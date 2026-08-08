@@ -1,0 +1,38 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "sense.config.json",
+  "description": "Config for sense -- SQL over the frontmatter of a markdown tree.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["scan", "queries"],
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Points editors at this schema for autocomplete and validation. Not read by sense itself. Conventionally \"https://unpkg.com/sensemaking/schema.json\"."
+    },
+    "version": {
+      "type": "integer",
+      "enum": [1],
+      "description": "Config format version. Bumped only on breaking changes to this file's shape. Omit to default to 1; a version newer than this sense build supports makes it exit with an error rather than misinterpret the file."
+    },
+    "scan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["include"],
+      "description": "Which files become rows in the `docs` table.",
+      "properties": {
+        "include": {
+          "type": "array",
+          "items": { "type": "string" },
+          "minItems": 1,
+          "description": "Glob patterns (globby syntax), resolved relative to this config file's own directory -- never the invocation cwd."
+        }
+      }
+    },
+    "queries": {
+      "type": "object",
+      "description": "Named SQL queries runnable as `sense <name> [params...]`. Each value is a SQL SELECT against the `docs` table (one row per file, one column per discovered frontmatter key, plus reserved `path`/`_mtime`/`_size`). `?` placeholders bind to CLI positional arguments in order. The custom `has(field, value)` function does array-membership on a JSON-array field, substring match on a string field, and is always false on NULL. The names `init`, `query`, `watch`, `status`, and `rebuild` are reserved subcommands — a query with one of those names is unreachable from the CLI.",
+      "additionalProperties": { "type": "string" }
+    }
+  }
+}

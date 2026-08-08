@@ -1,0 +1,10 @@
+node_modules/
+dist/
+docs/
+.tmp/
+.cache/
+.vscode/
+npm-debug.log*
+
+# sensemaking state dir
+.sense/
