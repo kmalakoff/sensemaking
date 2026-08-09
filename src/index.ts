@@ -1,6 +1,4 @@
-// Public library API. cli.ts is a consumer of this surface, not a source of
-// truth for it -- anything a test or another tool needs from sense should be
-// exported here rather than reached into src/ by relative path.
+// Public library API.
 
 export type { Config, ResolvedConfig } from './config.ts';
 export { CONFIG_FILENAME, findConfigPath, initConfig, loadConfig, STATE_DIR, SUPPORTED_CONFIG_VERSION } from './config.ts';

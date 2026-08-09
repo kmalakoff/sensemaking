@@ -19,7 +19,7 @@
       "type": "object",
       "additionalProperties": false,
       "required": ["include"],
-      "description": "Which files become rows in the `docs` table.",
+      "description": "Which files become rows in the `frontmatter` table.",
       "properties": {
         "include": {
           "type": "array",
@@ -31,7 +31,7 @@
     },
     "queries": {
       "type": "object",
-      "description": "Named SQL queries runnable as `sense <name> [params...]`. Each value is a SQL SELECT against the `docs` table (one row per file, one column per discovered frontmatter key, plus reserved `path`/`_mtime`/`_size`). `?` placeholders bind to CLI positional arguments in order. The custom `has(field, value)` function does array-membership on a JSON-array field, substring match on a string field, and is always false on NULL. The names `init`, `query`, `watch`, `status`, and `rebuild` are reserved subcommands — a query with one of those names is unreachable from the CLI.",
+      "description": "Named SQL queries runnable as `sense <name> [params...]`. Tables: `frontmatter` (one row per file, one column per discovered frontmatter key, plus `path`/`_mtime`/`_size`) and `content`, an FTS5 index (`title`, `summary`, `text`, `path`) for content search. `?` placeholders bind to CLI positional args in order. `has(field, value)`: array membership on a JSON-array field, substring match on a string, false on NULL. Canonical query: `SELECT f.path, content.title, content.summary, snippet(content, -1, '«', '»', '…', 10) AS hit FROM frontmatter f JOIN content ON content.path = f.path WHERE content MATCH ? ORDER BY bm25(content, 10.0, 5.0, 1.0) LIMIT 10`. Reserved frontmatter keys: `path`, `_mtime`, `_size`, `content`. Reserved query names (unreachable as subcommands): `init`, `query`, `watch`, `status`, `rebuild`.",
       "additionalProperties": { "type": "string" }
     }
   }

@@ -48,7 +48,8 @@
   },
   "dependencies": {
     "fast-glob": "^3.3.3",
-    "gray-matter": "^4.0.3"
+    "gray-matter": "^4.0.3",
+    "remove-markdown": "^0.6.4"
   },
   "devDependencies": {
     "@types/mocha": "*",

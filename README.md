@@ -18,18 +18,33 @@ step, or you re-explaining anything.
 
 ## How it works
 
-Every file becomes a row; every frontmatter key becomes a column. You write named SQL queries once
-and run them by name.
+Every file becomes a row; every frontmatter key becomes a column; the prose becomes a full-text
+index you can join against. You write named SQL queries once and run them by name.
 
 ```markdown
 ---
 title: Ship the Q3 report
+summary: where the Q3 numbers came from and who signed off
 status: active
 tags: [urgent, reports]
 ---
 
 Notes about the report…
 ```
+
+```sql
+-- active notes that actually discuss revenue, best match first
+SELECT f.path, content.title, content.summary, snippet(content, -1, '«', '»', '…', 10) AS hit
+FROM frontmatter f JOIN content ON content.path = f.path
+WHERE f.status = 'active' AND content MATCH 'revenue'
+ORDER BY bm25(content, 10.0, 5.0, 1.0) LIMIT 10
+```
+
+The filter shrinks the haystack, the search finds the needle, and each row that comes back —
+path, title, summary, matching excerpt — is enough to decide whether to open the file, without
+carrying the file. On a real 26-note vault that's a few hundred tokens, against ~6,000 to read the
+three files it points at. Cheap enough to run before deciding what to open; reading afterward is
+the expensive step, and it happens through the filesystem, not SQL.
 
 Two properties make it trustworthy:
 
@@ -43,11 +58,20 @@ Two properties make it trustworthy:
 
 ```bash
 npm install -g sensemaking
-cd your-notes && sense init        # writes a starter sense.config.json
+cd your-notes && sense init        # writes a minimal sense.config.json (globs only, no queries)
 ```
 
-Edit the queries to match your own frontmatter (the `$schema` line gives your editor autocomplete
-and validation):
+Query immediately — ad-hoc SQL needs no config beyond the globs:
+
+```
+sense query "SELECT … FROM frontmatter"    # ad-hoc SQL; positional args bind to ? placeholders
+sense query "…" --format json      # structured output (the default is a table)
+sense --list                       # what named queries exist
+sense status | rebuild             # cache info / delete .sense/ and re-crawl
+```
+
+When a query proves worth reusing, name it in `sense.config.json` (plain JSON; the `$schema` line
+gives your editor autocomplete and validation) and run it as `sense <name> [params...]`:
 
 ```json
 {
@@ -55,19 +79,9 @@ and validation):
   "version": 1,
   "scan": { "include": ["**/*.md"] },
   "queries": {
-    "all": "SELECT path, title FROM docs ORDER BY path",
-    "by-tag": "SELECT path, title FROM docs WHERE has(tags, ?) ORDER BY path"
+    "by-tag": "SELECT path, title, summary FROM frontmatter WHERE has(tags, ?) ORDER BY path"
   }
 }
-```
-
-```
-sense all                          # run a named query
-sense by-tag urgent                # positional args bind to ? placeholders (count-checked)
-sense query "SELECT … FROM docs"   # ad-hoc SQL for one-off questions, no config edit
-sense --list                       # what queries exist
-sense <name> --format json         # structured output (the default is a table)
-sense status | rebuild             # cache info / delete .sense/ and re-crawl
 ```
 
 Discovery walks up from your cwd git-style, so you can run `sense` from anywhere in the tree
@@ -75,8 +89,27 @@ Discovery walks up from your cwd git-style, so you can run `sense` from anywhere
 `2` usage error.
 
 The one custom SQL function is `has(field, value)`: array membership on a JSON-array field (like
-`tags`), substring match on a string, always false on a missing key. Reserved columns: `path`,
-`_mtime`, `_size`.
+`tags`), substring match on a string, always false on a missing key. Reserved names: `path`,
+`_mtime`, `_size`, `content`.
+
+### Content search
+
+`content` is an FTS5 table with columns `title`, `summary`, `text`, and `path` (for the join).
+`content MATCH ?` takes FTS5 syntax (`a OR b`, `"exact phrase"`, `pref*`, `NEAR(a b, 5)`,
+`summary: term`), with stemming on so `negotiate` matches "negotiating". Markdown syntax is
+stripped at index time — search for the words, not the formatting around them, and excerpts come
+back as clean prose. `bm25()` weights follow column order, so `bm25(content, 10.0, 5.0, 1.0)`
+ranks a title hit above a passing mention; `snippet(content, -1, …)` excerpts whichever column
+matched.
+
+Prose is deliberately **not** a column on `frontmatter`, so `SELECT * FROM frontmatter` can never
+dump your notes into an agent's context — reaching it takes an explicit join. Select `path`,
+`title`, `summary`, and a `snippet()`, keep a `LIMIT`, and read the files worth reading. `sense`
+warns on stderr when a result grows past 50 KB.
+
+A one-line `summary:` in frontmatter is worth adding as you write — what's on the page and when
+it's worth opening, like a skill's `description:`. It's both a column you can select (a search
+result row often answers the question with no file read at all) and a weighted search field.
 
 ### For AI agents
 
@@ -98,31 +131,36 @@ launchd and systemd examples: [WATCH.md](WATCH.md).
 
 ## Why not …
 
-- **Obsidian (Bases/Dataview):** filters this well — but only inside the running Electron app,
-  through its own view formats. There's no headless mode for queries (only Sync), so scripts and
-  agents must keep the app open. `sensemaking` needs no app and speaks plain SQL. Your vault works
-  unmodified either way; Obsidian stays a fine viewer for the same files.
-- **RAG / semantic search:** retrieves by similarity and hopes relevance follows. That can't
-  express "only active notes from this project" as a hard constraint — a `WHERE` clause can. The
-  two compose rather than compete: filter first, rank later.
-- **Index-on-build tools (MarkdownDB and similar):** you run an explicit index step and query the
-  snapshot, which is stale the moment a file changes. `sensemaking` reconciles on every query, so
-  there's no stale window by construction.
-- **Note CLIs (zk and similar):** good at their own model — tags, links, full text — but they
-  can't filter on arbitrary frontmatter fields, which is the whole point here.
+- **Obsidian (Bases/Dataview):** filters this well, but only inside the running Electron app —
+  scripts and agents can't query it headless. Your vault works unmodified either way; Obsidian
+  stays a fine viewer for the same files.
+- **RAG / semantic search:** ranks by similarity, not hard constraints like "only active notes from
+  this project" — that needs a `WHERE` clause. The two compose: filter first, rank later; vector
+  similarity, if added later, would join the same way.
+- **An LLM-written index file** (à la Karpathy's llm-wiki `index.md`): a good instinct, but a
+  second artifact that drifts out of sync. `frontmatter` is that catalog, derived from the notes
+  themselves on every query.
+- **Index-on-build tools (MarkdownDB and similar):** query a snapshot that's stale the moment a
+  file changes, instead of reconciling live.
+- **Note CLIs (zk and similar):** good at their own model — tags, links, full text — but can't
+  filter on arbitrary frontmatter fields, which is the whole point here.
 - **grep / one-off scripts:** fine until you want named, reusable, parameterized queries with real
   AND/OR/ORDER BY — at which point you've started writing a worse query engine.
 
 `sensemaking` is deliberately thin glue: [gray-matter](https://github.com/jonschlinkert/gray-matter)
-parses, [fast-glob](https://github.com/mrmlnc/fast-glob) walks, and Node's built-in SQLite
-(`node:sqlite`) does all the querying. Two dependencies, no native builds, no background services
-required.
+parses, [remove-markdown](https://github.com/zuchka/remove-markdown) cleans the prose for indexing,
+[fast-glob](https://github.com/mrmlnc/fast-glob) walks, and Node's built-in SQLite (`node:sqlite`)
+does all the querying. Three small dependencies, no native builds, no background services required.
 
 ## Roadmap
 
-Content search is the next stage: BM25 relevance over note bodies, scoped to a frontmatter filter,
-so you can ask "the active within-tech notes, ranked by how well they discuss compensation" in one
-query. The filter shrinks the haystack; the search finds the needle.
+Vector similarity is the natural next facet — a `doc_vec` table joined the same way `content` is,
+so semantic recall composes with the frontmatter filter instead of living in a separate tool
+(`SELECT path, distance`, never the embedding). It's deferred, not planned: today it would require
+a native SQLite extension (sqlite-vec is pre-v1 and ships platform binaries), which breaks the
+no-native-builds line above. It becomes worth revisiting when Node can do it dependency-free — and
+only if BM25 demonstrably misses things; on a curated vault of a few hundred notes it often
+doesn't.
 
 Beyond that, the corpus model isn't tied to markdown — anything carrying structured metadata
 (document properties, sidecar JSON) can join it without changing the query surface.

@@ -4,19 +4,11 @@ import { STATE_DIR } from './config.ts';
 import { docCount, getMeta, open, reconcile, setMeta } from './db.ts';
 import { SenseError } from './errors.ts';
 
-// Watch is a cache pre-warmer, not a correctness mechanism: every query
-// `open()` reconciles against the filesystem regardless, so a missed or
-// coalesced fs event can never change a query result -- it only moves one
-// file's parse from ahead-of-time to query-time. That's why any event, of
-// any kind, triggers the exact same response: a debounced full reconcile.
-// Per-file event handling would be complexity with no correctness payoff.
+// Watch is a cache pre-warmer, not a correctness mechanism: open() always reconciles anyway, so any fs event just triggers a debounced full reconcile.
 const DEBOUNCE_MS = 200;
 const HEARTBEAT_INTERVAL_MS = 5000;
 const STALE_HEARTBEAT_MS = 15000;
 
-// This module never prints -- it emits events via `onEvent` and throws on
-// the one exit-worthy condition (a live watcher already present). cli.ts is
-// the only place that touches console/process.exit.
 export type WatchEvent = { type: 'started'; baseDir: string; dbPath: string } | { type: 'reconciled'; parsed: number; total: number; warnings: string[] } | { type: 'reconcile-error'; message: string };
 
 export interface WatchOptions {
@@ -24,10 +16,7 @@ export interface WatchOptions {
   onEvent?: (event: WatchEvent) => void;
 }
 
-// Runs in the foreground until SIGINT/SIGTERM; never forks or daemonizes --
-// process lifecycle belongs to the OS (launchd/systemd/terminal). Resolves
-// on clean shutdown; throws SenseError("WATCH_ACTIVE", ...) if another
-// watcher's heartbeat is still fresh and `--force` wasn't given.
+// Runs in the foreground until SIGINT/SIGTERM. Throws WATCH_ACTIVE if another watcher's heartbeat is still fresh and --force wasn't given.
 export async function runWatch(cfg: ResolvedConfig, opts: WatchOptions = {}): Promise<void> {
   const onEvent = opts.onEvent ?? (() => {});
   const { db, dbPath, warnings: initialWarnings, parsed: initialParsed } = open(cfg);
@@ -67,9 +56,7 @@ export async function runWatch(cfg: ResolvedConfig, opts: WatchOptions = {}): Pr
     }, DEBOUNCE_MS);
   };
 
-  // Ignore events from our own state dir: the heartbeat writes cache.db
-  // every few seconds, and without this filter each write would schedule a
-  // (harmless but pointless) reconcile forever — a perpetual self-trigger.
+  // Ignore our own state dir, or the heartbeat write would retrigger itself forever.
   const watcher = fsWatch(baseDir, { recursive: true }, (_event, filename) => {
     if (typeof filename === 'string' && filename.startsWith(STATE_DIR)) return;
     scheduleReconcile();

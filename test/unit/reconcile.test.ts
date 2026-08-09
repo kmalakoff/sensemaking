@@ -24,7 +24,7 @@ describe('reconcile', () => {
     write(baseDir, 'b.md', { title: 'B' });
 
     const result = openVault(baseDir);
-    const rows = result.db.prepare('SELECT path FROM docs ORDER BY path').all() as Array<{ path: string }>;
+    const rows = result.db.prepare('SELECT path FROM frontmatter ORDER BY path').all() as Array<{ path: string }>;
     assert.deepEqual(
       rows.map((r) => r.path),
       ['a.md', 'b.md']
@@ -52,15 +52,14 @@ describe('reconcile', () => {
     const first = openVault(baseDir);
     first.db.close();
 
-    // Force a distinct mtime -- fast successive writes can land on the same
-    // filesystem-quantized mtime otherwise.
+    // force a distinct mtime; fast successive writes can quantize to the same one
     write(baseDir, 'a.md', { title: 'Updated', extra: 'field' });
     const future = new Date(Date.now() + 5000);
     utimesSync(join(baseDir, 'a.md'), future, future);
 
     const second = openVault(baseDir);
     assert.equal(second.parsed, 1);
-    const row = second.db.prepare('SELECT title, extra FROM docs WHERE path = ?').get('a.md') as Record<string, unknown>;
+    const row = second.db.prepare('SELECT title, extra FROM frontmatter WHERE path = ?').get('a.md') as Record<string, unknown>;
     assert.equal(row.title, 'Updated');
     assert.equal(row.extra, 'field');
     second.db.close();
@@ -77,7 +76,7 @@ describe('reconcile', () => {
     rmSync(join(baseDir, 'b.md'));
 
     const second = openVault(baseDir);
-    const rows = second.db.prepare('SELECT path FROM docs ORDER BY path').all() as Array<{ path: string }>;
+    const rows = second.db.prepare('SELECT path FROM frontmatter ORDER BY path').all() as Array<{ path: string }>;
     assert.deepEqual(
       rows.map((r) => r.path),
       ['a.md']
@@ -95,7 +94,7 @@ describe('reconcile', () => {
     write(baseDir, 'b.md', { title: 'B' });
 
     const second = openVault(baseDir);
-    const rows = second.db.prepare('SELECT path FROM docs ORDER BY path').all() as Array<{ path: string }>;
+    const rows = second.db.prepare('SELECT path FROM frontmatter ORDER BY path').all() as Array<{ path: string }>;
     assert.deepEqual(
       rows.map((r) => r.path),
       ['a.md', 'b.md']
@@ -116,10 +115,10 @@ describe('reconcile', () => {
     utimesSync(join(baseDir, 'b.md'), future, future);
 
     const second = openVault(baseDir);
-    const columns = second.db.prepare('PRAGMA table_info(docs)').all() as Array<{ name: string }>;
+    const columns = second.db.prepare('PRAGMA table_info(frontmatter)').all() as Array<{ name: string }>;
     assert.ok(columns.some((c) => c.name === 'brandNew'));
 
-    const rowA = second.db.prepare('SELECT brandNew FROM docs WHERE path = ?').get('a.md') as Record<string, unknown>;
+    const rowA = second.db.prepare('SELECT brandNew FROM frontmatter WHERE path = ?').get('a.md') as Record<string, unknown>;
     assert.equal(rowA.brandNew, null, 'pre-existing rows get NULL for a newly added column');
     second.db.close();
   });
@@ -130,15 +129,14 @@ describe('reconcile', () => {
     write(baseDir, 'gone.md', { title: 'Gone', ephemeral: 'value' });
 
     const first = openVault(baseDir);
-    let columns = first.db.prepare('PRAGMA table_info(docs)').all() as Array<{ name: string }>;
+    let columns = first.db.prepare('PRAGMA table_info(frontmatter)').all() as Array<{ name: string }>;
     assert.ok(columns.some((c) => c.name === 'ephemeral'));
     first.db.close();
 
     rmSync(join(baseDir, 'gone.md'));
     const second = openVault(baseDir);
-    // ALTER TABLE ADD COLUMN doesn't undo itself -- the column lingers even
-    // though no row uses it anymore.
-    columns = second.db.prepare('PRAGMA table_info(docs)').all() as Array<{ name: string }>;
+    // ALTER TABLE ADD COLUMN doesn't undo itself
+    columns = second.db.prepare('PRAGMA table_info(frontmatter)').all() as Array<{ name: string }>;
     assert.ok(
       columns.some((c) => c.name === 'ephemeral'),
       'column lingers after the row is deleted'
@@ -146,9 +144,9 @@ describe('reconcile', () => {
     second.db.close();
 
     const rebuilt = rebuild({ scan: { include: ['*.md'] }, queries: {}, baseDir, configPath: null });
-    columns = rebuilt.db.prepare('PRAGMA table_info(docs)').all() as Array<{ name: string }>;
+    columns = rebuilt.db.prepare('PRAGMA table_info(frontmatter)').all() as Array<{ name: string }>;
     assert.ok(!columns.some((c) => c.name === 'ephemeral'), "rebuild's fresh crawl drops the lingering column");
-    const count = (rebuilt.db.prepare('SELECT COUNT(*) AS n FROM docs').get() as { n: number }).n;
+    const count = (rebuilt.db.prepare('SELECT COUNT(*) AS n FROM frontmatter').get() as { n: number }).n;
     assert.equal(count, 1);
     rebuilt.db.close();
   });

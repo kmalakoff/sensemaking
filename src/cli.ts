@@ -35,10 +35,7 @@ function printWarnings(warnings: string[]): void {
   for (const w of warnings) console.warn(w);
 }
 
-// Shared tail of both the named-query and ad-hoc `query` paths. An unbound
-// `?` silently binds NULL and returns misleading empty results — fail
-// loudly instead. (Naive count; queries putting '?' in string literals
-// would miscount, which none of ours do.)
+// An unbound `?` silently binds NULL, so mismatched param counts fail loudly instead.
 function runSql(cfg: ResolvedConfig, sql: string, params: string[], format: 'table' | 'json', label: string): void {
   const placeholderCount = (sql.match(/\?/g) ?? []).length;
   if (params.length !== placeholderCount) {
@@ -68,11 +65,7 @@ function logWatchEvent(event: WatchEvent): void {
   console.error(`sense watch: reconcile error: ${event.message}`);
 }
 
-// Everything below that can throw (bad JSON, a config `version` newer than
-// this build supports, another watcher's fresh heartbeat, a SQLite error)
-// is caught by the top-level handler below and reported as exit 1 with the
-// error's message verbatim. Usage errors (missing/unknown query name, wrong
-// parameter count) exit(2) directly instead of throwing.
+// Thrown errors -> exit 1 with the message verbatim; usage errors exit(2) directly.
 export default async function cli(argv: string[], name: string): Promise<void> {
   const { values, positionals } = parseCliArgs(argv, name);
 
@@ -81,8 +74,6 @@ export default async function cli(argv: string[], name: string): Promise<void> {
     process.exit(0);
   }
 
-  // cli.ts's only config knowledge is the --config flag; discovery, parsing,
-  // and version-gating all live in config.ts.
   const resolveConfig = () => loadConfig(values.config);
 
   try {
@@ -91,7 +82,7 @@ export default async function cli(argv: string[], name: string): Promise<void> {
     if (first === 'init') {
       const configPath = initConfig(process.cwd());
       console.log(`created ${configPath}`);
-      console.log('edit the queries to fit your tree, then: sense --list');
+      console.log('query away: sense query "SELECT path FROM frontmatter LIMIT 10"');
       process.exit(0);
     }
 
@@ -135,8 +126,6 @@ export default async function cli(argv: string[], name: string): Promise<void> {
 
     const format = values.format === 'json' ? 'json' : 'table';
 
-    // Ad-hoc SQL without touching the config -- for one-off questions;
-    // save a query into sense.config.json only when it'll be reused.
     if (first === 'query') {
       const [sql, ...params] = rest;
       if (!sql) {
@@ -165,8 +154,6 @@ export default async function cli(argv: string[], name: string): Promise<void> {
 
     runSql(cfg, sql, params, format, `query "${name_}"`);
   } catch (err) {
-    // SQLite's own error message, a bad config, an unsupported config
-    // version, or an already-active watcher — printed verbatim.
     console.error((err as Error).message);
     process.exit(1);
   }

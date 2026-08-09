@@ -22,7 +22,7 @@ function runCli(dir: string, args: string[]) {
 describe('query subcommand (ad-hoc SQL)', () => {
   it('runs SQL directly without a saved query', () => {
     const dir = makeTree();
-    const result = runCli(dir, ['query', 'SELECT path, title FROM docs ORDER BY path', '--format', 'json']);
+    const result = runCli(dir, ['query', 'SELECT path, title FROM frontmatter ORDER BY path', '--format', 'json']);
     assert.equal(result.status, 0);
     const rows = JSON.parse(result.stdout);
     assert.deepEqual(
@@ -33,7 +33,7 @@ describe('query subcommand (ad-hoc SQL)', () => {
 
   it('binds positional params to ? placeholders', () => {
     const dir = makeTree();
-    const result = runCli(dir, ['query', 'SELECT path FROM docs WHERE has(tags, ?)', 'beta', '--format', 'json']);
+    const result = runCli(dir, ['query', 'SELECT path FROM frontmatter WHERE has(tags, ?)', 'beta', '--format', 'json']);
     assert.equal(result.status, 0);
     const rows = JSON.parse(result.stdout);
     assert.deepEqual(
@@ -44,7 +44,7 @@ describe('query subcommand (ad-hoc SQL)', () => {
 
   it('wrong parameter count: exit 2', () => {
     const dir = makeTree();
-    const result = runCli(dir, ['query', 'SELECT path FROM docs WHERE has(tags, ?)']);
+    const result = runCli(dir, ['query', 'SELECT path FROM frontmatter WHERE has(tags, ?)']);
     assert.equal(result.status, 2);
     assert.match(result.stderr, /expects 1 parameter/);
   });

@@ -14,8 +14,7 @@ describe('init', () => {
       const cfg = JSON.parse(readFileSync(configPath, 'utf8'));
       assert.equal(cfg.version, SUPPORTED_CONFIG_VERSION);
       assert.ok(Array.isArray(cfg.scan.include) && cfg.scan.include.length > 0);
-      assert.ok(Object.keys(cfg.queries).length > 0);
-      for (const sql of Object.values(cfg.queries)) assert.equal(typeof sql, 'string');
+      assert.deepEqual(cfg.queries, {});
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

@@ -8,3 +8,6 @@ npm-debug.log*
 
 # sensemaking state dir
 .sense/
+
+# local planning docs
+plans/
