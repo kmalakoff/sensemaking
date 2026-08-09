@@ -45,7 +45,7 @@ launchctl load ~/Library/LaunchAgents/com.sense.watch.plist
 
 ```ini
 [Unit]
-Description=sense watch (frontmatter cache pre-warmer)
+Description=sense watch (background index updater)
 
 [Service]
 ExecStart=/usr/local/bin/sense watch --config /path/to/sense.config.json
@@ -63,5 +63,5 @@ systemctl --user enable --now sense-watch.service
 
 - A second `sense watch` on the same tree refuses to start while another's heartbeat is fresh
   (override with `--force`); check with `sense status`.
-- A dead watcher can never cause stale query results — every query reconciles on open. The
-  watcher only pre-warms.
+- A stopped watcher never causes a wrong answer — every query runs its own freshness check. The
+  watcher only does the parsing early.

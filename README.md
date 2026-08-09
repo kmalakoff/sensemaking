@@ -5,18 +5,19 @@ Query a knowledge base you build with an agent: filter notes by frontmatter, the
 ## The problem
 
 When you work with an AI agent on anything substantial, you end up with a pile of small notes —
-findings, decisions, sources, summaries. The pile is the point: it's how knowledge accumulates
-instead of being re-derived every session.
+findings, decisions, sources, summaries. Small, categorized notes are how knowledge accumulates
+instead of being re-derived every session: structured frontmatter over free-form prose.
 
 But accumulation only pays off if it's findable. Past a couple dozen notes, an agent can't tell
-which fifteen of two hundred bear on its task, so it greps blindly, swallows the whole folder into
-context, or quietly rebuilds knowledge that already exists three files away.
+which fifteen of two hundred bear on its task, so it greps, reads whole folders into context, or
+rebuilds knowledge that already exists three files away.
 
 The classification an agent adds while writing — `status`, `type`, `tags`, `source` — is what keeps
 the pile navigable. `sensemaking` is the layer that acts on it, without an app running, a build
-step, or you re-explaining anything.
+step, or you re-explaining anything. The intended shape is a small vault per project, not one big
+one — starting a new one is a single command with no schema to design.
 
-## How it works
+## The model
 
 Every file becomes a row; every frontmatter key becomes a column; the prose becomes a full-text
 index you can join against. You write named SQL queries once and run them by name.
@@ -40,19 +41,11 @@ WHERE f.status = 'active' AND content MATCH 'revenue'
 ORDER BY bm25(content, 10.0, 5.0, 1.0) LIMIT 10
 ```
 
-The filter shrinks the haystack, the search finds the needle, and each row that comes back —
+The filter narrows the set, the search ranks it, and each row that comes back —
 path, title, summary, matching excerpt — is enough to decide whether to open the file, without
 carrying the file. On a real 26-note vault that's a few hundred tokens, against ~6,000 to read the
 three files it points at. Cheap enough to run before deciding what to open; reading afterward is
 the expensive step, and it happens through the filesystem, not SQL.
-
-Two properties make it trustworthy:
-
-- **Never stale.** Every query re-checks the filesystem first, re-reading only what changed. The
-  SQLite cache under `.sense/` is disposable — delete it any time, the next query rebuilds it. An
-  agent can trust a result without knowing when anything was last indexed.
-- **Headless.** Files on disk are the only source of truth. Nothing needs to be open — not
-  Obsidian, not a server, not a daemon.
 
 ## Use it
 
@@ -121,13 +114,26 @@ npx skills add kmalakoff/sensemaking   # the agent skill (add -g for global, -a 
 The skill teaches an agent the essentials: discovery, `--list`, `--format json`, `has()`, when to
 use ad-hoc `query` versus saving a named one, and when to `rebuild`.
 
-### Optional: a background pre-warmer
+## How it works, how it scales
 
-`sense watch` runs the same reconcile ahead of time whenever the filesystem changes, so queries
-open on an already-warm cache. It's purely an optimization — queries reconcile on open anyway, so
-a missed event can never make a result wrong — and under ~1000 files you likely won't notice a
-difference. It runs in the foreground and never daemonizes; process supervision belongs to the OS.
-launchd and systemd examples: [WATCH.md](WATCH.md).
+`sense` is a command, not an app. Nothing has to be running: it starts, answers,
+and exits.
+
+Every query begins with a freshness check: each file's timestamp and size is
+compared against the SQLite cache in `.sense/`, changed files are re-parsed, and
+deleted files are dropped. When nothing has changed, that check is the entire
+cost. Results are never stale, and the cache is disposable — `sense rebuild`
+deletes and rebuilds it.
+
+For a vault of a few hundred notes, the check takes a few milliseconds.
+
+On a large vault (10,000+ files), the check grows with file count — roughly a
+tenth of a second at 10k — and the first query after editing many files pays to
+re-parse them. `sense watch` moves that parsing into the background: a job that
+re-parses files as they change, so queries find the work already done. It is
+optional — queries always run their own check, so a stopped watcher never causes
+a wrong answer, only a slower next query. launchd and systemd examples:
+[WATCH.md](WATCH.md).
 
 ## Why not …
 
@@ -145,7 +151,7 @@ launchd and systemd examples: [WATCH.md](WATCH.md).
 - **Note CLIs (zk and similar):** good at their own model — tags, links, full text — but can't
   filter on arbitrary frontmatter fields, which is the whole point here.
 - **grep / one-off scripts:** fine until you want named, reusable, parameterized queries with real
-  AND/OR/ORDER BY — at which point you've started writing a worse query engine.
+  AND/OR/ORDER BY — at which point you're writing your own query engine.
 
 `sensemaking` is deliberately thin glue: [gray-matter](https://github.com/jonschlinkert/gray-matter)
 parses, [remove-markdown](https://github.com/zuchka/remove-markdown) cleans the prose for indexing,
