@@ -2,15 +2,17 @@ import { mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type { Config, ResolvedConfig } from './config.ts';
-import { STATE_DIR } from './config.ts';
+import { enabledFeatures, STATE_DIR } from './config.ts';
+import { activeFeatures } from './features/index.ts';
 import type { ParsedDoc } from './scan.ts';
 import { listFiles, parseFile } from './scan.ts';
 
-// Rows -> SQLite: schema, reconcile, has(). Filesystem/frontmatter parsing lives in scan.ts.
+// Rows -> SQLite: core schema, reconcile loop, has(). Parsing lives in scan.ts;
+// everything beyond frontmatter + content lives in src/features/.
 
 export const DB_FILENAME = 'cache.db';
 // Cache shape version, independent of the config's own `version`.
-export const SCHEMA_VERSION = '2';
+export const SCHEMA_VERSION = '3';
 
 export interface OpenResult {
   db: DatabaseSync;
@@ -52,11 +54,14 @@ function getColumns(db: DatabaseSync): Set<string> {
   return new Set(rows.map((r) => r.name));
 }
 
-// Content is a separate table (not a column on frontmatter) so `SELECT * FROM frontmatter` can't dump file text into context.
-function ensureSchema(db: DatabaseSync): void {
+// Content is a separate table (not a column on frontmatter) so `SELECT * FROM frontmatter`
+// can't dump file text into context. Features add their own tables after the core ones.
+function ensureSchema(db: DatabaseSync, cfg: Config): void {
   db.exec(`CREATE TABLE IF NOT EXISTS frontmatter ("path" TEXT PRIMARY KEY, "_mtime" REAL, "_size" INTEGER)`);
   db.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS content USING fts5(title, summary, text, path UNINDEXED, tokenize = 'porter unicode61')`);
+  for (const feature of activeFeatures(cfg)) feature.schema(db);
   if (getMeta(db, 'schema_version') === null) setMeta(db, 'schema_version', SCHEMA_VERSION);
+  if (getMeta(db, 'features') === null) setMeta(db, 'features', enabledFeatures(cfg).join(','));
 }
 
 export function getMeta(db: DatabaseSync, key: string): string | null {
@@ -96,13 +101,14 @@ export function reconcile(db: DatabaseSync, cfg: Config, baseDir: string): { par
 
   if (vanished.length === 0 && toReparse.length === 0) return { parsed: 0, warnings: [] };
 
+  const features = activeFeatures(cfg);
   const seenColumns = getColumns(db);
   const newColumns: string[] = [];
   const parsedDocs: ParsedDoc[] = [];
   const warnings: string[] = [];
 
   for (const file of toReparse) {
-    const { doc, warnings: fileWarnings } = parseFile(file);
+    const { doc, warnings: fileWarnings } = parseFile(file, features);
     warnings.push(...fileWarnings);
     for (const key of Object.keys(doc.data)) {
       if (!seenColumns.has(key)) {
@@ -126,6 +132,7 @@ export function reconcile(db: DatabaseSync, cfg: Config, baseDir: string): { par
       for (const path of vanished) {
         del.run(path);
         delBody.run(path);
+        for (const feature of features) feature.remove?.(db, path);
       }
     }
     if (parsedDocs.length > 0) {
@@ -141,8 +148,13 @@ export function reconcile(db: DatabaseSync, cfg: Config, baseDir: string): { par
         insert.run(...values);
         delBody.run(doc.relPath);
         insertBody.run(doc.search.title, doc.search.summary, doc.search.text, doc.relPath);
+        for (const feature of features) {
+          feature.remove?.(db, doc.relPath);
+          feature.store?.(db, doc.relPath, doc.extracted[feature.name]);
+        }
       }
     }
+    for (const feature of features) feature.afterReconcile?.(db, files);
     db.exec('COMMIT');
   } catch (err) {
     db.exec('ROLLBACK');
@@ -164,15 +176,18 @@ export function open(cfg: ResolvedConfig): OpenResult {
 
   db.exec('CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)');
 
-  // Schema version mismatch: reconcile only reparses changed files, so an old cache can't be patched up incrementally -- rebuild instead.
+  // Schema-version or feature-set mismatch: reconcile only reparses changed files, so an
+  // old cache can't be patched incrementally -- rebuild instead (cheap: nothing expensive lives here).
   const version = getMeta(db, 'schema_version');
-  if (version !== null && version !== SCHEMA_VERSION) {
+  const features = getMeta(db, 'features');
+  const wantFeatures = enabledFeatures(cfg).join(',');
+  if ((version !== null && version !== SCHEMA_VERSION) || (features !== null && features !== wantFeatures)) {
     db.close();
     rmSync(stateDir, { recursive: true, force: true });
     return open(cfg);
   }
 
-  ensureSchema(db);
+  ensureSchema(db, cfg);
   const { parsed, warnings } = reconcile(db, cfg, cfg.baseDir);
 
   return { db, cfg, dbPath, parsed, warnings };

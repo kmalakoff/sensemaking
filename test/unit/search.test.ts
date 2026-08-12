@@ -35,11 +35,11 @@ describe('search', () => {
 
   it('joins to frontmatter so a frontmatter filter and a content search compose', () => {
     const baseDir = tmpVault();
-    write(baseDir, 'active.md', { status: 'active' }, 'discusses compensation at length');
-    write(baseDir, 'archived.md', { status: 'archived' }, 'also discusses compensation at length');
+    write(baseDir, 'active.md', { status: 'active' }, 'discusses onboarding at length');
+    write(baseDir, 'archived.md', { status: 'archived' }, 'also discusses onboarding at length');
 
     const { db } = openVault(baseDir);
-    const rows = db.prepare(`SELECT d.path FROM frontmatter d JOIN content ON content.path = d.path WHERE d.status = ? AND content MATCH ? ORDER BY ${WEIGHTED}`).all('active', 'compensation') as Array<{ path: string }>;
+    const rows = db.prepare(`SELECT d.path FROM frontmatter d JOIN content ON content.path = d.path WHERE d.status = ? AND content MATCH ? ORDER BY ${WEIGHTED}`).all('active', 'onboarding') as Array<{ path: string }>;
     assert.deepEqual(
       rows.map((r) => r.path),
       ['active.md']
@@ -118,14 +118,14 @@ describe('search', () => {
 
   it('markdown syntax is stripped from the index; the text it wrapped is still searchable', () => {
     const baseDir = tmpVault();
-    write(baseDir, 'a.md', { title: 'A' }, '# Heading\n\n**Salary** matters, per [[compensation-floor|the floor]].\n\n| Col | Filter |\n|-----|--------|\n| D | `Remote` only |');
+    write(baseDir, 'a.md', { title: 'A' }, '# Heading\n\n**Margin** matters, per [[pricing-model|the model]].\n\n| Col | Filter |\n|-----|--------|\n| D | `Remote` only |');
 
     const { db } = openVault(baseDir);
     const { text } = db.prepare('SELECT text FROM content').get() as { text: string };
     for (const noise of ['**', '[[', ']]', '|', '#', '`']) {
       assert.ok(!text.includes(noise), `indexed text still contains "${noise}": ${JSON.stringify(text)}`);
     }
-    for (const term of ['floor', 'Remote', 'Salary']) {
+    for (const term of ['model', 'Remote', 'Margin']) {
       const n = (db.prepare('SELECT count(*) AS n FROM content WHERE content MATCH ?').get(term) as { n: number }).n;
       assert.equal(n, 1, `expected "${term}" to be searchable`);
     }

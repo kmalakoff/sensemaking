@@ -30,3 +30,29 @@ function render(rows: Row[], format: 'table' | 'json'): string {
 
   return [formatRow(columns), widths.map((w) => '-'.repeat(w)).join('  '), ...cells.map(formatRow)].join('\n');
 }
+
+// Text renderers for the layer verbs; cli.ts prints what these return.
+
+export function renderMap(result: { docs: { count: number; bytes: number }; fields: Row[]; hubs: Row[]; recent: Row[] }): string {
+  const parts = [`docs: ${result.docs.count} (${Math.round(result.docs.bytes / 1024)} KB)\n`, render(result.fields, 'table')];
+  if (result.hubs.length > 0) parts.push('\nhubs (by link rank):', render(result.hubs, 'table'));
+  parts.push('\nrecent:', render(result.recent, 'table'));
+  return parts.join('\n');
+}
+
+export function renderPeek(result: { path: string; tokens: number; frontmatter: Row; sections: Row[]; outbound: string[]; backlinks: string[]; unresolved: string[]; outboundTotal: number; backlinksTotal: number; unresolvedTotal: number }): string {
+  const lines = [`${result.path}  (~${result.tokens} tokens)`];
+  for (const [key, value] of Object.entries(result.frontmatter)) lines.push(`  ${key}: ${value}`);
+  if (result.sections.length > 0) {
+    lines.push('', 'sections:');
+    for (const s of result.sections) lines.push(`  ${'#'.repeat(s.level as number)} ${s.heading}  [L${s.start_line}-${s.end_line}, ~${s.tokens}t]`);
+  }
+  const linkLine = (label: string, shown: string[], total: number) => {
+    if (total > 0) lines.push(`${label} (${total}): ${shown.join(', ')}${total > shown.length ? `, +${total - shown.length} more` : ''}`);
+  };
+  if (result.outboundTotal + result.unresolvedTotal + result.backlinksTotal > 0) lines.push('');
+  linkLine('links out', result.outbound, result.outboundTotal);
+  linkLine('unresolved', result.unresolved, result.unresolvedTotal);
+  linkLine('backlinks', result.backlinks, result.backlinksTotal);
+  return lines.join('\n');
+}

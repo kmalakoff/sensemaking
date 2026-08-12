@@ -29,10 +29,10 @@ describe('db', () => {
     assert.equal(row.inactive, 0);
   });
 
-  it('value mapping: dates map to ISO strings (lexicographically sortable)', () => {
+  it('value mapping: dates stay as written (plain strings, lexicographically sortable)', () => {
     const { db } = openFixtures();
     const row = db.prepare('SELECT created FROM frontmatter WHERE path = ?').get('one.md') as Record<string, unknown>;
-    assert.equal(row.created, '2026-01-15T00:00:00.000Z');
+    assert.equal(row.created, '2026-01-15');
   });
 
   it('value mapping: arrays map to JSON text', () => {

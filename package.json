@@ -48,8 +48,8 @@
   },
   "dependencies": {
     "fast-glob": "^3.3.3",
-    "gray-matter": "^4.0.3",
-    "remove-markdown": "^0.6.4"
+    "remove-markdown": "^0.6.4",
+    "yaml": "^2.9.0"
   },
   "devDependencies": {
     "@types/mocha": "*",
@@ -59,6 +59,6 @@
     "tsds-config": "*"
   },
   "engines": {
-    "node": ">=22.13"
+    "node": ">=22.16"
   }
 }

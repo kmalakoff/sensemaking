@@ -1,158 +1,107 @@
+import { createRequire } from 'node:module';
 import { parseArgs } from 'node:util';
-import type { ResolvedConfig } from './config.ts';
-import { initConfig, loadConfig } from './config.ts';
-import { docCount, getMeta, open, rebuild } from './db.ts';
-import type { Row } from './output.ts';
-import { printRows } from './output.ts';
-import type { WatchEvent } from './watch.ts';
-import { runWatch } from './watch.ts';
+import { COMMANDS } from './commands/index.ts';
+import type { Ctx } from './commands/types.ts';
+import { loadConfig, SUPPORTED_CONFIG_VERSION } from './config.ts';
 
-function usage(name: string): string {
-  return `usage: ${name} <name> [params...] [--format table|json] [--config path]\n` + `       ${name} query "<sql>" [params...]\n` + `       ${name} --list\n` + `       ${name} init\n` + `       ${name} watch [--force]\n` + `       ${name} status\n` + `       ${name} rebuild`;
+// Parsing and dispatch only. Commands live in src/commands/, one file each, lazy-loaded --
+// nothing vault- or dependency-heavy may be imported at the top of this file.
+
+// Works from dist/cjs and dist/esm alike: walk up past the dist type-marker package.json.
+function packageVersion(): string {
+  const load = createRequire(import.meta.url);
+  for (const rel of ['../package.json', '../../package.json', '../../../package.json']) {
+    try {
+      const pkg = load(rel) as { name?: string; version?: string };
+      if (pkg.name === 'sensemaking' && pkg.version) return pkg.version;
+    } catch {}
+  }
+  return 'unknown';
 }
 
-function parseCliArgs(argv: string[], name: string) {
+function usage(name: string): string {
+  return (
+    `usage: ${name} <name> [params...] [--format table|json] [--config path]\n` +
+    `       ${name} query "<sql>" [params...]\n` +
+    `       ${name} find "<terms>" [--where "<sql>"] [--k n]\n` +
+    `       ${name} map\n` +
+    `       ${name} peek <path>\n` +
+    `       ${name} --list\n` +
+    `       ${name} init\n` +
+    `       ${name} watch [--force]\n` +
+    `       ${name} status\n` +
+    `       ${name} rebuild\n` +
+    `       ${name} --version`
+  );
+}
+
+// Thrown errors -> exit 1 with the message verbatim; usage errors exit 2 directly.
+export default async function cli(argv: string[], name: string): Promise<void> {
+  let values: Record<string, string | boolean | undefined>;
+  let positionals: string[];
   try {
-    return parseArgs({
+    ({ values, positionals } = parseArgs({
       args: argv,
       options: {
         format: { type: 'string', default: 'table' },
         config: { type: 'string' },
+        where: { type: 'string' },
+        k: { type: 'string' },
         list: { type: 'boolean', default: false },
         force: { type: 'boolean', default: false },
+        version: { type: 'boolean', default: false, short: 'v' },
         help: { type: 'boolean', default: false, short: 'h' },
       },
       allowPositionals: true,
-    });
+    }));
   } catch (err) {
     console.error((err as Error).message);
     console.error(usage(name));
     process.exit(2);
   }
-}
 
-function printWarnings(warnings: string[]): void {
-  for (const w of warnings) console.warn(w);
-}
-
-// An unbound `?` silently binds NULL, so mismatched param counts fail loudly instead.
-function runSql(cfg: ResolvedConfig, sql: string, params: string[], format: 'table' | 'json', label: string): void {
-  const placeholderCount = (sql.match(/\?/g) ?? []).length;
-  if (params.length !== placeholderCount) {
-    console.error(`${label} expects ${placeholderCount} parameter(s), got ${params.length}`);
-    process.exit(2);
-  }
-  const { db, warnings } = open(cfg);
-  printWarnings(warnings);
-  const rows = db.prepare(sql).all(...params) as Row[];
-  printRows(rows, format);
-  db.close();
-}
-
-function logWatchEvent(event: WatchEvent): void {
-  if (event.type === 'started') {
-    console.log(`sense watch: watching ${event.baseDir}`);
-    console.log(`sense watch: db ${event.dbPath}`);
+  if (values.version) {
+    console.log(`v${packageVersion()}`);
     return;
   }
-  if (event.type === 'reconciled') {
-    printWarnings(event.warnings);
-    if (event.parsed > 0) {
-      console.log(`sense watch: reconciled, ${event.parsed} file(s) reparsed (${event.total} total)`);
-    }
-    return;
-  }
-  console.error(`sense watch: reconcile error: ${event.message}`);
-}
-
-// Thrown errors -> exit 1 with the message verbatim; usage errors exit(2) directly.
-export default async function cli(argv: string[], name: string): Promise<void> {
-  const { values, positionals } = parseCliArgs(argv, name);
-
   if (values.help) {
     console.log(usage(name));
-    process.exit(0);
+    return;
   }
 
-  const resolveConfig = () => loadConfig(values.config);
+  const ctx: Ctx = {
+    name,
+    rest: positionals.slice(1),
+    format: values.format === 'json' ? 'json' : 'table',
+    values: values as Ctx['values'],
+    resolveConfig() {
+      const cfg = loadConfig(values.config as string | undefined);
+      if (cfg.migratedFrom !== undefined) {
+        console.warn(`${name}: migrated ${cfg.configPath} from config version ${cfg.migratedFrom} to ${SUPPORTED_CONFIG_VERSION}`);
+      }
+      return cfg;
+    },
+    usageError(message) {
+      console.error(message);
+      process.exit(2);
+    },
+  };
 
   try {
-    const [first, ...rest] = positionals;
-
-    if (first === 'init') {
-      const configPath = initConfig(process.cwd());
-      console.log(`created ${configPath}`);
-      console.log('query away: sense query "SELECT path FROM frontmatter LIMIT 10"');
-      process.exit(0);
-    }
-
-    if (first === 'watch') {
-      const cfg = resolveConfig();
-      await runWatch(cfg, { force: values.force, onEvent: logWatchEvent });
-      process.exit(0);
-    }
-
-    if (first === 'status') {
-      const cfg = resolveConfig();
-      const { db, dbPath, warnings } = open(cfg);
-      printWarnings(warnings);
-      console.log(`db: ${dbPath}`);
-      console.log(`docs: ${docCount(db)}`);
-      const heartbeat = getMeta(db, 'watch_heartbeat');
-      if (heartbeat) {
-        const ageSec = Math.round((Date.now() - Date.parse(heartbeat)) / 1000);
-        console.log(`watcher: last heartbeat ${ageSec}s ago`);
-      } else {
-        console.log('watcher: no watcher');
-      }
-      db.close();
-      process.exit(0);
-    }
-
-    if (first === 'rebuild') {
-      const cfg = resolveConfig();
-      const result = rebuild(cfg);
-      printWarnings(result.warnings);
-      console.log(`rebuilt: ${docCount(result.db)} docs`);
-      result.db.close();
-      process.exit(0);
-    }
-
     if (values.list) {
-      const cfg = resolveConfig();
-      for (const queryName of Object.keys(cfg.queries).sort()) console.log(queryName);
-      process.exit(0);
-    }
-
-    const format = values.format === 'json' ? 'json' : 'table';
-
-    if (first === 'query') {
-      const [sql, ...params] = rest;
-      if (!sql) {
-        console.error(`usage: ${name} query "<sql>" [params...]`);
-        process.exit(2);
-      }
-      runSql(resolveConfig(), sql, params, format, 'ad-hoc query');
+      for (const queryName of Object.keys(ctx.resolveConfig().queries).sort()) console.log(queryName);
       return;
     }
 
-    const [name_, ...params] = [first, ...rest];
-
-    if (!name_) {
+    const [first, ...params] = positionals;
+    if (!first) {
       console.error(usage(name));
       process.exit(2);
     }
 
-    const cfg = resolveConfig();
-
-    const sql = cfg.queries[name_];
-    if (!sql) {
-      console.error(`unknown query: "${name_}"`);
-      console.error(`valid queries: ${Object.keys(cfg.queries).sort().join(', ')}`);
-      process.exit(2);
-    }
-
-    runSql(cfg, sql, params, format, `query "${name_}"`);
+    const load = COMMANDS[first];
+    if (load) await (await load()).default(ctx);
+    else (await import('./commands/named.ts')).default(ctx, first, params);
   } catch (err) {
     console.error((err as Error).message);
     process.exit(1);

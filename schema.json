@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "sense.config.json",
-  "description": "Config for sense -- SQL over the frontmatter of a markdown tree.",
+  "description": "Config for sense -- SQL over the frontmatter, content, links, and structure of a markdown tree.",
   "type": "object",
   "additionalProperties": false,
   "required": ["scan", "queries"],
@@ -12,8 +12,8 @@
     },
     "version": {
       "type": "integer",
-      "enum": [1],
-      "description": "Config format version. Bumped only on breaking changes to this file's shape. Omit to default to 1; a version newer than this sense build supports makes it exit with an error rather than misinterpret the file."
+      "enum": [1, 2],
+      "description": "Config format version. Older versions are auto-migrated (and the file rewritten) on load; a version newer than this sense build supports makes it exit with an error rather than misinterpret the file. Omit to default to 1."
     },
     "scan": {
       "type": "object",
@@ -29,9 +29,28 @@
         }
       }
     },
+    "features": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Independently toggleable features. Absent block or key means enabled; set false to disable. Toggling a feature rebuilds the cache. Verbs degrade rather than fail: `find` without links is BM25-only, `map` without rank omits hubs, `peek` without sections omits the outline.",
+      "properties": {
+        "links": {
+          "type": "boolean",
+          "description": "Extract wikilinks and relative markdown links into the `links` table (src, target as written, dst resolved path or NULL for dead links). Powers backlinks, graph expansion in `find`, and `peek`'s link lists."
+        },
+        "sections": {
+          "type": "boolean",
+          "description": "Extract headings into the `sections` table (path, idx, level, heading, start_line, end_line, tokens estimate). Powers `peek`'s outline so agents can read line ranges instead of whole files."
+        },
+        "rank": {
+          "type": "boolean",
+          "description": "PageRank over resolved links into `frontmatter._rank` at reconcile -- a static importance prior. Powers `map`'s hub list; usable in any ORDER BY. Requires `links`."
+        }
+      }
+    },
     "queries": {
       "type": "object",
-      "description": "Named SQL queries runnable as `sense <name> [params...]`. Tables: `frontmatter` (one row per file, one column per discovered frontmatter key, plus `path`/`_mtime`/`_size`) and `content`, an FTS5 index (`title`, `summary`, `text`, `path`) for content search. `?` placeholders bind to CLI positional args in order. `has(field, value)`: array membership on a JSON-array field, substring match on a string, false on NULL. Canonical query: `SELECT f.path, content.title, content.summary, snippet(content, -1, '«', '»', '…', 10) AS hit FROM frontmatter f JOIN content ON content.path = f.path WHERE content MATCH ? ORDER BY bm25(content, 10.0, 5.0, 1.0) LIMIT 10`. Reserved frontmatter keys: `path`, `_mtime`, `_size`, `content`. Reserved query names (unreachable as subcommands): `init`, `query`, `watch`, `status`, `rebuild`.",
+      "description": "Named SQL queries runnable as `sense <name> [params...]`. Tables: `frontmatter` (one row per file, one column per discovered frontmatter key, plus `path`/`_mtime`/`_size`/`_rank`), `content` (FTS5: `title`, `summary`, `text`, `path`), `links` (`src`, `target`, `dst`), and `sections` (`path`, `idx`, `level`, `heading`, `start_line`, `end_line`, `tokens`). `?` placeholders bind to CLI positional args in order. `has(field, value)`: array membership on a JSON-array field, substring match on a string, false on NULL. Canonical query: `SELECT f.path, content.title, content.summary, snippet(content, -1, '«', '»', '…', 10) AS hit FROM frontmatter f JOIN content ON content.path = f.path WHERE content MATCH ? ORDER BY bm25(content, 10.0, 5.0, 1.0) LIMIT 10`. Reserved frontmatter keys: `path`, `_mtime`, `_size`, `_rank`, `content`, `links`, `sections`. Reserved query names (unreachable as subcommands): `init`, `query`, `find`, `map`, `peek`, `watch`, `status`, `rebuild`.",
       "additionalProperties": { "type": "string" }
     }
   }
