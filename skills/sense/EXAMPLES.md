@@ -83,6 +83,7 @@ sense query "SELECT DISTINCT type FROM frontmatter"    # what a field's values a
 | `SELECT text FROM content` | dumps the vault into context | `snippet(content, -1, '«', '»', '…', 10)` |
 | `sense find "pricing"` | one word misses synonyms | `"pricing OR billing OR invoicing"` |
 | `sense find "pricing model details"` | bare words AND-join in FTS5; one absent word = zero rows | OR the words, or quote an exact phrase |
+| `sense find "customer-facing OR on-site"` | bare punctuation is FTS5 syntax (`-` = column filter) | double-quote the terms: `"customer-facing" OR "on-site"` |
 | `Read` a 4,000-token file for one section | 10× the tokens needed | `peek` first, `Read` the line range |
 | queries without `LIMIT` | unbounded output | `LIMIT 10`, widen only if all rows look wrong |
 | save every query to config | config churn for one-offs | ad-hoc `sense query`; save only reusable views |

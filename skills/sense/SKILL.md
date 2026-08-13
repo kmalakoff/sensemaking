@@ -60,7 +60,9 @@ sense query "SELECT j.value, COUNT(*) n FROM frontmatter, json_each(frontmatter.
 ```
 
 - `content MATCH` takes FTS5 syntax: `a OR b`, `"phrase"`, `pref*`, `NEAR(a b, 5)`,
-  `summary: term`. Stemmed; markdown stripped at index time.
+  `summary: term`. Stemmed; markdown stripped at index time. Double-quote any term with
+  punctuation — bare `customer-facing` errors (`-` reads as a column filter), bare
+  apostrophes are syntax errors: write `"customer-facing"`, `"founder's"`.
 - Rank with `ORDER BY bm25(content, 10.0, 5.0, 1.0)` (title > summary > body); excerpt with
   `snippet(content, -1, '«', '»', '…', 10)`.
 - Select `content.title`/`content.summary` (always exist, empty when absent) rather than
