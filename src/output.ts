@@ -33,8 +33,9 @@ function render(rows: Row[], format: 'table' | 'json'): string {
 
 // Text renderers for the layer verbs; cli.ts prints what these return.
 
-export function renderMap(result: { docs: { count: number; bytes: number }; fields: Row[]; hubs: Row[]; recent: Row[] }): string {
+export function renderMap(result: { docs: { count: number; bytes: number }; fields: Row[]; fieldsTotal: number; hubs: Row[]; recent: Row[] }): string {
   const parts = [`docs: ${result.docs.count} (${Math.round(result.docs.bytes / 1024)} KB)\n`, render(result.fields, 'table')];
+  if (result.fieldsTotal > result.fields.length) parts.push(`(+${result.fieldsTotal - result.fields.length} more fields)`);
   if (result.hubs.length > 0) parts.push('\nhubs (by link rank):', render(result.hubs, 'table'));
   parts.push('\nrecent:', render(result.recent, 'table'));
   return parts.join('\n');

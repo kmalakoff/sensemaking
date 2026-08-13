@@ -31,6 +31,13 @@ sense query "SELECT path, title, status FROM frontmatter WHERE status = 'active'
 Plain SQL on discovered columns. Combine with search by joining `content` and adding
 `AND content MATCH ?` — filter and rank in one query.
 
+Per-member counts on an array field (GROUP BY on the raw column would split `["a","b"]` from
+`["b","a"]`):
+
+```
+sense query "SELECT j.value AS tag, COUNT(*) n FROM frontmatter, json_each(frontmatter.tags) j GROUP BY j.value ORDER BY n DESC"
+```
+
 ## C. Structure before reading
 
 ```
@@ -75,6 +82,7 @@ sense query "SELECT DISTINCT type FROM frontmatter"    # what a field's values a
 |---|---|---|
 | `SELECT text FROM content` | dumps the vault into context | `snippet(content, -1, '«', '»', '…', 10)` |
 | `sense find "pricing"` | one word misses synonyms | `"pricing OR billing OR invoicing"` |
+| `sense find "pricing model details"` | bare words AND-join in FTS5; one absent word = zero rows | OR the words, or quote an exact phrase |
 | `Read` a 4,000-token file for one section | 10× the tokens needed | `peek` first, `Read` the line range |
 | queries without `LIMIT` | unbounded output | `LIMIT 10`, widen only if all rows look wrong |
 | save every query to config | config churn for one-offs | ad-hoc `sense query`; save only reusable views |

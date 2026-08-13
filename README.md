@@ -64,8 +64,9 @@ ORDER BY bm25(content, 10.0, 5.0, 1.0) LIMIT 10
 | `query "<sql>" [params...]` | ad-hoc SQL over all four tables; `?` binds positional args |
 
 `find` seeds a personalized-PageRank walk with the BM25 matches, so a note that never contains
-the terms but is linked from ones that do still surfaces. Invalid FTS5 syntax falls back to
-OR over the words. `--where` takes a frontmatter condition against alias `f`.
+the terms but is linked from ones that do still surfaces. Terms pass verbatim to FTS5 `MATCH`
+(bare words AND-join; operators are yours to write). `--where` takes a frontmatter condition
+against alias `f`.
 `--format json` on any verb returns structured output.
 
 ## Config

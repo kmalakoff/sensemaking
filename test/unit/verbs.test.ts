@@ -56,10 +56,19 @@ describe('find', () => {
     assert.ok(rows.some((r) => r.path === 'floor.md'));
   });
 
-  it('invalid FTS5 syntax falls back to OR over words instead of erroring', () => {
+  it('terms pass verbatim: invalid FTS5 syntax errors loudly', () => {
     const { db, cfg } = openVault(makeVault());
-    const rows = find(db, cfg, 'what is the price floor?') as Array<{ path: string }>;
-    assert.ok(rows.some((r) => r.path === 'floor.md'));
+    assert.throws(() => find(db, cfg, 'price AND AND'), /fts5|syntax/);
+  });
+
+  it('terms pass verbatim: bare words AND-join, so an absent word means zero rows', () => {
+    const { db, cfg } = openVault(makeVault());
+    assert.deepEqual(find(db, cfg, 'price nonexistentword'), []);
+    const rows = find(db, cfg, 'price OR nonexistentword') as Array<{ path: string }>;
+    assert.ok(
+      rows.some((r) => r.path === 'floor.md'),
+      'explicit OR is the caller expressing intent'
+    );
   });
 
   it('with links disabled it degrades to BM25-only', () => {
@@ -148,5 +157,19 @@ describe('--version', () => {
     const result = spawnSync(process.execPath, [cliPath, '--version'], { encoding: 'utf8' });
     assert.equal(result.status, 0);
     assert.equal(result.stdout.trim(), `v${pkg.version}`);
+  });
+});
+
+describe('vaultMap truncation is reported', () => {
+  it('fieldsTotal carries the real count when fields exceed 20', () => {
+    const baseDir = tmpVault();
+    const fm: Record<string, unknown> = {};
+    for (let i = 0; i < 25; i++) fm[`field${String(i).padStart(2, '0')}`] = 'v';
+    write(baseDir, 'wide.md', 'body', fm);
+
+    const { db, cfg } = openVault(baseDir);
+    const result = vaultMap(db, cfg);
+    assert.equal(result.fields.length, 20);
+    assert.equal(result.fieldsTotal, 25);
   });
 });

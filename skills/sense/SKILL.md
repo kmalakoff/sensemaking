@@ -17,6 +17,8 @@ only as deep as the question needs.
 
 1. `sense map` — orient once: fields, hub notes, recent changes. Fixed-size output.
 2. `sense find "<terms>"` — locate: ranked references with excerpts, ~30 tokens/row.
+   FTS5 standard: bare words AND-join (one absent word = zero rows) — write
+   `a OR b OR c` for any-word matching.
 3. `sense peek <path>` — structure before reading: outline with `[L143-162, ~380t]` ranges,
    links both ways. ~17% the cost of reading the file.
 4. `Read` the line range peek gave you — not the whole file.
@@ -35,7 +37,11 @@ sense --list | status | rebuild
 ```
 
 - **Expand terms before searching.** Write `pricing OR billing OR invoicing`, not one word — you
-  know the synonyms; the index only knows the words in the files.
+  know the synonyms; the index only knows the words in the files. Expand categories into their
+  likely members too: a note about TypeScript never says "programming language".
+- Terms pass verbatim to FTS5 MATCH. Bare words AND-join — one absent word means zero rows —
+  so write `OR` yourself when you want any-word matching; invalid syntax is an error, not a
+  rewrite.
 - **Over-fetch, then choose.** `--k 20`, read the rows, open the 2–3 that matter.
 - `find` fuses BM25 with link-graph expansion; the `via` column says what produced each row —
   `match` (terms hit), `link` (connected to notes that hit), `match+link` (both).
@@ -50,6 +56,7 @@ sense query "SELECT src FROM links WHERE dst = ?" notes/pricing-model.md  # back
 sense query "SELECT src, target FROM links WHERE dst IS NULL"            # dead links
 sense query "SELECT path FROM frontmatter WHERE path NOT IN (SELECT dst FROM links WHERE dst IS NOT NULL)"  # orphans
 sense query "SELECT heading, start_line, tokens FROM sections WHERE path = ?" a.md   # budget a read
+sense query "SELECT j.value, COUNT(*) n FROM frontmatter, json_each(frontmatter.tags) j GROUP BY j.value ORDER BY n DESC"   # count per array member
 ```
 
 - `content MATCH` takes FTS5 syntax: `a OR b`, `"phrase"`, `pref*`, `NEAR(a b, 5)`,
@@ -59,6 +66,11 @@ sense query "SELECT heading, start_line, tokens FROM sections WHERE path = ?" a.
 - Select `content.title`/`content.summary` (always exist, empty when absent) rather than
   `f.title`/`f.summary` (discovered columns — error on vaults that never declare them).
 - `has(field, value)`: array membership on JSON-array fields, substring on strings, false on NULL.
+  To aggregate per member instead, use `json_each(frontmatter.<field>)` (above) -- GROUP BY on the
+  raw column splits `["a","b"]` and `["b","a"]` into separate buckets.
+- Date fields are stored as written. Compare through `datetime()`, which normalizes ISO 8601
+  timezone offsets to UTC: `WHERE datetime(dateCreated) >= datetime(?)`. Bare string comparison
+  is only safe when every note uses the same offset.
 - Never `SELECT text FROM content` — that is the whole vault into context. `SELECT * FROM
   frontmatter` is safe; prose is not a frontmatter column. Always `LIMIT`.
 
@@ -70,7 +82,8 @@ Worked traces: [EXAMPLES.md](EXAMPLES.md).
   Discovery walks up from cwd; `--config <path>` overrides.
 - Save a query into `sense.config.json` only when it will be reused; run ad-hoc otherwise.
 - When writing notes, give each a one-line `summary:` — it appears in every result row and is a
-  weighted search field.
+  weighted search field. Write date fields as ISO 8601 (`2026-08-12`, or with time and offset) —
+  the only format SQL date comparisons understand.
 - Reserved frontmatter keys (dropped with a warning): `path`, `_mtime`, `_size`, `_rank`,
   `content`, `links`, `sections`.
 - Exit codes: `0` ok, `1` error (SQLite message verbatim), `2` usage (unknown query, wrong

@@ -24,15 +24,10 @@ export function find(db: DatabaseSync, cfg: Config, terms: string, opts: FindOpt
   const k = opts.k ?? 10;
   const fetch = Math.max(k * 3, 30);
 
+  // Terms pass verbatim to FTS5 MATCH: bare words AND-join, operators are the caller's.
+  // Invalid syntax propagates as an error, zero matches return zero -- no silent rewrites.
   const matchSql = `SELECT content.path AS path, snippet(content, -1, '«', '»', '…', 10) AS hit FROM content WHERE content MATCH ? ORDER BY ${WEIGHTED_BM25} LIMIT ${fetch}`;
-  let matchRows: Array<{ path: string; hit: string }>;
-  try {
-    matchRows = db.prepare(matchSql).all(terms) as Array<{ path: string; hit: string }>;
-  } catch {
-    // Raw natural language can be invalid FTS5 syntax; fall back to OR over its words.
-    const fallback = (terms.match(/[\p{L}\p{N}]+/gu) ?? []).join(' OR ');
-    matchRows = fallback ? (db.prepare(matchSql).all(fallback) as Array<{ path: string; hit: string }>) : [];
-  }
+  const matchRows = db.prepare(matchSql).all(terms) as Array<{ path: string; hit: string }>;
 
   const hits = new Map(matchRows.map((r) => [r.path, r.hit]));
   const candidates = new Map<string, { score: number; via: string }>();
@@ -75,7 +70,8 @@ export function find(db: DatabaseSync, cfg: Config, terms: string, opts: FindOpt
 
 export interface VaultMap {
   docs: { count: number; bytes: number };
-  fields: Row[];
+  fields: Row[]; // top 20 by coverage; fieldsTotal carries the real count
+  fieldsTotal: number;
   hubs: Row[];
   recent: Row[];
 }
@@ -87,19 +83,19 @@ export function vaultMap(db: DatabaseSync, cfg: Config): VaultMap {
   const docs = db.prepare('SELECT COUNT(*) AS count, COALESCE(SUM("_size"), 0) AS bytes FROM frontmatter').get() as { count: number; bytes: number };
 
   const columns = (db.prepare('PRAGMA table_info(frontmatter)').all() as Array<{ name: string }>).map((r) => r.name).filter((name) => !INTERNAL_COLUMNS.has(name));
-  const fields = columns
+  const allFields = columns
     .map((name) => {
       const { n } = db.prepare(`SELECT COUNT("${name.split('"').join('""')}") AS n FROM frontmatter`).get() as { n: number };
       return { field: name, coverage: n };
     })
-    .sort((a, b) => (b.coverage as number) - (a.coverage as number))
-    .slice(0, 20) as Row[];
+    .sort((a, b) => (b.coverage as number) - (a.coverage as number)) as Row[];
+  const fields = allFields.slice(0, 20);
 
   const hubs = featureEnabled(cfg, 'rank') ? (db.prepare(`SELECT f."path" AS path, round(f."_rank" * 100, 2) AS rank, content.title FROM frontmatter f JOIN content ON content.path = f."path" WHERE f."_rank" IS NOT NULL ORDER BY f."_rank" DESC LIMIT 8`).all() as Row[]) : [];
 
   const recent = db.prepare(`SELECT "path", datetime("_mtime" / 1000, 'unixepoch') AS modified FROM frontmatter ORDER BY "_mtime" DESC LIMIT 5`).all() as Row[];
 
-  return { docs, fields, hubs, recent };
+  return { docs, fields, fieldsTotal: allFields.length, hubs, recent };
 }
 
 export interface Peek {

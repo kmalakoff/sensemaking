@@ -36,7 +36,7 @@
       "properties": {
         "links": {
           "type": "boolean",
-          "description": "Extract wikilinks and relative markdown links into the `links` table (src, target as written, dst resolved path or NULL for dead links). Powers backlinks, graph expansion in `find`, and `peek`'s link lists."
+          "description": "Extract wikilinks and relative markdown links into the `links` table (src, target as written, dst resolved path or NULL for dead links; an ambiguous basename resolves to the lexicographically first match). Powers backlinks, graph expansion in `find`, and `peek`'s link lists."
         },
         "sections": {
           "type": "boolean",
