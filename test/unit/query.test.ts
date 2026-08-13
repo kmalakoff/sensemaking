@@ -1,11 +1,8 @@
 import assert from 'assert';
-import { spawnSync } from 'child_process';
 import { mkdtempSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
-import { dirname, join } from 'path';
-import { fileURLToPath } from 'url';
-
-const cliPath = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'bin', 'cli.js');
+import { join } from 'path';
+import { runCli as spawnCli } from '../lib/cli.ts';
 
 function makeTree(): string {
   const dir = mkdtempSync(join(tmpdir(), 'sense-query-'));
@@ -16,7 +13,7 @@ function makeTree(): string {
 }
 
 function runCli(dir: string, args: string[]) {
-  return spawnSync(process.execPath, [cliPath, ...args, '--config', join(dir, 'sense.config.json')], { encoding: 'utf8' });
+  return spawnCli([...args, '--config', join(dir, 'sense.config.json')]);
 }
 
 describe('query subcommand (ad-hoc SQL)', () => {

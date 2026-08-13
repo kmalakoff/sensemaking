@@ -1,22 +1,9 @@
 import assert from 'assert';
-import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'fs';
-import { tmpdir } from 'os';
+import { mkdirSync, rmSync, utimesSync, writeFileSync } from 'fs';
 import { join } from 'path';
-import type { Config } from 'sensemaking';
-import { open } from 'sensemaking';
+import { openTree, tmpTree, writeNote } from '../lib/tree.ts';
 
-function tmpTree(): string {
-  return mkdtempSync(join(tmpdir(), 'sense-features-'));
-}
-
-function write(baseDir: string, relPath: string, body: string, frontmatter: Record<string, unknown> = {}): void {
-  const lines = Object.entries(frontmatter).map(([k, v]) => `${k}: ${JSON.stringify(v)}`);
-  writeFileSync(join(baseDir, relPath), `---\n${lines.join('\n')}\n---\n\n${body}\n`);
-}
-
-function openTree(baseDir: string, features?: Config['features']) {
-  return open({ scan: { include: ['**/*.md'] }, queries: {}, features, baseDir, configPath: null });
-}
+const write = (baseDir: string, relPath: string, body: string, frontmatter: Record<string, unknown> = {}) => writeNote(baseDir, relPath, { body, frontmatter });
 
 describe('links feature', () => {
   it('wikilinks resolve by basename; aliases, anchors, and embeds are handled', () => {

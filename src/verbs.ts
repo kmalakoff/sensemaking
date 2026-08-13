@@ -26,7 +26,11 @@ export function find(db: DatabaseSync, cfg: Config, terms: string, opts: FindOpt
 
   // Terms pass verbatim to FTS5 MATCH: bare words AND-join, operators are the caller's.
   // Invalid syntax propagates as an error, zero matches return zero -- no silent rewrites.
-  const matchSql = `SELECT content.path AS path, snippet(content, -1, '«', '»', '…', 10) AS hit FROM content WHERE content MATCH ? ORDER BY ${WEIGHTED_BM25} LIMIT ${fetch}`;
+  // --where applies inside the candidate query (a post-filter over the top-N would drop
+  // matches ranked past the pool) and again on the final select for link-derived rows.
+  const whereJoin = opts.where ? `JOIN frontmatter f ON f."path" = content.path` : '';
+  const whereCond = opts.where ? `AND (${opts.where})` : '';
+  const matchSql = `SELECT content.path AS path, snippet(content, -1, '«', '»', '…', 10) AS hit FROM content ${whereJoin} WHERE content MATCH ? ${whereCond} ORDER BY ${WEIGHTED_BM25} LIMIT ${fetch}`;
   const matchRows = db.prepare(matchSql).all(terms) as Array<{ path: string; hit: string }>;
 
   const hits = new Map(matchRows.map((r) => [r.path, r.hit]));

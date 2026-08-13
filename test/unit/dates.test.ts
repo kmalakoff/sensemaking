@@ -1,18 +1,15 @@
 import assert from 'assert';
-import { mkdtempSync, writeFileSync } from 'fs';
-import { tmpdir } from 'os';
-import { join } from 'path';
-import { open } from 'sensemaking';
+import { openTree, tmpTree, writeNote } from '../lib/tree.ts';
 
 // TaskNotes/Obsidian convention: dateCreated: YYYY-MM-DDTHH:MM:SS.sss±HH:MM.
 // Stored as written (yaml core schema has no timestamp type); compared via datetime().
 
 function treeWith(dates: Record<string, string>) {
-  const baseDir = mkdtempSync(join(tmpdir(), 'sense-dates-'));
+  const baseDir = tmpTree();
   for (const [name, date] of Object.entries(dates)) {
-    writeFileSync(join(baseDir, `${name}.md`), `---\ntitle: ${name}\ndateCreated: ${date}\n---\n\nbody\n`);
+    writeNote(baseDir, `${name}.md`, { frontmatter: { title: name, dateCreated: date } });
   }
-  return open({ scan: { include: ['*.md'] }, queries: {}, baseDir, configPath: null });
+  return openTree(baseDir);
 }
 
 describe('date frontmatter (ISO 8601 with offsets)', () => {

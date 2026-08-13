@@ -1,22 +1,12 @@
 import assert from 'assert';
-import { mkdtempSync, writeFileSync } from 'fs';
-import { tmpdir } from 'os';
-import { dirname, join } from 'path';
-import { fileURLToPath } from 'url';
+import { readFileSync } from 'fs';
+import { join } from 'path';
+import type { Row } from 'sensemaking';
+import { find, mapTree, peek } from 'sensemaking';
+import { packageRoot, runCli } from '../lib/cli.ts';
+import { openTree, tmpTree, writeNote } from '../lib/tree.ts';
 
-const dirname2 = () => dirname(fileURLToPath(import.meta.url));
-
-import type { Config, Row } from 'sensemaking';
-import { find, mapTree, open, peek } from 'sensemaking';
-
-function tmpTree(): string {
-  return mkdtempSync(join(tmpdir(), 'sense-verbs-'));
-}
-
-function write(baseDir: string, relPath: string, body: string, frontmatter: Record<string, unknown> = {}): void {
-  const lines = Object.entries(frontmatter).map(([k, v]) => `${k}: ${JSON.stringify(v)}`);
-  writeFileSync(join(baseDir, relPath), `---\n${lines.join('\n')}\n---\n\n${body}\n`);
-}
+const write = (baseDir: string, relPath: string, body: string, frontmatter: Record<string, unknown> = {}) => writeNote(baseDir, relPath, { body, frontmatter });
 
 function makeTree(): string {
   const baseDir = tmpTree();
@@ -25,10 +15,6 @@ function makeTree(): string {
   write(baseDir, 'archived.md', 'Old price discussion, superseded.', { title: 'Old', status: 'archived' });
   write(baseDir, 'unrelated.md', 'Gardening notes.', { title: 'Gardening', status: 'active' });
   return baseDir;
-}
-
-function openTree(baseDir: string, features?: Config['features']) {
-  return open({ scan: { include: ['**/*.md'] }, queries: {}, features, baseDir, configPath: null });
 }
 
 describe('find', () => {
@@ -149,12 +135,9 @@ describe('peek stays bounded', () => {
 });
 
 describe('--version', () => {
-  it('prints the package.json version', async () => {
-    const { spawnSync } = await import('child_process');
-    const { readFileSync } = await import('fs');
-    const cliPath = join(dirname2(), '..', '..', 'bin', 'cli.js');
-    const pkg = JSON.parse(readFileSync(join(dirname2(), '..', '..', 'package.json'), 'utf8'));
-    const result = spawnSync(process.execPath, [cliPath, '--version'], { encoding: 'utf8' });
+  it('prints the package.json version', () => {
+    const pkg = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8'));
+    const result = runCli(['--version']);
     assert.equal(result.status, 0);
     assert.equal(result.stdout.trim(), `v${pkg.version}`);
   });
@@ -171,5 +154,37 @@ describe('mapTree truncation is reported', () => {
     const result = mapTree(db, cfg);
     assert.equal(result.fields.length, 20);
     assert.equal(result.fieldsTotal, 25);
+  });
+});
+
+describe('find --where applies before the candidate cut', () => {
+  it('finds a filtered match ranked past the BM25 candidate pool', () => {
+    const baseDir = tmpTree();
+    // 40 archived notes with a title hit outrank one active note with a body-only
+    // mention; the candidate pool is max(k*3, 30), so a post-filter would return [].
+    for (let i = 0; i < 40; i++) write(baseDir, `arch${String(i).padStart(2, '0')}.md`, 'widget specs here', { title: `Widget ${i}`, status: 'archived' });
+    write(baseDir, 'live.md', 'A much longer note that mentions a widget once among many other unrelated words about several other topics entirely.', { title: 'Operations', status: 'active' });
+
+    const { db, cfg } = openTree(baseDir);
+    const rows = find(db, cfg, 'widget', { where: "f.status = 'active'" }) as Array<{ path: string }>;
+    assert.deepEqual(
+      rows.map((r) => r.path),
+      ['live.md']
+    );
+  });
+
+  it('link-derived rows still respect the filter', () => {
+    const baseDir = tmpTree();
+    write(baseDir, 'hit.md', 'gadget details, see [[linked-archived]] and [[linked-active]]', { title: 'Gadget', status: 'active' });
+    write(baseDir, 'linked-archived.md', 'no matching terms here', { title: 'Old', status: 'archived' });
+    write(baseDir, 'linked-active.md', 'no matching terms here either', { title: 'Ref', status: 'active' });
+
+    const { db, cfg } = openTree(baseDir);
+    const rows = find(db, cfg, 'gadget', { where: "f.status = 'active'" }) as Array<{ path: string; via: string }>;
+    assert.ok(
+      rows.some((r) => r.path === 'linked-active.md'),
+      `expected linked-active via link: ${JSON.stringify(rows)}`
+    );
+    assert.ok(!rows.some((r) => r.path === 'linked-archived.md'), 'archived link-derived row must be filtered');
   });
 });

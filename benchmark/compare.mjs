@@ -1,32 +1,47 @@
 // Full benchmark flow: install versions, copy the tree per version, run run.mjs for each,
 // print a ready-to-paste markdown table.
-// usage: node bench/compare.mjs <notes-dir> <version...>   e.g. node bench/compare.mjs ~/notes 0.2.1 local
-// 'local' = this repo's working tree; anything else = that version from npm.
+// usage: node benchmark/compare.mjs [corpus-or-dir] [version...]
+// Defaults: obsidian-hub corpus, latest published version vs 'local' (this working tree) --
+// so a bare `node bench/compare.mjs` answers "did the working tree regress?". Named corpora
+// and npm installs cache under .tmp/ (published versions are immutable; delete .tmp to refetch).
 import { spawnSync } from 'node:child_process';
-import { cpSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-
-const [treeDir, ...versions] = process.argv.slice(2);
-if (!treeDir || versions.length === 0) {
-  console.error('usage: node bench/compare.mjs <notes-dir> <version...>   (version = npm semver or "local")');
-  process.exit(2);
-}
+import { cached } from './lib/cache.mjs';
+import { corpusPath } from './lib/corpus.mjs';
 
 const benchDir = dirname(fileURLToPath(import.meta.url));
+const ROOT = join(benchDir, '..');
+
+function latestPublished() {
+  const out = spawnSync('npm', ['view', 'sensemaking', 'version'], { encoding: 'utf8' });
+  if (out.status !== 0) {
+    console.error(`npm view sensemaking version failed (offline?); pass versions explicitly:\n${out.stderr}`);
+    process.exit(1);
+  }
+  return out.stdout.trim();
+}
+
+const [corpusArg, ...versionArgs] = process.argv.slice(2);
+const treeDir = corpusArg ? (corpusPath(corpusArg) ?? resolve(corpusArg)) : corpusPath('obsidian-hub');
+if (!existsSync(treeDir)) {
+  console.error(`not a corpus name or directory: ${corpusArg}`);
+  process.exit(2);
+}
+const versions = versionArgs.length > 0 ? versionArgs : [latestPublished(), 'local'];
+
 const work = mkdtempSync(join(tmpdir(), 'sense-bench-'));
 
 function rootFor(version) {
-  if (version === 'local') return join(benchDir, '..');
-  const prefix = join(work, `pkg-${version}`);
-  writeFileSync(join(work, 'package.json'), '{"name":"bench","private":true}'); // stop npm walking up
-  const install = spawnSync('npm', ['install', `sensemaking@${version}`, '--ignore-scripts', '--no-audit', '--no-fund', '--prefix', prefix], { cwd: work, encoding: 'utf8' });
-  if (install.status !== 0) {
-    console.error(`npm install sensemaking@${version} failed:\n${install.stderr}`);
-    process.exit(1);
-  }
-  return join(prefix, 'node_modules', 'sensemaking');
+  if (version === 'local') return ROOT;
+  const dir = cached(`sensemaking-${version}`, (staging) => {
+    writeFileSync(join(staging, 'package.json'), '{"name":"bench","private":true}'); // stop npm walking up
+    const install = spawnSync('npm', ['install', `sensemaking@${version}`, '--ignore-scripts', '--no-audit', '--no-fund', '--prefix', staging], { cwd: staging, encoding: 'utf8' });
+    if (install.status !== 0) throw new Error(`npm install sensemaking@${version} failed:\n${install.stderr}`);
+  });
+  return join(dir, 'node_modules', 'sensemaking');
 }
 
 // Fresh copy per version: cache formats and config auto-migration must not cross versions.
@@ -58,6 +73,8 @@ const ROWS = [
   ['`find` (BM25 + link fusion)', (r) => ms(r.find_ms)],
   ['`map` (orient)', (r) => (r.map_ms === null ? '—' : `${r.map_ms} ms / ~${r.map_tokens} tokens`)],
   [`\`peek\` largest note (~${first.largest_note_tokens} t)`, (r) => (r.peek_ms === null ? '—' : `${r.peek_ms} ms / ~${r.peek_tokens} tokens (${((r.peek_tokens / r.largest_note_tokens) * 100).toFixed(1)}%)`)],
+  [`bulk change (${first.bulk_files} files): first query`, (r) => ms(r.bulk_change_ms)],
+  [`bulk change (${first.bulk_files} files): with warm watcher`, (r) => ms(r.bulk_watch_ms)],
   ['in-process: cold index build', (r) => (r.inproc?.cold_build_ms === undefined ? `**${r.inproc?.error ?? '—'}**` : `${r.inproc.cold_build_ms} ms`)],
   ['in-process: freshness check, no change', (r) => (r.inproc?.open_nochange_ms === undefined ? '—' : `${r.inproc.open_nochange_ms} ms`)],
   ['in-process: update, 1 file touched', (r) => (r.inproc?.update_1_file_ms === undefined ? '—' : `${r.inproc.update_1_file_ms} ms`)],

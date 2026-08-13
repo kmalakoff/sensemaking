@@ -1,18 +1,11 @@
 import assert from 'assert';
-import { spawnSync } from 'child_process';
 import { mkdtempSync, readFileSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
-import { dirname, join } from 'path';
+import { join } from 'path';
 import { SUPPORTED_CONFIG_VERSION } from 'sensemaking';
-import { fileURLToPath } from 'url';
+import { runCli as spawnCli } from '../lib/cli.ts';
 
-const cliPath = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'bin', 'cli.js');
-
-function runCli(configPath: string) {
-  return spawnSync(process.execPath, [cliPath, '--list', '--config', configPath], {
-    encoding: 'utf8',
-  });
-}
+const runCli = (configPath: string) => spawnCli(['--list', '--config', configPath]);
 
 function writeConfig(version: number | undefined): string {
   const dir = mkdtempSync(join(tmpdir(), 'sense-version-'));

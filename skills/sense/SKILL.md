@@ -72,7 +72,10 @@ sense query "SELECT j.value, COUNT(*) n FROM frontmatter, json_each(frontmatter.
   `snippet(content, -1, '«', '»', '…', 10)`.
 - Select `content.title`/`content.summary` (always exist, empty when absent) rather than
   `f.title`/`f.summary` (discovered columns — error on trees that never declare them).
-- `has(field, value)`: array membership on JSON-array fields, substring on strings, false on NULL.
+- `has(field, value)`: array membership on JSON-array fields, substring on strings, false on NULL
+  — the `includes()` convention. Substring means `has(f.status, 'active')` also matches
+  `inactive`; exact scalar match is `f.status = ?`, deliberate substring is `LIKE`, exact array
+  membership is `EXISTS (SELECT 1 FROM json_each(f.tags) WHERE value = ?)`.
   To aggregate per member instead, use `json_each(frontmatter.<field>)` (above) -- GROUP BY on the
   raw column splits `["a","b"]` and `["b","a"]` into separate buckets.
 - Date fields are stored as written. Compare through `datetime()`, which normalizes ISO 8601

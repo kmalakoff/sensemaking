@@ -1,18 +1,21 @@
 // Benchmark one sensemaking package against one tree; prints a JSON row for BENCHMARKING.md.
-// usage: node bench/run.mjs <package-root> <notes-dir>
+// usage: node benchmark/run.mjs <package-root> <notes-dir>
 // Wall-time metrics spawn the CLI (what a calling agent pays, ~40ms Node startup included);
 // in-process metrics import the library and time the engine alone (index build, freshness
 // check, incremental update).
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { appendFileSync, readdirSync, rmSync, statSync, utimesSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-const [pkgRoot, tree] = process.argv.slice(2);
-if (!pkgRoot || !tree) {
+const [pkgRootArg, treeArg] = process.argv.slice(2);
+if (!pkgRootArg || !treeArg) {
   console.error('usage: node bench/run.mjs <package-root> <notes-dir>');
   process.exit(2);
 }
+// Absolute from the start: spawns below run with cwd set to the tree.
+const pkgRoot = resolve(pkgRootArg);
+const tree = resolve(treeArg);
 const cli = join(pkgRoot, 'bin', 'cli.js');
 
 const run = (args) => spawnSync(process.execPath, [cli, ...args], { cwd: tree, encoding: 'utf8', maxBuffer: 64e6 });
@@ -95,6 +98,29 @@ try {
   inproc = { error: String(err.message ?? err).split('\n')[0] };
 }
 
+// --- bulk change (watch's scenario): touch many files, time the first query after ---
+const BULK = Math.min(500, mdFiles.length);
+const touchMany = () => {
+  const future = new Date(Date.now() + 120_000 + Math.random() * 60_000);
+  for (const f of mdFiles.slice(0, BULK)) utimesSync(join(tree, f.rel), future, future);
+};
+run(['query', 'SELECT 1']); // warm the cache first
+touchMany();
+const bulkCold = fail(timed(['query', 'SELECT COUNT(*) AS n FROM frontmatter'], 1));
+
+// Same change with a watcher already running: it reparses in the background, so the
+// first query pays only the freshness check.
+let bulkWatch = null;
+try {
+  const watcher = spawn(process.execPath, [cli, 'watch', '--force'], { cwd: tree, stdio: 'ignore' });
+  await new Promise((r) => setTimeout(r, 1500)); // watcher startup + initial reconcile
+  touchMany();
+  await new Promise((r) => setTimeout(r, 4000)); // debounce + background reparse
+  bulkWatch = fail(timed(['query', 'SELECT COUNT(*) AS n FROM frontmatter'], 1));
+  watcher.kill('SIGTERM');
+  await new Promise((r) => setTimeout(r, 300));
+} catch {}
+
 console.log(
   JSON.stringify(
     {
@@ -109,6 +135,9 @@ console.log(
       peek_ms: peekR?.ms ?? null,
       peek_tokens: peekR ? Math.round(peekR.bytes / 4) : null,
       largest_note_tokens: Math.round(largest.size / 4),
+      bulk_files: BULK,
+      bulk_change_ms: bulkCold?.ms ?? null,
+      bulk_watch_ms: bulkWatch?.ms ?? null,
       inproc,
     },
     null,

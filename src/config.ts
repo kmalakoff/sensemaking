@@ -87,6 +87,28 @@ export function findConfigPath(startDir: string): string | null {
   }
 }
 
+// Shape check for hand-edited files: a typo'd config fails with a named error, not a
+// TypeError from whatever code touched the missing field first. `queries` is optional
+// on disk (absent = none); `scan.include` has no usable default.
+function validateConfig(parsed: unknown, configPath: string): Config {
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw new SenseError('CONFIG_INVALID', `${configPath}: config must be a JSON object`);
+  }
+  const cfg = parsed as Record<string, unknown>;
+  const scan = cfg.scan as { include?: unknown } | undefined;
+  if (!scan || !Array.isArray(scan.include) || scan.include.length === 0 || !scan.include.every((g) => typeof g === 'string')) {
+    throw new SenseError('CONFIG_INVALID', `${configPath}: scan.include must be a non-empty array of glob strings`);
+  }
+  if (cfg.queries === undefined) cfg.queries = {};
+  if (typeof cfg.queries !== 'object' || cfg.queries === null || Array.isArray(cfg.queries) || !Object.values(cfg.queries).every((q) => typeof q === 'string')) {
+    throw new SenseError('CONFIG_INVALID', `${configPath}: queries must be an object of name -> SQL string`);
+  }
+  if (cfg.features !== undefined && (typeof cfg.features !== 'object' || cfg.features === null || Array.isArray(cfg.features) || !Object.values(cfg.features).every((v) => typeof v === 'boolean'))) {
+    throw new SenseError('CONFIG_INVALID', `${configPath}: features must be an object of name -> boolean`);
+  }
+  return cfg as unknown as Config;
+}
+
 export function loadConfig(explicitPath?: string): ResolvedConfig {
   let configPath: string;
   if (explicitPath) {
@@ -101,12 +123,16 @@ export function loadConfig(explicitPath?: string): ResolvedConfig {
   }
 
   const raw = readFileSync(configPath, 'utf8');
-  let cfg = JSON.parse(raw) as Config;
+  const parsed: unknown = JSON.parse(raw);
 
-  const version = cfg.version ?? 1;
+  // Version gate before shape validation: a config written by a newer sense should fail
+  // with "requires a newer sense", not with shape errors its own version may not have.
+  const version = typeof parsed === 'object' && parsed !== null && typeof (parsed as { version?: unknown }).version === 'number' ? (parsed as { version: number }).version : 1;
   if (version > SUPPORTED_CONFIG_VERSION) {
     throw new SenseError('CONFIG_VERSION_UNSUPPORTED', `config version ${version} requires a newer sense`);
   }
+
+  let cfg = validateConfig(parsed, configPath);
 
   let migratedFrom: number | undefined;
   if (version < SUPPORTED_CONFIG_VERSION) {

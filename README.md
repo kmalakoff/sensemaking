@@ -94,7 +94,9 @@ noted on stderr.
 ## Reference
 
 - `has(field, value)` — the one custom SQL function: array membership on JSON-array fields,
-  substring on strings, false on missing keys.
+  substring on strings (so `has(f.status, 'active')` also matches `inactive`), false on missing
+  keys. Exact matches: `=` for scalars, `EXISTS (SELECT 1 FROM json_each(f.tags) WHERE value = ?)`
+  for array members.
 - Reserved frontmatter keys (dropped with a warning): `path`, `_mtime`, `_size`, `_rank`,
   `content`, `links`, `sections`.
 - FTS5 syntax in `MATCH`: `a OR b`, `"phrase"`, `pref*`, `NEAR(a b, 5)`, `summary: term`.
