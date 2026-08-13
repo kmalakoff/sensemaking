@@ -5,7 +5,7 @@ import type { Ctx } from './commands/types.ts';
 import { loadConfig, SUPPORTED_CONFIG_VERSION } from './config.ts';
 
 // Parsing and dispatch only. Commands live in src/commands/, one file each, lazy-loaded --
-// nothing vault- or dependency-heavy may be imported at the top of this file.
+// nothing tree- or dependency-heavy may be imported at the top of this file.
 
 // Works from dist/cjs and dist/esm alike: walk up past the dist type-marker package.json.
 function packageVersion(): string {

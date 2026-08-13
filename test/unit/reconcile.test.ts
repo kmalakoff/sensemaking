@@ -4,7 +4,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { open, rebuild } from 'sensemaking';
 
-function tmpVault(): string {
+function tmpTree(): string {
   return mkdtempSync(join(tmpdir(), 'sense-reconcile-'));
 }
 
@@ -13,17 +13,17 @@ function write(baseDir: string, relPath: string, frontmatter: Record<string, unk
   writeFileSync(join(baseDir, relPath), `---\n${lines.join('\n')}\n---\n\nbody\n`);
 }
 
-function openVault(baseDir: string) {
+function openTree(baseDir: string) {
   return open({ scan: { include: ['*.md'] }, queries: {}, baseDir, configPath: null });
 }
 
 describe('reconcile', () => {
   it('create files -> open -> counts', () => {
-    const baseDir = tmpVault();
+    const baseDir = tmpTree();
     write(baseDir, 'a.md', { title: 'A' });
     write(baseDir, 'b.md', { title: 'B' });
 
-    const result = openVault(baseDir);
+    const result = openTree(baseDir);
     const rows = result.db.prepare('SELECT path FROM frontmatter ORDER BY path').all() as Array<{ path: string }>;
     assert.deepEqual(
       rows.map((r) => r.path),
@@ -33,23 +33,23 @@ describe('reconcile', () => {
   });
 
   it('unchanged files are not reparsed on a second open', () => {
-    const baseDir = tmpVault();
+    const baseDir = tmpTree();
     write(baseDir, 'a.md', { title: 'A' });
 
-    const first = openVault(baseDir);
+    const first = openTree(baseDir);
     assert.equal(first.parsed, 1);
     first.db.close();
 
-    const second = openVault(baseDir);
+    const second = openTree(baseDir);
     assert.equal(second.parsed, 0, 'warm cache: nothing should be reparsed');
     second.db.close();
   });
 
   it('modifying a file (mtime/size change) updates its row', () => {
-    const baseDir = tmpVault();
+    const baseDir = tmpTree();
     write(baseDir, 'a.md', { title: 'Original' });
 
-    const first = openVault(baseDir);
+    const first = openTree(baseDir);
     first.db.close();
 
     // force a distinct mtime; fast successive writes can quantize to the same one
@@ -57,7 +57,7 @@ describe('reconcile', () => {
     const future = new Date(Date.now() + 5000);
     utimesSync(join(baseDir, 'a.md'), future, future);
 
-    const second = openVault(baseDir);
+    const second = openTree(baseDir);
     assert.equal(second.parsed, 1);
     const row = second.db.prepare('SELECT title, extra FROM frontmatter WHERE path = ?').get('a.md') as Record<string, unknown>;
     assert.equal(row.title, 'Updated');
@@ -66,16 +66,16 @@ describe('reconcile', () => {
   });
 
   it('deleting a file removes its row', () => {
-    const baseDir = tmpVault();
+    const baseDir = tmpTree();
     write(baseDir, 'a.md', { title: 'A' });
     write(baseDir, 'b.md', { title: 'B' });
 
-    const first = openVault(baseDir);
+    const first = openTree(baseDir);
     first.db.close();
 
     rmSync(join(baseDir, 'b.md'));
 
-    const second = openVault(baseDir);
+    const second = openTree(baseDir);
     const rows = second.db.prepare('SELECT path FROM frontmatter ORDER BY path').all() as Array<{ path: string }>;
     assert.deepEqual(
       rows.map((r) => r.path),
@@ -85,15 +85,15 @@ describe('reconcile', () => {
   });
 
   it('adding a file makes its row appear', () => {
-    const baseDir = tmpVault();
+    const baseDir = tmpTree();
     write(baseDir, 'a.md', { title: 'A' });
 
-    const first = openVault(baseDir);
+    const first = openTree(baseDir);
     first.db.close();
 
     write(baseDir, 'b.md', { title: 'B' });
 
-    const second = openVault(baseDir);
+    const second = openTree(baseDir);
     const rows = second.db.prepare('SELECT path FROM frontmatter ORDER BY path').all() as Array<{ path: string }>;
     assert.deepEqual(
       rows.map((r) => r.path),
@@ -104,17 +104,17 @@ describe('reconcile', () => {
   });
 
   it('a new frontmatter key adds a column', () => {
-    const baseDir = tmpVault();
+    const baseDir = tmpTree();
     write(baseDir, 'a.md', { title: 'A' });
 
-    const first = openVault(baseDir);
+    const first = openTree(baseDir);
     first.db.close();
 
     const future = new Date(Date.now() + 5000);
     write(baseDir, 'b.md', { title: 'B', brandNew: 'yes' });
     utimesSync(join(baseDir, 'b.md'), future, future);
 
-    const second = openVault(baseDir);
+    const second = openTree(baseDir);
     const columns = second.db.prepare('PRAGMA table_info(frontmatter)').all() as Array<{ name: string }>;
     assert.ok(columns.some((c) => c.name === 'brandNew'));
 
@@ -124,17 +124,17 @@ describe('reconcile', () => {
   });
 
   it('rebuild: deletes .sense/ and fully re-crawls, dropping lingering columns', () => {
-    const baseDir = tmpVault();
+    const baseDir = tmpTree();
     write(baseDir, 'a.md', { title: 'A' });
     write(baseDir, 'gone.md', { title: 'Gone', ephemeral: 'value' });
 
-    const first = openVault(baseDir);
+    const first = openTree(baseDir);
     let columns = first.db.prepare('PRAGMA table_info(frontmatter)').all() as Array<{ name: string }>;
     assert.ok(columns.some((c) => c.name === 'ephemeral'));
     first.db.close();
 
     rmSync(join(baseDir, 'gone.md'));
-    const second = openVault(baseDir);
+    const second = openTree(baseDir);
     // ALTER TABLE ADD COLUMN doesn't undo itself
     columns = second.db.prepare('PRAGMA table_info(frontmatter)').all() as Array<{ name: string }>;
     assert.ok(

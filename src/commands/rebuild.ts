@@ -1,6 +1,6 @@
 import { docCount, rebuild } from '../db.ts';
+import { printWarnings } from './shared.ts';
 import type { Command } from './types.ts';
-import { printWarnings } from './vault.ts';
 
 const rebuildCmd: Command = (ctx) => {
   const result = rebuild(ctx.resolveConfig());

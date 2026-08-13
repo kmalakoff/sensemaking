@@ -7,9 +7,9 @@ import { fileURLToPath } from 'url';
 const dirname2 = () => dirname(fileURLToPath(import.meta.url));
 
 import type { Config, Row } from 'sensemaking';
-import { find, open, peek, vaultMap } from 'sensemaking';
+import { find, mapTree, open, peek } from 'sensemaking';
 
-function tmpVault(): string {
+function tmpTree(): string {
   return mkdtempSync(join(tmpdir(), 'sense-verbs-'));
 }
 
@@ -18,8 +18,8 @@ function write(baseDir: string, relPath: string, body: string, frontmatter: Reco
   writeFileSync(join(baseDir, relPath), `---\n${lines.join('\n')}\n---\n\n${body}\n`);
 }
 
-function makeVault(): string {
-  const baseDir = tmpVault();
+function makeTree(): string {
+  const baseDir = tmpTree();
   write(baseDir, 'floor.md', 'The price floor is 100 credits. See [[context]] for why.', { title: 'Pricing floor', status: 'active' });
   write(baseDir, 'context.md', 'Background that never mentions the c-word or the s-word.', { title: 'Context', status: 'active' });
   write(baseDir, 'archived.md', 'Old price discussion, superseded.', { title: 'Old', status: 'archived' });
@@ -27,13 +27,13 @@ function makeVault(): string {
   return baseDir;
 }
 
-function openVault(baseDir: string, features?: Config['features']) {
+function openTree(baseDir: string, features?: Config['features']) {
   return open({ scan: { include: ['**/*.md'] }, queries: {}, features, baseDir, configPath: null });
 }
 
 describe('find', () => {
   it('BM25 matches carry via=match with a snippet', () => {
-    const { db, cfg } = openVault(makeVault());
+    const { db, cfg } = openTree(makeTree());
     const rows = find(db, cfg, 'price') as Array<{ path: string; via: string; hit: string }>;
     const floor = rows.find((r) => r.path === 'floor.md');
     assert.ok(floor, `expected floor.md in results: ${JSON.stringify(rows.map((r) => r.path))}`);
@@ -42,7 +42,7 @@ describe('find', () => {
   });
 
   it('link expansion surfaces a connected note that never contains the terms, via=link', () => {
-    const { db, cfg } = openVault(makeVault());
+    const { db, cfg } = openTree(makeTree());
     const rows = find(db, cfg, 'price') as Array<{ path: string; via: string }>;
     const connected = rows.find((r) => r.path === 'context.md');
     assert.ok(connected, `expected context.md in results: ${JSON.stringify(rows.map((r) => r.path))}`);
@@ -50,19 +50,19 @@ describe('find', () => {
   });
 
   it('--where composes a frontmatter filter with the fused ranking', () => {
-    const { db, cfg } = openVault(makeVault());
+    const { db, cfg } = openTree(makeTree());
     const rows = find(db, cfg, 'price', { where: "f.status = 'active'" }) as Array<{ path: string }>;
     assert.ok(rows.every((r) => r.path !== 'archived.md'));
     assert.ok(rows.some((r) => r.path === 'floor.md'));
   });
 
   it('terms pass verbatim: invalid FTS5 syntax errors loudly', () => {
-    const { db, cfg } = openVault(makeVault());
+    const { db, cfg } = openTree(makeTree());
     assert.throws(() => find(db, cfg, 'price AND AND'), /fts5|syntax/);
   });
 
   it('terms pass verbatim: bare words AND-join, so an absent word means zero rows', () => {
-    const { db, cfg } = openVault(makeVault());
+    const { db, cfg } = openTree(makeTree());
     assert.deepEqual(find(db, cfg, 'price nonexistentword'), []);
     const rows = find(db, cfg, 'price OR nonexistentword') as Array<{ path: string }>;
     assert.ok(
@@ -72,7 +72,7 @@ describe('find', () => {
   });
 
   it('with links disabled it degrades to BM25-only', () => {
-    const { db, cfg } = openVault(makeVault(), { links: false });
+    const { db, cfg } = openTree(makeTree(), { links: false });
     const rows = find(db, cfg, 'price') as Array<{ path: string; via: string }>;
     assert.ok(rows.length > 0);
     assert.ok(rows.every((r) => r.via === 'match'));
@@ -80,10 +80,10 @@ describe('find', () => {
   });
 });
 
-describe('vaultMap', () => {
+describe('mapTree', () => {
   it('reports counts, field coverage, hubs, and recent', () => {
-    const { db, cfg } = openVault(makeVault());
-    const result = vaultMap(db, cfg);
+    const { db, cfg } = openTree(makeTree());
+    const result = mapTree(db, cfg);
     assert.equal(result.docs.count, 4);
     const status = result.fields.find((f: Row) => f.field === 'status');
     assert.equal(status?.coverage, 4);
@@ -96,8 +96,8 @@ describe('vaultMap', () => {
   });
 
   it('without rank there are no hubs, everything else stands', () => {
-    const { db, cfg } = openVault(makeVault(), { rank: false });
-    const result = vaultMap(db, cfg);
+    const { db, cfg } = openTree(makeTree(), { rank: false });
+    const result = mapTree(db, cfg);
     assert.deepEqual(result.hubs, []);
     assert.equal(result.docs.count, 4);
   });
@@ -105,14 +105,14 @@ describe('vaultMap', () => {
 
 describe('peek', () => {
   function structured(): string {
-    const baseDir = tmpVault();
+    const baseDir = tmpTree();
     write(baseDir, 'note.md', '# Alpha\n\nprose\n\n## Beta\n\nmore [[other]] prose\n', { title: 'Structured', tags: ['x'] });
     write(baseDir, 'other.md', 'links back to [[note]]');
     return baseDir;
   }
 
   it('returns frontmatter, outline with line ranges, and links both ways', () => {
-    const { db, cfg } = openVault(structured());
+    const { db, cfg } = openTree(structured());
     const result = peek(db, cfg, 'note.md');
     assert.equal(result.frontmatter.title, 'Structured');
     assert.equal(result.sections.length, 2);
@@ -124,24 +124,24 @@ describe('peek', () => {
   });
 
   it('resolves a bare basename when unique', () => {
-    const { db, cfg } = openVault(structured());
+    const { db, cfg } = openTree(structured());
     const result = peek(db, cfg, 'note');
     assert.equal(result.path, 'note.md');
   });
 
   it('unknown path throws with a message', () => {
-    const { db, cfg } = openVault(structured());
+    const { db, cfg } = openTree(structured());
     assert.throws(() => peek(db, cfg, 'missing'), /no note matches/);
   });
 });
 
 describe('peek stays bounded', () => {
   it('caps link lists at 20 and reports totals', () => {
-    const baseDir = tmpVault();
+    const baseDir = tmpTree();
     write(baseDir, 'hub.md', 'the target everyone cites');
     for (let i = 0; i < 30; i++) write(baseDir, `n${String(i).padStart(2, '0')}.md`, 'cites [[hub]]');
 
-    const { db, cfg } = openVault(baseDir);
+    const { db, cfg } = openTree(baseDir);
     const result = peek(db, cfg, 'hub.md');
     assert.equal(result.backlinksTotal, 30);
     assert.equal(result.backlinks.length, 20);
@@ -160,15 +160,15 @@ describe('--version', () => {
   });
 });
 
-describe('vaultMap truncation is reported', () => {
+describe('mapTree truncation is reported', () => {
   it('fieldsTotal carries the real count when fields exceed 20', () => {
-    const baseDir = tmpVault();
+    const baseDir = tmpTree();
     const fm: Record<string, unknown> = {};
     for (let i = 0; i < 25; i++) fm[`field${String(i).padStart(2, '0')}`] = 'v';
     write(baseDir, 'wide.md', 'body', fm);
 
-    const { db, cfg } = openVault(baseDir);
-    const result = vaultMap(db, cfg);
+    const { db, cfg } = openTree(baseDir);
+    const result = mapTree(db, cfg);
     assert.equal(result.fields.length, 20);
     assert.equal(result.fieldsTotal, 25);
   });

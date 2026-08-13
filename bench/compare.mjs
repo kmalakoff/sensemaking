@@ -1,6 +1,6 @@
-// Full benchmark flow: install versions, copy the vault per version, run run.mjs for each,
+// Full benchmark flow: install versions, copy the tree per version, run run.mjs for each,
 // print a ready-to-paste markdown table.
-// usage: node bench/compare.mjs <vault-dir> <version...>   e.g. node bench/compare.mjs ~/notes 0.2.1 local
+// usage: node bench/compare.mjs <notes-dir> <version...>   e.g. node bench/compare.mjs ~/notes 0.2.1 local
 // 'local' = this repo's working tree; anything else = that version from npm.
 import { spawnSync } from 'node:child_process';
 import { cpSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -8,9 +8,9 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const [vaultDir, ...versions] = process.argv.slice(2);
-if (!vaultDir || versions.length === 0) {
-  console.error('usage: node bench/compare.mjs <vault-dir> <version...>   (version = npm semver or "local")');
+const [treeDir, ...versions] = process.argv.slice(2);
+if (!treeDir || versions.length === 0) {
+  console.error('usage: node bench/compare.mjs <notes-dir> <version...>   (version = npm semver or "local")');
   process.exit(2);
 }
 
@@ -31,9 +31,9 @@ function rootFor(version) {
 
 // Fresh copy per version: cache formats and config auto-migration must not cross versions.
 // The copy gets a v1 config (the lowest common denominator every version can read).
-function vaultCopyFor(version) {
-  const copy = join(work, `vault-${version}`);
-  cpSync(vaultDir, copy, { recursive: true, filter: (src) => !/\/(\.sense|\.git|node_modules)(\/|$)/.test(src) });
+function treeCopyFor(version) {
+  const copy = join(work, `tree-${version}`);
+  cpSync(treeDir, copy, { recursive: true, filter: (src) => !/\/(\.sense|\.git|node_modules)(\/|$)/.test(src) });
   writeFileSync(join(copy, 'sense.config.json'), '{"version":1,"scan":{"include":["**/*.md"]},"queries":{}}');
   return copy;
 }
@@ -41,7 +41,7 @@ function vaultCopyFor(version) {
 const results = new Map();
 for (const version of versions) {
   process.stderr.write(`benchmarking ${version}...\n`);
-  const out = spawnSync(process.execPath, [join(benchDir, 'run.mjs'), rootFor(version), vaultCopyFor(version)], { encoding: 'utf8', maxBuffer: 16e6 });
+  const out = spawnSync(process.execPath, [join(benchDir, 'run.mjs'), rootFor(version), treeCopyFor(version)], { encoding: 'utf8', maxBuffer: 16e6 });
   if (out.status !== 0) {
     console.error(`run.mjs failed for ${version}:\n${out.stderr}`);
     process.exit(1);

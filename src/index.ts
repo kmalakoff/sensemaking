@@ -20,8 +20,8 @@ export { printRows } from './output.ts';
 export type { FileStat, ParsedDoc } from './scan.ts';
 export { listFiles, parseFile } from './scan.ts';
 
-export type { FindOptions, Peek, VaultMap } from './verbs.ts';
-export { find, peek, vaultMap } from './verbs.ts';
+export type { FindOptions, Peek, TreeMap } from './verbs.ts';
+export { find, mapTree, peek } from './verbs.ts';
 
 export type { WatchEvent, WatchOptions } from './watch.ts';
 export { runWatch } from './watch.ts';

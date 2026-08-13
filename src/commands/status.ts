@@ -1,6 +1,6 @@
 import { docCount, getMeta, open } from '../db.ts';
+import { printWarnings } from './shared.ts';
 import type { Command } from './types.ts';
-import { printWarnings } from './vault.ts';
 
 const status: Command = (ctx) => {
   const { db, dbPath, warnings } = open(ctx.resolveConfig());

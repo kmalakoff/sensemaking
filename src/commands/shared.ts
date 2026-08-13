@@ -5,13 +5,13 @@ import type { Row } from '../output.ts';
 import { printRows } from '../output.ts';
 import type { Ctx } from './types.ts';
 
-// Shared open-query-close envelope for commands that touch the vault.
+// Shared open-query-close envelope for commands that touch the tree.
 
 export function printWarnings(warnings: string[]): void {
   for (const w of warnings) console.warn(w);
 }
 
-export function withVault(ctx: Ctx, fn: (db: OpenResult['db'], cfg: ResolvedConfig) => void): void {
+export function withDb(ctx: Ctx, fn: (db: OpenResult['db'], cfg: ResolvedConfig) => void): void {
   const cfg = ctx.resolveConfig();
   const { db, warnings } = open(cfg);
   printWarnings(warnings);

@@ -1,5 +1,5 @@
+import { runSql } from './shared.ts';
 import type { Command } from './types.ts';
-import { runSql } from './vault.ts';
 
 const query: Command = (ctx) => {
   const [sql, ...params] = ctx.rest;

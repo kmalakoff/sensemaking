@@ -35,7 +35,7 @@ function resolveTarget(src: string, target: string, pathSet: Set<string>, byBase
 }
 
 // A new or deleted file can change any note's resolution, so re-resolve the whole table
-// whenever the vault changes. An in-memory probe per row; writes only on change.
+// whenever the tree changes. An in-memory probe per row; writes only on change.
 function resolveAll(db: DatabaseSync, files: FileStat[]): void {
   const pathSet = new Set(files.map((f) => f.relPath));
   const byBase = new Map<string, string[]>();

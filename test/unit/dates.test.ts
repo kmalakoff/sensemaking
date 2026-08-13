@@ -7,7 +7,7 @@ import { open } from 'sensemaking';
 // TaskNotes/Obsidian convention: dateCreated: YYYY-MM-DDTHH:MM:SS.sss±HH:MM.
 // Stored as written (yaml core schema has no timestamp type); compared via datetime().
 
-function vaultWith(dates: Record<string, string>) {
+function treeWith(dates: Record<string, string>) {
   const baseDir = mkdtempSync(join(tmpdir(), 'sense-dates-'));
   for (const [name, date] of Object.entries(dates)) {
     writeFileSync(join(baseDir, `${name}.md`), `---\ntitle: ${name}\ndateCreated: ${date}\n---\n\nbody\n`);
@@ -17,13 +17,13 @@ function vaultWith(dates: Record<string, string>) {
 
 describe('date frontmatter (ISO 8601 with offsets)', () => {
   it('is stored as the literal string written', () => {
-    const { db } = vaultWith({ a: '2026-08-12T09:15:30.123-07:00' });
+    const { db } = treeWith({ a: '2026-08-12T09:15:30.123-07:00' });
     const row = db.prepare('SELECT dateCreated FROM frontmatter').get() as { dateCreated: string };
     assert.equal(row.dateCreated, '2026-08-12T09:15:30.123-07:00');
   });
 
   it('plain string comparison works when every note shares one offset', () => {
-    const { db } = vaultWith({
+    const { db } = treeWith({
       old: '2026-08-10T08:00:00.000-07:00',
       new: '2026-08-12T09:15:30.123-07:00',
     });
@@ -36,7 +36,7 @@ describe('date frontmatter (ISO 8601 with offsets)', () => {
 
   it('mixed offsets: plain string order is WRONG, datetime() normalizes to UTC and is right', () => {
     // tokyo is 2026-08-12 01:00 UTC; vancouver is 2026-08-12 16:00 UTC -- tokyo is earlier.
-    const { db } = vaultWith({
+    const { db } = treeWith({
       tokyo: '2026-08-12T10:00:00.000+09:00',
       vancouver: '2026-08-12T09:00:00.000-07:00',
     });
@@ -56,7 +56,7 @@ describe('date frontmatter (ISO 8601 with offsets)', () => {
   });
 
   it('datetime() equality holds across representations of the same instant', () => {
-    const { db } = vaultWith({
+    const { db } = treeWith({
       utc: '2026-08-12T16:00:00.000Z',
       offset: '2026-08-12T09:00:00.000-07:00',
     });
@@ -65,7 +65,7 @@ describe('date frontmatter (ISO 8601 with offsets)', () => {
   });
 
   it('range filters bind as parameters through datetime()', () => {
-    const { db } = vaultWith({
+    const { db } = treeWith({
       a: '2026-08-01T12:00:00.000-07:00',
       b: '2026-08-12T12:00:00.000-07:00',
     });

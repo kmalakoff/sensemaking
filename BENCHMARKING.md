@@ -12,10 +12,10 @@ node bench/compare.mjs /tmp/obsidian-hub 0.2.1 local                          # 
 ```
 
 `compare.mjs` does the whole flow: installs each npm version into a temp dir (`local` = this
-working tree), gives every version an isolated copy of the vault with a v1 config (the lowest
+working tree), gives every version an isolated copy of the tree with a v1 config (the lowest
 common denominator every version can read; copies keep cache formats and config auto-migration
 from cross-contaminating), runs `bench/run.mjs` per version, and prints the table. `run.mjs` can
-also run alone against any single package root + vault; it prints one JSON row.
+also run alone against any single package root + tree; it prints one JSON row.
 
 Two kinds of metric per version:
 
@@ -42,13 +42,13 @@ Two kinds of metric per version:
   grows, the engine (scan/reconcile/SQL) got slower; if the gap grows while in-process stays
   flat, startup got heavier — typically a new dependency imported at module top level, which
   every invocation pays for before any work happens. Commands lazy-load from `src/commands/`
-  (cli.ts imports no vault code), so a heavy import belongs inside the one command that uses it;
+  (cli.ts imports no tree code), so a heavy import belongs inside the one command that uses it;
   `--version` is the canary: it should stay at bare Node startup (~25 ms here).
 - The update rows include everything reconcile does after re-parsing: link re-resolution across
   the whole table and a full PageRank pass. They are the numbers to watch as features add
   reconcile work.
 - Token columns (`map`, `peek`) are output-size contracts, not performance: they must stay
-  roughly flat as vaults grow. A token number that scales with vault size is a context-bloat
+  roughly flat as trees grow. A token number that scales with tree size is a context-bloat
   regression even if timings look fine.
 - Watch for: cold build growing worse than linearly with note count; the no-change check
   drifting above ~50 ms at 10k notes; updates drifting above ~300 ms.
@@ -73,7 +73,7 @@ Apple Silicon, Node 26. 2026-08-12.
 0.2.1's failure is structural, not a timing gap: `01 - Community/People/MugishoMp.md` has an
 alias list entry starting with `@`, which strict YAML rejects; 0.2.1's parser (gray-matter/
 js-yaml) throws with no per-file handling, so one bad file aborts the whole crawl with nothing
-indexed. At real-vault scale some frontmatter is always broken. 0.3.0 parses frontmatter
+indexed. At real-tree scale some frontmatter is always broken. 0.3.0 parses frontmatter
 leniently (`yaml` parseDocument): syntax errors become per-file warnings and the values —
 including the `@` alias — are kept.
 

@@ -1,7 +1,7 @@
 import type { WatchEvent } from '../watch.ts';
 import { runWatch } from '../watch.ts';
+import { printWarnings } from './shared.ts';
 import type { Command } from './types.ts';
-import { printWarnings } from './vault.ts';
 
 const watch: Command = async (ctx) => {
   await runWatch(ctx.resolveConfig(), {

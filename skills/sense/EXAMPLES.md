@@ -3,7 +3,7 @@
 Outputs below are illustrative. Every result is a reference; reading happens afterward, through
 the filesystem, on the paths that earned it.
 
-## A. "Does the vault say anything about X?"
+## A. "Do the notes say anything about X?"
 
 ```
 sense find "pricing OR billing OR invoicing" --k 10 --format json
@@ -19,8 +19,7 @@ sense find "pricing OR billing OR invoicing" --k 10 --format json
 ```
 
 ~30 tokens per row; often the `summary` answers the question with no read at all. A row with
-`via: "link"` never contained the terms — it is linked from notes that did, usually a signal
-worth following, not noise.
+`via: "link"` never contained the terms — it is linked from notes that did.
 
 ## B. Known-field filtering (no search)
 
@@ -68,7 +67,7 @@ sense query "SELECT path, round(_rank*100,2) r FROM frontmatter ORDER BY _rank D
 
 `sense map` prints the hub list without SQL; use these when you need it filtered or joined.
 
-## E. Cold start on an unknown vault
+## E. Cold start on an unknown notes tree
 
 ```
 sense map                          # fields, hubs, recent — read this first
@@ -76,14 +75,14 @@ sense --list                       # named queries someone already saved
 sense query "SELECT DISTINCT type FROM frontmatter"    # what a field's values are
 ```
 
-## Anti-patterns
+## Consequences
 
-| don't | because | instead |
+| query | what happens | bounded alternative |
 |---|---|---|
-| `SELECT text FROM content` | dumps the vault into context | `snippet(content, -1, '«', '»', '…', 10)` |
-| `sense find "pricing"` | one word misses synonyms | `"pricing OR billing OR invoicing"` |
-| `sense find "pricing model details"` | bare words AND-join in FTS5; one absent word = zero rows | OR the words, or quote an exact phrase |
-| `sense find "customer-facing OR on-site"` | bare punctuation is FTS5 syntax (`-` = column filter) | double-quote the terms: `"customer-facing" OR "on-site"` |
-| `Read` a 4,000-token file for one section | 10× the tokens needed | `peek` first, `Read` the line range |
-| queries without `LIMIT` | unbounded output | `LIMIT 10`, widen only if all rows look wrong |
-| save every query to config | config churn for one-offs | ad-hoc `sense query`; save only reusable views |
+| `SELECT text FROM content` | returns the tree's entire prose | `snippet(content, -1, '«', '»', '…', 10)` excerpts the match |
+| `sense find "pricing"` | matches only that word's stem | OR-in synonyms and instances: `"pricing OR billing OR invoicing"` |
+| `sense find "pricing model details"` | bare words AND-join; one absent word = zero rows | OR the words, or quote an exact phrase |
+| `sense find "customer-facing OR on-site"` | bare punctuation is FTS5 syntax (`-` reads as a column filter) | double-quote: `"customer-facing" OR "on-site"` |
+| `Read` of a large file for one section | costs the whole file | `peek`, then `Read` the line range |
+| row queries without `LIMIT` | unbounded output (aggregates are already bounded) | `LIMIT n` |
+| saving one-off queries to config | config churn | ad-hoc `sense query`; save reusable views |

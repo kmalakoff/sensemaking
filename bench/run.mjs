@@ -1,5 +1,5 @@
-// Benchmark one sensemaking package against one vault; prints a JSON row for BENCHMARKING.md.
-// usage: node bench/run.mjs <package-root> <vault-dir>
+// Benchmark one sensemaking package against one tree; prints a JSON row for BENCHMARKING.md.
+// usage: node bench/run.mjs <package-root> <notes-dir>
 // Wall-time metrics spawn the CLI (what a calling agent pays, ~40ms Node startup included);
 // in-process metrics import the library and time the engine alone (index build, freshness
 // check, incremental update).
@@ -8,14 +8,14 @@ import { appendFileSync, readdirSync, rmSync, statSync, utimesSync } from 'node:
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-const [pkgRoot, vault] = process.argv.slice(2);
-if (!pkgRoot || !vault) {
-  console.error('usage: node bench/run.mjs <package-root> <vault-dir>');
+const [pkgRoot, tree] = process.argv.slice(2);
+if (!pkgRoot || !tree) {
+  console.error('usage: node bench/run.mjs <package-root> <notes-dir>');
   process.exit(2);
 }
 const cli = join(pkgRoot, 'bin', 'cli.js');
 
-const run = (args) => spawnSync(process.execPath, [cli, ...args], { cwd: vault, encoding: 'utf8', maxBuffer: 64e6 });
+const run = (args) => spawnSync(process.execPath, [cli, ...args], { cwd: tree, encoding: 'utf8', maxBuffer: 64e6 });
 
 function timed(args, runs = 5) {
   const times = [];
@@ -34,11 +34,11 @@ const fail = (r) => (r.status === 0 ? r : null);
 // Largest note: peek target and the read-cost baseline. Also collect files for update benchmarks.
 const mdFiles = [];
 (function walk(dir) {
-  for (const e of readdirSync(join(vault, dir), { withFileTypes: true })) {
+  for (const e of readdirSync(join(tree, dir), { withFileTypes: true })) {
     if (e.name.startsWith('.') || e.name === 'node_modules') continue;
     const rel = dir ? `${dir}/${e.name}` : e.name;
     if (e.isDirectory()) walk(rel);
-    else if (e.name.endsWith('.md')) mdFiles.push({ rel, size: statSync(join(vault, rel)).size });
+    else if (e.name.endsWith('.md')) mdFiles.push({ rel, size: statSync(join(tree, rel)).size });
   }
 })('');
 const largest = mdFiles.reduce((a, b) => (b.size > a.size ? b : a), { rel: null, size: 0 });
@@ -46,7 +46,7 @@ const largest = mdFiles.reduce((a, b) => (b.size > a.size ? b : a), { rel: null,
 const SEARCH = `SELECT f.path, content.title, snippet(content, -1, '«', '»', '…', 10) AS hit FROM frontmatter f JOIN content ON content.path = f.path WHERE content MATCH ? ORDER BY bm25(content, 10.0, 5.0, 1.0) LIMIT 10`;
 
 // --- wall-time (CLI) ---
-rmSync(join(vault, '.sense'), { recursive: true, force: true });
+rmSync(join(tree, '.sense'), { recursive: true, force: true });
 const cold = timed(['status'], 1); // first open = full crawl
 const warm = fail(timed(['query', 'SELECT COUNT(*) AS n FROM frontmatter']));
 const search = fail(timed(['query', SEARCH, 'the']));
@@ -58,7 +58,7 @@ const peekR = fail(timed(['peek', largest.rel], 3));
 let inproc = null;
 try {
   const lib = await import(pathToFileURL(join(pkgRoot, 'dist', 'esm', 'index.js')).href);
-  const cfg = { scan: { include: ['**/*.md'] }, queries: {}, baseDir: vault, configPath: null };
+  const cfg = { scan: { include: ['**/*.md'] }, queries: {}, baseDir: tree, configPath: null };
   const openClose = () => {
     const t = process.hrtime.bigint();
     const { db } = lib.open(cfg);
@@ -72,7 +72,7 @@ try {
   };
   const touch = (files) => {
     const future = new Date(Date.now() + 60_000 + Math.random() * 60_000);
-    for (const f of files) utimesSync(join(vault, f.rel), future, future);
+    for (const f of files) utimesSync(join(tree, f.rel), future, future);
   };
 
   const noChange = median(openClose, 5);
@@ -81,11 +81,11 @@ try {
     return openClose();
   }, 3);
   const modify10 = median(() => {
-    for (const f of mdFiles.slice(0, 10)) appendFileSync(join(vault, f.rel), ' benchmark-edit');
+    for (const f of mdFiles.slice(0, 10)) appendFileSync(join(tree, f.rel), ' benchmark-edit');
     touch(mdFiles.slice(0, 10));
     return openClose();
   }, 3);
-  rmSync(join(vault, '.sense'), { recursive: true, force: true });
+  rmSync(join(tree, '.sense'), { recursive: true, force: true });
   const t = process.hrtime.bigint();
   const { db } = lib.open(cfg);
   const coldBuild = Math.round(Number(process.hrtime.bigint() - t) / 1e6);
@@ -98,7 +98,7 @@ try {
 console.log(
   JSON.stringify(
     {
-      vault,
+      tree,
       notes: mdFiles.length,
       cold_crawl_ms: cold.status === 0 ? cold.ms : `FAILED(exit ${cold.status})`,
       warm_query_ms: warm?.ms ?? null,

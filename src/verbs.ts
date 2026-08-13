@@ -7,7 +7,7 @@ import { linkEdges } from './features/index.ts';
 import { personalizedRank } from './graph.ts';
 import type { Row } from './output.ts';
 
-// The three layer verbs: vaultMap (orient), find (locate), peek (structure).
+// The three layer verbs: mapTree (orient), find (locate), peek (structure).
 // Each returns data; cli.ts renders. All of them degrade when a feature is off.
 
 const WEIGHTED_BM25 = 'bm25(content, 10.0, 5.0, 1.0)';
@@ -68,7 +68,7 @@ export function find(db: DatabaseSync, cfg: Config, terms: string, opts: FindOpt
     .all(k) as Row[];
 }
 
-export interface VaultMap {
+export interface TreeMap {
   docs: { count: number; bytes: number };
   fields: Row[]; // top 20 by coverage; fieldsTotal carries the real count
   fieldsTotal: number;
@@ -78,8 +78,8 @@ export interface VaultMap {
 
 const INTERNAL_COLUMNS = new Set(['path', '_mtime', '_size', '_rank']);
 
-// Layer 0: what is this vault. Fixed-size output regardless of vault size.
-export function vaultMap(db: DatabaseSync, cfg: Config): VaultMap {
+// Layer 0: what is this tree. Fixed-size output regardless of tree size.
+export function mapTree(db: DatabaseSync, cfg: Config): TreeMap {
   const docs = db.prepare('SELECT COUNT(*) AS count, COALESCE(SUM("_size"), 0) AS bytes FROM frontmatter').get() as { count: number; bytes: number };
 
   const columns = (db.prepare('PRAGMA table_info(frontmatter)').all() as Array<{ name: string }>).map((r) => r.name).filter((name) => !INTERNAL_COLUMNS.has(name));

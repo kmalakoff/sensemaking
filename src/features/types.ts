@@ -2,7 +2,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import type { FeatureName } from '../config.ts';
 import type { FileStat } from '../scan.ts';
 
-// A feature owns its schema, per-file extraction/storage, and any whole-vault pass.
+// A feature owns its schema, per-file extraction/storage, and any whole-tree pass.
 // Adding a feature = one module here + one entry in the registry (index.ts).
 export interface Feature {
   name: FeatureName;
