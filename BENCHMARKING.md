@@ -39,6 +39,8 @@ Two kinds of metric per version:
 
 - Regenerate **all** columns of a table in one sitting on one machine — numbers are not
   comparable across machines or Node versions. Record machine + Node in the table caption.
+- Regenerate **before** the version bump, not after publishing: a benchmark run is only a
+  release gate if a bad number can still stop the release. See [RELEASING.md](RELEASING.md).
 - To add a metric: one measured field in `run.mjs`, one row in the `ROWS` table in `compare.mjs`.
   Versions lacking a verb report `—` automatically; a version that errors reports the error.
 - Corpus pins live in `benchmark/lib/corpus.mjs`. If a pin must move (repo disappears, need a
@@ -68,22 +70,22 @@ Two kinds of metric per version:
 
 ## Results — obsidian-hub @ b11036f9 (6,566 notes, 14 MB)
 
-Apple Silicon, Node 26.7.0. 2026-08-13, all columns regenerated in one sitting.
+Apple Silicon, Node 26.7.0. 2026-08-14, all columns regenerated in one sitting.
 
-| metric | 0.2.1 | 0.5.0 | 0.6.0 |
+| metric | 0.2.1 | 0.6.0 | 0.7.0 |
 |---|---|---|---|
-| cold crawl (wall) | **FAILED** | 5.65 s | **0.94 s** |
-| warm query (`COUNT(*)`) | — | 72 ms | 72 ms |
-| BM25 search (canonical join) | — | 79 ms | 80 ms |
-| `find` (BM25 + link fusion) | — | 131 ms | 135 ms |
-| `map` (orient) | — | 77 ms / ~452 tokens | 79 ms / ~468 tokens |
-| `peek` largest note (~77,274 t) | — | 76 ms / ~581 tokens (0.8%) | 76 ms / ~581 tokens (0.8%) |
-| bulk change (500 files): first query | — | 1.11 s | 1.15 s |
-| bulk change (500 files): with warm watcher | — | 101 ms | 116 ms |
-| in-process: cold index build | **FAILED** | 5.69 s | **0.91 s** |
-| in-process: freshness check, no change | — | 29 ms | 28 ms |
-| in-process: update, 1 file touched | — | 119 ms | 120 ms |
-| in-process: update, 10 files modified | — | 136 ms | 137 ms |
+| cold crawl (wall) | **FAILED** | 0.94 s | 1.01 s |
+| warm query (`COUNT(*)`) | — | 72 ms | 75 ms |
+| BM25 search (canonical join) | — | 79 ms | 82 ms |
+| `find` (BM25 + link fusion) | — | 137 ms | 148 ms |
+| `map` (orient) | — | 90 ms / ~468 tokens | 87 ms / ~469 tokens |
+| `peek` largest note (~77,274 t) | — | 89 ms / ~581 tokens (0.8%) | 84 ms / ~581 tokens (0.8%) |
+| bulk change (500 files): first query | — | 1.22 s | 1.23 s |
+| bulk change (500 files): with warm watcher | — | 114 ms | 118 ms |
+| in-process: cold index build | **FAILED** | 995 ms | 928 ms |
+| in-process: freshness check, no change | — | 31.1 ms | 31.5 ms |
+| in-process: update, 1 file touched | — | 127 ms | 126 ms |
+| in-process: update, 10 files modified | — | 142 ms | 153 ms |
 
 0.2.1's failure is structural, not a timing gap: `01 - Community/People/MugishoMp.md` has an
 alias list entry starting with `@`, which strict YAML rejects; 0.2.1's parser (gray-matter/
@@ -92,15 +94,15 @@ indexed. At real-tree scale some frontmatter is always broken. 0.3.0 parses fron
 leniently (`yaml` parseDocument): syntax errors become per-file warnings and the values —
 including the `@` alias — are kept.
 
-0.6.0's 6x cold-crawl drop is one fix, not tuning: the per-document delete-before-insert into
-`content` ran on cold builds too, where there is nothing to delete, and an FTS5 `DELETE` by
-column cannot use an index — so every inserted document scanned the whole table. Cost grew
-quadratically and had been present since the `content` table existed; it only became visible
-at the 13k/26k scale rows below. Steady-state query rows are unchanged, as expected — the
-defect was confined to first-index and bulk-reparse paths.
+0.6.0 -> 0.7.0 is flat. Two changes were expected to cost something and did not: `map` gained a
+`GROUP_CONCAT(DISTINCT typeof(...))` per discovered column and came out 3 ms faster, and
+frontmatter integers now bind as INTEGER (a `BigInt` per value) with no indexing cost. Where
+the two columns differ they differ by under 10% and disagree in direction — wall cold crawl up,
+in-process cold build down — which is the shape of run-to-run noise, not a change; cold crawl
+is a single run per the harness. Token counts are unchanged, which is the contract that matters.
 
-The update rows are dominated by post-parse reconcile work (whole-table link re-resolution +
-PageRank), not by re-parsing: 1 file vs 10 files differs by only ~20 ms.
+Earlier release history: 0.5.0 measured 5.65 s cold crawl on this corpus, fixed to 0.94 s in
+0.6.0 by removing a per-document FTS5 delete on cold builds (details under Scale).
 
 ## Scale
 
@@ -111,17 +113,18 @@ nothing like every corpus. Duplicate basenames across copies stress link-ambigui
 resolution harder than a natural tree. Run `node benchmark/run.mjs . <corpusPath>` per
 tree; regenerate scale rows together with the main table.
 
-Measured 2026-08-13, same machine and sitting as the table above (0.6.0):
+Measured 2026-08-14, same machine and sitting as the table above (0.7.0):
 
 | metric | 6.5k (hub) | 13k (x2) | 26k (x4) |
 |---|---|---|---|
-| cold crawl (wall) | 0.94 s | 2.95 s | 5.76 s |
-| warm query | 72 ms | 100 ms | 151 ms |
-| `find` | 135 ms | 203 ms | 339 ms |
-| bulk change (500 files): first query | 1.15 s | 2.25 s | 4.53 s |
-| bulk change (500 files): with warm watcher | 116 ms | 122 ms | 182 ms |
-| in-process: freshness check, no change | 28 ms | 53 ms | 100 ms |
-| in-process: update, 1 file touched | 120 ms | 246 ms | 523 ms |
+| cold crawl (wall) | 1.01 s | 3.41 s | 6.14 s |
+| warm query | 75 ms | 107 ms | 154 ms |
+| `find` | 148 ms | 220 ms | 350 ms |
+| `map` | 87 ms / ~469 t | 121 ms / ~539 t | 184 ms / ~539 t |
+| bulk change (500 files): first query | 1.23 s | 2.30 s | 4.67 s |
+| bulk change (500 files): with warm watcher | 118 ms | 135 ms | 239 ms |
+| in-process: freshness check, no change | 31 ms | 55 ms | 101 ms |
+| in-process: update, 1 file touched | 126 ms | 268 ms | 522 ms |
 
 Every row is linear or better in note count across a 4x range. The freshness check — the
 cost every single invocation pays — is 100 ms at 26k notes; `map` and `peek` token counts

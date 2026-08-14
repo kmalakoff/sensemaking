@@ -71,16 +71,23 @@ sense --list | status | rebuild | check
 - `score` is a rank-fusion value: it ranks rows within one result set and is not comparable
   across queries, not a relevance magnitude — a perfect lexical hit and a weak vector-only
   hit can both read ~0.017, because the number encodes how many signals fired and at what
-  rank. With `--semantic`, rows carry `similarity` (cosine, -1 to 1) which does measure
-  match quality: on a query whose words are absent from the tree, similarities sit near zero
-  (and can be negative), while a genuine paraphrase match runs high.
+  rank. With `--semantic`, rows carry `similarity`: the cosine (-1 to 1) of the query
+  against that file's best-matching chunk — the same chunk the `lines` range points at.
+  It orders vector evidence within a result set; its absolute range depends on the corpus.
+  Measured: on thousands of notes, unrelated queries ~0.2 and genuine matches ~0.6; on a
+  few dozen notes the ranges compress and can overlap, because even a nonsense query has a
+  moderately near neighbour somewhere. Compare similarities within a result set rather than
+  against a fixed cutoff carried between trees.
 - Lexical `find` returns 0 rows when nothing matches, so it answers "is this in the tree at
   all". `--semantic` always returns up to `k` rows — nearest-neighbour search has a nearest
-  neighbour for any input — so absence is a lexical question; with `--semantic` the
-  `similarity` column is what separates a real hit from the best of a bad lot.
+  neighbour for any input — so absence is a lexical question; `similarity` and the snippet
+  are the evidence for judging whether a vector row is a real hit.
 - `sense check` prepares every saved query (catching syntax and unknown-column errors), runs
   the ones taking no parameters, and prints row counts: a saved query returning 0 rows looks
-  the same as a true empty result until something distinguishes them.
+  the same as a true empty result until something distinguishes them. For queries that
+  encode invariants (a dead-link list, an unsupported-claims list — rows are violations),
+  `checks: { "<name>": "empty" }` in the config inverts the meaning: `check` fails when the
+  query returns rows, making it usable as a test suite rather than a linter.
 
 ## SQL
 

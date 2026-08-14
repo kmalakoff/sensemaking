@@ -33,6 +33,9 @@ export interface Config {
   // Tree-declared default scope for `find`. A --where on the invocation replaces it, so a
   // caller can always reach the whole tree (`--where "1=1"`).
   defaults?: { find?: { where?: string } };
+  // Assertions over saved queries: `checks: { "dead-links": "empty" }` makes `sense check`
+  // fail when that query returns rows -- for invariant queries where 0 rows is the pass.
+  checks?: Record<string, 'empty'>;
   queries: Record<string, string>;
 }
 
@@ -142,7 +145,7 @@ export function findConfigPath(startDir: string): string | null {
 // looks identical to working -- one field report set `scan.exclude`, saw no change in doc
 // count and no warning, and reasonably concluded the filter had applied. Reported as a
 // warning rather than an error so a config carrying an unknown key still runs.
-const KNOWN_KEYS = new Set(['$schema', 'version', 'scan', 'features', 'defaults', 'queries']);
+const KNOWN_KEYS = new Set(['$schema', 'version', 'scan', 'features', 'defaults', 'checks', 'queries']);
 const KNOWN_SCAN_KEYS = new Set(['include']);
 
 function unknownConfigKeys(cfg: Record<string, unknown>): string[] {
@@ -184,6 +187,16 @@ function validateConfig(parsed: unknown, configPath: string): Config {
   const defaults = cfg.defaults as { find?: { where?: unknown } } | undefined;
   if (defaults !== undefined && (typeof defaults !== 'object' || defaults === null || Array.isArray(defaults) || (defaults.find !== undefined && typeof defaults.find?.where !== 'string'))) {
     throw new SenseError('CONFIG_INVALID', `${configPath}: defaults.find.where must be a SQL condition string`);
+  }
+  const checks = cfg.checks as Record<string, unknown> | undefined;
+  if (checks !== undefined) {
+    if (typeof checks !== 'object' || checks === null || Array.isArray(checks) || !Object.values(checks).every((v) => v === 'empty')) {
+      throw new SenseError('CONFIG_INVALID', `${configPath}: checks must be an object of query name -> "empty"`);
+    }
+    const queries = (cfg.queries ?? {}) as Record<string, unknown>;
+    for (const name of Object.keys(checks)) {
+      if (queries[name] === undefined) throw new SenseError('CONFIG_INVALID', `${configPath}: checks names "${name}", which is not a saved query`);
+    }
   }
   if (cfg.features !== undefined && (typeof cfg.features !== 'object' || cfg.features === null || Array.isArray(cfg.features))) {
     throw new SenseError('CONFIG_INVALID', `${configPath}: features must be an object of name -> boolean`);

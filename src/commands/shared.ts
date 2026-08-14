@@ -3,6 +3,7 @@ import type { OpenResult } from '../db.ts';
 import { open } from '../db.ts';
 import type { Row } from '../output.ts';
 import { printRows } from '../output.ts';
+import { searchError } from '../search-error.ts';
 import type { Ctx } from './types.ts';
 
 // Shared open-query-close envelope for commands that touch the tree.
@@ -31,6 +32,17 @@ export function runSql(cfg: ResolvedConfig, sql: string, params: string[], forma
   }
   const { db, warnings } = open(cfg);
   printWarnings(warnings);
-  printRows(db.prepare(sql).all(...params) as Row[], format);
+  let rows: Row[];
+  try {
+    rows = db.prepare(sql).all(...params) as Row[];
+  } catch (err) {
+    db.close();
+    // A saved query or ad-hoc SQL can carry `content MATCH ?` too, so the same FTS5
+    // punctuation trap applies -- the bound parameters are the search terms there. SQL
+    // without MATCH gets its error verbatim; search advice on a plain typo would mislead.
+    if (/\bMATCH\b/i.test(sql)) throw searchError(err as Error, params.join(' '));
+    throw err;
+  }
+  printRows(rows, format);
   db.close();
 }

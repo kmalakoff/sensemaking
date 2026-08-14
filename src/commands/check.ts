@@ -19,6 +19,7 @@ const check: Command = (ctx) => {
   let failed = 0;
   for (const [name, sql] of Object.entries(cfg.queries ?? {})) {
     const params = (sql.match(/\?/g) ?? []).length;
+    const expectEmpty = cfg.checks?.[name] === 'empty';
     try {
       const statement = db.prepare(sql);
       if (params > 0) {
@@ -26,7 +27,13 @@ const check: Command = (ctx) => {
         continue;
       }
       const count = (statement.all() as unknown[]).length;
-      rows.push({ query: name, params, rows: count, status: count === 0 ? 'ok, but returns 0 rows' : 'ok' });
+      if (expectEmpty) {
+        // An invariant query: rows are violations, so 0 is the pass, anything else fails.
+        if (count > 0) failed++;
+        rows.push({ query: name, params, rows: count, status: count === 0 ? 'ok (empty, as asserted)' : `FAILED: expected empty, returned ${count} row(s)` });
+      } else {
+        rows.push({ query: name, params, rows: count, status: count === 0 ? 'ok, but returns 0 rows' : 'ok' });
+      }
     } catch (err) {
       failed++;
       rows.push({ query: name, params, rows: '—', status: `FAILED: ${(err as Error).message}` });

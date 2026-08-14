@@ -142,3 +142,19 @@ describe('semantic absence signal', () => {
     db.close();
   });
 });
+
+describe('similarity provenance', () => {
+  it('a multi-chunk note reports the best chunk: its similarity and its line range agree', async () => {
+    const base = tmpTree();
+    // Chunk 1 (heading "Walls"): vector-far from the query. Chunk 2 ("Orchard"): vector-identical.
+    writeNote(base, 'two.md', { body: '# Walls\n\nstone walls here\n\n# Orchard\n\nAn apple every day\n' });
+    const { db, cfg } = openTree(base, { embed: { model: writeModel(), type: 'static' } });
+    const rows = (await find(db, cfg, 'pomme', { semantic: true })) as Array<{ path: string; similarity: number; lines: string }>;
+    db.close();
+    const hit = rows.find((r) => r.path === 'two.md');
+    assert.ok(hit, JSON.stringify(rows));
+    assert.ok(hit.similarity > 0.9, `best chunk is the orchard section, got ${hit.similarity}`);
+    const [start] = hit.lines.replace('L', '').split('-').map(Number);
+    assert.ok(start >= 5, `lines should point at the orchard chunk, got ${hit.lines}`);
+  });
+});

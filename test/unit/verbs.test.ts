@@ -341,3 +341,36 @@ describe('search error attribution', () => {
     db.close();
   });
 });
+
+describe('search error coverage beyond find', () => {
+  const matchSql = 'SELECT f.path FROM frontmatter f JOIN content ON content.path = f.path WHERE content MATCH ? LIMIT 5';
+
+  it('a saved query using MATCH gets the same explained error as find', () => {
+    const base = tmpTree();
+    writeFileSync(join(base, 'sense.config.json'), JSON.stringify({ version: 2, scan: { include: ['**/*.md'] }, queries: { search: matchSql } }));
+    writeNote(base, 'a.md', { body: 'about player-coach roles' });
+    const result = runCli(['search', 'player-coach'], { cwd: base });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /punctuation in `player-coach`/);
+    assert.match(result.stderr, /double-quoting/);
+  });
+
+  it('ad-hoc sense query with MATCH gets it too', () => {
+    const base = tmpTree();
+    writeFileSync(join(base, 'sense.config.json'), JSON.stringify({ version: 2, scan: { include: ['**/*.md'] }, queries: {} }));
+    writeNote(base, 'a.md', { body: 'text' });
+    const result = runCli(['query', matchSql, 'player-coach'], { cwd: base });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /punctuation in `player-coach`/);
+  });
+
+  it('plain SQL errors pass through without search advice', () => {
+    const base = tmpTree();
+    writeFileSync(join(base, 'sense.config.json'), JSON.stringify({ version: 2, scan: { include: ['**/*.md'] }, queries: {} }));
+    writeNote(base, 'a.md', { body: 'text' });
+    const result = runCli(['query', 'SELECT nosuchcol FROM frontmatter'], { cwd: base });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /no such column: nosuchcol/);
+    assert.doesNotMatch(result.stderr, /punctuation|double-quoting/);
+  });
+});

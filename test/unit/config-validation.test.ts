@@ -73,4 +73,31 @@ describe('config validation', () => {
     assert.match(result.stderr, /scan\.exclude/);
     assert.match(result.stderr, /does not read/);
   });
+
+  it('checks referencing an unknown query is a named config error', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sense-checks-'));
+    const configPath = join(dir, 'sense.config.json');
+    writeFileSync(configPath, JSON.stringify({ version: 2, scan: { include: ['*.md'] }, queries: {}, checks: { nope: 'empty' } }));
+    const result = runCli(['--list', '--config', configPath]);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /checks names "nope"/);
+  });
+
+  it('check fails when an expect-empty query returns rows, passes when empty', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sense-checks2-'));
+    writeFileSync(join(dir, 'note.md'), '---\ntitle: t\n---\nbody with [[missing-target]]\n');
+    writeFileSync(
+      join(dir, 'sense.config.json'),
+      JSON.stringify({
+        version: 2,
+        scan: { include: ['**/*.md'] },
+        queries: { 'dead-links': 'SELECT src FROM links WHERE dst IS NULL', 'no-frontmatterless': 'SELECT path FROM frontmatter WHERE title IS NULL' },
+        checks: { 'dead-links': 'empty', 'no-frontmatterless': 'empty' },
+      })
+    );
+    const result = runCli(['check'], { cwd: dir });
+    assert.equal(result.status, 1, 'the dead link fails the run');
+    assert.match(result.stdout, /dead-links.*FAILED: expected empty, returned 1/);
+    assert.match(result.stdout, /no-frontmatterless.*ok \(empty, as asserted\)/);
+  });
 });
