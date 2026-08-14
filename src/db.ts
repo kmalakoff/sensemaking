@@ -2,7 +2,7 @@ import { mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type { Config, ResolvedConfig } from './config.ts';
-import { enabledFeatures, STATE_DIR } from './config.ts';
+import { featureSignature, STATE_DIR } from './config.ts';
 import { activeFeatures } from './features/index.ts';
 import type { ParsedDoc } from './scan.ts';
 import { listFiles, parseFile } from './scan.ts';
@@ -61,7 +61,7 @@ function ensureSchema(db: DatabaseSync, cfg: Config): void {
   db.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS content USING fts5(title, summary, text, path UNINDEXED, tokenize = 'porter unicode61')`);
   for (const feature of activeFeatures(cfg)) feature.schema(db);
   if (getMeta(db, 'schema_version') === null) setMeta(db, 'schema_version', SCHEMA_VERSION);
-  if (getMeta(db, 'features') === null) setMeta(db, 'features', enabledFeatures(cfg).join(','));
+  if (getMeta(db, 'features') === null) setMeta(db, 'features', featureSignature(cfg));
 }
 
 export function getMeta(db: DatabaseSync, key: string): string | null {
@@ -146,12 +146,16 @@ export function reconcile(db: DatabaseSync, cfg: Config, baseDir: string): { par
           return doc.data[col] ?? null;
         });
         insert.run(...values);
-        delBody.run(doc.relPath);
-        insertBody.run(doc.search.title, doc.search.summary, doc.search.text, doc.relPath);
-        for (const feature of features) {
-          feature.remove?.(db, doc.relPath);
-          feature.store?.(db, doc.relPath, doc.extracted[feature.name]);
+        // Delete-before-insert only for docs that have rows: an FTS5 DELETE by column
+        // cannot use an index and scans the whole table, so running it per doc on a
+        // cold build (empty table, nothing to delete) made the crawl quadratic --
+        // measured 4x time per note-count doubling at 13k/26k notes.
+        if (existing.has(doc.relPath)) {
+          delBody.run(doc.relPath);
+          for (const feature of features) feature.remove?.(db, doc.relPath);
         }
+        insertBody.run(doc.search.title, doc.search.summary, doc.search.text, doc.relPath);
+        for (const feature of features) feature.store?.(db, doc.relPath, doc.extracted[feature.name]);
       }
     }
     for (const feature of features) feature.afterReconcile?.(db, files);
@@ -171,7 +175,11 @@ export function open(cfg: ResolvedConfig): OpenResult {
 
   const db = new DatabaseSync(dbPath);
   db.exec('PRAGMA journal_mode = WAL');
-  db.exec('PRAGMA busy_timeout = 5000');
+  // Covers a concurrent watcher's bulk reconcile: the write transaction for 500 changed
+  // files measures ~5s at 26k notes, so 5s expired exactly at the boundary and queries
+  // racing the watcher got SQLITE_BUSY. 30s bounds the wait at ~3x the largest measured
+  // reconcile; a query that outwaits it still fails loudly.
+  db.exec('PRAGMA busy_timeout = 30000');
   registerFunctions(db);
 
   db.exec('CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)');
@@ -180,7 +188,7 @@ export function open(cfg: ResolvedConfig): OpenResult {
   // old cache can't be patched incrementally -- rebuild instead (cheap: nothing expensive lives here).
   const version = getMeta(db, 'schema_version');
   const features = getMeta(db, 'features');
-  const wantFeatures = enabledFeatures(cfg).join(',');
+  const wantFeatures = featureSignature(cfg);
   if ((version !== null && version !== SCHEMA_VERSION) || (features !== null && features !== wantFeatures)) {
     db.close();
     rmSync(stateDir, { recursive: true, force: true });

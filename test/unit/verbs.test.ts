@@ -188,3 +188,29 @@ describe('find --where applies before the candidate cut', () => {
     assert.ok(!rows.some((r) => r.path === 'linked-archived.md'), 'archived link-derived row must be filtered');
   });
 });
+
+describe('find provenance', () => {
+  it('linkless tree: via is match only, never link', async () => {
+    const base = tmpTree();
+    writeNote(base, 'a.md', { body: 'alpha topic content' });
+    writeNote(base, 'b.md', { body: 'alpha adjacent content' });
+    const { db, cfg } = openTree(base);
+    const rows = await find(db, cfg, 'alpha');
+    assert.ok(rows.length >= 2);
+    for (const row of rows) assert.equal(row.via, 'match', `expected match, got ${row.via} for ${row.path}`);
+    db.close();
+  });
+
+  it('linked tree: a seed with no incident edge stays via match', async () => {
+    const base = tmpTree();
+    writeNote(base, 'hub.md', { body: 'alpha hub, see [[spoke]]' });
+    writeNote(base, 'spoke.md', { body: 'spoke detail' });
+    writeNote(base, 'island.md', { body: 'alpha island, no links at all' });
+    const { db, cfg } = openTree(base);
+    const rows = await find(db, cfg, 'alpha');
+    const island = rows.find((r) => r.path === 'island.md');
+    assert.ok(island, 'island matched');
+    assert.equal(island.via, 'match');
+    db.close();
+  });
+});

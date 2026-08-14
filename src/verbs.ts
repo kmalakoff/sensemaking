@@ -43,10 +43,16 @@ export async function find(db: DatabaseSync, cfg: Config, terms: string, opts: F
     candidates.set(r.path, { score: 1 / (RRF_K + i), via: 'match' });
   });
 
-  if (featureEnabled(cfg, 'links') && matchRows.length > 0) {
+  const edges = featureEnabled(cfg, 'links') && matchRows.length > 0 ? linkEdges(db) : [];
+  if (edges.length > 0) {
+    // `linked` gates the label only, not the score: PPR restart mass gives every seed a
+    // nonzero rank even without an incident edge, which is not link evidence — but dropping
+    // that mass from the score list reweights fusion toward connectivity and measurably
+    // wrecks ranking on link-dense corpora (FEVER hit@10 0.997 -> 0.907; fusion-tuning.md).
+    const linked = new Set(edges.flat());
     const nodes = (db.prepare('SELECT "path" FROM frontmatter').all() as Array<{ path: string }>).map((r) => r.path);
     const seeds = new Map(matchRows.map((r, i) => [r.path, 1 / (i + 1)]));
-    const ranked = [...personalizedRank(nodes, linkEdges(db), seeds)]
+    const ranked = [...personalizedRank(nodes, edges, seeds)]
       .filter(([, score]) => score > 1e-9)
       .sort((a, b) => b[1] - a[1])
       .slice(0, fetch);
@@ -54,7 +60,7 @@ export async function find(db: DatabaseSync, cfg: Config, terms: string, opts: F
       const existing = candidates.get(path);
       if (existing) {
         existing.score += 1 / (RRF_K + i);
-        existing.via = 'match+link';
+        if (linked.has(path)) existing.via = 'match+link';
       } else {
         candidates.set(path, { score: 1 / (RRF_K + i), via: 'link' });
       }
