@@ -1,11 +1,13 @@
 // Full benchmark flow: install versions, copy the tree per version, run run.mjs for each,
 // print a ready-to-paste markdown table.
 // usage: node benchmark/compare.mjs [corpus-or-dir] [version...]
-// Defaults: obsidian-hub corpus, latest published version vs 'local' (this working tree) --
-// so a bare `node bench/compare.mjs` answers "did the working tree regress?". Named corpora
-// and npm installs cache under .tmp/ (published versions are immutable; delete .tmp to refetch).
+// Defaults: obsidian-hub corpus, the released baseline vs 'local' (this working tree) -- so a
+// bare `node benchmark/compare.mjs` answers "did the working tree regress?". The baseline is
+// package.json's own version: the bump happens after a release, so during development it names
+// the last release, and no version is written down anywhere in the harness. Named corpora and
+// npm installs cache under .tmp/ (published versions are immutable; delete .tmp to refetch).
 import { spawnSync } from 'node:child_process';
-import { cpSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -15,13 +17,13 @@ import { corpusPath } from './lib/corpus.mjs';
 const benchDir = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(benchDir, '..');
 
-function latestPublished() {
-  const out = spawnSync('npm', ['view', 'sensemaking', 'version'], { encoding: 'utf8' });
-  if (out.status !== 0) {
-    console.error(`npm view sensemaking version failed (offline?); pass versions explicitly:\n${out.stderr}`);
+function releasedBaseline() {
+  const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'));
+  if (!pkg.version) {
+    console.error('package.json has no version; pass versions explicitly');
     process.exit(1);
   }
-  return out.stdout.trim();
+  return pkg.version;
 }
 
 const [corpusArg, ...versionArgs] = process.argv.slice(2);
@@ -30,7 +32,7 @@ if (!existsSync(treeDir)) {
   console.error(`not a corpus name or directory: ${corpusArg}`);
   process.exit(2);
 }
-const versions = versionArgs.length > 0 ? versionArgs : [latestPublished(), 'local'];
+const versions = versionArgs.length > 0 ? versionArgs : [releasedBaseline(), 'local'];
 
 const work = mkdtempSync(join(tmpdir(), 'sense-bench-'));
 

@@ -30,6 +30,7 @@ function usage(name: string): string {
     `       ${name} init\n` +
     `       ${name} watch [--force]\n` +
     `       ${name} status\n` +
+    `       ${name} check\n` +
     `       ${name} rebuild\n` +
     `       ${name} --version`
   );

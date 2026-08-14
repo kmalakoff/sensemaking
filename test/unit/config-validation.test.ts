@@ -2,7 +2,8 @@ import assert from 'assert';
 import { mkdtempSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { runCli } from '../lib/cli.ts';
+import { pathToFileURL } from 'url';
+import { packageRoot, runCli } from '../lib/cli.ts';
 
 function runWith(config: string, args: string[] = ['--list']) {
   const dir = mkdtempSync(join(tmpdir(), 'sense-validate-'));
@@ -99,5 +100,16 @@ describe('config validation', () => {
     assert.equal(result.status, 1, 'the dead link fails the run');
     assert.match(result.stdout, /dead-links.*FAILED: expected empty, returned 1/);
     assert.match(result.stdout, /no-frontmatterless.*ok \(empty, as asserted\)/);
+  });
+
+  it('--help lists every command in the registry', async () => {
+    // Guards the gap that shipped in 0.7.x: `check` existed and worked but was absent from
+    // --help, so the command that answers "is my config broken" was undiscoverable from the
+    // CLI itself.
+    const { COMMANDS } = (await import(pathToFileURL(join(packageRoot, 'dist', 'esm', 'commands', 'index.js')).href)) as { COMMANDS: Record<string, unknown> };
+    const help = runCli(['--help']).stdout + runCli([]).stderr;
+    for (const name of Object.keys(COMMANDS)) {
+      assert.ok(new RegExp(`\\b${name}\\b`).test(help), `${name} is a command but is missing from --help`);
+    }
   });
 });
