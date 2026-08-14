@@ -1,7 +1,7 @@
 import posix from 'node:path/posix';
 import type { DatabaseSync } from 'node:sqlite';
-import type { Config } from './config.ts';
-import { featureEnabled } from './config.ts';
+import type { Config, FeatureName } from './config.ts';
+import { featureEnabled, featureStates } from './config.ts';
 import { SenseError } from './errors.ts';
 import { semanticCandidates } from './features/embed.ts';
 import { linkEdges } from './features/index.ts';
@@ -104,6 +104,7 @@ export interface TreeMap {
   docs: { count: number; bytes: number };
   fields: Row[]; // top 20 by coverage; fieldsTotal carries the real count
   fieldsTotal: number;
+  features: { on: FeatureName[]; off: FeatureName[] };
   hubs: Row[];
   recent: Row[];
 }
@@ -127,7 +128,7 @@ export function mapTree(db: DatabaseSync, cfg: Config): TreeMap {
 
   const recent = db.prepare(`SELECT "path", datetime("_mtime" / 1000, 'unixepoch') AS modified FROM frontmatter ORDER BY "_mtime" DESC LIMIT 5`).all() as Row[];
 
-  return { docs, fields, fieldsTotal: allFields.length, hubs, recent };
+  return { docs, fields, fieldsTotal: allFields.length, features: featureStates(cfg), hubs, recent };
 }
 
 export interface Peek {
@@ -143,6 +144,7 @@ export interface Peek {
   outboundTotal: number;
   backlinksTotal: number;
   unresolvedTotal: number;
+  off: FeatureName[]; // disabled features whose blocks are omitted (not empty)
 }
 
 const PEEK_LINK_LIMIT = 20;
@@ -191,5 +193,6 @@ export function peek(db: DatabaseSync, cfg: Config, pathArg: string): Peek {
     outboundTotal: outbound.length,
     backlinksTotal,
     unresolvedTotal: unresolved.length,
+    off: (['sections', 'links'] as FeatureName[]).filter((name) => !featureEnabled(cfg, name)),
   };
 }

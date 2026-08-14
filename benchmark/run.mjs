@@ -54,6 +54,9 @@ const cold = timed(['status'], 1); // first open = full crawl
 const warm = fail(timed(['query', 'SELECT COUNT(*) AS n FROM frontmatter']));
 const search = fail(timed(['query', SEARCH, 'the']));
 const findR = fail(timed(['find', 'the', '--k', '10'], 3));
+// Non-null only on embed-enabled trees (vectors pre-built by the first run). The delta
+// vs find_ms is what --semantic pays per invocation: model load + query embed + scan.
+const semanticR = fail(timed(['find', 'the', '--semantic', '--k', '10'], 3));
 const mapR = fail(timed(['map'], 3));
 const peekR = fail(timed(['peek', largest.rel], 3));
 
@@ -115,7 +118,7 @@ try {
   const watcher = spawn(process.execPath, [cli, 'watch', '--force'], { cwd: tree, stdio: 'ignore' });
   await new Promise((r) => setTimeout(r, 1500)); // watcher startup + initial reconcile
   touchMany();
-  await new Promise((r) => setTimeout(r, 4000)); // debounce + background reparse
+  await new Promise((r) => setTimeout(r, 1500 + 1.5 * (bulkCold?.ms ?? 4000))); // debounce + background reparse, scaled to the measured reparse cost
   bulkWatch = fail(timed(['query', 'SELECT COUNT(*) AS n FROM frontmatter'], 1));
   watcher.kill('SIGTERM');
   await new Promise((r) => setTimeout(r, 300));
@@ -130,6 +133,7 @@ console.log(
       warm_query_ms: warm?.ms ?? null,
       bm25_search_ms: search?.ms ?? null,
       find_ms: findR?.ms ?? null,
+      semantic_find_ms: semanticR?.ms ?? null,
       map_ms: mapR?.ms ?? null,
       map_tokens: mapR ? Math.round(mapR.bytes / 4) : null,
       peek_ms: peekR?.ms ?? null,

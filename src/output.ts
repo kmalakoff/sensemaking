@@ -33,20 +33,30 @@ function render(rows: Row[], format: 'table' | 'json'): string {
 
 // Text renderers for the layer verbs; cli.ts prints what these return.
 
-export function renderMap(result: { docs: { count: number; bytes: number }; fields: Row[]; fieldsTotal: number; hubs: Row[]; recent: Row[] }): string {
-  const parts = [`docs: ${result.docs.count} (${Math.round(result.docs.bytes / 1024)} KB)\n`, render(result.fields, 'table')];
+function featuresLine(features: { on: string[]; off: string[] }): string {
+  const off = features.off.length > 0 ? ` · off: ${features.off.map((name) => `${name} (features.${name})`).join(', ')}` : '';
+  return `features: ${features.on.join(', ')}${off}`;
+}
+
+export function renderMap(result: { docs: { count: number; bytes: number }; fields: Row[]; fieldsTotal: number; features: { on: string[]; off: string[] }; hubs: Row[]; recent: Row[] }): string {
+  const parts = [`docs: ${result.docs.count} (${Math.round(result.docs.bytes / 1024)} KB)`, `${featuresLine(result.features)}\n`, render(result.fields, 'table')];
   if (result.fieldsTotal > result.fields.length) parts.push(`(+${result.fieldsTotal - result.fields.length} more fields)`);
   if (result.hubs.length > 0) parts.push('\nhubs (by link rank):', render(result.hubs, 'table'));
+  else if (result.features.off.includes('rank')) parts.push('\nhubs: off (features.rank)');
   parts.push('\nrecent:', render(result.recent, 'table'));
   return parts.join('\n');
 }
 
-export function renderPeek(result: { path: string; tokens: number; frontmatter: Row; sections: Row[]; outbound: string[]; backlinks: string[]; unresolved: string[]; outboundTotal: number; backlinksTotal: number; unresolvedTotal: number }): string {
+export function renderPeek(result: { path: string; tokens: number; frontmatter: Row; sections: Row[]; outbound: string[]; backlinks: string[]; unresolved: string[]; outboundTotal: number; backlinksTotal: number; unresolvedTotal: number; off: string[] }): string {
   const lines = [`${result.path}  (~${result.tokens} tokens)`];
   for (const [key, value] of Object.entries(result.frontmatter)) lines.push(`  ${key}: ${value}`);
   if (result.sections.length > 0) {
     lines.push('', 'sections:');
     for (const s of result.sections) lines.push(`  ${'#'.repeat(s.level as number)} ${s.heading}  [L${s.start_line}-${s.end_line}, ~${s.tokens}t]`);
+  } else if (result.off.includes('sections')) lines.push('', 'sections: off (features.sections)');
+  if (result.off.includes('links')) {
+    lines.push('', 'links: off (features.links)');
+    return lines.join('\n');
   }
   const linkLine = (label: string, shown: string[], total: number) => {
     if (total > 0) lines.push(`${label} (${total}): ${shown.join(', ')}${total > shown.length ? `, +${total - shown.length} more` : ''}`);

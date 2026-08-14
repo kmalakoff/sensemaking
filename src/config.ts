@@ -53,6 +53,14 @@ export function enabledFeatures(cfg: Config): FeatureName[] {
   return FEATURE_NAMES.filter((name) => featureEnabled(cfg, name));
 }
 
+// Every feature with its current state; verbs surface this so "off" and "empty" stay
+// distinguishable in output.
+export function featureStates(cfg: Config): { on: FeatureName[]; off: FeatureName[] } {
+  return {
+    on: FEATURE_NAMES.filter((name) => featureEnabled(cfg, name)),
+    off: FEATURE_NAMES.filter((name) => !featureEnabled(cfg, name)),
+  };
+}
 
 // Resolved embed settings, or null when the feature is off.
 export function embedConfig(cfg: Config): { model: string; type: 'static' | 'api'; url?: string; key?: string } | null {

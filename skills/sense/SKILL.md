@@ -10,22 +10,32 @@ SQL over a markdown tree, kept fresh by a filesystem check on every query. Four 
 `title`, `summary`, `text`), `links` (`src`, `target`, `dst` — `NULL` dst = dead link),
 `sections` (heading outline with line ranges and token estimates).
 
-## The descent
+## What each tool is for
 
-Spend tokens in this order (progressive disclosure: metadata first, payloads just in time); go
-only as deep as the question needs.
+Every result is a reference (path, metadata, excerpt), never file contents; prose enters
+context only when you Read it. Costs: `map` is fixed-size, a `find` row ~30 tokens, `peek`
+~17% of reading the file. Which tool fits is a property of the question:
 
-1. `sense map` — orient once: fields, hub notes, recent changes. Fixed-size output.
-2. `sense find "<terms>"` — locate: ranked references with excerpts, ~30 tokens/row.
-   FTS5 standard: bare words AND-join (one absent word = zero rows) — write
-   `a OR b OR c` for any-word matching.
-3. `sense peek <path>` — structure before reading: outline with `[L143-162, ~380t]` ranges,
-   links both ways. ~17% the cost of reading the file.
-4. `Read` — the payload. On large files, peek's line ranges let you read just the section
-   you need; small files are often cheaper to read whole.
+- A deterministic, factual answer over known fields — counts, filters, "which notes have
+  X" — is SQL: `sense query`, a named query, or `find --where`. Enumerates every match;
+  same result regardless of phrasing.
+- Locating notes by words in their prose is `find` — ranked lexical match. Results shift as
+  phrasing shifts, and bare words AND-join (one absent word = zero rows): write
+  `a OR b OR c` for any-word matching.
+- A conceptual question the notes phrase in different words is `find --semantic` (exists only
+  on trees whose config enables `embed`): adds meaning-based candidates labeled `via: vector`.
+  Conceptual similarity, not typo-tolerance; false positives are expected, labeled, and
+  bounded by `--k`.
+- `map` answers "what is this tree" — fields, hub notes, recent changes — when the tree is
+  unfamiliar.
+- `peek <path>` prices a file before you pay for it: outline with `[L143-162, ~380t]`
+  ranges, links both ways.
+- When you know the file and need its contents, `Read` it — sense adds nothing there. On
+  large files peek's ranges let you read just one section; small files are often cheaper
+  whole.
 
-Every result is a reference, never file contents. Output defaults to a table, built for
-humans; `--format json` returns the same rows machine-parseable.
+Output defaults to a table, built for humans; `--format json` returns the same rows
+machine-parseable.
 
 ## Verbs
 
@@ -44,15 +54,20 @@ sense --list | status | rebuild
   rules apply to search commands you write into subagent briefs.
 - When a search misses, the recall levers are: OR-in synonyms and concrete instances (the
   index only knows the words in the files — a note about a specific tool rarely names its
-  category), and raise `--k` (a row costs ~30 tokens). Each widening adds candidates and
-  dilutes ranking, so the noise trade-off runs both ways.
+  category), raise `--k` (a row costs ~30 tokens), and on embed-enabled trees `--semantic`
+  (matches meaning where term overlap fails). Each widening adds candidates and dilutes
+  ranking, so the noise trade-off runs both ways.
 - A frontmatter query enumerates its matches deterministically; search ranks by term overlap,
   so results shift as phrasing shifts. Trade-off: a query needs a known field, search doesn't.
 - `find` fuses BM25 with link-graph expansion; the `via` column says what produced each row —
-  `match` (terms hit), `link` (connected to notes that hit), `match+link` (both).
+  `match` (terms hit), `link` (connected to notes that hit), `match+link` (both). With
+  `--semantic`, `vector` joins the composition and rows gain a `lines` column pointing at the
+  best-matching section, a direct `Read` range.
 - `--where` takes a frontmatter condition against alias `f`, e.g. `"f.status = 'active' AND has(f.tags, 'x')"`.
 
-## SQL, when the verbs aren't enough
+## SQL
+
+The verbs are shorthands over the same four tables; anything they don't express, SQL does.
 
 ```
 sense query "SELECT name FROM pragma_table_info('frontmatter')"          # what fields exist
@@ -92,7 +107,11 @@ Worked traces: [EXAMPLES.md](EXAMPLES.md).
 ## Setup and upkeep
 
 - Missing CLI: `npm install -g sensemaking`. Missing config: `sense init` at the tree root.
-  Discovery walks up from cwd; `--config <path>` overrides.
+  Discovery walks up from cwd; `--config <path>` overrides. Setting up or restructuring a
+  tree (features, frontmatter conventions, note design) is the `sense-setup` skill.
+- `map` and `status` report feature state (`features: links, sections, rank · off: embed
+  (features.embed)`). Invoking a capability whose feature is off is an error naming the
+  config key to enable — nothing silently falls back.
 - Save a query into `sense.config.json` only when it will be reused; run ad-hoc otherwise.
 - A one-line `summary:` per note is optional and pays twice: it appears in result rows and is a
   weighted search field. Date comparisons work for dates written as ISO 8601 (`2026-08-12`, or

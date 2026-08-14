@@ -214,3 +214,25 @@ describe('find provenance', () => {
     db.close();
   });
 });
+
+describe('feature visibility', () => {
+  it('map reports feature states; disabled features carry their config key', () => {
+    const base = tmpTree();
+    writeNote(base, 'a.md', { body: 'alpha' });
+    const { db, cfg } = openTree(base, { rank: false, embed: false });
+    const result = mapTree(db, cfg);
+    assert.deepEqual(result.features.on, ['links', 'sections']);
+    assert.deepEqual(result.features.off, ['rank', 'embed']);
+    db.close();
+  });
+
+  it('peek distinguishes off from empty: sections off is reported, not silent', () => {
+    const base = tmpTree();
+    writeNote(base, 'a.md', { body: '# Heading\n\nalpha' });
+    const { db, cfg } = openTree(base, { sections: false });
+    const result = peek(db, cfg, 'a.md');
+    assert.deepEqual(result.sections, []);
+    assert.ok(result.off.includes('sections'));
+    db.close();
+  });
+});

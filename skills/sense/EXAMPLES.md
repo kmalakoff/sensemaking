@@ -75,6 +75,22 @@ sense --list                       # named queries someone already saved
 sense query "SELECT DISTINCT type FROM frontmatter"    # what a field's values are
 ```
 
+## F. "The notes say it in different words"
+
+```
+sense find "children dying from poor nutrition" --semantic --k 3 --format json
+```
+
+```json
+[
+  { "path": "notes/malnutrition-outcomes.md", "title": "Malnutrition outcomes",
+    "summary": "Stunting and mortality by region", "hit": null, "via": "vector", "score": 0.0167, "lines": "L14-52" }
+]
+```
+
+A `via: "vector"` row never contained the terms — it is semantically near them; `lines` is the
+best-matching section, a direct `Read` range. Only on trees whose config enables `features.embed`.
+
 ## Consequences
 
 | query | what happens | bounded alternative |

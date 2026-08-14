@@ -24,6 +24,11 @@ const CORPORA = {
   // Pages keep their sentence link annotations as wikilinks -- the corpus that can
   // measure link fusion. Tree = only pages cited as evidence; links to pages outside
   // it are dead (dst NULL), as in a real partial tree.
+  // Scale rows: the same real corpus replicated N times under one root. Tests the
+  // per-query freshness stat-walk and reconcile at the note counts the README claims;
+  // duplicate basenames across copies also stress link-ambiguity resolution.
+  'obsidian-hub-x2': { type: 'replicate', source: 'obsidian-hub', copies: 2, version: 'x2-hub-1' },
+  'obsidian-hub-x4': { type: 'replicate', source: 'obsidian-hub', copies: 4, version: 'x4-hub-1' },
   fever: {
     type: 'fever',
     wikiUrl: 'https://fever.ai/download/fever/wiki-pages.zip',
@@ -138,6 +143,16 @@ const BUILDERS = {
     writeFileSync(join(labels, 'test.tsv'), `${qrels.join('\n')}\n`);
     console.error(`fever: ${kept.size} pages (${cited.size} cited), ${keptQueries.length} claims`);
   },
+};
+
+BUILDERS.replicate = (spec, dest) => {
+  const src = corpusPath(spec.source);
+  for (let i = 1; i <= spec.copies; i++) {
+    const copy = join(dest, `copy${i}`);
+    execFileSync('cp', ['-R', src, copy]);
+    execFileSync('rm', ['-rf', join(copy, '.git'), join(copy, '.sense'), join(copy, 'sense.config.json')]);
+  }
+  writeFileSync(join(dest, 'sense.config.json'), '{"version":1,"scan":{"include":["**/*.md"]},"queries":{}}');
 };
 
 function entryDir(name) {
