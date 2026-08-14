@@ -1,6 +1,6 @@
 {
   "name": "sensemaking",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "Query a knowledge base you build with an agent: filter notes by frontmatter, then search inside them",
   "keywords": [
     "markdown",
