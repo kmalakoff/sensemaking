@@ -1,10 +1,11 @@
 import assert from 'assert';
-import { readFileSync } from 'fs';
+import { spawnSync } from 'child_process';
+import { readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import type { Row } from 'sensemaking';
 import { find, mapTree, peek } from 'sensemaking';
 import { packageRoot, runCli } from '../lib/cli.ts';
-import { openTree, tmpTree, writeNote } from '../lib/tree.ts';
+import { openConfig, openTree, tmpTree, writeNote } from '../lib/tree.ts';
 
 const write = (baseDir: string, relPath: string, body: string, frontmatter: Record<string, unknown> = {}) => writeNote(baseDir, relPath, { body, frontmatter });
 
@@ -233,6 +234,110 @@ describe('feature visibility', () => {
     const result = peek(db, cfg, 'a.md');
     assert.deepEqual(result.sections, []);
     assert.ok(result.off.includes('sections'));
+    db.close();
+  });
+});
+
+describe('field-report fixes', () => {
+  it('FTS5 punctuation error names the offending term, not a word inside it', async () => {
+    const base = tmpTree();
+    writeNote(base, 'a.md', { body: 'body about end-to-end delivery' });
+    const { db, cfg } = openTree(base);
+    await assert.rejects(
+      () => find(db, cfg, 'end-to-end'),
+      (err: Error) => {
+        assert.match(err.message, /end-to-end/, 'names the term the user typed');
+        assert.match(err.message, /double-quot/i, 'states the remedy');
+        return true;
+      }
+    );
+    db.close();
+  });
+
+  it('a valid query still returns rows (the error path is not over-eager)', async () => {
+    const base = tmpTree();
+    writeNote(base, 'a.md', { body: 'body about delivery' });
+    const { db, cfg } = openTree(base);
+    const rows = await find(db, cfg, 'delivery');
+    assert.equal(rows.length, 1);
+    db.close();
+  });
+
+  it('map reports the observed type per field, including drift across notes', () => {
+    const base = tmpTree();
+    writeNote(base, 'a.md', { frontmatter: { flag: true, count: 3, ratio: 1.5, name: 'x' } });
+    writeNote(base, 'b.md', { frontmatter: { count: 'notanumber' } });
+    const { db, cfg } = openTree(base);
+    const byField = new Map(mapTree(db, cfg).fields.map((f) => [f.field, f.type]));
+    assert.equal(byField.get('flag'), 'integer', 'YAML booleans store as INTEGER, so WHERE flag = 1 matches');
+    assert.equal(byField.get('ratio'), 'real');
+    assert.equal(byField.get('name'), 'text');
+    assert.equal(byField.get('count'), 'integer,text', 'a field with mixed types shows both');
+    db.close();
+  });
+});
+
+describe('find default scope', () => {
+  it('config default fences find; --where replaces it rather than ANDing', async () => {
+    const base = tmpTree();
+    writeNote(base, 'note.md', { frontmatter: { type: 'knowledge' }, body: 'alpha subject' });
+    writeNote(base, 'raw.md', { frontmatter: { type: 'raw' }, body: 'alpha subject' });
+    const cfg = { scan: { include: ['**/*.md'] }, queries: {}, defaults: { find: { where: "f.type != 'raw'" } }, baseDir: base, configPath: null };
+    const { db } = openConfig(cfg);
+
+    const fenced = await find(db, cfg, 'alpha');
+    assert.deepEqual(
+      fenced.map((r) => r.path),
+      ['note.md'],
+      'default scope excludes raw'
+    );
+
+    const widened = await find(db, cfg, 'alpha', { where: '1=1' });
+    assert.equal(widened.length, 2, '--where replaces the default, so the tree is reachable');
+
+    const narrowed = await find(db, cfg, 'alpha', { where: "f.type = 'raw'" });
+    assert.deepEqual(
+      narrowed.map((r) => r.path),
+      ['raw.md'],
+      'an explicit scope wins outright'
+    );
+    db.close();
+  });
+});
+
+describe('table output', () => {
+  it('fits the terminal width instead of wrapping; json is never truncated', () => {
+    const base = tmpTree();
+    writeFileSync(join(base, 'sense.config.json'), JSON.stringify({ version: 2, scan: { include: ['**/*.md'] }, queries: {} }));
+    writeNote(base, 'a.md', { frontmatter: { summary: 'x'.repeat(400) }, body: 'body' });
+    const run = (format: string) =>
+      spawnSync(process.execPath, ['-e', `process.stdout.columns=100; require(${JSON.stringify(join(packageRoot, 'dist', 'cjs', 'cli.js'))})(['query','SELECT f.path, f.summary FROM frontmatter f','--format','${format}'],'sense')`], {
+        cwd: base,
+        encoding: 'utf8',
+      });
+    const table = run('table');
+    assert.equal(table.status, 0, table.stderr);
+    for (const line of table.stdout.split('\n')) assert.ok([...line].length <= 100, `line of ${[...line].length} chars exceeds the declared width`);
+    assert.match(table.stdout, /…/, 'truncation is marked');
+    const json = run('json');
+    assert.match(json.stdout, /x{400}/, 'json keeps full values');
+  });
+});
+
+describe('search error attribution', () => {
+  it('a --where column typo is not blamed on term punctuation', async () => {
+    const base = tmpTree();
+    writeNote(base, 'a.md', { body: 'body about end-to-end delivery' });
+    const { db, cfg } = openTree(base);
+    await assert.rejects(
+      () => find(db, cfg, 'end-to-end delivery', { where: 'f.nosuchfield = 1' }),
+      (err: Error) => {
+        assert.doesNotMatch(err.message, /punctuation/, 'the term is innocent here');
+        assert.match(err.message, /where condition/, 'the where clause is named instead');
+        assert.match(err.message, /pragma_table_info/);
+        return true;
+      }
+    );
     db.close();
   });
 });

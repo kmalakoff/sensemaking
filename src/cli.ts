@@ -80,6 +80,9 @@ export default async function cli(argv: string[], name: string): Promise<void> {
       if (cfg.migratedFrom !== undefined) {
         console.warn(`${name}: migrated ${cfg.configPath} from config version ${cfg.migratedFrom} to ${SUPPORTED_CONFIG_VERSION}`);
       }
+      if (cfg.unknownKeys !== undefined) {
+        console.warn(`${name}: ${cfg.configPath} sets ${cfg.unknownKeys.join(', ')}, which this build does not read (no effect); see schema.json for the keys it does`);
+      }
       return cfg;
     },
     usageError(message) {

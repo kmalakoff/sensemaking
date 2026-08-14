@@ -68,23 +68,22 @@ Two kinds of metric per version:
 
 ## Results — obsidian-hub @ b11036f9 (6,566 notes, 14 MB)
 
-Apple Silicon, Node 26. 2026-08-12. `local` = working tree after v0.4.0 (the audit fixes);
-regenerate at the next release for its real number.
+Apple Silicon, Node 26.7.0. 2026-08-13, all columns regenerated in one sitting.
 
-| metric | 0.2.1 | local |
-|---|---|---|
-| cold crawl (wall) | **FAILED** | 5.7 s |
-| warm query (`COUNT(*)`) | — | 72 ms |
-| BM25 search (canonical join) | — | 78 ms |
-| `find` (BM25 + link fusion) | — | 131 ms |
-| `map` (orient) | — | 80 ms / ~452 tokens |
-| `peek` largest note (~77,274 t) | — | 79 ms / ~581 tokens (0.8%) |
-| bulk change (500 files): first query | — | 1.15 s |
-| bulk change (500 files): with warm watcher | — | 100 ms |
-| in-process: cold index build | **FAILED** | 5.8 s |
-| in-process: freshness check, no change | — | 27 ms |
-| in-process: update, 1 file touched | — | 116 ms |
-| in-process: update, 10 files modified | — | 131 ms |
+| metric | 0.2.1 | 0.5.0 | 0.6.0 |
+|---|---|---|---|
+| cold crawl (wall) | **FAILED** | 5.65 s | **0.94 s** |
+| warm query (`COUNT(*)`) | — | 72 ms | 72 ms |
+| BM25 search (canonical join) | — | 79 ms | 80 ms |
+| `find` (BM25 + link fusion) | — | 131 ms | 135 ms |
+| `map` (orient) | — | 77 ms / ~452 tokens | 79 ms / ~468 tokens |
+| `peek` largest note (~77,274 t) | — | 76 ms / ~581 tokens (0.8%) | 76 ms / ~581 tokens (0.8%) |
+| bulk change (500 files): first query | — | 1.11 s | 1.15 s |
+| bulk change (500 files): with warm watcher | — | 101 ms | 116 ms |
+| in-process: cold index build | **FAILED** | 5.69 s | **0.91 s** |
+| in-process: freshness check, no change | — | 29 ms | 28 ms |
+| in-process: update, 1 file touched | — | 119 ms | 120 ms |
+| in-process: update, 10 files modified | — | 136 ms | 137 ms |
 
 0.2.1's failure is structural, not a timing gap: `01 - Community/People/MugishoMp.md` has an
 alias list entry starting with `@`, which strict YAML rejects; 0.2.1's parser (gray-matter/
@@ -92,6 +91,13 @@ js-yaml) throws with no per-file handling, so one bad file aborts the whole craw
 indexed. At real-tree scale some frontmatter is always broken. 0.3.0 parses frontmatter
 leniently (`yaml` parseDocument): syntax errors become per-file warnings and the values —
 including the `@` alias — are kept.
+
+0.6.0's 6x cold-crawl drop is one fix, not tuning: the per-document delete-before-insert into
+`content` ran on cold builds too, where there is nothing to delete, and an FTS5 `DELETE` by
+column cannot use an index — so every inserted document scanned the whole table. Cost grew
+quadratically and had been present since the `content` table existed; it only became visible
+at the 13k/26k scale rows below. Steady-state query rows are unchanged, as expected — the
+defect was confined to first-index and bulk-reparse paths.
 
 The update rows are dominated by post-parse reconcile work (whole-table link re-resolution +
 PageRank), not by re-parsing: 1 file vs 10 files differs by only ~20 ms.
@@ -105,6 +111,23 @@ nothing like every corpus. Duplicate basenames across copies stress link-ambigui
 resolution harder than a natural tree. Run `node benchmark/run.mjs . <corpusPath>` per
 tree; regenerate scale rows together with the main table.
 
+Measured 2026-08-13, same machine and sitting as the table above (0.6.0):
+
+| metric | 6.5k (hub) | 13k (x2) | 26k (x4) |
+|---|---|---|---|
+| cold crawl (wall) | 0.94 s | 2.95 s | 5.76 s |
+| warm query | 72 ms | 100 ms | 151 ms |
+| `find` | 135 ms | 203 ms | 339 ms |
+| bulk change (500 files): first query | 1.15 s | 2.25 s | 4.53 s |
+| bulk change (500 files): with warm watcher | 116 ms | 122 ms | 182 ms |
+| in-process: freshness check, no change | 28 ms | 53 ms | 100 ms |
+| in-process: update, 1 file touched | 120 ms | 246 ms | 523 ms |
+
+Every row is linear or better in note count across a 4x range. The freshness check — the
+cost every single invocation pays — is 100 ms at 26k notes; `map` and `peek` token counts
+stay flat by construction (539 / 843 tokens at 26k), which is the contract that matters
+for context.
+
 What the scale rows watch, in order of what actually breaks: the per-query freshness
 check (stats every file — linear, the cost every call pays), cold crawl (linear —
 a quadratic here was found and fixed at 13k/26k: FTS5 DELETE by column scans the whole
@@ -115,38 +138,64 @@ waits on `busy_timeout` — sized at 30s to cover ~3x the largest measured recon
 
 ## Retrieval quality
 
-`benchmark/eval.mjs <corpus>` runs every labeled query through `find` in two variants —
-BM25-only (links and rank off) and fused (BM25 + link expansion) — and reports nDCG@10,
-MRR@10, and hit@10 against the corpus qrels. Queries are natural-language text, submitted
-as an OR bag of words (the standard bag-of-words baseline; bare FTS5 terms AND-join and
-punctuation is syntax). Labeled corpora convert their labels to one format
-(`labels/queries.jsonl` + `test.tsv`, read by `benchmark/lib/labels.mjs`):
+`benchmark/eval.mjs <corpus>` runs every labeled query through the shipped library in four
+passes and reports nDCG@10, MRR@10 and hit@10 against the corpus qrels: **bm25-only**
+(links and rank off), **fused** (BM25 + link expansion), **embed-on** (the feature enabled
+but never invoked), and **semantic** (`--semantic` expansion invoked). Queries are
+natural-language text submitted as an OR bag of words (the standard bag-of-words baseline;
+bare FTS5 terms AND-join and punctuation is syntax).
+
+Two guards run before any number is reported:
+
+- **Bit-identity.** The embed-on pass must return rows identical to fused, query for query;
+  a divergence aborts the run with a nonzero exit. This is what makes "enabling the feature
+  changes nothing until you ask for it" a tested claim rather than a design intention.
+- **Paired per-query deltas.** Point metrics hide whether a change moved many queries a
+  little or a few queries a lot, and at these sample sizes a 0.01 difference can be noise —
+  so every comparison also reports wins/losses and a sign-test z (|z| > 2 is beyond noise).
+
+Labeled corpora convert their labels to one format (`labels/queries.jsonl` + `test.tsv`,
+read by `benchmark/lib/labels.mjs`):
 
 - **nfcorpus** — BEIR NFCorpus: 3,633 medical abstracts, 323 queries, graded qrels
-  (~38 judged/query). No links, so it measures BM25 recall; both variants score identically.
-- **fever** — FEVER dev split: Wikipedia intro pages cited as evidence by verifiable claims,
-  with sentence link annotations kept as wikilinks. The claims are the queries; the corpus
-  that can measure whether link fusion helps or hurts ranking.
+  (~38 judged/query). No links, so fused equals bm25-only; it measures lexical recall and
+  the vocabulary gap semantic expansion targets.
+- **fever** — FEVER dev split: 2,860 Wikipedia pages cited as evidence by 13,229 verifiable
+  claims, with sentence link annotations kept as wikilinks. The claims are the queries; the
+  corpus that can measure whether link fusion helps or hurts ranking.
 
-Results (macOS arm64, Node 24, 2026-08):
+Results (Apple Silicon, Node 26.7.0, 2026-08-13, 0.6.0):
 
-| metric | nfcorpus bm25-only | nfcorpus fused | fever bm25-only | fever fused |
-|---|---|---|---|---|
-| nDCG@10 | 0.3233 | 0.3233 | 0.9436 | 0.9361 |
-| MRR@10 | 0.5185 | 0.5185 | 0.9508 | 0.9381 |
-| hit@10 | 0.6873 | 0.6873 | 0.9969 | 0.9971 |
-| mean ms/query | 3.5 | 5.0 | 7.6 | 15.2 |
+| metric | nfcorpus bm25 | nfcorpus fused | nfcorpus semantic | fever bm25 | fever fused | fever semantic |
+|---|---|---|---|---|---|---|
+| nDCG@10 | 0.3233 | 0.3233 | 0.3444 | 0.9436 | 0.9361 | 0.9435 |
+| MRR@10 | 0.5185 | 0.5185 | 0.5634 | 0.9508 | 0.9381 | 0.9479 |
+| hit@10 | 0.6873 | 0.6873 | 0.7152 | 0.9969 | 0.9971 | 0.9974 |
+| mean ms/query | 3.6 | 3.6 | 12.1 | 7.7 | 15.3 | 18.9 |
 
-The published BEIR BM25 (Anserini) baseline for NFCorpus is nDCG@10 ≈ 0.32 — the FTS5
-pipeline matches it, so `find`'s lexical layer is a faithful BM25, and the identical fused
-column confirms fusion is a no-op on a linkless corpus.
+Paired deltas: on nfcorpus, semantic vs fused is 110W/77L on nDCG (z=2.4) and 16W/7L on hit
+(z=1.9). On fever, semantic vs fused is 1084W/687L on nDCG (z=9.4).
 
-On FEVER, claims quote their evidence pages' vocabulary almost verbatim, so BM25 alone is
-near-saturated (99.7% hit@10) — little headroom for fusion to help. Within that: fusion
-recovers a handful of BM25 misses (hit@10 +0.02 points) but costs ~1 point of MRR/nDCG
-(link neighbors occasionally rerank above the true evidence page) and doubles per-query
-latency. The eval detects sub-point ranking deltas; use it before and after any change to
-`find`'s fusion or scoring.
+Read:
+
+- The published BEIR BM25 (Anserini) baseline for NFCorpus is nDCG@10 ≈ 0.32 — the FTS5
+  pipeline matches it, so `find`'s lexical layer is a faithful BM25 rather than an
+  approximation, and the identical fused column confirms link fusion is a no-op where there
+  are no links.
+- **The two corpora are the ends of one axis**, and no customer tree is either: NFCorpus is
+  maximal vocabulary gap (layman queries, jargon documents — 31% of queries have no relevant
+  document in the top 10), FEVER is zero gap (claims quote their evidence nearly verbatim,
+  99.7% hit@10 for plain BM25). A change that wins on one by losing on the other is fitted to
+  a corpus nobody has; see plans/fusion-tuning.md.
+- **Semantic expansion earns its cost where the gap is real** and does no harm where it
+  isn't: +0.021 nDCG / +0.028 hit on NFCorpus, and on FEVER it recovers most of link
+  fusion's ranking cost rather than adding noise (0.9361 → 0.9435 nDCG).
+- **Link fusion's own contribution is smaller than the fused column suggests.** Its score
+  comes largely from PageRank restart mass sitting on the seed set, which re-ranks matches
+  in near-match order; on FEVER it costs ~1 point of MRR by occasionally promoting neighbors
+  above the true evidence page. Removing that restart mass was measured and rejected — it
+  drops FEVER hit@10 to 0.907. `via` labels are gated on a real incident edge, so the labels
+  stay honest even where the score echo remains.
 
 ### Static-model bake-off (semantic-search-design.md, sequence step 2)
 
@@ -193,15 +242,18 @@ Read:
 
 ## Capabilities
 
-| | 0.2.1 | 0.3.0 |
-|---|---|---|
-| frontmatter filter + FTS5 search | ✓ | ✓ |
-| links table, backlinks, dead links | — | ✓ |
-| sections table, outline with line ranges | — | ✓ |
-| PageRank (`_rank`), hub detection | — | ✓ |
-| fused retrieval (`find`, `via` column) | — | ✓ |
-| bounded orient/structure verbs (`map`, `peek`) | — | ✓ |
-| lenient frontmatter (syntax errors → warnings, values kept) | — | ✓ |
-| config auto-migration | — | ✓ |
-| feature toggles | — | ✓ |
-| `--version` | — | ✓ |
+| | 0.2.1 | 0.3.0 | 0.6.0 |
+|---|---|---|---|
+| frontmatter filter + FTS5 search | ✓ | ✓ | ✓ |
+| links table, backlinks, dead links | — | ✓ | ✓ |
+| sections table, outline with line ranges | — | ✓ | ✓ |
+| PageRank (`_rank`), hub detection | — | ✓ | ✓ |
+| fused retrieval (`find`, `via` column) | — | ✓ | ✓ |
+| bounded orient/structure verbs (`map`, `peek`) | — | ✓ | ✓ |
+| lenient frontmatter (syntax errors → warnings, values kept) | — | ✓ | ✓ |
+| config auto-migration | — | ✓ | ✓ |
+| feature toggles | — | ✓ | ✓ |
+| `--version` | — | ✓ | ✓ |
+| semantic expansion (`features.embed`, `find --semantic`, `via: vector`) | — | — | ✓ |
+| feature state reported by `map` and `status` | — | — | ✓ |
+| labeled-corpus retrieval eval (nDCG/MRR/hit, paired deltas) | — | — | ✓ |

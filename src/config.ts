@@ -30,12 +30,17 @@ export interface Config {
   version?: number;
   scan: { include: string[] };
   features?: { links?: boolean; sections?: boolean; rank?: boolean; embed?: boolean | EmbedConfig };
+  // Tree-declared default scope for `find`. A --where on the invocation replaces it, so a
+  // caller can always reach the whole tree (`--where "1=1"`).
+  defaults?: { find?: { where?: string } };
   queries: Record<string, string>;
 }
 
 export interface ResolvedConfig extends Config {
   baseDir: string;
   configPath: string | null;
+  // Keys the file declares that this build does not read; cli reports them.
+  unknownKeys?: string[];
   // Set when loadConfig auto-migrated the file on disk; cli reports it.
   migratedFrom?: number;
 }
@@ -133,6 +138,36 @@ export function findConfigPath(startDir: string): string | null {
 // Shape check for hand-edited files: a typo'd config fails with a named error, not a
 // TypeError from whatever code touched the missing field first. `queries` is optional
 // on disk (absent = none); `scan.include` has no usable default.
+// Keys each block actually reads. A key outside these sets is accepted and ignored, which
+// looks identical to working -- one field report set `scan.exclude`, saw no change in doc
+// count and no warning, and reasonably concluded the filter had applied. Reported as a
+// warning rather than an error so a config carrying an unknown key still runs.
+const KNOWN_KEYS = new Set(['$schema', 'version', 'scan', 'features', 'defaults', 'queries']);
+const KNOWN_SCAN_KEYS = new Set(['include']);
+
+function unknownConfigKeys(cfg: Record<string, unknown>): string[] {
+  const unknown = Object.keys(cfg)
+    .filter((k) => !KNOWN_KEYS.has(k))
+    .map((k) => k);
+  const scan = cfg.scan as Record<string, unknown> | undefined;
+  if (scan && typeof scan === 'object' && !Array.isArray(scan)) {
+    unknown.push(
+      ...Object.keys(scan)
+        .filter((k) => !KNOWN_SCAN_KEYS.has(k))
+        .map((k) => `scan.${k}`)
+    );
+  }
+  const features = cfg.features as Record<string, unknown> | undefined;
+  if (features && typeof features === 'object' && !Array.isArray(features)) {
+    unknown.push(
+      ...Object.keys(features)
+        .filter((k) => !(FEATURE_NAMES as readonly string[]).includes(k))
+        .map((k) => `features.${k}`)
+    );
+  }
+  return unknown;
+}
+
 function validateConfig(parsed: unknown, configPath: string): Config {
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
     throw new SenseError('CONFIG_INVALID', `${configPath}: config must be a JSON object`);
@@ -145,6 +180,10 @@ function validateConfig(parsed: unknown, configPath: string): Config {
   if (cfg.queries === undefined) cfg.queries = {};
   if (typeof cfg.queries !== 'object' || cfg.queries === null || Array.isArray(cfg.queries) || !Object.values(cfg.queries).every((q) => typeof q === 'string')) {
     throw new SenseError('CONFIG_INVALID', `${configPath}: queries must be an object of name -> SQL string`);
+  }
+  const defaults = cfg.defaults as { find?: { where?: unknown } } | undefined;
+  if (defaults !== undefined && (typeof defaults !== 'object' || defaults === null || Array.isArray(defaults) || (defaults.find !== undefined && typeof defaults.find?.where !== 'string'))) {
+    throw new SenseError('CONFIG_INVALID', `${configPath}: defaults.find.where must be a SQL condition string`);
   }
   if (cfg.features !== undefined && (typeof cfg.features !== 'object' || cfg.features === null || Array.isArray(cfg.features))) {
     throw new SenseError('CONFIG_INVALID', `${configPath}: features must be an object of name -> boolean`);
@@ -194,5 +233,6 @@ export function loadConfig(explicitPath?: string): ResolvedConfig {
     writeFileSync(configPath, `${JSON.stringify(cfg, null, 2)}\n`);
   }
 
-  return { ...cfg, baseDir: dirname(configPath), configPath, migratedFrom };
+  const unknownKeys = unknownConfigKeys(cfg as unknown as Record<string, unknown>);
+  return { ...cfg, baseDir: dirname(configPath), configPath, migratedFrom, unknownKeys: unknownKeys.length > 0 ? unknownKeys : undefined };
 }

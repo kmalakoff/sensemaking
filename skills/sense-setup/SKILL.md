@@ -31,6 +31,16 @@ installing, configuring features, and the design decisions a tree owner faces.
   Face id or local path), `type` (`static` pure-JS built-in, or `api` for any
   OpenAI-compatible `/v1/embeddings` endpoint — Ollama, LM Studio, llama.cpp,
   hosted), `url`, `key` (env var name). A local `model` path is fully offline.
+- The two types differ in what they match, not only in cost: `static` is a
+  context-free distilled model that handles paraphrase and reworded concepts
+  (a query like "delegating without micromanaging" can reach a note that uses
+  neither word); tight near-synonyms and domain jargon ("heart attack" for
+  "myocardial infarction") are where it misses and an `api` transformer model
+  tends to succeed. The gain concentrates where the searcher's vocabulary
+  differs from the notes' — measured in the retrieval eval (BENCHMARKING.md,
+  "Retrieval quality"): on a vocabulary-gap corpus semantic expansion adds
+  recall; where vocabulary overlaps, BM25 plus link expansion already answers
+  most queries and vectors mostly reorder.
 - Enabling `embed` changes no default `find` result — expansion runs only when
   a query passes `--semantic`. Invoking `--semantic` on a tree without `embed`
   is an error naming the config key.
@@ -46,10 +56,18 @@ do, and every consequence is listed so the choice can be made deliberately.
 
 - **Frontmatter fields.** Columns are discovered per tree — whatever keys notes
   declare become queryable. Consistent fields across notes make SQL filters
-  and named queries possible (`WHERE status = 'active'`); inconsistent fields
-  still work but produce sparse columns that filter less of the tree. Reserved
-  keys (dropped with a warning): `path`, `_mtime`, `_size`, `_rank`, `content`,
-  `links`, `sections`.
+  and named queries possible (`WHERE status = 'active'`). Reserved keys
+  (dropped with a warning): `path`, `_mtime`, `_size`, `_rank`, `content`,
+  `links`, `sections`. Values keep their YAML type: strings TEXT, whole numbers
+  and booleans INTEGER (`true` is 1), fractions REAL, lists and maps JSON text;
+  `map` prints the observed type per field.
+- **What a note omits is also a filter.** A layer that deliberately carries none
+  of the fields the saved views filter on is excluded from all of them without
+  any view naming the layer; only a view filtering solely on a field the layer
+  does share needs an explicit condition (`AND type != 'raw'`). Sparse fields cut
+  both ways: less of the tree filters when you want breadth, and exactly this
+  separation when layers differ in authority — source extractions vs.
+  conclusions, generated output vs. notes.
 - **Dates.** `datetime()` comparisons work for dates written as ISO 8601 —
   the only format it parses. A tree that mixes date formats can store them,
   but can't compare them in SQL.

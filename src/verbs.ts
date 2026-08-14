@@ -14,6 +14,30 @@ import type { Row } from './output.ts';
 const WEIGHTED_BM25 = 'bm25(content, 10.0, 5.0, 1.0)';
 const RRF_K = 60;
 
+// FTS5 reads these as operators, so a bare term containing one is a syntax error or --
+// worse -- a column filter: `end-to-end` parses as a filter on column `to`, and SQLite
+// reports `no such column: to`, which is a true statement about the parse and a false
+// one about the input. Both field reports on 0.6.0 misdiagnosed that message.
+const FTS5_OPERATORS = /[-'"/.:^*()]/;
+
+function searchError(err: Error, terms: string, scope?: string): Error {
+  const message = err.message;
+  if (!/no such column|fts5: syntax error|malformed MATCH/.test(message)) return err;
+  const suspects = (terms.match(/\S+/g) ?? []).filter((t) => !t.startsWith('"') && FTS5_OPERATORS.test(t));
+  // Blame the terms only when the failing token actually came from one -- a typo'd column
+  // in --where (or the tree's default scope) raises "no such column" through this same
+  // statement, and naming a term for it would state a false fact about the input.
+  const col = /no such column: (\S+)/.exec(message)?.[1];
+  const fromTerms = col === undefined ? suspects.length > 0 : suspects.some((t) => t.split(/[^\p{L}\p{N}]+/u).includes(col));
+  if (fromTerms && suspects.length > 0) {
+    return new SenseError('SEARCH_SYNTAX', `${message} -- the punctuation in ${suspects.map((t) => `\`${t}\``).join(', ')} is FTS5 syntax, not literal text; search for it literally by double-quoting: '"${suspects[0]}"'. Searchable columns are title, summary, text.`);
+  }
+  if (col !== undefined && scope !== undefined) {
+    return new SenseError('SEARCH_SYNTAX', `${message} -- the where condition (${scope}) references it; frontmatter columns are listed by sense query "SELECT name FROM pragma_table_info('frontmatter')".`);
+  }
+  return new SenseError('SEARCH_SYNTAX', `${message} -- searchable columns are title, summary, text; frontmatter fields are queried with --where or sense query (list them with pragma_table_info('frontmatter')).`);
+}
+
 export interface FindOptions {
   k?: number;
   where?: string; // SQL fragment against frontmatter alias `f`, e.g. "f.status = 'active'"
@@ -32,10 +56,18 @@ export async function find(db: DatabaseSync, cfg: Config, terms: string, opts: F
   // Invalid syntax propagates as an error, zero matches return zero -- no silent rewrites.
   // --where applies inside the candidate query (a post-filter over the top-N would drop
   // matches ranked past the pool) and again on the final select for link-derived rows.
-  const whereJoin = opts.where ? `JOIN frontmatter f ON f."path" = content.path` : '';
-  const whereCond = opts.where ? `AND (${opts.where})` : '';
+  // An explicit --where replaces the tree's declared default rather than ANDing with it,
+  // so a caller can always widen back to the whole tree.
+  const scope = opts.where ?? cfg.defaults?.find?.where;
+  const whereJoin = scope ? `JOIN frontmatter f ON f."path" = content.path` : '';
+  const whereCond = scope ? `AND (${scope})` : '';
   const matchSql = `SELECT content.path AS path, snippet(content, -1, '«', '»', '…', 10) AS hit FROM content ${whereJoin} WHERE content MATCH ? ${whereCond} ORDER BY ${WEIGHTED_BM25} LIMIT ${fetch}`;
-  const matchRows = db.prepare(matchSql).all(terms) as Array<{ path: string; hit: string }>;
+  let matchRows: Array<{ path: string; hit: string }>;
+  try {
+    matchRows = db.prepare(matchSql).all(terms) as Array<{ path: string; hit: string }>;
+  } catch (err) {
+    throw searchError(err as Error, terms, scope);
+  }
 
   const hits = new Map(matchRows.map((r) => [r.path, r.hit]));
   const candidates = new Map<string, { score: number; via: string }>();
@@ -70,10 +102,12 @@ export async function find(db: DatabaseSync, cfg: Config, terms: string, opts: F
   // Vector expansion, invoked only: a third RRF list at the swept flat-region constants
   // (weight 1, pool = fetch). Each row carries its best chunk's line range.
   const chunkLines = new Map<string, string>();
+  const chunkSimilarity = new Map<string, number>();
   if (opts.semantic) {
     const vec = await semanticCandidates(db, cfg, terms, fetch);
-    vec.forEach(({ path, lines }, i) => {
+    vec.forEach(({ path, lines, similarity }, i) => {
       chunkLines.set(path, lines);
+      chunkSimilarity.set(path, similarity);
       const existing = candidates.get(path);
       if (existing) {
         existing.score += 1 / (RRF_K + i);
@@ -85,12 +119,12 @@ export async function find(db: DatabaseSync, cfg: Config, terms: string, opts: F
   }
 
   db.exec('DROP TABLE IF EXISTS _find');
-  db.exec('CREATE TEMP TABLE _find ("path" TEXT PRIMARY KEY, score REAL, via TEXT, hit TEXT, lines TEXT)');
-  const insert = db.prepare('INSERT INTO _find ("path", score, via, hit, lines) VALUES (?, ?, ?, ?, ?)');
-  for (const [path, c] of candidates) insert.run(path, c.score, c.via, hits.get(path) ?? null, chunkLines.get(path) ?? null);
+  db.exec('CREATE TEMP TABLE _find ("path" TEXT PRIMARY KEY, score REAL, via TEXT, hit TEXT, lines TEXT, similarity REAL)');
+  const insert = db.prepare('INSERT INTO _find ("path", score, via, hit, lines, similarity) VALUES (?, ?, ?, ?, ?, ?)');
+  for (const [path, c] of candidates) insert.run(path, c.score, c.via, hits.get(path) ?? null, chunkLines.get(path) ?? null, chunkSimilarity.get(path) ?? null);
 
-  const where = opts.where ? `WHERE ${opts.where}` : '';
-  const linesCol = opts.semantic ? ', _find.lines' : '';
+  const where = scope ? `WHERE ${scope}` : '';
+  const linesCol = opts.semantic ? ', _find.lines, _find.similarity' : '';
   return db
     .prepare(
       `SELECT f."path" AS path, content.title, content.summary, _find.hit, _find.via, round(_find.score, 4) AS score${linesCol}
@@ -118,8 +152,12 @@ export function mapTree(db: DatabaseSync, cfg: Config): TreeMap {
   const columns = (db.prepare('PRAGMA table_info(frontmatter)').all() as Array<{ name: string }>).map((r) => r.name).filter((name) => !INTERNAL_COLUMNS.has(name));
   const allFields = columns
     .map((name) => {
-      const { n } = db.prepare(`SELECT COUNT("${name.split('"').join('""')}") AS n FROM frontmatter`).get() as { n: number };
-      return { field: name, coverage: n };
+      const quoted = `"${name.split('"').join('""')}"`;
+      // Observed storage class, not a declared one: these columns are added dynamically and
+      // SQLite types per value, so a field can be text in most notes and numeric in a few.
+      // Listing every distinct type makes both the type and any drift visible.
+      const { n, types } = db.prepare(`SELECT COUNT(${quoted}) AS n, GROUP_CONCAT(DISTINCT typeof(${quoted})) AS types FROM frontmatter WHERE ${quoted} IS NOT NULL`).get() as { n: number; types: string | null };
+      return { field: name, coverage: n, type: types ?? '' };
     })
     .sort((a, b) => (b.coverage as number) - (a.coverage as number)) as Row[];
   const fields = allFields.slice(0, 20);

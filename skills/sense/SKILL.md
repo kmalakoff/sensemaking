@@ -45,7 +45,7 @@ sense peek notes/pricing-model.md               # a unique basename also works
 sense map
 sense query "<sql>" [params...]                 # ad-hoc SQL; ? binds positional args, count-checked
 sense <name> [params...]                        # named query from sense.config.json
-sense --list | status | rebuild
+sense --list | status | rebuild | check
 ```
 
 - Terms pass verbatim to FTS5 MATCH. Bare words AND-join — one absent word means zero rows —
@@ -63,7 +63,24 @@ sense --list | status | rebuild
   `match` (terms hit), `link` (connected to notes that hit), `match+link` (both). With
   `--semantic`, `vector` joins the composition and rows gain a `lines` column pointing at the
   best-matching section, a direct `Read` range.
-- `--where` takes a frontmatter condition against alias `f`, e.g. `"f.status = 'active' AND has(f.tags, 'x')"`.
+- `--where` takes any SQL condition against frontmatter alias `f` — not only field equality:
+  `"f.status = 'active' AND has(f.tags, 'x')"`, `"f.path NOT LIKE 'generated/%'"`,
+  `"f.created >= datetime(?)"`. A tree can declare a default scope in `sense.config.json`
+  (`defaults.find.where`); an explicit `--where` replaces it, so `--where "1=1"` searches
+  everything. `sense status` prints the active default.
+- `score` is a rank-fusion value: it ranks rows within one result set and is not comparable
+  across queries, not a relevance magnitude — a perfect lexical hit and a weak vector-only
+  hit can both read ~0.017, because the number encodes how many signals fired and at what
+  rank. With `--semantic`, rows carry `similarity` (cosine, -1 to 1) which does measure
+  match quality: on a query whose words are absent from the tree, similarities sit near zero
+  (and can be negative), while a genuine paraphrase match runs high.
+- Lexical `find` returns 0 rows when nothing matches, so it answers "is this in the tree at
+  all". `--semantic` always returns up to `k` rows — nearest-neighbour search has a nearest
+  neighbour for any input — so absence is a lexical question; with `--semantic` the
+  `similarity` column is what separates a real hit from the best of a bad lot.
+- `sense check` prepares every saved query (catching syntax and unknown-column errors), runs
+  the ones taking no parameters, and prints row counts: a saved query returning 0 rows looks
+  the same as a true empty result until something distinguishes them.
 
 ## SQL
 
@@ -87,6 +104,10 @@ sense query "SELECT j.value, COUNT(*) n FROM frontmatter, json_each(frontmatter.
   `snippet(content, -1, '«', '»', '…', 10)`.
 - Select `content.title`/`content.summary` (always exist, empty when absent) rather than
   `f.title`/`f.summary` (discovered columns — error on trees that never declare them).
+- Frontmatter values keep their YAML type: strings are TEXT, whole numbers and booleans are
+  INTEGER (`true` stores as 1, so `WHERE flag = 1` matches and `WHERE flag = 'true'` matches
+  nothing), fractions are REAL, lists and maps are JSON text. `map` prints the observed type
+  per field, and a field showing two types (`integer,text`) has drifted across notes.
 - `has(field, value)`: array membership on JSON-array fields, substring on strings, false on NULL
   — the `includes()` convention. Substring means `has(f.status, 'active')` also matches
   `inactive`; exact scalar match is `f.status = ?`, deliberate substring is `LIKE`, exact array

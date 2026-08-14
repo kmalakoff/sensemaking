@@ -11,22 +11,48 @@ function cell(value: unknown): string {
 }
 
 export function printRows(rows: Row[], format: 'table' | 'json'): void {
-  const rendered = render(rows, format);
+  const rendered = renderRows(rows, format);
   console.log(rendered);
   if (rendered.length > OVERSIZE_BYTES) {
     console.warn(`warning: result is ${Math.round(rendered.length / 1000)} KB across ${rows.length} row(s); consider a LIMIT, fewer columns, or snippet() instead of whole values`);
   }
 }
 
-function render(rows: Row[], format: 'table' | 'json'): string {
+// Table output is for reading; a row wider than the terminal wraps into an unreadable
+// block (a `find` header measured 330 chars once `summary` is present, which drove one
+// user to pipe --format json through a script for every interactive query). Widest
+// columns give up space first, down to a floor, and only as far as the terminal needs.
+// --format json is never truncated: it is the machine-readable surface.
+const MIN_COLUMN = 12;
+const TRUNCATED = '…';
+
+function fitWidths(widths: number[], limit: number): number[] {
+  const gaps = (widths.length - 1) * 2;
+  const fitted = [...widths];
+  for (;;) {
+    const total = fitted.reduce((a, b) => a + b, 0) + gaps;
+    if (total <= limit) return fitted;
+    const widest = fitted.indexOf(Math.max(...fitted));
+    if (fitted[widest] <= MIN_COLUMN) return fitted;
+    fitted[widest] = Math.max(MIN_COLUMN, fitted[widest] - Math.max(1, total - limit));
+  }
+}
+
+function renderRows(rows: Row[], format: 'table' | 'json', width = process.stdout.columns): string {
   if (format === 'json') return JSON.stringify(rows, null, 2);
   if (rows.length === 0) return '(0 rows)';
 
   const columns = Object.keys(rows[0]);
   const cells = rows.map((row) => columns.map((col) => cell(row[col])));
-  const widths = columns.map((col, i) => Math.max(col.length, ...cells.map((row) => row[i].length)));
+  const natural = columns.map((col, i) => Math.max(col.length, ...cells.map((row) => row[i].length)));
+  const widths = width && width > MIN_COLUMN ? fitWidths(natural, width) : natural;
 
-  const formatRow = (values: string[]) => values.map((value, i) => value.padEnd(widths[i])).join('  ');
+  const clip = (value: string, w: number) => (value.length <= w ? value.padEnd(w) : `${value.slice(0, w - 1)}${TRUNCATED}`);
+  const formatRow = (values: string[]) =>
+    values
+      .map((value, i) => clip(value, widths[i]))
+      .join('  ')
+      .trimEnd();
 
   return [formatRow(columns), widths.map((w) => '-'.repeat(w)).join('  '), ...cells.map(formatRow)].join('\n');
 }
@@ -39,11 +65,11 @@ function featuresLine(features: { on: string[]; off: string[] }): string {
 }
 
 export function renderMap(result: { docs: { count: number; bytes: number }; fields: Row[]; fieldsTotal: number; features: { on: string[]; off: string[] }; hubs: Row[]; recent: Row[] }): string {
-  const parts = [`docs: ${result.docs.count} (${Math.round(result.docs.bytes / 1024)} KB)`, `${featuresLine(result.features)}\n`, render(result.fields, 'table')];
+  const parts = [`docs: ${result.docs.count} (${Math.round(result.docs.bytes / 1024)} KB)`, `${featuresLine(result.features)}\n`, renderRows(result.fields, 'table')];
   if (result.fieldsTotal > result.fields.length) parts.push(`(+${result.fieldsTotal - result.fields.length} more fields)`);
-  if (result.hubs.length > 0) parts.push('\nhubs (by link rank):', render(result.hubs, 'table'));
+  if (result.hubs.length > 0) parts.push('\nhubs (by link rank):', renderRows(result.hubs, 'table'));
   else if (result.features.off.includes('rank')) parts.push('\nhubs: off (features.rank)');
-  parts.push('\nrecent:', render(result.recent, 'table'));
+  parts.push('\nrecent:', renderRows(result.recent, 'table'));
   return parts.join('\n');
 }
 

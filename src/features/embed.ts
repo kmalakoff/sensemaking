@@ -118,7 +118,10 @@ async function staticProvider(model: string): Promise<EmbedProvider> {
   const unkId = tokenizerJson.model?.vocab?.[tokenizerJson.model?.unk_token] ?? -1;
 
   function one(text: string): Float32Array {
-    const ids = (tok.encode(text, { add_special_tokens: false }).ids as number[]).filter((id) => id !== unkId);
+    // The tokenizer yields undefined (not the unk id) for tokens outside the vocab; an
+    // undefined id would index the matrix at NaN and poison the whole mean-pool -- and the
+    // int8 conversion then stores the NaN vector as all zeros, silently. Keep integers only.
+    const ids = (tok.encode(text, { add_special_tokens: false }).ids as number[]).filter((id) => Number.isInteger(id) && id !== unkId);
     const v = new Float32Array(dims);
     if (ids.length === 0) return v;
     for (const id of ids) {
@@ -234,7 +237,12 @@ export async function embedPending(db: DatabaseSync, cfg: Config, baseDir: strin
 // Top candidates by cosine for a semantic find: best chunk per file, its line range
 // riding along. FTS5 operators in the terms are lexical syntax, not meaning -- stripped
 // before embedding.
-export async function semanticCandidates(db: DatabaseSync, cfg: Config, terms: string, fetch: number): Promise<Array<{ path: string; lines: string }>> {
+// Returns the cosine similarity alongside each candidate: stored and query vectors are both
+// L2-normalised before quantisation, so the dot product is cosine in [-1, 1]. `find` surfaces
+// it because the fused rank score cannot express match quality -- nearest-neighbour search
+// always returns a nearest neighbour, so without a magnitude an agent cannot tell a real hit
+// from the best of a bad lot.
+export async function semanticCandidates(db: DatabaseSync, cfg: Config, terms: string, fetch: number): Promise<Array<{ path: string; lines: string; similarity: number }>> {
   const baseDir = (cfg as Partial<ResolvedConfig>).baseDir;
   if (!baseDir) throw new SenseError('EMBED_MODEL', 'semantic expansion needs a config with baseDir (use loadConfig/open)');
   await embedPending(db, cfg, baseDir);
@@ -264,5 +272,5 @@ export async function semanticCandidates(db: DatabaseSync, cfg: Config, terms: s
   return [...best.entries()]
     .sort((a, b) => b[1].score - a[1].score)
     .slice(0, fetch)
-    .map(([path, b]) => ({ path, lines: b.lines }));
+    .map(([path, b]) => ({ path, lines: b.lines, similarity: Math.round(b.score * 1000) / 1000 }));
 }

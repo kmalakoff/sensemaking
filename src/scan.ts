@@ -45,17 +45,23 @@ export interface ParsedDoc {
   relPath: string;
   mtimeMs: number;
   size: number;
-  data: Record<string, string | number | null>;
+  data: Record<string, string | number | bigint | null>;
   // title/summary are duplicated from frontmatter so bm25() can weight them above the body text.
   search: { title: string; summary: string; text: string };
   // Per-feature extraction results, keyed by feature name; features store them at reconcile.
   extracted: Record<string, unknown>;
 }
 
-function mapValue(value: unknown): string | number | null {
+// SQLite storage classes follow the YAML scalar: strings -> TEXT, booleans and whole
+// numbers -> INTEGER, fractions -> REAL, everything else (lists, maps) -> JSON TEXT.
+// Booleans have no SQLite type of their own; 1/0 is the convention, so `WHERE flag = 1`
+// matches and `WHERE flag = 'true'` cannot -- `map` prints the observed type per field so
+// that mismatch is visible rather than a silent zero-row answer.
+function mapValue(value: unknown): string | number | bigint | null {
   if (value === null || value === undefined) return null;
-  if (typeof value === 'boolean') return value ? 1 : 0;
-  if (typeof value === 'string' || typeof value === 'number') return value;
+  if (typeof value === 'boolean') return BigInt(value ? 1 : 0);
+  if (typeof value === 'number') return Number.isSafeInteger(value) ? BigInt(value) : value;
+  if (typeof value === 'string') return value;
   return JSON.stringify(value);
 }
 
@@ -97,7 +103,7 @@ export function parseFile(file: FileStat, extractors: Feature[] = []): { doc: Pa
 
   const { fm, body: content } = splitFrontmatter(raw);
   const data = fm === null ? {} : parseFrontmatter(file.relPath, fm, warnings);
-  const mapped: Record<string, string | number | null> = {};
+  const mapped: Record<string, string | number | bigint | null> = {};
 
   for (const key of Object.keys(data)) {
     if (RESERVED_COLUMNS.has(key)) {

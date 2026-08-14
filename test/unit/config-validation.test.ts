@@ -63,4 +63,14 @@ describe('config validation', () => {
     assert.equal(result.status, 1);
     assert.match(result.stderr, /config version 3 requires a newer sense/);
   });
+
+  it('an unrecognised key is reported, not silently ignored', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sense-unknown-'));
+    const configPath = join(dir, 'sense.config.json');
+    writeFileSync(configPath, JSON.stringify({ version: 2, scan: { include: ['*.md'], exclude: ['x/**'] }, queries: {} }));
+    const result = runCli(['--list', '--config', configPath]);
+    assert.equal(result.status, 0, 'still runs');
+    assert.match(result.stderr, /scan\.exclude/);
+    assert.match(result.stderr, /does not read/);
+  });
 });

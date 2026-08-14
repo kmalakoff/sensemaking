@@ -122,3 +122,23 @@ describe('embed api type', () => {
     assert.equal(rows[0].via, 'vector');
   });
 });
+
+describe('semantic absence signal', () => {
+  it('vector rows carry cosine similarity: a real match runs high, absent vocabulary near zero', async () => {
+    const { db, cfg } = openTree(fruitTree(), { embed: { model: writeModel(), type: 'static' } });
+
+    const absent = await find(db, cfg, 'zzznotaword');
+    assert.equal(absent.length, 0, 'lexical find answers absence with zero rows');
+
+    const semantic = (await find(db, cfg, 'zzznotaword', { semantic: true })) as Array<{ via: string; similarity: number }>;
+    assert.ok(semantic.length > 0, 'nearest-neighbour search always returns a neighbour');
+    for (const row of semantic) {
+      assert.equal(row.via, 'vector');
+      assert.ok(Math.abs(row.similarity) < 0.05, `unknown vocabulary embeds to ~zero, got ${row.similarity}`);
+    }
+
+    const real = (await find(db, cfg, 'pomme', { semantic: true })) as Array<{ path: string; similarity: number }>;
+    assert.ok(real[0].similarity > 0.9, `apple ≡ pomme in the fixture, got ${real[0].similarity}`);
+    db.close();
+  });
+});

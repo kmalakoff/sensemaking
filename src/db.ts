@@ -12,7 +12,7 @@ import { listFiles, parseFile } from './scan.ts';
 
 export const DB_FILENAME = 'cache.db';
 // Cache shape version, independent of the config's own `version`.
-export const SCHEMA_VERSION = '3';
+export const SCHEMA_VERSION = '4'; // 4: frontmatter scalars store as INTEGER/REAL/TEXT by YAML type (was: all numbers REAL)
 
 export interface OpenResult {
   db: DatabaseSync;

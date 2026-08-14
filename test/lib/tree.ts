@@ -24,3 +24,8 @@ export function writeNote(baseDir: string, relPath: string, { frontmatter = {}, 
 export function openTree(baseDir: string, features?: Config['features']) {
   return open({ scan: { include: ['**/*.md'] }, queries: {}, features, baseDir, configPath: null });
 }
+
+// For tests that need config beyond features (defaults, queries).
+export function openConfig(cfg: Parameters<typeof open>[0]) {
+  return open(cfg);
+}
