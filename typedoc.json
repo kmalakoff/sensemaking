@@ -1,3 +1,4 @@
 {
-  "highlightLanguages": ["bash", "console", "javascript", "json", "jsonc", "markdown", "sql", "typescript"]
+  "highlightLanguages": ["bash", "console", "javascript", "json", "jsonc", "markdown", "sql", "typescript"],
+  "intentionallyNotExported": ["FEATURE_NAMES"]
 }

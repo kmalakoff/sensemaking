@@ -1,7 +1,7 @@
 // Public library API. Deliberately small: every export is a stability promise;
 // internals (feature registry, graph, scan, meta) stay module-private.
 
-export type { Config, FeatureName, ResolvedConfig } from './config.ts';
+export type { Config, EmbedConfig, FeatureName, ResolvedConfig } from './config.ts';
 export { CONFIG_FILENAME, initConfig, loadConfig, migrateConfig, STATE_DIR, SUPPORTED_CONFIG_VERSION } from './config.ts';
 
 export type { OpenResult } from './db.ts';

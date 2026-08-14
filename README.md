@@ -59,14 +59,16 @@ ORDER BY bm25(content, 10.0, 5.0, 1.0) LIMIT 10
 | verb | does |
 |---|---|
 | `map` | doc count, frontmatter field coverage, top hubs by link rank, recent changes |
-| `find "<terms>" [--where "<sql>"] [--k n]` | BM25 + link-graph expansion, fused; `via` marks each row `match`, `link`, or `match+link` |
+| `find "<terms>" [--where "<sql>"] [--k n] [--semantic]` | BM25 + link-graph expansion, fused; `via` marks each row `match`, `link`, or `match+link` |
 | `peek <path>` | frontmatter + heading outline (`[L143-162, ~380t]`) + links both ways, capped at 20 per list |
 | `query "<sql>" [params...]` | ad-hoc SQL over all four tables; `?` binds positional args |
 
 `find` seeds a personalized-PageRank walk with the BM25 matches, so a note that never contains
 the terms but is linked from ones that do still surfaces. Terms pass verbatim to FTS5 `MATCH`
 (bare words AND-join; operators are yours to write). `--where` takes a frontmatter condition
-against alias `f`.
+against alias `f`. On trees with the `embed` feature, `--semantic` additionally expands by
+meaning — explicit per query, never silent; rows it adds are labeled `via: vector` and carry a
+`lines` column pointing at the best-matching section.
 `--format json` on any verb returns structured output.
 
 ## Config
@@ -90,6 +92,12 @@ Features toggle independently; disabling one degrades its verb instead of failin
 goes BM25-only without `links`, `map` drops hubs without `rank`, `peek` drops the outline
 without `sections`). Toggling rebuilds the cache. Older config versions auto-migrate on load,
 noted on stderr.
+
+`embed` is the one opt-in feature (absent = off; most trees don't need vectors): `"embed": true`
+uses the built-in static model (downloaded to `~/.cache/sensemaking` on first use, never in the
+package), or `{ "model", "type": "static"|"api", "url", "key" }` points at any Model2Vec model,
+local path, or OpenAI-compatible endpoint (Ollama, LM Studio, hosted). With it on, vectors stay
+fresh at reconcile and `find --semantic` uses them; default `find` results are unchanged.
 
 ## Reference
 
@@ -140,10 +148,9 @@ The skill teaches the descent: `map` to orient, `find` to locate, `peek` before 
   query it headless.
 - **Index-on-build tools (MarkdownDB)** — query a snapshot; `sense` reconciles on every query.
 - **Note CLIs (zk)** — fixed schema; `sense` filters on arbitrary frontmatter.
-- **RAG / vector stores** — similarity can't express `WHERE status = 'active'`. Vector recall is
-  planned as an optional `embed` feature (pure-JS provider package, fused into `find`) — not
-  blocked (`node:sqlite` can load extensions since Node 22.13), just deferred until BM25 + links
-  measurably miss.
+- **RAG / vector stores** — similarity can't express `WHERE status = 'active'`. Here vectors are
+  the optional `embed` feature: same SQLite file, filters compose, expansion is explicit per
+  query (`find --semantic`) and labeled — no second store, no daemon, no native builds.
 
 Dependencies: [yaml](https://github.com/eemeli/yaml),
 [remove-markdown](https://github.com/zuchka/remove-markdown),

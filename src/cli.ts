@@ -23,7 +23,7 @@ function usage(name: string): string {
   return (
     `usage: ${name} <name> [params...] [--format table|json] [--config path]\n` +
     `       ${name} query "<sql>" [params...]\n` +
-    `       ${name} find "<terms>" [--where "<sql>"] [--k n]\n` +
+    `       ${name} find "<terms>" [--where "<sql>"] [--k n] [--semantic]\n` +
     `       ${name} map\n` +
     `       ${name} peek <path>\n` +
     `       ${name} --list\n` +
@@ -47,6 +47,7 @@ export default async function cli(argv: string[], name: string): Promise<void> {
         config: { type: 'string' },
         where: { type: 'string' },
         k: { type: 'string' },
+        semantic: { type: 'boolean', default: false },
         list: { type: 'boolean', default: false },
         force: { type: 'boolean', default: false },
         version: { type: 'boolean', default: false, short: 'v' },

@@ -3,6 +3,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import type { Config } from './config.ts';
 import { featureEnabled } from './config.ts';
 import { SenseError } from './errors.ts';
+import { semanticCandidates } from './features/embed.ts';
 import { linkEdges } from './features/index.ts';
 import { personalizedRank } from './graph.ts';
 import type { Row } from './output.ts';
@@ -16,11 +17,14 @@ const RRF_K = 60;
 export interface FindOptions {
   k?: number;
   where?: string; // SQL fragment against frontmatter alias `f`, e.g. "f.status = 'active'"
+  semantic?: boolean; // invoke vector expansion (requires features.embed); rows gain via 'vector' and a lines column
 }
 
 // Layer 1: BM25 + link-graph expansion, fused by reciprocal rank. `via` says which
 // signal produced each row so the agent knows what evidence it is trusting.
-export function find(db: DatabaseSync, cfg: Config, terms: string, opts: FindOptions = {}): Row[] {
+// Semantic expansion is per-query opt-in: without opts.semantic the result is
+// byte-for-byte independent of the embed feature.
+export async function find(db: DatabaseSync, cfg: Config, terms: string, opts: FindOptions = {}): Promise<Row[]> {
   const k = opts.k ?? 10;
   const fetch = Math.max(k * 3, 30);
 
@@ -57,15 +61,33 @@ export function find(db: DatabaseSync, cfg: Config, terms: string, opts: FindOpt
     });
   }
 
-  db.exec('CREATE TEMP TABLE IF NOT EXISTS _find ("path" TEXT PRIMARY KEY, score REAL, via TEXT, hit TEXT)');
-  db.exec('DELETE FROM _find');
-  const insert = db.prepare('INSERT INTO _find ("path", score, via, hit) VALUES (?, ?, ?, ?)');
-  for (const [path, c] of candidates) insert.run(path, c.score, c.via, hits.get(path) ?? null);
+  // Vector expansion, invoked only: a third RRF list at the swept flat-region constants
+  // (weight 1, pool = fetch). Each row carries its best chunk's line range.
+  const chunkLines = new Map<string, string>();
+  if (opts.semantic) {
+    const vec = await semanticCandidates(db, cfg, terms, fetch);
+    vec.forEach(({ path, lines }, i) => {
+      chunkLines.set(path, lines);
+      const existing = candidates.get(path);
+      if (existing) {
+        existing.score += 1 / (RRF_K + i);
+        existing.via = `${existing.via}+vector`;
+      } else {
+        candidates.set(path, { score: 1 / (RRF_K + i), via: 'vector' });
+      }
+    });
+  }
+
+  db.exec('DROP TABLE IF EXISTS _find');
+  db.exec('CREATE TEMP TABLE _find ("path" TEXT PRIMARY KEY, score REAL, via TEXT, hit TEXT, lines TEXT)');
+  const insert = db.prepare('INSERT INTO _find ("path", score, via, hit, lines) VALUES (?, ?, ?, ?, ?)');
+  for (const [path, c] of candidates) insert.run(path, c.score, c.via, hits.get(path) ?? null, chunkLines.get(path) ?? null);
 
   const where = opts.where ? `WHERE ${opts.where}` : '';
+  const linesCol = opts.semantic ? ', _find.lines' : '';
   return db
     .prepare(
-      `SELECT f."path" AS path, content.title, content.summary, _find.hit, _find.via, round(_find.score, 4) AS score
+      `SELECT f."path" AS path, content.title, content.summary, _find.hit, _find.via, round(_find.score, 4) AS score${linesCol}
        FROM _find JOIN frontmatter f ON f."path" = _find."path" JOIN content ON content.path = _find."path"
        ${where} ORDER BY _find.score DESC LIMIT ?`
     )

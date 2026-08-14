@@ -107,20 +107,18 @@ export function parseFile(file: FileStat, extractors: Feature[] = []): { doc: Pa
     mapped[key] = mapValue(data[key]);
   }
 
+  // title/summary are plain YAML strings -- whitespace-collapse only;
+  // the prose gets the full markdown strip.
+  const search = { title: normalizeText(data.title), summary: normalizeText(data.summary), text: stripText(content) };
+
   return {
     doc: {
       relPath: file.relPath,
       mtimeMs: file.mtimeMs,
       size: file.size,
       data: mapped,
-      search: {
-        // title/summary are plain YAML strings -- whitespace-collapse only;
-        // the prose gets the full markdown strip.
-        title: normalizeText(data.title),
-        summary: normalizeText(data.summary),
-        text: stripText(content),
-      },
-      extracted: Object.fromEntries(extractors.filter((f) => f.extract).map((f) => [f.name, f.extract?.(raw, content)])),
+      search,
+      extracted: Object.fromEntries(extractors.filter((f) => f.extract).map((f) => [f.name, f.extract?.(raw, content, search)])),
     },
     warnings,
   };

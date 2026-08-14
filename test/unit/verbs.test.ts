@@ -18,48 +18,48 @@ function makeTree(): string {
 }
 
 describe('find', () => {
-  it('BM25 matches carry via=match with a snippet', () => {
+  it('BM25 matches carry via=match with a snippet', async () => {
     const { db, cfg } = openTree(makeTree());
-    const rows = find(db, cfg, 'price') as Array<{ path: string; via: string; hit: string }>;
+    const rows = (await find(db, cfg, 'price')) as Array<{ path: string; via: string; hit: string }>;
     const floor = rows.find((r) => r.path === 'floor.md');
     assert.ok(floor, `expected floor.md in results: ${JSON.stringify(rows.map((r) => r.path))}`);
     assert.ok(floor.via.includes('match'));
     assert.ok(/«pric/i.test(floor.hit), `no highlighted match in: ${floor.hit}`);
   });
 
-  it('link expansion surfaces a connected note that never contains the terms, via=link', () => {
+  it('link expansion surfaces a connected note that never contains the terms, via=link', async () => {
     const { db, cfg } = openTree(makeTree());
-    const rows = find(db, cfg, 'price') as Array<{ path: string; via: string }>;
+    const rows = (await find(db, cfg, 'price')) as Array<{ path: string; via: string }>;
     const connected = rows.find((r) => r.path === 'context.md');
     assert.ok(connected, `expected context.md in results: ${JSON.stringify(rows.map((r) => r.path))}`);
     assert.equal(connected.via, 'link');
   });
 
-  it('--where composes a frontmatter filter with the fused ranking', () => {
+  it('--where composes a frontmatter filter with the fused ranking', async () => {
     const { db, cfg } = openTree(makeTree());
-    const rows = find(db, cfg, 'price', { where: "f.status = 'active'" }) as Array<{ path: string }>;
+    const rows = (await find(db, cfg, 'price', { where: "f.status = 'active'" })) as Array<{ path: string }>;
     assert.ok(rows.every((r) => r.path !== 'archived.md'));
     assert.ok(rows.some((r) => r.path === 'floor.md'));
   });
 
-  it('terms pass verbatim: invalid FTS5 syntax errors loudly', () => {
+  it('terms pass verbatim: invalid FTS5 syntax errors loudly', async () => {
     const { db, cfg } = openTree(makeTree());
-    assert.throws(() => find(db, cfg, 'price AND AND'), /fts5|syntax/);
+    await assert.rejects(find(db, cfg, 'price AND AND'), /fts5|syntax/);
   });
 
-  it('terms pass verbatim: bare words AND-join, so an absent word means zero rows', () => {
+  it('terms pass verbatim: bare words AND-join, so an absent word means zero rows', async () => {
     const { db, cfg } = openTree(makeTree());
-    assert.deepEqual(find(db, cfg, 'price nonexistentword'), []);
-    const rows = find(db, cfg, 'price OR nonexistentword') as Array<{ path: string }>;
+    assert.deepEqual(await find(db, cfg, 'price nonexistentword'), []);
+    const rows = (await find(db, cfg, 'price OR nonexistentword')) as Array<{ path: string }>;
     assert.ok(
       rows.some((r) => r.path === 'floor.md'),
       'explicit OR is the caller expressing intent'
     );
   });
 
-  it('with links disabled it degrades to BM25-only', () => {
+  it('with links disabled it degrades to BM25-only', async () => {
     const { db, cfg } = openTree(makeTree(), { links: false });
-    const rows = find(db, cfg, 'price') as Array<{ path: string; via: string }>;
+    const rows = (await find(db, cfg, 'price')) as Array<{ path: string; via: string }>;
     assert.ok(rows.length > 0);
     assert.ok(rows.every((r) => r.via === 'match'));
     assert.ok(!rows.some((r) => r.path === 'context.md'));
@@ -158,7 +158,7 @@ describe('mapTree truncation is reported', () => {
 });
 
 describe('find --where applies before the candidate cut', () => {
-  it('finds a filtered match ranked past the BM25 candidate pool', () => {
+  it('finds a filtered match ranked past the BM25 candidate pool', async () => {
     const baseDir = tmpTree();
     // 40 archived notes with a title hit outrank one active note with a body-only
     // mention; the candidate pool is max(k*3, 30), so a post-filter would return [].
@@ -166,21 +166,21 @@ describe('find --where applies before the candidate cut', () => {
     write(baseDir, 'live.md', 'A much longer note that mentions a widget once among many other unrelated words about several other topics entirely.', { title: 'Operations', status: 'active' });
 
     const { db, cfg } = openTree(baseDir);
-    const rows = find(db, cfg, 'widget', { where: "f.status = 'active'" }) as Array<{ path: string }>;
+    const rows = (await find(db, cfg, 'widget', { where: "f.status = 'active'" })) as Array<{ path: string }>;
     assert.deepEqual(
       rows.map((r) => r.path),
       ['live.md']
     );
   });
 
-  it('link-derived rows still respect the filter', () => {
+  it('link-derived rows still respect the filter', async () => {
     const baseDir = tmpTree();
     write(baseDir, 'hit.md', 'gadget details, see [[linked-archived]] and [[linked-active]]', { title: 'Gadget', status: 'active' });
     write(baseDir, 'linked-archived.md', 'no matching terms here', { title: 'Old', status: 'archived' });
     write(baseDir, 'linked-active.md', 'no matching terms here either', { title: 'Ref', status: 'active' });
 
     const { db, cfg } = openTree(baseDir);
-    const rows = find(db, cfg, 'gadget', { where: "f.status = 'active'" }) as Array<{ path: string; via: string }>;
+    const rows = (await find(db, cfg, 'gadget', { where: "f.status = 'active'" })) as Array<{ path: string; via: string }>;
     assert.ok(
       rows.some((r) => r.path === 'linked-active.md'),
       `expected linked-active via link: ${JSON.stringify(rows)}`

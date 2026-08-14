@@ -9,15 +9,27 @@ export const STATE_DIR = '.sense';
 export const SUPPORTED_CONFIG_VERSION = 2;
 
 // Each feature owns its tables, parse-time extraction, and reconcile step; verbs degrade when one is off.
-export const FEATURE_NAMES = ['links', 'sections', 'rank'] as const;
+// links/sections/rank are opt-out (absent = on); embed is opt-in (absent = off) -- most trees don't need vectors.
+const FEATURE_NAMES = ['links', 'sections', 'rank', 'embed'] as const;
+const OPT_OUT_NAMES = ['links', 'sections', 'rank'] as const;
 export type FeatureName = (typeof FEATURE_NAMES)[number];
+
+// `true` = all defaults (static type, default model). A local `model` path skips the network.
+export interface EmbedConfig {
+  model?: string;
+  type?: 'static' | 'api';
+  url?: string; // api type: OpenAI-compatible base URL, e.g. http://localhost:11434/v1
+  key?: string; // api type: name of the env var holding the bearer token, if any
+}
+
+export const DEFAULT_EMBED_MODEL = 'minishlab/potion-retrieval-32M';
 
 export interface Config {
   // Editor-only pointer to schema.json; never read by sense.
   $schema?: string;
   version?: number;
   scan: { include: string[] };
-  features?: Partial<Record<FeatureName, boolean>>;
+  features?: { links?: boolean; sections?: boolean; rank?: boolean; embed?: boolean | EmbedConfig };
   queries: Record<string, string>;
 }
 
@@ -28,8 +40,10 @@ export interface ResolvedConfig extends Config {
   migratedFrom?: number;
 }
 
-// Absent block or key means enabled -- features are opt-out. `rank` additionally requires `links`.
+// Opt-out features: absent block or key means enabled. `rank` additionally requires `links`.
+// `embed` is the opposite: enabled only when the config says so.
 export function featureEnabled(cfg: Config, name: FeatureName): boolean {
+  if (name === 'embed') return Boolean(cfg.features?.embed);
   const enabled = cfg.features?.[name] !== false;
   if (name === 'rank') return enabled && featureEnabled(cfg, 'links');
   return enabled;
@@ -39,10 +53,31 @@ export function enabledFeatures(cfg: Config): FeatureName[] {
   return FEATURE_NAMES.filter((name) => featureEnabled(cfg, name));
 }
 
+
+// Resolved embed settings, or null when the feature is off.
+export function embedConfig(cfg: Config): { model: string; type: 'static' | 'api'; url?: string; key?: string } | null {
+  const e = cfg.features?.embed;
+  if (!e) return null;
+  const o = e === true ? {} : e;
+  return { model: o.model ?? DEFAULT_EMBED_MODEL, type: o.type ?? 'static', url: o.url, key: o.key };
+}
+
+// Cache-key string: embed carries its type + model so a model change rebuilds like a toggle.
+export function featureSignature(cfg: Config): string {
+  return enabledFeatures(cfg)
+    .map((name) => {
+      if (name !== 'embed') return name;
+      const e = embedConfig(cfg);
+      return `embed:${e?.type}:${e?.model}`;
+    })
+    .join(',');
+}
+
 // Pure per-version steps; loadConfig chains them from the file's version up to SUPPORTED_CONFIG_VERSION.
 const MIGRATIONS: Record<number, (cfg: Config) => Config> = {
-  // v1 -> v2: features block introduced, everything enabled (matches the old implicit behavior of `links` etc. not existing).
-  1: (cfg) => ({ ...cfg, version: 2, features: Object.fromEntries(FEATURE_NAMES.map((name) => [name, true])) as Config['features'] }),
+  // v1 -> v2: features block introduced, opt-out features enabled (matches the old implicit
+  // behavior of `links` etc. not existing). embed stays absent -- opt-in.
+  1: (cfg) => ({ ...cfg, version: 2, features: Object.fromEntries(OPT_OUT_NAMES.map((name) => [name, true])) as Config['features'] }),
 };
 
 export function migrateConfig(cfg: Config): { cfg: Config; from: number } {
@@ -61,7 +96,7 @@ function starterConfig(): Config {
     $schema: 'https://unpkg.com/sensemaking/schema.json',
     version: SUPPORTED_CONFIG_VERSION,
     scan: { include: ['**/*.md'] },
-    features: Object.fromEntries(FEATURE_NAMES.map((name) => [name, true])) as Config['features'],
+    features: Object.fromEntries(OPT_OUT_NAMES.map((name) => [name, true])) as Config['features'],
     queries: {},
   };
 }
@@ -103,8 +138,17 @@ function validateConfig(parsed: unknown, configPath: string): Config {
   if (typeof cfg.queries !== 'object' || cfg.queries === null || Array.isArray(cfg.queries) || !Object.values(cfg.queries).every((q) => typeof q === 'string')) {
     throw new SenseError('CONFIG_INVALID', `${configPath}: queries must be an object of name -> SQL string`);
   }
-  if (cfg.features !== undefined && (typeof cfg.features !== 'object' || cfg.features === null || Array.isArray(cfg.features) || !Object.values(cfg.features).every((v) => typeof v === 'boolean'))) {
+  if (cfg.features !== undefined && (typeof cfg.features !== 'object' || cfg.features === null || Array.isArray(cfg.features))) {
     throw new SenseError('CONFIG_INVALID', `${configPath}: features must be an object of name -> boolean`);
+  }
+  for (const [name, value] of Object.entries(cfg.features ?? {})) {
+    if (typeof value === 'boolean') continue;
+    // embed alone takes an object form: { model?, type?: static|api, url?, key? }.
+    const embed = value as Record<string, unknown>;
+    const shapeOk = name === 'embed' && typeof value === 'object' && value !== null && !Array.isArray(value) && ['model', 'url', 'key'].every((f) => embed[f] === undefined || typeof embed[f] === 'string') && (embed.type === undefined || embed.type === 'static' || embed.type === 'api');
+    if (!shapeOk) {
+      throw new SenseError('CONFIG_INVALID', `${configPath}: features.${name} must be a boolean${name === 'embed' ? ' or { model?, type?: "static"|"api", url?, key? }' : ''}`);
+    }
   }
   return cfg as unknown as Config;
 }

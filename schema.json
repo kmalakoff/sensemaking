@@ -45,6 +45,22 @@
         "rank": {
           "type": "boolean",
           "description": "PageRank over resolved links into `frontmatter._rank` at reconcile -- a static importance prior. Powers `map`'s hub list; usable in any ORDER BY. Requires `links`."
+        },
+        "embed": {
+          "description": "Semantic vectors, opt-in (absent = off; most trees don't need them). When on, vectors are computed and kept fresh at reconcile; expansion runs only on `find --semantic` invocations -- default `find` results are unchanged. `true` = defaults (static type, minishlab/potion-retrieval-32M, downloaded to ~/.cache/sensemaking on first use). Object form: `model` (Hugging Face id or local path), `type` (`static` = built-in pure-JS Model2Vec loader; `api` = OpenAI-compatible POST /embeddings), `url` (api base, e.g. http://localhost:11434/v1), `key` (name of the env var holding the bearer token). Changing model or type rebuilds the cache like a feature toggle.",
+          "oneOf": [
+            { "type": "boolean" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "model": { "type": "string" },
+                "type": { "type": "string", "enum": ["static", "api"] },
+                "url": { "type": "string" },
+                "key": { "type": "string" }
+              }
+            }
+          ]
         }
       }
     },

@@ -7,8 +7,9 @@ import type { FileStat } from '../scan.ts';
 export interface Feature {
   name: FeatureName;
   schema(db: DatabaseSync): void;
-  // Pure, per file: raw is the full file, body the prose after frontmatter.
-  extract?(raw: string, body: string): unknown;
+  // Pure, per file: raw is the full file, body the prose after frontmatter,
+  // search the normalized title/summary strings.
+  extract?(raw: string, body: string, search?: { title: string; summary: string }): unknown;
   remove?(db: DatabaseSync, path: string): void;
   store?(db: DatabaseSync, path: string, extracted: unknown): void;
   // After all rows are current, inside the reconcile transaction (resolution, rank).

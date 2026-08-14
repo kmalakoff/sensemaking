@@ -4,6 +4,10 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+// Dataset queries are natural language; bare punctuation is FTS5 syntax and bare words
+// AND-join. The standard bag-of-words baseline: OR over the query's tokens.
+export const orBag = (text) => (text.match(/[\p{L}\p{N}]+/gu) ?? []).filter((t) => !['AND', 'OR', 'NOT', 'NEAR'].includes(t)).join(' OR ');
+
 export function readLabels(labelsDir, split = 'test') {
   const queries = new Map();
   for (const line of readFileSync(join(labelsDir, 'queries.jsonl'), 'utf8').split('\n')) {

@@ -6,7 +6,7 @@ import type { Command } from './types.ts';
 const peekCmd: Command = (ctx) => {
   const [pathArg] = ctx.rest;
   if (!pathArg) ctx.usageError(`usage: ${ctx.name} peek <path>`);
-  withDb(ctx, (db, cfg) => {
+  return withDb(ctx, (db, cfg) => {
     const result = peek(db, cfg, pathArg);
     console.log(ctx.format === 'json' ? JSON.stringify(result, null, 2) : renderPeek(result));
   });

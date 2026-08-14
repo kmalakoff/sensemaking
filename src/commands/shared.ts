@@ -11,12 +11,12 @@ export function printWarnings(warnings: string[]): void {
   for (const w of warnings) console.warn(w);
 }
 
-export function withDb(ctx: Ctx, fn: (db: OpenResult['db'], cfg: ResolvedConfig) => void): void {
+export async function withDb(ctx: Ctx, fn: (db: OpenResult['db'], cfg: ResolvedConfig) => void | Promise<void>): Promise<void> {
   const cfg = ctx.resolveConfig();
   const { db, warnings } = open(cfg);
   printWarnings(warnings);
   try {
-    fn(db, cfg);
+    await fn(db, cfg);
   } finally {
     db.close();
   }

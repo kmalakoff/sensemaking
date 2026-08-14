@@ -44,7 +44,18 @@ describe('config validation', () => {
   it('non-boolean feature value is rejected', () => {
     const result = runWith('{"version":2,"scan":{"include":["*.md"]},"features":{"links":"yes"}}');
     assert.equal(result.status, 1);
-    assert.match(result.stderr, /features must be an object of name -> boolean/);
+    assert.match(result.stderr, /features\.links must be a boolean/);
+  });
+
+  it('embed accepts true and the object form', () => {
+    assert.equal(runWith('{"version":2,"scan":{"include":["*.md"]},"features":{"embed":true}}').status, 0);
+    assert.equal(runWith('{"version":2,"scan":{"include":["*.md"]},"features":{"embed":{"type":"api","url":"http://x/v1"}}}').status, 0);
+  });
+
+  it('embed with an unknown type is rejected', () => {
+    const result = runWith('{"version":2,"scan":{"include":["*.md"]},"features":{"embed":{"type":"weird"}}}');
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /features\.embed must be a boolean or \{/);
   });
 
   it('a newer config version fails the version gate, not shape validation', () => {
