@@ -12,14 +12,15 @@ sense find "pricing OR billing OR invoicing" --k 10 --format json
 ```json
 [
   { "path": "notes/pricing-model.md", "title": "Pricing model",
-    "summary": "Tiered per-seat pricing; floor and discount rules", "hit": "«Pricing» floor for annual…", "via": "match+link", "score": 0.0333 },
+    "summary": "Tiered per-seat pricing; floor and discount rules", "hit": "«Pricing» floor for annual…", "via": "match+link", "score": 0.0333, "lines": null },
   { "path": "notes/renewal-playbook.md", "title": "Renewal playbook",
-    "summary": "Renewal sequence and owners", "hit": "…«billing» contact confirms the PO…", "via": "match", "score": 0.0313 }
+    "summary": "Renewal sequence and owners", "hit": "…«billing» contact confirms the PO…", "via": "match", "score": 0.0313, "lines": "L81-140" }
 ]
 ```
 
-~30 tokens per row; often the `summary` answers the question with no read at all. A row with
-`via: "link"` never contained the terms — it is linked from notes that did.
+Tens of tokens per row; often the `summary` answers the question with no read at all. A row with
+`via: "link"` never contained the terms — it is linked from notes that did. `lines`, when
+set, is the section that earned the row, a direct `Read` range.
 
 ## B. Known-field filtering (no search)
 
@@ -84,18 +85,19 @@ sense find "children dying from poor nutrition" --semantic --k 3 --format json
 ```json
 [
   { "path": "notes/malnutrition-outcomes.md", "title": "Malnutrition outcomes",
-    "summary": "Stunting and mortality by region", "hit": null, "via": "vector", "score": 0.0167, "lines": "L14-52" }
+    "summary": "Stunting and mortality by region", "hit": null, "via": "vector", "score": 0.0167, "similarity": 0.61, "lines": "L14-52" }
 ]
 ```
 
-A `via: "vector"` row never contained the terms — it is semantically near them; `lines` is the
-best-matching section, a direct `Read` range. Only on trees whose config enables `features.embed`.
+A `via: "vector"` row never contained the terms — it is semantically near them; `similarity` is
+the cosine against the chunk `lines` names, a direct `Read` range. Only on trees whose config enables `features.embed`.
 
 ## Consequences
 
 | query | what happens | bounded alternative |
 |---|---|---|
 | `SELECT text FROM content` | returns the tree's entire prose | `snippet(content, -1, '«', '»', '…', 10)` excerpts the match |
+| `snippet()` on a tree holding a megabyte-scale note | re-tokenizes the whole document per matched row: seconds per query | bound it: `CASE WHEN length(content.text) <= 16384 THEN snippet(...) END`, or select `summary` instead |
 | `sense find "pricing"` | matches only that word's stem | OR-in synonyms and instances: `"pricing OR billing OR invoicing"` |
 | `sense find "pricing model details"` | bare words AND-join; one absent word = zero rows | OR the words, or quote an exact phrase |
 | `sense find "customer-facing OR on-site"` | bare punctuation is FTS5 syntax (`-` reads as a column filter) | double-quote: `"customer-facing" OR "on-site"` |

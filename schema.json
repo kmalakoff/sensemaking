@@ -32,7 +32,7 @@
     "features": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Independently toggleable features. Absent block or key means enabled; set false to disable. Toggling a feature rebuilds the cache. Verbs degrade rather than fail: `find` without links is BM25-only, `map` without rank omits hubs, `peek` without sections omits the outline.",
+      "description": "Independently toggleable features. Absent block or key means enabled; set false to disable. Toggling a feature rebuilds the cache. Commands degrade rather than fail: `find` without links is BM25-only, `map` without rank omits hubs, `peek` without sections omits the outline.",
       "properties": {
         "links": {
           "type": "boolean",
@@ -67,7 +67,7 @@
     "defaults": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Tree-declared defaults for the verbs.",
+      "description": "Tree-declared defaults for the commands.",
       "properties": {
         "find": {
           "type": "object",
@@ -89,8 +89,23 @@
     },
     "queries": {
       "type": "object",
-      "description": "Named SQL queries runnable as `sense <name> [params...]`. Tables: `frontmatter` (one row per file, one column per discovered frontmatter key, plus `path`/`_mtime`/`_size`/`_rank`), `content` (FTS5: `title`, `summary`, `text`, `path`), `links` (`src`, `target`, `dst`), and `sections` (`path`, `idx`, `level`, `heading`, `start_line`, `end_line`, `tokens`). `?` placeholders bind to CLI positional args in order. `has(field, value)`: array membership on a JSON-array field, substring match on a string (so has(f.status, 'active') also matches 'inactive'), false on NULL. Exact matches: `=` for scalars, `EXISTS (SELECT 1 FROM json_each(f.tags) WHERE value = ?)` for array members. Canonical query: `SELECT f.path, content.title, content.summary, snippet(content, -1, '«', '»', '…', 10) AS hit FROM frontmatter f JOIN content ON content.path = f.path WHERE content MATCH ? ORDER BY bm25(content, 10.0, 5.0, 1.0) LIMIT 10`. Reserved frontmatter keys: `path`, `_mtime`, `_size`, `_rank`, `content`, `links`, `sections`. Reserved query names (unreachable as subcommands): `init`, `query`, `find`, `map`, `peek`, `watch`, `status`, `rebuild`, `check`.",
-      "additionalProperties": { "type": "string" }
+      "description": "Named queries runnable as `sense <name> [params...]`, either a SQL string or a saved find. SQL string: `?` placeholders bind to CLI positional args in order. Tables: `frontmatter` (one row per file, one column per discovered frontmatter key, plus `path`/`_mtime`/`_size`/`_rank`), `content` (FTS5: `title`, `summary`, `text`, `path`), `links` (`src`, `target`, `dst`), and `sections` (`path`, `idx`, `level`, `heading`, `start_line`, `end_line`, `tokens`). `has(field, value)`: array membership on a JSON-array field, substring match on a string (so has(f.status, 'active') also matches 'inactive'), false on NULL. Exact matches: `=` for scalars, `EXISTS (SELECT 1 FROM json_each(f.tags) WHERE value = ?)` for array members. Canonical query: `SELECT f.path, content.title, content.summary, CASE WHEN length(content.text) <= 16384 THEN snippet(content, -1, '«', '»', '…', 10) END AS hit FROM frontmatter f JOIN content ON content.path = f.path WHERE content MATCH ? ORDER BY bm25(content, 10.0, 5.0, 1.0) LIMIT 10`. The CASE bounds snippet(), which re-tokenizes each matched document and costs seconds per query once a tree holds a megabyte-scale note; `find` applies the same bound internally. Saved find object: `sense <name>` behaves like `sense find <find> [--k] [--where] [--semantic]` with zero flags; it takes no positional parameters. Reserved frontmatter keys: `path`, `_mtime`, `_size`, `_rank`, `content`, `links`, `sections`. Reserved query names (unreachable as subcommands, either form): `init`, `query`, `find`, `map`, `peek`, `watch`, `status`, `rebuild`, `check`.",
+      "additionalProperties": {
+        "oneOf": [
+          { "type": "string" },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["find"],
+            "properties": {
+              "find": { "type": "string", "description": "FTS5 MATCH terms, verbatim -- same syntax as `sense find \"<terms>\"`." },
+              "k": { "type": "integer", "minimum": 1, "description": "Result count, same as `find --k`. Defaults to 10. A --k on the invocation overrides this." },
+              "where": { "type": "string", "description": "SQL condition against frontmatter alias `f`, same as `find --where`. A --where on the invocation replaces this rather than ANDing with it." },
+              "semantic": { "type": "boolean", "description": "Adds vector expansion, same as `find --semantic`. Requires features.embed; `sense check` reports a saved find with semantic true as failed when embed is off, without running it." }
+            }
+          }
+        ]
+      }
     }
   }
 }

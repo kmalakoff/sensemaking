@@ -4,6 +4,7 @@ import { readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import type { Row } from 'sensemaking';
 import { find, mapTree, peek } from 'sensemaking';
+import { renderPeek } from '../../src/output.ts';
 import { packageRoot, runCli } from '../lib/cli.ts';
 import { openConfig, openTree, tmpTree, writeNote } from '../lib/tree.ts';
 
@@ -372,5 +373,133 @@ describe('search error coverage beyond find', () => {
     assert.equal(result.status, 1);
     assert.match(result.stderr, /no such column: nosuchcol/);
     assert.doesNotMatch(result.stderr, /punctuation|double-quoting/);
+  });
+});
+
+describe('find on oversized docs', () => {
+  it('overlapping terms never duplicate document text in the excerpt', async () => {
+    const baseDir = tmpTree();
+    const filler = 'lorem ipsum dolor sit amet consectetur adipiscing elit '.repeat(2000);
+    write(baseDir, 'big.md', `${filler}\n\nwe test tests here and testing continues\n\n${filler}`, { title: 'Big' });
+    const { db, cfg } = openTree(baseDir);
+    // "test" occurs inside "tests"/"testing": overlapping spans must be absorbed, not re-emitted.
+    const rows = await find(db, cfg, 'test OR tests', { k: 5 });
+    const hit = rows.find((r) => r.path === 'big.md')?.hit as string;
+    assert.ok(hit.includes('«test»'), hit);
+    assert.ok(!/»«/.test(hit), `adjacent re-emitted spans in: ${hit}`);
+    assert.ok(hit.includes('«tests»'), `longest span should win the tie: ${hit}`);
+    const stripped = hit.replace(/[«»…]/g, '');
+    assert.ok(stripped.includes('test tests here'), `document text distorted: ${hit}`);
+    db.close();
+  });
+
+  // Body well past SNIPPET_BOUND so FTS5 snippet() gets CASE-bounded out;
+  // the marker sits deep in a second block so a first-160-chars fallback would miss it.
+  function bigTree(): string {
+    const baseDir = tmpTree();
+    const filler = 'lorem ipsum dolor sit amet consectetur adipiscing elit '.repeat(2000);
+    const body = `# Intro\n\n${filler}\n\n## Deep section\n\nHere is the marker zzxyzzy, see [[other]] for context.\n\n${filler}`;
+    write(baseDir, 'big.md', body, { title: 'Big note' });
+    write(baseDir, 'other.md', 'unrelated content, no marker here', { title: 'Other' });
+    return baseDir;
+  }
+
+  it('computes a JS excerpt with the term highlighted and a section-backed lines range', async () => {
+    const { db, cfg } = openTree(bigTree());
+    const rows = (await find(db, cfg, 'zzxyzzy')) as Array<{ path: string; hit: string | null; lines: string | null }>;
+    const big = rows.find((r) => r.path === 'big.md');
+    assert.ok(big, `expected big.md in results: ${JSON.stringify(rows.map((r) => r.path))}`);
+    assert.ok(big.hit !== null, 'expected a JS-computed excerpt, not null');
+    assert.ok(big.hit.includes('«zzxyzzy»'), `expected the marker highlighted: ${big.hit}`);
+    assert.match(big.lines as string, /^L\d+-\d+$/, `expected a section-backed lines range: ${big.lines}`);
+  });
+
+  it('a via=link row pulled in from the oversized doc still has a null hit', async () => {
+    const { db, cfg } = openTree(bigTree());
+    const rows = (await find(db, cfg, 'zzxyzzy')) as Array<{ path: string; via: string; hit: string | null }>;
+    const other = rows.find((r) => r.path === 'other.md');
+    assert.ok(other, `expected other.md via link: ${JSON.stringify(rows.map((r) => r.path))}`);
+    assert.equal(other.via, 'link');
+    assert.equal(other.hit, null);
+  });
+
+  it('a small note in the same tree still gets an ordinary FTS5 snippet', async () => {
+    const { db, cfg } = openTree(bigTree());
+    const rows = (await find(db, cfg, 'unrelated')) as Array<{ path: string; hit: string | null }>;
+    const other = rows.find((r) => r.path === 'other.md');
+    assert.ok(other, `expected other.md matched directly: ${JSON.stringify(rows.map((r) => r.path))}`);
+    assert.ok(other.hit?.includes('«unrelated»'), `expected an ordinary snippet: ${other.hit}`);
+  });
+
+  it('completes well under a second, not the multi-second snippet() cliff', async () => {
+    const { db, cfg } = openTree(bigTree());
+    const start = Date.now();
+    await find(db, cfg, 'zzxyzzy');
+    const elapsed = Date.now() - start;
+    assert.ok(elapsed < 2000, `find took ${elapsed}ms`);
+  });
+});
+
+describe('mapTree many fields', () => {
+  it('aggregates coverage and type across ~40 fields in one scan, matching the old per-column semantics', () => {
+    const baseDir = tmpTree();
+    const fm: Record<string, unknown> = {};
+    for (let i = 0; i < 39; i++) fm[`field${String(i).padStart(2, '0')}`] = i % 2 === 0 ? i : `v${i}`;
+    fm.field00 = 5; // numeric in a.md; b.md below redrifts it to text
+    write(baseDir, 'a.md', 'body', fm);
+    write(baseDir, 'b.md', 'body', { field00: 'drifted' });
+
+    const { db, cfg } = openTree(baseDir);
+    const result = mapTree(db, cfg);
+    assert.equal(result.fieldsTotal, 39);
+
+    const field00 = result.fields.find((f) => f.field === 'field00');
+    assert.ok(field00, 'field00 has the highest coverage and must be in the top 20');
+    assert.equal(field00.coverage, 2);
+    assert.equal(field00.type, 'integer,text', 'drift across notes shows both observed types');
+
+    const field01 = result.fields.find((f) => f.field === 'field01');
+    assert.ok(field01, 'field01 expected in the top 20 (tied coverage, earlier column)');
+    assert.equal(field01.coverage, 1);
+    assert.equal(field01.type, 'text');
+  });
+});
+
+describe('peek stays bounded (sections)', () => {
+  function headingsTree(n: number): string {
+    const baseDir = tmpTree();
+    let body = '';
+    for (let i = 0; i < n; i++) body += `## Heading ${i}\n\ntext for heading ${i}\n\n`;
+    write(baseDir, 'wide.md', body, { title: 'Wide' });
+    return baseDir;
+  }
+
+  it('caps the outline at 20 and reports the true total', () => {
+    const { db, cfg } = openTree(headingsTree(30));
+    const result = peek(db, cfg, 'wide.md');
+    assert.equal(result.sections.length, 20);
+    assert.equal(result.sectionsTotal, 30);
+  });
+
+  it('renderPeek prints a +N more line for the truncated outline', () => {
+    const { db, cfg } = openTree(headingsTree(30));
+    const result = peek(db, cfg, 'wide.md');
+    assert.match(renderPeek(result), /\(\+10 more sections -- sections table has all of them\)/);
+  });
+
+  it('outbound links are capped with a correct total alongside the outline cap', () => {
+    const baseDir = tmpTree();
+    let body = '';
+    for (let i = 0; i < 30; i++) {
+      const name = `t${String(i).padStart(2, '0')}`;
+      write(baseDir, `${name}.md`, 'target note');
+      body += `see [[${name}]]\n`;
+    }
+    write(baseDir, 'hub.md', body, { title: 'Hub' });
+
+    const { db, cfg } = openTree(baseDir);
+    const result = peek(db, cfg, 'hub.md');
+    assert.equal(result.outbound.length, 20);
+    assert.equal(result.outboundTotal, 30);
   });
 });

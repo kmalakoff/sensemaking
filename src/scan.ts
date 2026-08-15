@@ -8,8 +8,11 @@ import type { Feature } from './features/types.ts';
 
 // Filesystem -> rows. Pure data in, data + warnings out; db.ts does the SQL.
 
-// Reserved: colliding with these would clash with the `frontmatter` table's own columns or the other tables (`content`, `links`, `sections`).
-const RESERVED_COLUMNS = new Set(['path', '_mtime', '_size', '_rank', 'content', 'links', 'sections']);
+// Reserved: colliding with these would clash with the `frontmatter` table's own columns or
+// the other tables (`content`, `links`, `sections`). Exported so db.ts's frontmatter upsert
+// can tell a feature-owned column (e.g. rank's `_rank`) apart from a parsed frontmatter
+// column and leave the former alone on reparse.
+export const RESERVED_COLUMNS = new Set(['path', '_mtime', '_size', '_rank', 'content', 'links', 'sections']);
 
 function normalizeText(value: unknown): string {
   if (value === null || value === undefined) return '';

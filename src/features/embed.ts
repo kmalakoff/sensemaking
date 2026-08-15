@@ -5,6 +5,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import type { Config, ResolvedConfig } from '../config.ts';
 import { embedConfig } from '../config.ts';
 import { SenseError } from '../errors.ts';
+import { progress } from '../progress.ts';
 import { parseFile } from '../scan.ts';
 import type { Feature } from './types.ts';
 
@@ -215,6 +216,9 @@ export async function embedPending(db: DatabaseSync, cfg: Config, baseDir: strin
   }
 
   const update = db.prepare('UPDATE embeddings SET scale = ?, vector = ? WHERE "path" = ? AND chunk = ?');
+  // The lazy build is the one long silence a first --semantic query hits (measured 23s at
+  // 26k notes); progress makes it distinguishable from a hang.
+  const report = progress('embedding chunks', jobs.length);
   for (let i = 0; i < jobs.length; i += BATCH) {
     const batch = jobs.slice(i, i + BATCH);
     const vectors = await provider.embed(batch.map((j) => j.text));
@@ -231,7 +235,9 @@ export async function embedPending(db: DatabaseSync, cfg: Config, baseDir: strin
       db.exec('ROLLBACK');
       throw err;
     }
+    report.tick(Math.min(i + BATCH, jobs.length));
   }
+  report.finish();
 }
 
 // Top candidates by cosine for a semantic find: best chunk per file, its line range

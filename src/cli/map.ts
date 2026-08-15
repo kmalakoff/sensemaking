@@ -1,5 +1,5 @@
+import { mapTree } from '../commands.ts';
 import { renderMap } from '../output.ts';
-import { mapTree } from '../verbs.ts';
 import { withDb } from './shared.ts';
 import type { Command } from './types.ts';
 

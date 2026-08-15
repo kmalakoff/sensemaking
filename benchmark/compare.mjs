@@ -73,6 +73,7 @@ const ROWS = [
   ['warm query (`COUNT(*)`)', (r) => ms(r.warm_query_ms)],
   ['BM25 search (canonical join)', (r) => ms(r.bm25_search_ms)],
   ['`find` (BM25 + link fusion)', (r) => ms(r.find_ms)],
+  ['`find` row size (json)', (r) => (r.find_row_tokens == null ? '—' : `~${r.find_row_tokens} tokens`)],
   ['`map` (orient)', (r) => (r.map_ms === null ? '—' : `${r.map_ms} ms / ~${r.map_tokens} tokens`)],
   [`\`peek\` largest note (~${first.largest_note_tokens} t)`, (r) => (r.peek_ms === null ? '—' : `${r.peek_ms} ms / ~${r.peek_tokens} tokens (${((r.peek_tokens / r.largest_note_tokens) * 100).toFixed(1)}%)`)],
   [`bulk change (${first.bulk_files} files): first query`, (r) => ms(r.bulk_change_ms)],

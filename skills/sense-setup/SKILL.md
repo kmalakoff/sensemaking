@@ -25,7 +25,7 @@ installing, configuring features, and the design decisions a tree owner faces.
 | `links` | backlinks, dead-link queries, `find`'s link expansion, `peek`'s link lists | link re-resolution at reconcile | `features.links` (default on) |
 | `sections` | `peek`'s outline, line-range reads, per-section token estimates | heading extraction at parse | `features.sections` (default on) |
 | `rank` | `map`'s hubs, `_rank` in any ORDER BY | PageRank pass at reconcile; requires `links` | `features.rank` (default on) |
-| `embed` | `find --semantic` (meaning-based expansion) | vectors computed at reconcile; model download to `~/.cache/sensemaking` on first use; ~40 ms model load per semantic invocation | `features.embed` (default off) |
+| `embed` | `find --semantic` (meaning-based expansion) | the first semantic query embeds the whole tree (minutes on tens of thousands of notes, progress on stderr); after that, a model load per invocation (measured in BENCHMARKING.md as `semantic_find_ms` minus `find_ms`) | `features.embed` (default off) |
 
 - `embed` accepts `true` (built-in static model) or an object: `model` (Hugging
   Face id or local path), `type` (`static` pure-JS built-in, or `api` for any
@@ -47,6 +47,12 @@ installing, configuring features, and the design decisions a tree owner faces.
 - Toggling any feature rebuilds the cache on the next query (safe, automatic).
 - Disabled features degrade output, visibly: `peek` prints
   `sections: off (features.sections)` rather than an empty outline.
+- Every query reconciles for itself, so nothing has to be running. On a
+  large tree that changes in bulk — a sync, a generated batch — whoever
+  queries next pays that re-parse; `sense watch` moves it into the
+  background instead. It changes latency, never answers, and the OS
+  supervises it rather than the CLI (WATCH.md ships launchd and systemd
+  units).
 
 ## Tree design decisions
 
@@ -56,7 +62,10 @@ do, and every consequence is listed so the choice can be made deliberately.
 
 - **Frontmatter fields.** Columns are discovered per tree — whatever keys notes
   declare become queryable. Consistent fields across notes make SQL filters
-  and named queries possible (`WHERE status = 'active'`). Reserved keys
+  and named queries possible (`WHERE status = 'active'`). SQLite's compiled
+  column limit (2,000; sqlite.org/limits.html) bounds distinct keys per tree —
+  the crawl stops with an error naming the count and the levers, which in
+  practice only a generator writing unbounded keys ever hits. Reserved keys
   (dropped with a warning): `path`, `_mtime`, `_size`, `_rank`, `content`,
   `links`, `sections`. Values keep their YAML type: strings TEXT, whole numbers
   and booleans INTEGER (`true` is 1), fractions REAL, lists and maps JSON text;
@@ -83,6 +92,11 @@ do, and every consequence is listed so the choice can be made deliberately.
   cheap, more links to maintain. Fewer large notes: `sections` and `peek`
   carry the cost down to line-range reads. Both work; per-section token
   estimates exist either way.
+- **Recurring questions.** A scenario an agent will run repeatedly can be saved
+  with its settings: a SQL string for filters and reports, or a saved find
+  (`"hot": { "find": "...", "k": 20, "semantic": true }`) for searches — either
+  runs as `sense <name>`, and `sense check` validates both kinds against the
+  real tree, so a broken saved scenario fails at check time, not mid-task.
 - **Where decisions live.** Choices that should outlive one conversation can
   be recorded in the agent's own instruction or skill files, or in a note in
   the tree itself; a one-off search over an existing corpus needs none of

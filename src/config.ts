@@ -8,7 +8,7 @@ export const STATE_DIR = '.sense';
 // Highest sense.config.json `version` this build understands. Older versions auto-migrate on load.
 export const SUPPORTED_CONFIG_VERSION = 2;
 
-// Each feature owns its tables, parse-time extraction, and reconcile step; verbs degrade when one is off.
+// Each feature owns its tables, parse-time extraction, and reconcile step; commands degrade when one is off.
 // links/sections/rank are opt-out (absent = on); embed is opt-in (absent = off) -- most trees don't need vectors.
 const FEATURE_NAMES = ['links', 'sections', 'rank', 'embed'] as const;
 const OPT_OUT_NAMES = ['links', 'sections', 'rank'] as const;
@@ -24,6 +24,15 @@ export interface EmbedConfig {
 
 export const DEFAULT_EMBED_MODEL = 'minishlab/potion-retrieval-32M';
 
+// A saved `find` invocation: `sense <name>` runs like `sense find <find> [--k] [--where] [--semantic]`.
+// All keys but `find` are optional; a runtime --where/--k on the invocation overrides the saved value.
+export interface SavedFind {
+  find: string;
+  k?: number;
+  where?: string;
+  semantic?: boolean;
+}
+
 export interface Config {
   // Editor-only pointer to schema.json; never read by sense.
   $schema?: string;
@@ -35,8 +44,9 @@ export interface Config {
   defaults?: { find?: { where?: string } };
   // Assertions over saved queries: `checks: { "dead-links": "empty" }` makes `sense check`
   // fail when that query returns rows -- for invariant queries where 0 rows is the pass.
+  // Applies only to SQL queries; a saved find under checks is a config error.
   checks?: Record<string, 'empty'>;
-  queries: Record<string, string>;
+  queries: Record<string, string | SavedFind>;
 }
 
 export interface ResolvedConfig extends Config {
@@ -61,7 +71,7 @@ export function enabledFeatures(cfg: Config): FeatureName[] {
   return FEATURE_NAMES.filter((name) => featureEnabled(cfg, name));
 }
 
-// Every feature with its current state; verbs surface this so "off" and "empty" stay
+// Every feature with its current state; commands surface this so "off" and "empty" stay
 // distinguishable in output.
 export function featureStates(cfg: Config): { on: FeatureName[]; off: FeatureName[] } {
   return {
@@ -171,6 +181,32 @@ function unknownConfigKeys(cfg: Record<string, unknown>): string[] {
   return unknown;
 }
 
+const SAVED_FIND_KEYS = new Set(['find', 'k', 'where', 'semantic']);
+
+// A queries.<name> entry that isn't a SQL string must be a saved find: { find, k?, where?, semantic? }.
+function validateSavedFind(name: string, value: unknown, configPath: string): void {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new SenseError('CONFIG_INVALID', `${configPath}: queries.${name} must be a SQL string or { find, k?, where?, semantic? }`);
+  }
+  const entry = value as Record<string, unknown>;
+  const unknown = Object.keys(entry).filter((k) => !SAVED_FIND_KEYS.has(k));
+  if (unknown.length > 0) {
+    throw new SenseError('CONFIG_INVALID', `${configPath}: queries.${name} has unknown key(s) ${unknown.join(', ')}; a saved find takes find, k, where, semantic`);
+  }
+  if (typeof entry.find !== 'string') {
+    throw new SenseError('CONFIG_INVALID', `${configPath}: queries.${name}.find must be a string`);
+  }
+  if (entry.k !== undefined && (typeof entry.k !== 'number' || !Number.isInteger(entry.k) || entry.k <= 0)) {
+    throw new SenseError('CONFIG_INVALID', `${configPath}: queries.${name}.k must be a positive integer`);
+  }
+  if (entry.where !== undefined && typeof entry.where !== 'string') {
+    throw new SenseError('CONFIG_INVALID', `${configPath}: queries.${name}.where must be a SQL condition string`);
+  }
+  if (entry.semantic !== undefined && typeof entry.semantic !== 'boolean') {
+    throw new SenseError('CONFIG_INVALID', `${configPath}: queries.${name}.semantic must be a boolean`);
+  }
+}
+
 function validateConfig(parsed: unknown, configPath: string): Config {
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
     throw new SenseError('CONFIG_INVALID', `${configPath}: config must be a JSON object`);
@@ -181,8 +217,12 @@ function validateConfig(parsed: unknown, configPath: string): Config {
     throw new SenseError('CONFIG_INVALID', `${configPath}: scan.include must be a non-empty array of glob strings`);
   }
   if (cfg.queries === undefined) cfg.queries = {};
-  if (typeof cfg.queries !== 'object' || cfg.queries === null || Array.isArray(cfg.queries) || !Object.values(cfg.queries).every((q) => typeof q === 'string')) {
-    throw new SenseError('CONFIG_INVALID', `${configPath}: queries must be an object of name -> SQL string`);
+  if (typeof cfg.queries !== 'object' || cfg.queries === null || Array.isArray(cfg.queries)) {
+    throw new SenseError('CONFIG_INVALID', `${configPath}: queries must be an object of name -> SQL string or saved find`);
+  }
+  for (const [name, value] of Object.entries(cfg.queries as Record<string, unknown>)) {
+    if (typeof value === 'string') continue;
+    validateSavedFind(name, value, configPath);
   }
   const defaults = cfg.defaults as { find?: { where?: unknown } } | undefined;
   if (defaults !== undefined && (typeof defaults !== 'object' || defaults === null || Array.isArray(defaults) || (defaults.find !== undefined && typeof defaults.find?.where !== 'string'))) {
@@ -196,6 +236,7 @@ function validateConfig(parsed: unknown, configPath: string): Config {
     const queries = (cfg.queries ?? {}) as Record<string, unknown>;
     for (const name of Object.keys(checks)) {
       if (queries[name] === undefined) throw new SenseError('CONFIG_INVALID', `${configPath}: checks names "${name}", which is not a saved query`);
+      if (typeof queries[name] !== 'string') throw new SenseError('CONFIG_INVALID', `${configPath}: checks names "${name}", which is a saved find, not a SQL query`);
     }
   }
   if (cfg.features !== undefined && (typeof cfg.features !== 'object' || cfg.features === null || Array.isArray(cfg.features))) {

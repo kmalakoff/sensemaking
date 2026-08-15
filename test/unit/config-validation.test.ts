@@ -106,7 +106,7 @@ describe('config validation', () => {
     // Guards the gap that shipped in 0.7.x: `check` existed and worked but was absent from
     // --help, so the command that answers "is my config broken" was undiscoverable from the
     // CLI itself.
-    const { COMMANDS } = (await import(pathToFileURL(join(packageRoot, 'dist', 'esm', 'commands', 'index.js')).href)) as { COMMANDS: Record<string, unknown> };
+    const { COMMANDS } = (await import(pathToFileURL(join(packageRoot, 'dist', 'esm', 'cli', 'index.js')).href)) as { COMMANDS: Record<string, unknown> };
     const help = runCli(['--help']).stdout + runCli([]).stderr;
     for (const name of Object.keys(COMMANDS)) {
       assert.ok(new RegExp(`\\b${name}\\b`).test(help), `${name} is a command but is missing from --help`);

@@ -1,15 +1,19 @@
 {
   "name": "sensemaking",
   "version": "0.7.2",
-  "description": "Query a knowledge base you build with an agent: filter notes by frontmatter, then search inside them",
+  "description": "SQL over a tree of markdown notes: filter by frontmatter, search the prose, follow the links, read the structure",
   "keywords": [
     "markdown",
     "frontmatter",
     "sql",
     "sqlite",
+    "fts5",
     "query",
+    "search",
+    "semantic",
     "obsidian",
     "notes",
+    "agent",
     "cli"
   ],
   "homepage": "https://github.com/kmalakoff/sensemaking",

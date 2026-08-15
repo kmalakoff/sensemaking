@@ -4,9 +4,10 @@
 // in-process metrics import the library and time the engine alone (index build, freshness
 // check, incremental update).
 import { spawn, spawnSync } from 'node:child_process';
-import { appendFileSync, readdirSync, rmSync, statSync, utimesSync } from 'node:fs';
+import { appendFileSync, rmSync, statSync, utimesSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { futureDate, median as sharedMedian, timedCli, walkMd } from './lib/measure.mjs';
 
 const [pkgRootArg, treeArg] = process.argv.slice(2);
 if (!pkgRootArg || !treeArg) {
@@ -20,30 +21,12 @@ const cli = join(pkgRoot, 'bin', 'cli.js');
 
 const run = (args) => spawnSync(process.execPath, [cli, ...args], { cwd: tree, encoding: 'utf8', maxBuffer: 64e6 });
 
-function timed(args, runs = 5) {
-  const times = [];
-  let out = null;
-  for (let i = 0; i < runs; i++) {
-    const t = process.hrtime.bigint();
-    out = run(args);
-    times.push(Number(process.hrtime.bigint() - t) / 1e6);
-  }
-  times.sort((a, b) => a - b);
-  return { ms: Math.round(times[Math.floor(runs / 2)]), status: out.status, bytes: (out.stdout ?? '').length };
-}
+const timed = (args, runs = 5) => timedCli(() => run(args), runs);
 
 const fail = (r) => (r.status === 0 ? r : null);
 
 // Largest note: peek target and the read-cost baseline. Also collect files for update benchmarks.
-const mdFiles = [];
-(function walk(dir) {
-  for (const e of readdirSync(join(tree, dir), { withFileTypes: true })) {
-    if (e.name.startsWith('.') || e.name === 'node_modules') continue;
-    const rel = dir ? `${dir}/${e.name}` : e.name;
-    if (e.isDirectory()) walk(rel);
-    else if (e.name.endsWith('.md')) mdFiles.push({ rel, size: statSync(join(tree, rel)).size });
-  }
-})('');
+const mdFiles = walkMd(tree).map((rel) => ({ rel, size: statSync(join(tree, rel)).size }));
 const largest = mdFiles.reduce((a, b) => (b.size > a.size ? b : a), { rel: null, size: 0 });
 
 const SEARCH = `SELECT f.path, content.title, snippet(content, -1, '«', '»', '…', 10) AS hit FROM frontmatter f JOIN content ON content.path = f.path WHERE content MATCH ? ORDER BY bm25(content, 10.0, 5.0, 1.0) LIMIT 10`;
@@ -58,6 +41,19 @@ const findR = fail(timed(['find', 'the', '--k', '10'], 3));
 // vs find_ms is what --semantic pays per invocation: model load + query embed + scan.
 const semanticR = fail(timed(['find', 'the', '--semantic', '--k', '10'], 3));
 const mapR = fail(timed(['map'], 3));
+// A `find` row is an output contract like the map/peek token counts: a row is a reference,
+// and its cost must not grow with the tree. Measured in json (the shape an agent parses),
+// per row actually returned.
+const findRowTokens = (() => {
+  const out = run(['find', 'the', '--k', '10', '--format', 'json']);
+  if (out.status !== 0) return null;
+  try {
+    const rows = JSON.parse(out.stdout);
+    return rows.length ? Math.round(out.stdout.length / 4 / rows.length) : null;
+  } catch {
+    return null;
+  }
+})();
 const peekR = fail(timed(['peek', largest.rel], 3));
 
 // --- in-process (library) ---
@@ -72,12 +68,9 @@ try {
     db.close();
     return ms;
   };
-  const median = (fn, runs) => {
-    const times = Array.from({ length: runs }, fn).sort((a, b) => a - b);
-    return Math.round(times[Math.floor(runs / 2)] * 10) / 10;
-  };
+  const median = sharedMedian;
   const touch = (files) => {
-    const future = new Date(Date.now() + 60_000 + Math.random() * 60_000);
+    const future = futureDate();
     for (const f of files) utimesSync(join(tree, f.rel), future, future);
   };
 
@@ -133,6 +126,7 @@ console.log(
       warm_query_ms: warm?.ms ?? null,
       bm25_search_ms: search?.ms ?? null,
       find_ms: findR?.ms ?? null,
+      find_row_tokens: findRowTokens,
       semantic_find_ms: semanticR?.ms ?? null,
       map_ms: mapR?.ms ?? null,
       map_tokens: mapR ? Math.round(mapR.bytes / 4) : null,

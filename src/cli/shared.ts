@@ -6,6 +6,16 @@ import { printRows } from '../output.ts';
 import { searchError } from '../search-error.ts';
 import type { Ctx } from './types.ts';
 
+// --k must be a positive integer: SQLite reads a bound LIMIT of -1 as "unlimited" and 0 as
+// "nothing", and parseInt would silently truncate "5.9" -- all three are caller mistakes
+// worth a usage error, matching the config-level SavedFind validation.
+export function parseK(ctx: Ctx): number | undefined {
+  if (ctx.values.k === undefined) return undefined;
+  const k = Number(ctx.values.k);
+  if (!Number.isInteger(k) || k <= 0) ctx.usageError(`--k expects a positive integer, got "${ctx.values.k}"`);
+  return k;
+}
+
 // Shared open-query-close envelope for commands that touch the tree.
 
 export function printWarnings(warnings: string[]): void {

@@ -1,10 +1,10 @@
 import { createRequire } from 'node:module';
 import { parseArgs } from 'node:util';
-import { COMMANDS } from './commands/index.ts';
-import type { Ctx } from './commands/types.ts';
+import { COMMANDS } from './cli/index.ts';
+import type { Ctx } from './cli/types.ts';
 import { loadConfig, SUPPORTED_CONFIG_VERSION } from './config.ts';
 
-// Parsing and dispatch only. Commands live in src/commands/, one file each, lazy-loaded --
+// Parsing and dispatch only. Commands live in src/cli/, one file each, lazy-loaded --
 // nothing tree- or dependency-heavy may be imported at the top of this file.
 
 // Works from dist/cjs and dist/esm alike: walk up past the dist type-marker package.json.
@@ -48,7 +48,7 @@ export default async function cli(argv: string[], name: string): Promise<void> {
         config: { type: 'string' },
         where: { type: 'string' },
         k: { type: 'string' },
-        semantic: { type: 'boolean', default: false },
+        semantic: { type: 'boolean' },
         list: { type: 'boolean', default: false },
         force: { type: 'boolean', default: false },
         version: { type: 'boolean', default: false, short: 'v' },
@@ -94,7 +94,10 @@ export default async function cli(argv: string[], name: string): Promise<void> {
 
   try {
     if (values.list) {
-      for (const queryName of Object.keys(ctx.resolveConfig().queries).sort()) console.log(queryName);
+      const queries = ctx.resolveConfig().queries;
+      for (const queryName of Object.keys(queries).sort()) {
+        console.log(typeof queries[queryName] === 'string' ? queryName : `${queryName}  (find)`);
+      }
       return;
     }
 
@@ -106,7 +109,7 @@ export default async function cli(argv: string[], name: string): Promise<void> {
 
     const load = COMMANDS[first];
     if (load) await (await load()).default(ctx);
-    else (await import('./commands/named.ts')).default(ctx, first, params);
+    else await (await import('./cli/named.ts')).default(ctx, first, params);
   } catch (err) {
     console.error((err as Error).message);
     process.exit(1);

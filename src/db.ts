@@ -3,16 +3,32 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type { Config, ResolvedConfig } from './config.ts';
 import { featureSignature, STATE_DIR } from './config.ts';
+import { SenseError } from './errors.ts';
 import { activeFeatures } from './features/index.ts';
+import type { ReconcileDelta } from './features/types.ts';
+import { progress } from './progress.ts';
 import type { ParsedDoc } from './scan.ts';
-import { listFiles, parseFile } from './scan.ts';
+import { listFiles, parseFile, RESERVED_COLUMNS } from './scan.ts';
+
+// path/_mtime/_size are core: every reparse legitimately rewrites them. Every other
+// RESERVED_COLUMNS entry that shows up as a real frontmatter column (currently only
+// rank's `_rank`) is feature-owned -- scan.ts already refuses to let frontmatter set it,
+// so it must never appear in the upsert below, or a reparse would blow its last computed
+// value away with NULL on every touch, not just the reconciles that recompute it.
+const CORE_FRONTMATTER_COLUMNS = new Set(['path', '_mtime', '_size']);
 
 // Rows -> SQLite: core schema, reconcile loop, has(). Parsing lives in scan.ts;
 // everything beyond frontmatter + content lives in src/features/.
 
 export const DB_FILENAME = 'cache.db';
 // Cache shape version, independent of the config's own `version`.
-export const SCHEMA_VERSION = '4'; // 4: frontmatter scalars store as INTEGER/REAL/TEXT by YAML type (was: all numbers REAL)
+// 5: frontmatter upsert is ON CONFLICT UPDATE (was OR REPLACE) so rowid is stable, and
+// content is coupled to that rowid instead of an UNINDEXED path column (was: 4 -- scalars
+// store as INTEGER/REAL/TEXT by YAML type).
+export const SCHEMA_VERSION = '5';
+
+// SQLite's compile-time SQLITE_MAX_COLUMN, default 2000 (https://www.sqlite.org/limits.html).
+const MAX_FRONTMATTER_COLUMNS = 2000;
 
 export interface OpenResult {
   db: DatabaseSync;
@@ -107,8 +123,13 @@ export function reconcile(db: DatabaseSync, cfg: Config, baseDir: string): { par
   const parsedDocs: ParsedDoc[] = [];
   const warnings: string[] = [];
 
+  // Bulk reparses (a sync, a cold build) are the long silences a query can hit; short
+  // reconciles stay silent (progress() has a threshold).
+  const report = progress('reparsing files', toReparse.length);
+  let parsedCount = 0;
   for (const file of toReparse) {
     const { doc, warnings: fileWarnings } = parseFile(file, features);
+    report.tick(++parsedCount);
     warnings.push(...fileWarnings);
     for (const key of Object.keys(doc.data)) {
       if (!seenColumns.has(key)) {
@@ -118,52 +139,87 @@ export function reconcile(db: DatabaseSync, cfg: Config, baseDir: string): { par
     }
     parsedDocs.push(doc);
   }
+  report.finish();
 
   const allColumns = [...seenColumns];
-  const insertSql = `INSERT OR REPLACE INTO frontmatter (${allColumns.map(quoteIdent).join(', ')}) VALUES (${allColumns.map(() => '?').join(', ')})`;
+  // Fence before ALTERing: SQLite's own failure past this point is a raw
+  // "too many columns on sqlite_altertab_frontmatter" with no indication of the boundary or the levers.
+  if (allColumns.length > MAX_FRONTMATTER_COLUMNS) {
+    throw new SenseError(
+      'COLUMN_LIMIT',
+      `frontmatter would need ${allColumns.length} columns, crossing SQLite's compile-time SQLITE_MAX_COLUMN limit (default ${MAX_FRONTMATTER_COLUMNS}; see https://www.sqlite.org/limits.html). Narrow scan.include so fewer/other files are indexed, or fix whatever is generating unbounded frontmatter keys.`
+    );
+  }
+  // Columns the frontmatter upsert actually writes: core + parsed frontmatter keys, never a
+  // feature-owned reserved column (see CORE_FRONTMATTER_COLUMNS above).
+  const writableColumns = allColumns.filter((c) => CORE_FRONTMATTER_COLUMNS.has(c) || !RESERVED_COLUMNS.has(c));
+  // ON CONFLICT UPDATE (not OR REPLACE) keeps the row's rowid stable across reparses --
+  // content rows are coupled to that rowid below.
+  const insertSql = `INSERT INTO frontmatter (${writableColumns.map(quoteIdent).join(', ')}) VALUES (${writableColumns.map(() => '?').join(', ')}) ON CONFLICT("path") DO UPDATE SET ${writableColumns
+    .filter((c) => c !== 'path')
+    .map((c) => `${quoteIdent(c)} = excluded.${quoteIdent(c)}`)
+    .join(', ')}`;
 
+  const added = toReparse.filter((f) => !existing.has(f.relPath)).map((f) => f.relPath);
+  const delta: ReconcileDelta = { files, reparsed: parsedDocs.map((d) => d.relPath), added, vanished };
+
+  const txStart = Date.now();
   db.exec('BEGIN');
   try {
     for (const col of newColumns) db.exec(`ALTER TABLE frontmatter ADD COLUMN ${quoteIdent(col)}`);
-    // FTS5 has no upsert, so delete-before-insert into `content`.
-    const delBody = db.prepare(`DELETE FROM content WHERE "path" = ?`);
+    // FTS5 has no upsert, so delete-before-insert into `content`; coupled to the
+    // frontmatter rowid (indexed via its PRIMARY KEY) instead of the UNINDEXED `path`
+    // column, which a per-row DELETE would otherwise scan the whole table to find.
+    const delBody = db.prepare(`DELETE FROM content WHERE rowid = (SELECT rowid FROM frontmatter WHERE "path" = ?)`);
     if (vanished.length > 0) {
       const del = db.prepare(`DELETE FROM frontmatter WHERE "path" = ?`);
       for (const path of vanished) {
-        del.run(path);
+        // content delete must run first: it looks up the frontmatter rowid by path, which
+        // the frontmatter delete below would otherwise have already removed.
         delBody.run(path);
-        for (const feature of features) feature.remove?.(db, path);
+        del.run(path);
+        for (const feature of features) feature.remove?.(db, path, delta);
       }
     }
     if (parsedDocs.length > 0) {
       const insert = db.prepare(insertSql);
-      const insertBody = db.prepare(`INSERT INTO content (title, summary, text, "path") VALUES (?, ?, ?, ?)`);
+      const insertBody = db.prepare(`INSERT INTO content (rowid, title, summary, text, "path") VALUES ((SELECT rowid FROM frontmatter WHERE "path" = ?), ?, ?, ?, ?)`);
       for (const doc of parsedDocs) {
-        const values = allColumns.map((col) => {
+        const values = writableColumns.map((col) => {
           if (col === 'path') return doc.relPath;
           if (col === '_mtime') return doc.mtimeMs;
           if (col === '_size') return doc.size;
           return doc.data[col] ?? null;
         });
+        // Frontmatter upsert first: content's rowid lookup below depends on this row existing.
         insert.run(...values);
-        // Delete-before-insert only for docs that have rows: an FTS5 DELETE by column
-        // cannot use an index and scans the whole table, so running it per doc on a
-        // cold build (empty table, nothing to delete) made the crawl quadratic --
+        // Delete-before-insert only for docs that have rows: an FTS5 DELETE by rowid on a
+        // cold build (empty table, nothing to delete) is wasted work, and doing it
+        // unconditionally previously made the crawl quadratic when it scanned by column --
         // measured 4x time per note-count doubling at 13k/26k notes.
         if (existing.has(doc.relPath)) {
           delBody.run(doc.relPath);
-          for (const feature of features) feature.remove?.(db, doc.relPath);
+          for (const feature of features) feature.remove?.(db, doc.relPath, delta);
         }
-        insertBody.run(doc.search.title, doc.search.summary, doc.search.text, doc.relPath);
-        for (const feature of features) feature.store?.(db, doc.relPath, doc.extracted[feature.name]);
+        insertBody.run(doc.relPath, doc.search.title, doc.search.summary, doc.search.text, doc.relPath);
+        for (const feature of features) feature.store?.(db, doc.relPath, doc.extracted[feature.name], delta);
       }
     }
-    for (const feature of features) feature.afterReconcile?.(db, files);
+    for (const feature of features) feature.afterReconcile?.(db, delta);
     db.exec('COMMIT');
   } catch (err) {
     db.exec('ROLLBACK');
     throw err;
   }
+
+  // Reconcile's own write-transaction duration, for open()'s derived busy_timeout (F):
+  // keep the observed max so a big watcher reconcile's lock hold is what the next open bounds its wait against.
+  const durationMs = Date.now() - txStart;
+  const prevRaw = getMeta(db, 'reconcile_max_ms');
+  // -1, not 0, so a genuinely 0ms first reconcile (sub-millisecond, common on a tiny tree)
+  // still gets recorded instead of losing to the "nothing recorded yet" default.
+  const prevMax = prevRaw === null ? -1 : Number(prevRaw);
+  if (durationMs > prevMax) setMeta(db, 'reconcile_max_ms', String(durationMs));
 
   return { parsed: parsedDocs.length, warnings };
 }
@@ -196,6 +252,15 @@ export function open(cfg: ResolvedConfig): OpenResult {
   }
 
   ensureSchema(db, cfg);
+
+  // Derived from reconcile's own recorded max (F): 3x the largest reconcile this cache has
+  // ever held its write transaction for, floored at the 30s default and capped at 10min so
+  // one pathological build can't pin every later open to an unbounded wait. Installed
+  // before reconcile() below -- this open's own reconcile is exactly the operation that
+  // races a concurrent watcher's transaction and needs the derived wait.
+  const recordedMaxMs = Number(getMeta(db, 'reconcile_max_ms') ?? '0');
+  db.exec(`PRAGMA busy_timeout = ${Math.min(Math.max(30000, 3 * recordedMaxMs), 600_000)}`);
+
   const { parsed, warnings } = reconcile(db, cfg, cfg.baseDir);
 
   return { db, cfg, dbPath, parsed, warnings };

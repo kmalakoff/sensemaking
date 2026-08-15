@@ -5,16 +5,18 @@ description: Query a markdown tree with the sense CLI — filter notes by frontm
 
 # sense
 
-SQL over a markdown tree, kept fresh by a filesystem check on every query. Four tables per file:
-`frontmatter` (one column per key, plus `path`/`_mtime`/`_size`/`_rank`), `content` (FTS5:
-`title`, `summary`, `text`), `links` (`src`, `target`, `dst` — `NULL` dst = dead link),
-`sections` (heading outline with line ranges and token estimates).
+SQL over a markdown tree, kept fresh by a filesystem check on every query. Every file becomes
+rows in `frontmatter` (one column per key, plus `path`/`_mtime`/`_size`/`_rank`), `content`
+(FTS5: `title`, `summary`, `text`), `links` (`src`, `target`, `dst` — `NULL` dst = dead link),
+and `sections` (heading outline with line ranges and token estimates). Features add their own
+storage; `map` and `status` report which are on.
 
 ## What each tool is for
 
 Every result is a reference (path, metadata, excerpt), never file contents; prose enters
-context only when you Read it. Costs: `map` is fixed-size, a `find` row ~30 tokens, `peek`
-~17% of reading the file. Which tool fits is a property of the question:
+context only when you Read it. Costs: `map` is fixed-size, a `find` row is tens of tokens,
+and a `peek` stays flat however large the note is. Which tool fits is a property of the
+question:
 
 - A deterministic, factual answer over known fields — counts, filters, "which notes have
   X" — is SQL: `sense query`, a named query, or `find --where`. Enumerates every match;
@@ -29,7 +31,9 @@ context only when you Read it. Costs: `map` is fixed-size, a `find` row ~30 toke
 - `map` answers "what is this tree" — fields, hub notes, recent changes — when the tree is
   unfamiliar.
 - `peek <path>` prices a file before you pay for it: outline with `[L143-162, ~380t]`
-  ranges, links both ways.
+  ranges, links both ways. Every list shows its first 20 with the true total; the
+  `sections` and `links` tables hold the rest, so a peek costs a few hundred tokens on any
+  note — heading-dense monsters included.
 - When you know the file and need its contents, `Read` it — sense adds nothing there. On
   large files peek's ranges let you read just one section; small files are often cheaper
   whole.
@@ -37,14 +41,14 @@ context only when you Read it. Costs: `map` is fixed-size, a `find` row ~30 toke
 Output defaults to a table, built for humans; `--format json` returns the same rows
 machine-parseable.
 
-## Verbs
+## Commands
 
 ```
 sense find "pricing OR billing OR invoicing" --where "f.status = 'active'" --k 10
 sense peek notes/pricing-model.md               # a unique basename also works
 sense map
 sense query "<sql>" [params...]                 # ad-hoc SQL; ? binds positional args, count-checked
-sense <name> [params...]                        # named query from sense.config.json
+sense <name> [params...]                        # named query or saved find from sense.config.json
 sense --list | status | rebuild | check
 ```
 
@@ -54,44 +58,52 @@ sense --list | status | rebuild | check
   rules apply to search commands you write into subagent briefs.
 - When a search misses, the recall levers are: OR-in synonyms and concrete instances (the
   index only knows the words in the files — a note about a specific tool rarely names its
-  category), raise `--k` (a row costs ~30 tokens), and on embed-enabled trees `--semantic`
+  category), raise `--k` (a row costs tens of tokens), and on embed-enabled trees `--semantic`
   (matches meaning where term overlap fails). Each widening adds candidates and dilutes
   ranking, so the noise trade-off runs both ways.
 - A frontmatter query enumerates its matches deterministically; search ranks by term overlap,
   so results shift as phrasing shifts. Trade-off: a query needs a known field, search doesn't.
 - `find` fuses BM25 with link-graph expansion; the `via` column says what produced each row —
   `match` (terms hit), `link` (connected to notes that hit), `match+link` (both). With
-  `--semantic`, `vector` joins the composition and rows gain a `lines` column pointing at the
-  best-matching section, a direct `Read` range.
+  `--semantic`, `vector` joins the composition. The `lines` column, when set, points at the
+  section that earned the row — the best-matching chunk on vector rows, the term cluster's
+  section on large lexical notes — and is a direct `Read` range; null means the whole note
+  is the reference.
 - `--where` takes any SQL condition against frontmatter alias `f` — not only field equality:
   `"f.status = 'active' AND has(f.tags, 'x')"`, `"f.path NOT LIKE 'generated/%'"`,
   `"f.created >= datetime(?)"`. A tree can declare a default scope in `sense.config.json`
   (`defaults.find.where`); an explicit `--where` replaces it, so `--where "1=1"` searches
   everything. `sense status` prints the active default.
 - `score` is a rank-fusion value: it ranks rows within one result set and is not comparable
-  across queries, not a relevance magnitude — a perfect lexical hit and a weak vector-only
-  hit can both read ~0.017, because the number encodes how many signals fired and at what
-  rank. With `--semantic`, rows carry `similarity`: the cosine (-1 to 1) of the query
-  against that file's best-matching chunk — the same chunk the `lines` range points at.
-  It orders vector evidence within a result set; its absolute range depends on the corpus.
-  Measured: on thousands of notes, unrelated queries ~0.2 and genuine matches ~0.6; on a
-  few dozen notes the ranges compress and can overlap, because even a nonsense query has a
-  moderately near neighbour somewhere. Compare similarities within a result set rather than
-  against a fixed cutoff carried between trees.
+  across queries, not a relevance magnitude — it encodes how many signals fired and at what
+  rank, so a perfect lexical hit and a weak vector-only hit can read the same number. With
+  `--semantic`, rows carry `similarity`: the cosine (-1 to 1) of the query against that
+  file's best-matching chunk — the same chunk the `lines` range points at. It orders vector
+  evidence within a result set; the range it spans depends on the corpus and the embedding
+  model, and compresses on small trees, where even a nonsense query has a moderately near
+  neighbour somewhere. Compare similarities within a result set rather than against a fixed
+  cutoff carried between trees.
 - Lexical `find` returns 0 rows when nothing matches, so it answers "is this in the tree at
   all". `--semantic` always returns up to `k` rows — nearest-neighbour search has a nearest
   neighbour for any input — so absence is a lexical question; `similarity` and the snippet
   are the evidence for judging whether a vector row is a real hit.
+- Besides SQL strings, a config entry can save a whole `find` invocation:
+  `"hot": { "find": "pricing OR billing", "k": 20, "where": "...", "semantic": true }` runs
+  as `sense hot` — the scenario's settings ride along with the name, so repeat runs need no
+  flags. An invocation-level `--k`, `--where`, or `--semantic` overrides the saved value;
+  `--list` marks these entries `(find)`.
 - `sense check` prepares every saved query (catching syntax and unknown-column errors), runs
   the ones taking no parameters, and prints row counts: a saved query returning 0 rows looks
-  the same as a true empty result until something distinguishes them. For queries that
-  encode invariants (a dead-link list, an unsupported-claims list — rows are violations),
-  `checks: { "<name>": "empty" }` in the config inverts the meaning: `check` fails when the
-  query returns rows, making it usable as a test suite rather than a linter.
+  the same as a true empty result until something distinguishes them. Saved finds are probed
+  lexically with k=1 (a bad `where` column or FTS5 syntax fails here, not mid-task); their
+  semantic pass is never run by `check`, only checked against `features.embed`. For queries
+  that encode invariants (a dead-link list, an unsupported-claims list — rows are
+  violations), `checks: { "<name>": "empty" }` in the config inverts the meaning: `check`
+  fails when the query returns rows, making it usable as a test suite rather than a linter.
 
 ## SQL
 
-The verbs are shorthands over the same four tables; anything they don't express, SQL does.
+The commands are shorthands over those tables; anything they don't express, SQL does.
 
 ```
 sense query "SELECT name FROM pragma_table_info('frontmatter')"          # what fields exist
@@ -108,7 +120,11 @@ sense query "SELECT j.value, COUNT(*) n FROM frontmatter, json_each(frontmatter.
   punctuation — bare `customer-facing` errors (`-` reads as a column filter), bare
   apostrophes are syntax errors: write `"customer-facing"`, `"founder's"`.
 - Rank with `ORDER BY bm25(content, 10.0, 5.0, 1.0)` (title > summary > body); excerpt with
-  `snippet(content, -1, '«', '»', '…', 10)`.
+  `snippet(content, -1, '«', '»', '…', 10)`. snippet() re-tokenizes each matched doc and its
+  cost grows superlinearly with doc size — measured ~10 s per query on a tree holding one
+  1 MB note. `find` bounds this itself (docs past 16 KB get an equivalent excerpt another
+  way); in hand-written SQL, guard it: `CASE WHEN length(text) <= 16384 THEN snippet(...)
+  END`, or select `title`/`summary` instead of an excerpt.
 - Select `content.title`/`content.summary` (always exist, empty when absent) rather than
   `f.title`/`f.summary` (discovered columns — error on trees that never declare them).
 - Frontmatter values keep their YAML type: strings are TEXT, whole numbers and booleans are

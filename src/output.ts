@@ -57,7 +57,7 @@ function renderRows(rows: Row[], format: 'table' | 'json', width = process.stdou
   return [formatRow(columns), widths.map((w) => '-'.repeat(w)).join('  '), ...cells.map(formatRow)].join('\n');
 }
 
-// Text renderers for the layer verbs; cli.ts prints what these return.
+// Text renderers for the layer commands; cli.ts prints what these return.
 
 function featuresLine(features: { on: string[]; off: string[] }): string {
   const off = features.off.length > 0 ? ` · off: ${features.off.map((name) => `${name} (features.${name})`).join(', ')}` : '';
@@ -73,12 +73,13 @@ export function renderMap(result: { docs: { count: number; bytes: number }; fiel
   return parts.join('\n');
 }
 
-export function renderPeek(result: { path: string; tokens: number; frontmatter: Row; sections: Row[]; outbound: string[]; backlinks: string[]; unresolved: string[]; outboundTotal: number; backlinksTotal: number; unresolvedTotal: number; off: string[] }): string {
+export function renderPeek(result: { path: string; tokens: number; frontmatter: Row; sections: Row[]; outbound: string[]; backlinks: string[]; unresolved: string[]; sectionsTotal: number; outboundTotal: number; backlinksTotal: number; unresolvedTotal: number; off: string[] }): string {
   const lines = [`${result.path}  (~${result.tokens} tokens)`];
   for (const [key, value] of Object.entries(result.frontmatter)) lines.push(`  ${key}: ${value}`);
   if (result.sections.length > 0) {
     lines.push('', 'sections:');
     for (const s of result.sections) lines.push(`  ${'#'.repeat(s.level as number)} ${s.heading}  [L${s.start_line}-${s.end_line}, ~${s.tokens}t]`);
+    if (result.sectionsTotal > result.sections.length) lines.push(`  (+${result.sectionsTotal - result.sections.length} more sections -- sections table has all of them)`);
   } else if (result.off.includes('sections')) lines.push('', 'sections: off (features.sections)');
   if (result.off.includes('links')) {
     lines.push('', 'links: off (features.links)');

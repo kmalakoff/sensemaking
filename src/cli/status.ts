@@ -24,6 +24,10 @@ const status: Command = (ctx) => {
   const e = embedConfig(cfg);
   const vectors = e ? vectorState(db) : null;
   const heartbeat = getMeta(db, 'watch_heartbeat');
+  // Derived at open() (F): 3x the largest reconcile this cache has ever held its write
+  // transaction for, floored at 30s -- read back from the connection rather than
+  // recomputed here, so this always reports what open() actually set.
+  const busyTimeoutMs = (db.prepare('PRAGMA busy_timeout').get() as { timeout: number }).timeout;
   const result = {
     db: dbPath,
     docs: docCount(db),
@@ -32,6 +36,7 @@ const status: Command = (ctx) => {
     embed: e ? { type: e.type, model: e.model, ...(vectors ?? {}) } : null,
     findDefaultWhere: cfg.defaults?.find?.where ?? null,
     watcherHeartbeatSecondsAgo: heartbeat ? Math.round((Date.now() - Date.parse(heartbeat)) / 1000) : null,
+    busyTimeoutMs,
   };
 
   if (ctx.format === 'json') {
@@ -44,6 +49,7 @@ const status: Command = (ctx) => {
     if (e) console.log(`embed: ${e.type} ${e.model}${vectors ? ` (vectors: ${vectors.embedded} embedded, ${vectors.pending} pending — embedded on first --semantic query)` : ''}`);
     if (result.findDefaultWhere) console.log(`find default scope: ${result.findDefaultWhere} (--where replaces it)`);
     console.log(result.watcherHeartbeatSecondsAgo === null ? 'watcher: no watcher' : `watcher: last heartbeat ${result.watcherHeartbeatSecondsAgo}s ago`);
+    console.log(`busy_timeout: ${result.busyTimeoutMs}ms (derived: 3x the largest reconcile this cache has recorded, floored at 30000ms)`);
   }
   db.close();
 };

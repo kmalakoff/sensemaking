@@ -29,7 +29,7 @@ sense query "SELECT path FROM frontmatter WHERE has(tags, ?)" urgent
 
 ## Model
 
-Every file becomes rows in four tables:
+Every file becomes rows in these tables, plus whatever an enabled feature adds of its own:
 
 | table | holds | for |
 |---|---|---|
@@ -43,8 +43,9 @@ afterward through the filesystem, scoped to the line ranges `peek` returns. This
 [just-in-time context pattern](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents):
 the agent holds lightweight identifiers and loads payloads only when needed.
 
-Measured costs: a `find` row is ~20–40 tokens, a `peek` is ~17% of reading the file, and the
-section it points at is a direct `Read` range.
+Output size is a contract, measured per release ([BENCHMARKING.md](BENCHMARKING.md)): `map` is
+fixed-size, a `find` row is tens of tokens, and a `peek` stays flat however large the note is —
+so what it saves over reading grows with the file, and a small note is cheaper read whole.
 
 ```sql
 -- filter and search compose in one query
@@ -54,22 +55,29 @@ WHERE f.status = 'active' AND content MATCH 'revenue'
 ORDER BY bm25(content, 10.0, 5.0, 1.0) LIMIT 10
 ```
 
-## Verbs
+## Commands
 
-| verb | does |
+| command | does |
 |---|---|
 | `map` | doc count, frontmatter field coverage, top hubs by link rank, recent changes |
 | `find "<terms>" [--where "<sql>"] [--k n] [--semantic]` | BM25 + link-graph expansion, fused; `via` marks each row `match`, `link`, or `match+link` |
-| `peek <path>` | frontmatter + heading outline (`[L143-162, ~380t]`) + links both ways, capped at 20 per list |
-| `query "<sql>" [params...]` | ad-hoc SQL over all four tables; `?` binds positional args |
+| `peek <path>` | frontmatter + heading outline (`[L143-162, ~380t]`) + links both ways — first 20 per list, each with its total; the `links` table has the rest |
+| `query "<sql>" [params...]` | ad-hoc SQL over all the tables; `?` binds positional args |
+| `<name> [params...]` | run a query saved in the config; `--list` names them |
+| `init` | write a starter `sense.config.json` |
+| `status` | index location, doc count, feature state, watcher heartbeat |
+| `check` | prepare and run the saved queries, so a broken one fails here instead of mid-task |
+| `rebuild` | delete the cache and re-crawl |
+| `watch` | keep the index warm in the background (optional; see [WATCH.md](WATCH.md)) |
 
 `find` seeds a personalized-PageRank walk with the BM25 matches, so a note that never contains
 the terms but is linked from ones that do still surfaces. Terms pass verbatim to FTS5 `MATCH`
-(bare words AND-join; operators are yours to write). `--where` takes a frontmatter condition
-against alias `f`. On trees with the `embed` feature, `--semantic` additionally expands by
-meaning — explicit per query, never silent; rows it adds are labeled `via: vector` and carry a
-`lines` column pointing at the best-matching section.
-`--format json` on any verb returns structured output.
+(bare words AND-join; operators are yours to write). `--where` takes any SQL condition against
+frontmatter alias `f`. On trees with the `embed` feature, `--semantic` additionally expands by
+meaning — explicit per query, never silent; rows it adds are labeled `via: vector` and carry
+`similarity` (cosine against the best-matching chunk). A `lines` column points at the section
+that earned a row — a direct read range. `--format json` on any command returns structured
+output; `--version` and `--help` do what they say.
 
 ## Config
 
@@ -82,46 +90,55 @@ meaning — explicit per query, never silent; rows it adds are labeled `via: vec
   "version": 2,
   "scan": { "include": ["**/*.md"] },
   "features": { "links": true, "sections": true, "rank": true },
+  "defaults": { "find": { "where": "f.type != 'generated'" } },
   "queries": {
-    "by-tag": "SELECT path, title FROM frontmatter WHERE has(tags, ?) ORDER BY path"
-  }
+    "dead-links": "SELECT src, target FROM links WHERE dst IS NULL",
+    "by-tag": "SELECT path, title FROM frontmatter WHERE has(tags, ?) ORDER BY path",
+    "hot": { "find": "pricing OR billing", "k": 20 }
+  },
+  "checks": { "dead-links": "empty" }
 }
 ```
 
-Features toggle independently; disabling one degrades its verb instead of failing it (`find`
+A query entry is a SQL string, or a saved `find` with its settings baked in — `sense hot`
+then needs no flags. `defaults.find.where` scopes `find` tree-wide (an explicit `--where`
+replaces it, so `--where "1=1"` always reaches everything). `checks` turns a saved query
+into an assertion: `sense check` fails when a query marked `empty` returns rows. Every key
+is documented in [schema.json](schema.json), which editors read for autocomplete.
+
+Features toggle independently; disabling one degrades its command instead of failing it (`find`
 goes BM25-only without `links`, `map` drops hubs without `rank`, `peek` drops the outline
 without `sections`). Toggling rebuilds the cache. Older config versions auto-migrate on load,
 noted on stderr.
 
-`embed` is the one opt-in feature (absent = off; most trees don't need vectors): `"embed": true`
-uses the built-in static model (downloaded to `~/.cache/sensemaking` on first use, never in the
-package), or `{ "model", "type": "static"|"api", "url", "key" }` points at any Model2Vec model,
+`embed` is opt-in — the only feature off by default, since most trees don't need vectors.
+`"embed": true` uses the built-in static model (downloaded to `~/.cache/sensemaking` on first
+use, never in the package), or `{ "model", "type": "static"|"api", "url", "key" }` points at any Model2Vec model,
 local path, or OpenAI-compatible endpoint (Ollama, LM Studio, hosted). With it on, vectors stay
 fresh at reconcile and `find --semantic` uses them; default `find` results are unchanged.
 
-## Reference
-
-- `has(field, value)` — the one custom SQL function: array membership on JSON-array fields,
-  substring on strings (so `has(f.status, 'active')` also matches `inactive`), false on missing
-  keys. Exact matches: `=` for scalars, `EXISTS (SELECT 1 FROM json_each(f.tags) WHERE value = ?)`
-  for array members.
-- Reserved frontmatter keys (dropped with a warning): `path`, `_mtime`, `_size`, `_rank`,
-  `content`, `links`, `sections`.
-- FTS5 syntax in `MATCH`: `a OR b`, `"phrase"`, `pref*`, `NEAR(a b, 5)`, `summary: term`.
-  Stemmed; markdown is stripped at index time. `bm25(content, 10.0, 5.0, 1.0)` weights title
-  over summary over body.
-- A one-line `summary:` in frontmatter is both a selectable column and a weighted search field.
-- Exit codes: `0` ok, `1` error (SQLite message verbatim), `2` usage.
-- Frontmatter parsing is lenient: syntax errors (an alias starting with `@`, say) are per-file
-  warnings and the values are still indexed.
+`has(field, value)` is the one custom SQL function: array membership on JSON-array fields,
+substring on strings, false on missing keys. Frontmatter parsing is lenient — syntax errors are
+per-file warnings and the values are still indexed, so one bad note never costs you the crawl.
 
 ## Scale
 
 Every query starts with a freshness check against the cache in `.sense/`; only changed files are
-re-parsed. Measured per release in [BENCHMARKING.md](BENCHMARKING.md) — at 6,566 notes: full
-crawl ~5 s, warm query ~100 ms, one-file change ~200 ms. `sense watch` (optional) moves
-re-parsing into the background — see [WATCH.md](WATCH.md). `sense rebuild` deletes the cache and
-re-crawls.
+re-parsed. What to expect as a tree grows:
+
+- **Work is linear in note count** — crawl, reconcile, and the freshness check every invocation
+  pays. That check is the floor cost of a query and the first thing to watch on a large tree.
+- **Output is flat.** `map`, `peek`, and a `find` row cost the same on a small tree as a large
+  one: context cost is bounded by what you ask for, not by how much there is.
+- **Bulk changes are paid by whoever queries next.** `sense watch` moves that re-parse into the
+  background ([WATCH.md](WATCH.md)) — it changes latency, never answers, since every query
+  reconciles for itself. `sense rebuild` starts the cache over.
+
+These are release gates rather than hopes: every release regenerates the numbers on pinned
+corpora spanning a 4x range in note count plus a stress tree that packs the worst measured
+shapes into one place — a megabyte-scale note, heading-dense outlines, dense link graphs,
+hundreds of frontmatter fields. A row that grows faster than linearly, or a token count
+that grows at all, blocks the release. Current figures: [BENCHMARKING.md](BENCHMARKING.md).
 
 ## For AI agents
 
@@ -129,14 +146,15 @@ re-crawls.
 npx skills add kmalakoff/sensemaking   # -g for global, -a claude-code to target
 ```
 
-The skill teaches the descent: `map` to orient, `find` to locate, `peek` before reading,
-`Read` line ranges instead of files.
+Two skills: `sense` for querying a tree — what each command is for, FTS5 syntax, reading the
+`via`/`score`/`similarity` columns, worked examples — and `sense-setup` for making one, where
+features, frontmatter conventions, and note size are decisions with consequences either way.
 
 ## Prior art
 
 - [Effective context engineering for AI agents](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents)
   (Anthropic): agents should hold lightweight identifiers — file paths, links — and load payloads
-  just in time, because context is a finite resource. The four verbs implement that pattern as a CLI.
+  just in time, because context is a finite resource. The commands implement that pattern as a CLI.
 - [llm-wiki](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) (Karpathy): an
   agent-maintained wiki navigated by an `index.md` and links, which he notes needs real search
   infrastructure past a few hundred pages. `sense map` derives that index from the notes instead of
@@ -154,7 +172,9 @@ The skill teaches the descent: `map` to orient, `find` to locate, `peek` before 
 
 Dependencies: [yaml](https://github.com/eemeli/yaml),
 [remove-markdown](https://github.com/zuchka/remove-markdown),
-[fast-glob](https://github.com/mrmlnc/fast-glob), and Node's built-in SQLite. No native builds.
+[fast-glob](https://github.com/mrmlnc/fast-glob),
+[@huggingface/tokenizers](https://github.com/huggingface/tokenizers.js) (pure JS), and Node's
+built-in SQLite. No native builds.
 
 ## License
 

@@ -1,6 +1,7 @@
 import assert from 'assert';
 import { mkdirSync, rmSync, utimesSync, writeFileSync } from 'fs';
 import { join } from 'path';
+import { rebuild } from 'sensemaking';
 import { openTree, tmpTree, writeNote } from '../lib/tree.ts';
 
 const write = (baseDir: string, relPath: string, body: string, frontmatter: Record<string, unknown> = {}) => writeNote(baseDir, relPath, { body, frontmatter });
@@ -88,6 +89,54 @@ describe('links feature', () => {
     assert.equal(rows.n, 1);
     second.db.close();
   });
+
+  it('incremental resolve: deleting the lexicographically-first of two same-basename files re-points existing links to the survivor', () => {
+    const baseDir = tmpTree();
+    write(baseDir, 'a/dup.md', 'target A');
+    write(baseDir, 'b/dup.md', 'target B');
+    write(baseDir, 'src.md', 'See [[dup]].');
+    for (let i = 0; i < 7; i++) write(baseDir, `filler${i}.md`, 'filler');
+
+    const first = openTree(baseDir);
+    const before = first.db.prepare('SELECT dst FROM links WHERE src = ?').get('src.md') as { dst: string };
+    assert.equal(before.dst, 'a/dup.md', 'lexicographically-first wins the tie');
+    first.db.close();
+
+    // one file removed out of ten stays well under the incremental/full-fallback ratio
+    rmSync(join(baseDir, 'a/dup.md'));
+    const second = openTree(baseDir);
+    const after = second.db.prepare('SELECT dst FROM links WHERE src = ?').get('src.md') as { dst: string };
+    assert.equal(after.dst, 'b/dup.md', 'removing the tie-winner should re-point to the survivor');
+    second.db.close();
+  });
+
+  it('incremental resolve matches a full rebuild byte-for-byte after add/delete/modify', () => {
+    const baseDir = tmpTree();
+    write(baseDir, 'hub.md', 'the hub');
+    write(baseDir, 'a.md', 'See [[hub]] and [[missing]].');
+    write(baseDir, 'sub/b.md', '[relative](../hub.md)');
+    for (let i = 0; i < 13; i++) write(baseDir, `filler${i}.md`, `mentions [[filler${(i + 1) % 13}]]`);
+
+    const first = openTree(baseDir);
+    first.db.close();
+
+    // add + delete + modify in one reconcile, still under the 20% churn threshold (3 of 16 files)
+    write(baseDir, 'new.md', 'points at [[a]]');
+    rmSync(join(baseDir, 'filler12.md'));
+    const future = new Date(Date.now() + 5000);
+    write(baseDir, 'a.md', 'See [[hub]] and [[missing]], now also [[sub/b]].');
+    utimesSync(join(baseDir, 'a.md'), future, future);
+
+    const incremental = openTree(baseDir);
+    const incrementalRows = incremental.db.prepare('SELECT src, target, dst FROM links ORDER BY src, target').all();
+    incremental.db.close();
+
+    const rebuilt = rebuild({ scan: { include: ['**/*.md'] }, queries: {}, baseDir, configPath: null });
+    const rebuiltRows = rebuilt.db.prepare('SELECT src, target, dst FROM links ORDER BY src, target').all();
+    rebuilt.db.close();
+
+    assert.deepEqual(incrementalRows, rebuiltRows);
+  });
 });
 
 describe('sections feature', () => {
@@ -147,6 +196,98 @@ describe('rank feature', () => {
     const second = openTree(baseDir);
     const rows = second.db.prepare('SELECT "path", "_rank" FROM frontmatter ORDER BY "_rank" DESC').all() as Array<{ path: string }>;
     assert.equal(rows[0].path, 'b.md');
+    second.db.close();
+  });
+
+  it('recompute is skipped when the reconcile touched no link rows', () => {
+    const baseDir = tmpTree();
+    write(baseDir, 'hub.md', 'first body');
+    write(baseDir, 'a.md', 'points at [[hub]]');
+
+    const first = openTree(baseDir);
+    first.db.close();
+
+    // plant an otherwise-impossible rank value; a recompute would overwrite it with the real one
+    const probe = openTree(baseDir); // nothing changed since `first` -> no-op reconcile, no afterReconcile call
+    probe.db.prepare('UPDATE frontmatter SET "_rank" = ? WHERE "path" = ?').run(999, 'hub.md');
+    probe.db.close();
+
+    // hub.md has no outbound links, so reparsing it touches no link rows
+    const future = new Date(Date.now() + 5000);
+    write(baseDir, 'hub.md', 'second body, still no links');
+    utimesSync(join(baseDir, 'hub.md'), future, future);
+
+    const second = openTree(baseDir);
+    const row = second.db.prepare('SELECT "_rank" FROM frontmatter WHERE "path" = ?').get('hub.md') as { _rank: number };
+    assert.equal(row._rank, 999, 'rank recompute should have been skipped, leaving the planted value in place');
+    second.db.close();
+  });
+
+  it('a touch-only reparse of a linked note keeps dst and skips the rank recompute', () => {
+    const baseDir = tmpTree();
+    write(baseDir, 'hub.md', 'body');
+    write(baseDir, 'a.md', 'points at [[hub]]');
+
+    const first = openTree(baseDir);
+    first.db.close();
+
+    const probe = openTree(baseDir);
+    probe.db.prepare('UPDATE frontmatter SET "_rank" = ? WHERE "path" = ?').run(999, 'hub.md');
+    probe.db.close();
+
+    // same content, newer mtime: the links are re-stored but no edge changed
+    const future = new Date(Date.now() + 5000);
+    utimesSync(join(baseDir, 'a.md'), future, future);
+
+    const second = openTree(baseDir);
+    const hub = second.db.prepare('SELECT "_rank" FROM frontmatter WHERE "path" = ?').get('hub.md') as { _rank: number };
+    const link = second.db.prepare('SELECT dst FROM links WHERE src = ?').get('a.md') as { dst: string | null };
+    assert.equal(hub._rank, 999, 'no edge changed, so the recompute must be skipped');
+    assert.equal(link.dst, 'hub.md', 'the preserved row must keep its resolved dst');
+    second.db.close();
+  });
+
+  it('adding a linkless note recomputes: the node set changed even though no edge did', () => {
+    const baseDir = tmpTree();
+    write(baseDir, 'hub.md', 'body');
+    write(baseDir, 'a.md', 'points at [[hub]]');
+
+    const first = openTree(baseDir);
+    first.db.close();
+
+    const probe = openTree(baseDir);
+    probe.db.prepare('UPDATE frontmatter SET "_rank" = ? WHERE "path" = ?').run(999, 'hub.md');
+    probe.db.close();
+
+    write(baseDir, 'newcomer.md', 'no links here, none point at me');
+
+    const second = openTree(baseDir);
+    const hub = second.db.prepare('SELECT "_rank" FROM frontmatter WHERE "path" = ?').get('hub.md') as { _rank: number };
+    const fresh = second.db.prepare('SELECT "_rank" FROM frontmatter WHERE "path" = ?').get('newcomer.md') as { _rank: number | null };
+    assert.notEqual(hub._rank, 999, 'the planted value should have been overwritten by a recompute');
+    assert.ok(fresh._rank !== null, 'the new note must get a rank, not stay NULL');
+    second.db.close();
+  });
+
+  it('reparsing a note down to zero links recomputes: its old rows carried edges', () => {
+    const baseDir = tmpTree();
+    write(baseDir, 'hub.md', 'body');
+    write(baseDir, 'a.md', 'points at [[hub]]');
+
+    const first = openTree(baseDir);
+    first.db.close();
+
+    const probe = openTree(baseDir);
+    probe.db.prepare('UPDATE frontmatter SET "_rank" = ? WHERE "path" = ?').run(999, 'hub.md');
+    probe.db.close();
+
+    const future = new Date(Date.now() + 5000);
+    write(baseDir, 'a.md', 'the link is gone now');
+    utimesSync(join(baseDir, 'a.md'), future, future);
+
+    const second = openTree(baseDir);
+    const hub = second.db.prepare('SELECT "_rank" FROM frontmatter WHERE "path" = ?').get('hub.md') as { _rank: number };
+    assert.notEqual(hub._rank, 999, 'losing the last inbound edge must trigger a recompute');
     second.db.close();
   });
 });

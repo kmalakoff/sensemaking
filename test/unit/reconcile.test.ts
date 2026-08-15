@@ -2,7 +2,7 @@ import assert from 'assert';
 import { mkdtempSync, rmSync, utimesSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { open, rebuild } from 'sensemaking';
+import { open, rebuild, SenseError } from 'sensemaking';
 
 function tmpTree(): string {
   return mkdtempSync(join(tmpdir(), 'sense-reconcile-'));
@@ -149,5 +149,64 @@ describe('reconcile', () => {
     const count = (rebuilt.db.prepare('SELECT COUNT(*) AS n FROM frontmatter').get() as { n: number }).n;
     assert.equal(count, 1);
     rebuilt.db.close();
+  });
+
+  it('re-parsing an existing doc leaves exactly one content row per path, and search finds the updated text', () => {
+    const baseDir = tmpTree();
+    writeFileSync(join(baseDir, 'a.md'), '---\ntitle: "A"\n---\n\noriginal needle text\n');
+
+    const first = openTree(baseDir);
+    first.db.close();
+
+    const future = new Date(Date.now() + 5000);
+    writeFileSync(join(baseDir, 'a.md'), '---\ntitle: "A"\n---\n\nupdated haystack text\n');
+    utimesSync(join(baseDir, 'a.md'), future, future);
+
+    const second = openTree(baseDir);
+    const count = (second.db.prepare('SELECT COUNT(*) AS n FROM content WHERE "path" = ?').get('a.md') as { n: number }).n;
+    assert.equal(count, 1, 'exactly one content row per path after a reparse');
+
+    const hit = (second.db.prepare('SELECT COUNT(*) AS n FROM content WHERE content MATCH ?').get('haystack') as { n: number }).n;
+    assert.equal(hit, 1);
+    const stale = (second.db.prepare('SELECT COUNT(*) AS n FROM content WHERE content MATCH ?').get('needle') as { n: number }).n;
+    assert.equal(stale, 0, 'the old text should no longer be indexed');
+    second.db.close();
+  });
+
+  it("the frontmatter upsert keeps a row's rowid stable across a reparse, so content stays coupled to it", () => {
+    const baseDir = tmpTree();
+    write(baseDir, 'a.md', { title: 'A' });
+
+    const first = openTree(baseDir);
+    const before = (first.db.prepare('SELECT rowid AS r FROM frontmatter WHERE "path" = ?').get('a.md') as { r: number }).r;
+    first.db.close();
+
+    const future = new Date(Date.now() + 5000);
+    write(baseDir, 'a.md', { title: 'A2' });
+    utimesSync(join(baseDir, 'a.md'), future, future);
+
+    const second = openTree(baseDir);
+    const after = (second.db.prepare('SELECT rowid AS r FROM frontmatter WHERE "path" = ?').get('a.md') as { r: number }).r;
+    assert.equal(after, before, 'ON CONFLICT UPDATE should not change the rowid the way OR REPLACE would');
+    second.db.close();
+  });
+
+  it("crossing SQLite's column limit fails with a named error, not the raw SQLite message", () => {
+    const baseDir = tmpTree();
+    const frontmatter: Record<string, unknown> = {};
+    for (let i = 0; i < 2001; i++) frontmatter[`k${i}`] = i;
+    write(baseDir, 'huge.md', frontmatter);
+
+    assert.throws(
+      () => openTree(baseDir),
+      (err: unknown) => {
+        assert.ok(err instanceof SenseError, `expected a SenseError, got ${err}`);
+        assert.equal((err as SenseError).code, 'COLUMN_LIMIT');
+        assert.match((err as Error).message, /2000/);
+        assert.match((err as Error).message, /sqlite\.org\/limits\.html/);
+        assert.match((err as Error).message, /scan\.include/);
+        return true;
+      }
+    );
   });
 });

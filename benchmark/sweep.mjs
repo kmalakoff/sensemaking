@@ -1,145 +1,292 @@
-// Dev sweep for the constants that survive the explicit-expansion design (2026-08-13
-// correction: vectors are per-query opt-in, so the lexical-confidence gate is superseded —
-// the caller states what it would have inferred; this sweep's earlier gate run showed hard
-// gates hurt NFCorpus and soft gates were flat, consistent with dropping it). What remains
-// tunable under the fusion-tuning protocol: the vector candidate pool and the vector
-// list's RRF weight when expansion is invoked. Reports paired per-query deltas vs the
-// bake-off shape (w=1, pool=30). Dev only — test runs and the FEVER guard are eval-side.
-// usage: node benchmark/sweep.mjs [corpus] [--split dev] [--dims 256] [--f32] [--k N]
-import { readdirSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { pathToFileURL } from 'node:url';
-import { corpusLabels, corpusPath } from './lib/corpus.mjs';
-import { leverVec, loadModel, MODEL } from './lib/embed.mjs';
-import { orBag, readLabels } from './lib/labels.mjs';
-import { metrics } from './lib/metrics.mjs';
+// Performance shape sweep (plans/performance.md Phase 2): synthetic corpora that isolate one
+// dimension at a time, holding the rest at hub-like values. Corpora build into .tmp/cache
+// (fetch-once, see lib/cache.mjs); every measurement runs against a working COPY so the
+// cached originals stay clean, and copies are deleted after each point. Points run strictly
+// serially -- a shared CPU with another benchmark would swamp the signal this sweep hunts for.
+// usage: node benchmark/sweep.mjs [dimension ...] [--quick] [--out file]
+// dimensions: fields headings links filesize notes bulk probes (default: all)
+import { spawnSync } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
+import { appendFileSync, cpSync, mkdirSync, rmSync, statSync, utimesSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { syntheticPath } from './lib/corpus.mjs';
+import { futureDate, median, timedCli, walkMd } from './lib/measure.mjs';
 
-const RRF_K = 60;
-const WEIGHTED_BM25 = 'bm25(content, 10.0, 5.0, 1.0)';
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+const CLI = join(ROOT, 'bin', 'cli.js');
+const WORK_ROOT = join(ROOT, '.tmp', 'sweep-work');
 
-const args = process.argv.slice(2);
-const corpus = args.find((a) => !a.startsWith('--')) ?? 'nfcorpus';
-const flag = (name, dflt) => {
-  const i = args.indexOf(`--${name}`);
-  return i >= 0 ? args[i + 1] : dflt;
-};
-const K = Number(flag('k', 10));
-const SPLIT = flag('split', 'dev');
-const DIMS = Number(flag('dims', 256));
-const INT8 = !args.includes('--f32');
-const FETCH = Math.max(K * 3, 30);
+const DIMENSION_NAMES = ['fields', 'headings', 'links', 'filesize', 'notes', 'bulk', 'probes'];
 
-const POOLS = [10, 30, 60];
-const WEIGHTS = [0.25, 0.5, 0.75, 1, 1.5];
-const MAX_POOL = Math.max(...POOLS);
+const argv = process.argv.slice(2);
+const QUICK = argv.includes('--quick');
+let OUT = join(ROOT, '.tmp', 'sweep-results.jsonl');
+const requested = [];
+for (let i = 0; i < argv.length; i++) {
+  if (argv[i] === '--quick') continue;
+  if (argv[i] === '--out') {
+    OUT = resolve(argv[++i]);
+    continue;
+  }
+  requested.push(argv[i]);
+}
+for (const d of requested) {
+  if (!DIMENSION_NAMES.includes(d)) {
+    console.error(`unknown dimension: ${d} (choices: ${DIMENSION_NAMES.join(', ')})`);
+    process.exit(2);
+  }
+}
+const dimensions = requested.length ? requested : DIMENSION_NAMES;
 
-const tree = corpusPath(corpus);
-const labelsDir = corpusLabels(corpus);
-if (!tree || !labelsDir) {
-  console.error(`not a labeled corpus: ${corpus}`);
-  process.exit(2);
+// Hub-like values every dimension holds the non-swept params at (matches plans/performance.md).
+const HUB = { notes: 6000, noteTokens: 500, headingsPerNote: 8, linksPerNote: 5, distinctFields: 30, fieldsPerNote: 8, seed: 1 };
+
+const lib = await import(pathToFileURL(join(ROOT, 'dist', 'esm', 'index.js')).href);
+
+mkdirSync(WORK_ROOT, { recursive: true });
+mkdirSync(dirname(OUT), { recursive: true });
+
+function record(dimension, params, metrics) {
+  const row = { dimension, params, metrics, date: new Date().toISOString(), node: process.version };
+  appendFileSync(OUT, `${JSON.stringify(row)}\n`);
+  return row;
 }
 
-const { embedFull } = loadModel();
+// Cached corpus stays pristine: every measurement runs against a throwaway copy.
+function workingCopy(tree) {
+  const dir = join(WORK_ROOT, randomBytes(6).toString('hex'));
+  cpSync(tree, dir, { recursive: true });
+  rmSync(join(dir, '.sense'), { recursive: true, force: true });
+  return dir;
+}
 
-const files = readdirSync(tree)
-  .filter((f) => f.endsWith('.md'))
-  .sort();
-const docIds = files.map((f) => f.replace(/\.md$/, ''));
-const docs = files.map((f) => {
-  const raw = readFileSync(join(tree, f), 'utf8');
-  const m = raw.match(/^---\ntitle: (.*)\n---\n\n?/);
-  let title = '';
+const runCli = (cwd, args) => spawnSync(process.execPath, [CLI, ...args], { cwd, encoding: 'utf8', maxBuffer: 64e6 });
+
+const timed = (cwd, args, runs = 3) => timedCli(() => runCli(cwd, args), runs);
+
+// Three in-process measurements (cold build, no-change open, one-file-touched open) plus
+// three wall CLI measurements (map, peek, find). peek and the touch both target the largest
+// note (run.mjs's convention): on uniform synthetic points every note ties, and on the
+// filesize dimension the big note is the whole point -- mdFiles[0] sorts by path and could
+// miss it.
+async function measurePoint(spec) {
+  const src = syntheticPath(spec);
+  const work = workingCopy(src);
   try {
-    title = m ? JSON.parse(m[1]) : '';
-  } catch {}
-  return leverVec(embedFull(`${title}\n${m ? raw.slice(m[0].length) : raw}`), DIMS, INT8);
-});
+    const mdFiles = walkMd(work);
+    const target = mdFiles.reduce((a, b) => (statSync(join(work, b)).size > statSync(join(work, a)).size ? b : a));
+    const cfg = lib.loadConfig(join(work, 'sense.config.json'));
 
-const ROOT = join(new URL('.', import.meta.url).pathname, '..');
-const lib = await import(pathToFileURL(join(ROOT, 'dist', 'esm', 'index.js')).href);
-const cfg = { scan: { include: ['**/*.md'] }, queries: {}, features: { links: false, rank: false }, baseDir: tree, configPath: null };
-const { db } = lib.open(cfg);
-const bm25Stmt = db.prepare(`SELECT content.path AS path FROM content WHERE content MATCH ? ORDER BY ${WEIGHTED_BM25} LIMIT ${FETCH}`);
+    const openClose = () => {
+      const t = process.hrtime.bigint();
+      const { db } = lib.open(cfg);
+      const ms = Number(process.hrtime.bigint() - t) / 1e6;
+      db.close();
+      return ms;
+    };
 
-const { queries, qrels } = readLabels(labelsDir, SPLIT);
-const qids = [...qrels.keys()].sort();
+    const t0 = process.hrtime.bigint();
+    openClose();
+    const cold_build_ms = Math.round(Number(process.hrtime.bigint() - t0) / 1e6);
+    const open_nochange_ms = median(openClose, 5);
+    const update_1_file_ms = median(() => {
+      utimesSync(join(work, target), futureDate(), futureDate());
+      return openClose();
+    }, 3);
 
-function topN(qv, n) {
-  const top = [];
-  for (let i = 0; i < docs.length; i++) {
-    const dv = docs[i];
-    let s = 0;
-    for (let d = 0; d < DIMS; d++) s += qv[d] * dv[d];
-    if (top.length < n || s > top[top.length - 1].s) {
-      top.push({ i, s });
-      top.sort((a, b) => b.s - a.s);
-      if (top.length > n) top.pop();
+    const mapR = timed(work, ['map']);
+    const peekR = timed(work, ['peek', target]);
+    const findR = timed(work, ['find', 'the', '--k', '10']);
+
+    return {
+      cold_build_ms,
+      open_nochange_ms,
+      update_1_file_ms,
+      map_ms: mapR.ms,
+      map_tokens: Math.round(mapR.bytes / 4),
+      peek_ms: peekR.ms,
+      peek_tokens: Math.round(peekR.bytes / 4),
+      find_ms: findR.ms,
+    };
+  } finally {
+    rmSync(work, { recursive: true, force: true });
+  }
+}
+
+function printTable(title, paramName, points) {
+  const metricNames = Object.keys(points[0].metrics);
+  console.log(`\n### ${title}\n`);
+  console.log(`| ${paramName} | ${metricNames.join(' | ')} |`);
+  console.log(`|---|${metricNames.map(() => '---').join('|')}|`);
+  for (const p of points) console.log(`| ${p.param} | ${metricNames.map((m) => p.metrics[m]).join(' | ')} |`);
+  printVerdict(points, metricNames);
+}
+
+// Flags a metric whose cost ratio outpaces the swept param's ratio by 1.5x (superlinear),
+// or a *_tokens metric that grows at all -- map/peek/find token output is a contract meant
+// to stay flat with tree size, so any growth there is worth a look even if sub-1.5x.
+function printVerdict(points, metricNames) {
+  console.log('\nscaling verdict:');
+  let flagged = false;
+  for (let i = 1; i < points.length; i++) {
+    const paramRatio = points[i].param / points[i - 1].param;
+    for (const m of metricNames) {
+      const a = points[i - 1].metrics[m];
+      const b = points[i].metrics[m];
+      if (typeof a !== 'number' || typeof b !== 'number' || a <= 0) continue;
+      const costRatio = b / a;
+      const tokenMetric = m.endsWith('tokens');
+      if (costRatio > 1.5 * paramRatio) {
+        console.log(`  SUPERLINEAR ${m}: param ${points[i - 1].param}->${points[i].param} (${paramRatio.toFixed(2)}x), cost ${a}->${b} (${costRatio.toFixed(2)}x)`);
+        flagged = true;
+      } else if (tokenMetric && costRatio > 1.001) {
+        console.log(`  TOKEN GROWTH ${m}: ${a}->${b} (${costRatio.toFixed(2)}x) at param ${points[i - 1].param}->${points[i].param} -- output contract expected flat`);
+        flagged = true;
+      }
     }
   }
-  return top.map((t) => docIds[t.i]);
+  if (!flagged) console.log('  none: every metric scaled linear-or-flat across these points');
 }
 
-const perQuery = qids
-  .map((qid) => {
-    const text = queries.get(qid);
-    if (!text) return null;
-    let bm25 = [];
-    try {
-      bm25 = bm25Stmt.all(orBag(text)).map((r) => r.path.replace(/\.md$/, ''));
-    } catch {}
-    return { qid, bm25, vec: topN(leverVec(embedFull(text), DIMS, false), MAX_POOL) };
-  })
-  .filter(Boolean);
-db.close();
-
-// RRF with a weighted vector list: bm25 contributes 1/(k+i), vectors w/(k+j).
-function rrfW(bm25, vec, w) {
-  const scores = new Map();
-  bm25.forEach((id, i) => scores.set(id, (scores.get(id) ?? 0) + 1 / (RRF_K + i)));
-  vec.forEach((id, j) => scores.set(id, (scores.get(id) ?? 0) + w / (RRF_K + j)));
-  return [...scores.entries()].sort((a, b) => b[1] - a[1]).map(([id]) => id);
-}
-
-function signTest(up, down) {
-  const n = up + down;
-  if (n === 0) return 1;
-  let t = 0.5 ** n;
-  let p = 0;
-  for (let i = 0; i <= Math.min(up, down); i++) {
-    p += t;
-    t = (t * (n - i)) / (i + 1);
+async function sweepOne(dimension, paramName, values, specFor) {
+  const points = [];
+  for (const v of values) {
+    console.error(`${dimension}: ${paramName}=${v}`);
+    const spec = specFor(v);
+    const metrics = await measurePoint(spec);
+    record(dimension, { ...spec, [paramName]: v }, metrics);
+    points.push({ param: v, metrics });
   }
-  return Math.min(1, 2 * p);
+  printTable(dimension, paramName, points);
+  return points;
 }
 
-const mean = (rows) => {
-  const n = rows.length;
-  return rows.reduce((acc, m) => ({ ndcg: acc.ndcg + m.ndcg / n, rr: acc.rr + m.rr / n, hit: acc.hit + m.hit / n }), { ndcg: 0, rr: 0, hit: 0 });
-};
+// distinctFields near SQLITE_MAX_COLUMN (2000): fieldsPerNote == distinctFields so every
+// note declares the whole pool, guaranteeing the frontmatter table actually reaches that
+// many columns rather than a random subsample falling short of the pool size.
+async function columnLimitProbe(dimension) {
+  console.log(`\n### ${dimension}: column-limit probe (distinctFields near SQLITE_MAX_COLUMN=2000, notes=100)`);
+  const rows = [];
+  for (const distinctFields of [1900, 2000, 2100]) {
+    const spec = { notes: 100, noteTokens: 200, headingsPerNote: 4, linksPerNote: 3, distinctFields, fieldsPerNote: distinctFields, seed: 7 };
+    const src = syntheticPath(spec);
+    const work = workingCopy(src);
+    let result;
+    try {
+      const r = runCli(work, ['status']);
+      result = { status: r.status, stdout: (r.stdout ?? '').trim().slice(0, 500), stderr: (r.stderr ?? '').trim().slice(0, 500) };
+    } finally {
+      rmSync(work, { recursive: true, force: true });
+    }
+    record(dimension, { distinctFields, notes: 100 }, result);
+    rows.push({ distinctFields, ...result });
+  }
+  console.log('\n| distinctFields | exit | message |');
+  console.log('|---|---|---|');
+  for (const r of rows) {
+    const message = (r.stderr || r.stdout || '(empty)').split('\n')[0].replace(/\|/g, '\\|');
+    console.log(`| ${r.distinctFields} | ${r.status} | ${message} |`);
+  }
+}
 
-const baseline = perQuery.map((q) => metrics(rrfW(q.bm25, q.vec.slice(0, 30), 1), qrels.get(q.qid), K));
-const bm25Only = mean(perQuery.map((q) => metrics(q.bm25, qrels.get(q.qid), K)));
+// remove-markdown is regex-based; pathological nesting/bracket-run inputs risk catastrophic
+// backtracking, so the crawl runs under a hard wall-clock timeout instead of trusting it to return.
+async function adversarialProbe() {
+  console.log('\n### probes: remove-markdown adversarial crawl (15s hard timeout)');
+  const spec = { notes: 5, noteTokens: 50, headingsPerNote: 2, linksPerNote: 1, distinctFields: 5, fieldsPerNote: 2, seed: 11, adversarial: true };
+  const src = syntheticPath(spec);
+  const work = workingCopy(src);
+  let result;
+  try {
+    const t0 = process.hrtime.bigint();
+    const r = spawnSync(process.execPath, [CLI, 'status'], { cwd: work, encoding: 'utf8', maxBuffer: 64e6, timeout: 15_000 });
+    const ms = Math.round(Number(process.hrtime.bigint() - t0) / 1e6);
+    const timedOut = r.signal !== null || (r.error && r.error.code === 'ETIMEDOUT');
+    result = timedOut ? { ms, status: 'TIMEOUT', signal: r.signal } : { ms, status: r.status, stderr: (r.stderr ?? '').trim().slice(0, 500) };
+  } finally {
+    rmSync(work, { recursive: true, force: true });
+  }
+  record('probes', { adversarial: true, notes: spec.notes }, result);
+  console.log(`  crawl: ${JSON.stringify(result)}`);
+}
 
-const f = (v) => v.toFixed(4);
-console.log(`corpus: ${corpus} | split: ${SPLIT} | queries: ${perQuery.length} | k: ${K} | lever: ${INT8 ? 'int8' : 'f32'}-${DIMS} | model: ${MODEL.id}@${MODEL.revision.slice(0, 8)}`);
-console.log('paired columns compare per-query nDCG vs the bake-off shape (w=1, pool=30)\n');
-console.log(`| bm25 only | ${f(bm25Only.ndcg)} | ${f(bm25Only.rr)} | ${f(bm25Only.hit)} |`);
-console.log(`\n| pool | w | nDCG@${K} | MRR@${K} | hit@${K} | up | down | tie | p |`);
-console.log('|---|---|---|---|---|---|---|---|---|');
-for (const pool of POOLS) {
-  for (const w of WEIGHTS) {
-    const per = perQuery.map((q) => metrics(rrfW(q.bm25, q.vec.slice(0, pool), w), qrels.get(q.qid), K));
-    const m = mean(per);
-    let up = 0;
-    let down = 0;
-    let tie = 0;
-    per.forEach((x, i) => {
-      const d = x.ndcg - baseline[i].ndcg;
-      if (d > 1e-12) up++;
-      else if (d < -1e-12) down++;
-      else tie++;
-    });
-    console.log(`| ${pool} | ${w} | ${f(m.ndcg)} | ${f(m.rr)} | ${f(m.hit)} | ${up} | ${down} | ${tie} | ${signTest(up, down).toFixed(3)} |`);
+// Vectors build lazily on the first --semantic query (embedPending tops up NULL rows), not
+// at reconcile -- so the warm-up call pays the embed cost and subsequent calls don't. Model
+// is assumed already cached in ~/.cache/sensemaking; this probe doesn't fetch it.
+async function semanticProbe() {
+  console.log('\n### probes: semantic (find --semantic warm-up + 3 timed, median)');
+  const rows = [];
+  for (const notes of [6000, 26000]) {
+    const spec = { ...HUB, notes, embed: true };
+    const src = syntheticPath(spec);
+    const work = workingCopy(src);
+    try {
+      let t = process.hrtime.bigint();
+      const warm = runCli(work, ['find', 'the', '--semantic', '--k', '10']);
+      const warmup_ms = Math.round(Number(process.hrtime.bigint() - t) / 1e6);
+      const semantic_find_ms = Math.round(
+        median(() => {
+          t = process.hrtime.bigint();
+          runCli(work, ['find', 'the', '--semantic', '--k', '10']);
+          return Number(process.hrtime.bigint() - t) / 1e6;
+        }, 3)
+      );
+      const result = { warmup_status: warm.status, warmup_ms, semantic_find_ms };
+      record('probes', { semantic: true, notes }, result);
+      rows.push({ notes, ...result });
+    } finally {
+      rmSync(work, { recursive: true, force: true });
+    }
+  }
+  console.log('\n| notes | warmup_ms | semantic_find_ms (median of 3) |');
+  console.log('|---|---|---|');
+  for (const r of rows) console.log(`| ${r.notes} | ${r.warmup_ms} | ${r.semantic_find_ms} |`);
+}
+
+for (const dimension of dimensions) {
+  if (dimension === 'fields') {
+    await sweepOne('fields', 'distinctFields', [30, 300, 1000], (distinctFields) => ({ ...HUB, distinctFields }));
+    await columnLimitProbe('fields');
+  } else if (dimension === 'headings') {
+    await sweepOne('headings', 'headingsPerNote', [10, 200, 2000], (headingsPerNote) => ({ ...HUB, notes: 500, headingsPerNote }));
+  } else if (dimension === 'links') {
+    await sweepOne('links', 'linksPerNote', [5, 100, 1000], (linksPerNote) => ({ ...HUB, notes: 2000, linksPerNote }));
+  } else if (dimension === 'filesize') {
+    await sweepOne('filesize', 'bigNoteBytes', [100_000, 1_000_000, 10_000_000], (bigNoteBytes) => ({ ...HUB, notes: 20, bigNoteBytes }));
+  } else if (dimension === 'notes') {
+    const values = QUICK ? [6000, 26000] : [6000, 26000, 50000, 100000];
+    await sweepOne('notes', 'notes', values, (notes) => ({ ...HUB, notes }));
+  } else if (dimension === 'bulk') {
+    console.log('\n### bulk (notes=26000, touch N files, time the next open)\n');
+    const spec = { ...HUB, notes: 26000 };
+    const src = syntheticPath(spec);
+    const points = [];
+    for (const touchFiles of [50, 500, 5000]) {
+      console.error(`bulk: touch=${touchFiles}`);
+      const work = workingCopy(src);
+      let bulk_open_ms;
+      try {
+        const mdFiles = walkMd(work);
+        const { db } = lib.open(lib.loadConfig(join(work, 'sense.config.json')));
+        db.close();
+        const future = () => new Date(Date.now() + 120_000 + Math.random() * 60_000);
+        for (const f of mdFiles.slice(0, touchFiles)) utimesSync(join(work, f), future(), future());
+        const t = process.hrtime.bigint();
+        const { db: db2 } = lib.open(lib.loadConfig(join(work, 'sense.config.json')));
+        bulk_open_ms = Math.round(Number(process.hrtime.bigint() - t) / 1e6);
+        db2.close();
+      } finally {
+        rmSync(work, { recursive: true, force: true });
+      }
+      record('bulk', { notes: spec.notes, touchFiles }, { bulk_open_ms });
+      points.push({ param: touchFiles, metrics: { bulk_open_ms } });
+    }
+    printTable('bulk', 'touchFiles', points);
+  } else if (dimension === 'probes') {
+    await columnLimitProbe('probes');
+    await adversarialProbe();
+    if (!QUICK) await semanticProbe();
+    else console.log('\n### probes: semantic skipped (--quick)');
   }
 }

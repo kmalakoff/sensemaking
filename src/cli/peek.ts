@@ -1,5 +1,5 @@
+import { peek } from '../commands.ts';
 import { renderPeek } from '../output.ts';
-import { peek } from '../verbs.ts';
 import { withDb } from './shared.ts';
 import type { Command } from './types.ts';
 

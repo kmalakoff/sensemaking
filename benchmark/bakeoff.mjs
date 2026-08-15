@@ -2,7 +2,7 @@
 // corpus with the candidate static model at each lever setting (f32 / truncated dims /
 // int8 storage), score cosine-only and bm25+vector RRF against the qrels, and print the
 // numbers next to the acceptance thresholds. No core code — find's future fusion is
-// simulated with the same candidate pool and RRF constant as src/verbs.ts.
+// simulated with the same candidate pool and RRF constant as src/commands.ts.
 // usage: node benchmark/bakeoff.mjs [corpus] [--queries N] [--k N]
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -12,7 +12,7 @@ import { leverVec, loadModel, MODEL } from './lib/embed.mjs';
 import { orBag, readLabels } from './lib/labels.mjs';
 import { metrics } from './lib/metrics.mjs';
 
-// Mirror find's internals (src/verbs.ts): candidate pool size and RRF constant.
+// Mirror find's internals (src/commands.ts): candidate pool size and RRF constant.
 const RRF_K = 60;
 const WEIGHTED_BM25 = 'bm25(content, 10.0, 5.0, 1.0)';
 
