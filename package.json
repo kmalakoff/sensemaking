@@ -1,6 +1,6 @@
 {
   "name": "sensemaking",
-  "version": "0.7.2",
+  "version": "0.8.0",
   "description": "SQL over a tree of markdown notes: filter by frontmatter, search the prose, follow the links, read the structure",
   "keywords": [
     "markdown",
