@@ -40,7 +40,9 @@ question:
   whole.
 
 Output defaults to a table, built for humans; `--format json` returns the same rows
-machine-parseable.
+machine-parseable. That also makes a saved query usable as a CI/hook gate with zero added
+mechanism: `[ "$(sense <query> --format json)" = "[]" ]` is true exactly when the query
+returned no rows.
 
 ## Commands
 

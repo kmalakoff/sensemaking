@@ -91,6 +91,18 @@ consumers install it, and the only remedy is another release.
    previous version until they upgrade, so guidance written for unreleased behaviour is
    guidance that fails.
 
+**Docs-only patches take the short path.** When the diff touches nothing but published
+prose — *.md files, skill text, schema descriptions — steps 2–4 and 6 (benchmarks, their
+reading, the pack/compare verification) are skipped: text cannot move a number. What
+remains: `npm test` (the docs tests guard the mechanical facts), the step-5 read of the
+surfaces the diff touched, then version → publish → push with the tag check. Anything
+that touches src/, benchmark logic, or dependencies is not a docs-only patch, whatever
+the diff size.
+
+Benchmark tables in BENCHMARKING.md are pasted from harness output, never hand-typed —
+`compare.mjs` derives the baseline column's version label from `package.json`, so a
+hand-written version string in a table is a sign the table didn't come from a run.
+
 **The version is the maintainer's call.** An agent preparing a release states what changed
 and what a consumer would notice — new config keys, changed output shapes, changed storage
 classes, bug fixes only — and suggests a bump if asked. It does not choose one, and does not

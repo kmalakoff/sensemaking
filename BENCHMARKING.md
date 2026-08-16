@@ -77,27 +77,31 @@ Two kinds of metric per version:
 
 ## Results — obsidian-hub @ b11036f9 (6,566 notes, 14 MB)
 
-Apple Silicon, Node 26.7.0. 2026-08-16. `local` is the working tree about to be released;
+Apple Silicon, Node 26.7.0. 2026-08-16 (patch sitting). `local` is the working tree about to be released;
 the baseline column is whatever `package.json` names, so a bare `compare.mjs` always reads
 "last release vs what ships next".
 
-| metric | 0.8.0 | local |
+| metric | 0.9.0 | local |
 |---|---|---|
-| cold crawl (wall) | 1004 ms | 1100 ms |
-| warm query (`COUNT(*)`) | 73 ms | 75 ms |
-| BM25 search (canonical join) | 79 ms | 81 ms |
-| lexical `search` (BM25 + link fusion) | 131 ms | 135 ms |
+| cold crawl (wall) | 1064 ms | 1060 ms |
+| warm query (`COUNT(*)`) | 75 ms | 74 ms |
+| BM25 search (canonical join) | 81 ms | 81 ms |
+| lexical `search` (BM25 + link fusion) | 135 ms | 132 ms |
 | `search` row size (json) | ~70 tokens | ~70 tokens |
-| `map` (orient) | 77 ms / ~469 tokens | 85 ms / ~475 tokens |
-| `peek` largest note (~77,274 t) | 76 ms / ~581 tokens (0.8%) | 76 ms / ~581 tokens (0.8%) |
-| bulk change (500 files): first query | 204 ms | 216 ms |
-| bulk change (500 files): with warm watcher | 102 ms | 103 ms |
-| in-process: cold index build | 964 ms | 1052 ms |
-| in-process: freshness check, no change | 28 ms | 29.6 ms |
-| in-process: update, 1 file touched | 29.7 ms | 30.7 ms |
-| in-process: update, 10 files modified | 29.3 ms | 29.6 ms |
+| `map` (orient) | 84 ms / ~475 tokens | 82 ms / ~475 tokens |
+| `peek` largest note (~77,274 t) | 77 ms / ~581 tokens (0.8%) | 75 ms / ~581 tokens (0.8%) |
+| bulk change (500 files): first query | 222 ms | 214 ms |
+| bulk change (500 files): with warm watcher | 106 ms | 104 ms |
+| in-process: cold index build | 1039 ms | 1059 ms |
+| in-process: freshness check, no change | 30 ms | 29.3 ms |
+| in-process: update, 1 file touched | 29.5 ms | 29.7 ms |
+| in-process: update, 10 files modified | 29.6 ms | 29 ms |
 
-Two movements are designed, not noise: cold crawl is ~10% slower because vectors are on by
+Flat, as expected for a one-line skill addition — every row within a few percent,
+differences split in both directions, token counts identical. (The 0.9.0 release itself
+carried the two designed movements recorded below.)
+
+At the 0.9.0 release, two movements were designed, not noise: cold crawl ~10% slower because vectors are on by
 default in v3 configs (the crawl writes per-chunk placeholder rows; embedding itself stays
 lazy), and `map` grew 6 tokens for the per-preset coverage block. The row formerly named
 `find` measures the same operation through the renamed verb (`search --lexical` here /
