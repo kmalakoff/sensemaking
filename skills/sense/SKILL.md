@@ -14,20 +14,21 @@ storage; `map` and `status` report which are on.
 ## What each tool is for
 
 Every result is a reference (path, metadata, excerpt), never file contents; prose enters
-context only when you Read it. Costs: `map` is fixed-size, a `find` row is tens of tokens,
+context only when you Read it. Costs: `map` is fixed-size, a `search` row is tens of tokens,
 and a `peek` stays flat however large the note is. Which tool fits is a property of the
 question:
 
 - A deterministic, factual answer over known fields — counts, filters, "which notes have
-  X" — is SQL: `sense query`, a named query, or `find --where`. Enumerates every match;
+  X" — is SQL: `sense query`, a named query, or `search --where`. Enumerates every match;
   same result regardless of phrasing.
-- Locating notes by words in their prose is `find` — ranked lexical match. Results shift as
-  phrasing shifts, and bare words AND-join (one absent word = zero rows): write
-  `a OR b OR c` for any-word matching.
-- A conceptual question the notes phrase in different words is `find --semantic` (exists only
-  on trees whose config enables `embed`): adds meaning-based candidates labeled `via: vector`.
-  Conceptual similarity, not typo-tolerance; false positives are expected, labeled, and
-  bounded by `--k`.
+- Locating notes about something is `search` — one text through every engine the scope
+  has: word match (bare words AND-join — one absent word = zero lexical rows; write
+  `a OR b OR c` for any-word), link-graph expansion, and vector similarity, fused into one
+  ranked list. Read `via` per row: `match` rows contained your words; `vector`-only rows
+  did not — they are the "these words aren't in the tree; this is what's near in meaning"
+  signal. Vector rows are conceptual similarity, not typo-tolerance; false positives are
+  expected, labeled, and bounded by `--k`. `--lexical` skips vectors for one command when
+  word-presence is the question.
 - `map` answers "what is this tree" — fields, hub notes, recent changes — when the tree is
   unfamiliar.
 - `peek <path>` prices a file before you pay for it: outline with `[L143-162, ~380t]`
@@ -44,11 +45,12 @@ machine-parseable.
 ## Commands
 
 ```
-sense find "pricing OR billing OR invoicing" --where "f.status = 'active'" --k 10
+sense search "pricing OR billing OR invoicing" --where "f.status = 'active'" --k 10
+sense search "sourcing quotes" --preset raw     # a named settings bundle from the config
 sense peek notes/pricing-model.md               # a unique basename also works
 sense map
 sense query "<sql>" [params...]                 # ad-hoc SQL; ? binds positional args, count-checked
-sense <name> [params...]                        # named query or saved find from sense.config.json
+sense <name> [params...]                        # named query or saved search from sense.config.json
 sense --list | status | rebuild | check
 ```
 
@@ -58,48 +60,48 @@ sense --list | status | rebuild | check
   rules apply to search commands you write into subagent briefs.
 - When a search misses, the recall levers are: OR-in synonyms and concrete instances (the
   index only knows the words in the files — a note about a specific tool rarely names its
-  category), raise `--k` (a row costs tens of tokens), and on embed-enabled trees `--semantic`
-  (matches meaning where term overlap fails). Each widening adds candidates and dilutes
-  ranking, so the noise trade-off runs both ways.
+  category), raise `--k` (a row costs tens of tokens), and widen the scope (`--preset`, or
+  `--include` for an ad-hoc glob). Vector rows already cover the meaning-over-words gap by
+  default. Each widening adds candidates and dilutes ranking, so the noise trade-off runs
+  both ways.
 - A frontmatter query enumerates its matches deterministically; search ranks by term overlap,
   so results shift as phrasing shifts. Trade-off: a query needs a known field, search doesn't.
-- `find` fuses BM25 with link-graph expansion; the `via` column says what produced each row —
-  `match` (terms hit), `link` (connected to notes that hit), `match+link` (both). With
-  `--semantic`, `vector` joins the composition. The `lines` column, when set, points at the
-  section that earned the row — the best-matching chunk on vector rows, the term cluster's
-  section on large lexical notes — and is a direct `Read` range; null means the whole note
-  is the reference.
-- `--where` takes any SQL condition against frontmatter alias `f` — not only field equality:
-  `"f.status = 'active' AND has(f.tags, 'x')"`, `"f.path NOT LIKE 'generated/%'"`,
-  `"f.created >= datetime(?)"`. A tree can declare a default scope in `sense.config.json`
-  (`defaults.find.where`); an explicit `--where` replaces it, so `--where "1=1"` searches
-  everything. `sense status` prints the active default.
+- The `via` column says what produced each row — `match` (words hit), `link` (connected to
+  notes that hit), `vector` (near in meaning), and combinations. The `lines` column, when
+  set, points at the section that earned the row — the best-matching chunk on vector rows,
+  the term cluster's section on large lexical notes — and is a direct `Read` range; null
+  means the whole note is the reference.
+- Scope comes from presets: bare `search` uses the config's `default` preset; `--preset
+  <name>` picks another (unknown names error, listing what's declared); `--include <glob>`
+  is an ad-hoc scope that replaces the preset's globs for one command. `--where` takes any
+  SQL condition against frontmatter alias `f` — not only field equality:
+  `"f.status = 'active' AND has(f.tags, 'x')"`, `"datetime(f.created) >= datetime(?)"` —
+  and filters within the scope. `sense status` shows every preset with its coverage.
 - `score` is a rank-fusion value: it ranks rows within one result set and is not comparable
   across queries, not a relevance magnitude — it encodes how many signals fired and at what
   rank, so a perfect lexical hit and a weak vector-only hit can read the same number. With
-  `--semantic`, rows carry `similarity`: the cosine (-1 to 1) of the query against that
+  vectors active, rows carry `similarity`: the cosine (-1 to 1) of the query against that
   file's best-matching chunk — the same chunk the `lines` range points at. It orders vector
   evidence within a result set; the range it spans depends on the corpus and the embedding
   model, and compresses on small trees, where even a nonsense query has a moderately near
   neighbour somewhere. Compare similarities within a result set rather than against a fixed
   cutoff carried between trees.
-- Lexical `find` returns 0 rows when nothing matches, so it answers "is this in the tree at
-  all". `--semantic` always returns up to `k` rows — nearest-neighbour search has a nearest
-  neighbour for any input — so absence is a lexical question; `similarity` and the snippet
-  are the evidence for judging whether a vector row is a real hit.
-- Besides SQL strings, a config entry can save a whole `find` invocation:
-  `"hot": { "find": "pricing OR billing", "k": 20, "where": "...", "semantic": true }` runs
-  as `sense hot` — the scenario's settings ride along with the name, so repeat runs need no
-  flags. An invocation-level `--k`, `--where`, or `--semantic` overrides the saved value;
-  `--list` marks these entries `(find)`.
-- `sense check` prepares every saved query (catching syntax and unknown-column errors), runs
-  the ones taking no parameters, and prints row counts: a saved query returning 0 rows looks
-  the same as a true empty result until something distinguishes them. Saved finds are probed
-  lexically with k=1 (a bad `where` column or FTS5 syntax fails here, not mid-task); their
-  semantic pass is never run by `check`, only checked against `features.embed`. For queries
-  that encode invariants (a dead-link list, an unsupported-claims list — rows are
-  violations), `checks: { "<name>": "empty" }` in the config inverts the meaning: `check`
-  fails when the query returns rows, making it usable as a test suite rather than a linter.
+- Absence evidence lives in the labels: `search --lexical` (or a semantic-off scope)
+  returns 0 rows when the words are nowhere in the tree. Default `search` always returns
+  up to `k` rows — nearest-neighbour search has a nearest neighbour for any input — so a
+  result of only `via: vector` rows IS the absence signal for the words themselves;
+  `similarity` and the snippet are the evidence for judging whether a vector row is a real
+  conceptual hit.
+- Besides SQL strings, a config entry can save a whole search:
+  `"hot": { "search": "pricing OR billing", "preset": "raw", "k": 20 }` runs as
+  `sense hot` — the scenario's settings ride along with the name, so repeat runs need no
+  flags. An invocation-level `--preset`, `--k`, `--where`, or `--lexical` overrides the
+  saved value; `--list` marks these entries `(search)`.
+- `sense check` prepares every saved query and probes every saved search lexically with
+  k=1, so a typo'd column, stale SQL, bad FTS5 syntax, or unknown preset fails at check
+  time instead of silently mid-task. It reports row counts; whether an empty result is
+  good or bad is the reader's judgment — a dead-link query returning rows means broken
+  citations to fix, and the agent reads that directly.
 
 ## SQL
 
@@ -122,7 +124,7 @@ sense query "SELECT j.value, COUNT(*) n FROM frontmatter, json_each(frontmatter.
 - Rank with `ORDER BY bm25(content, 10.0, 5.0, 1.0)` (title > summary > body); excerpt with
   `snippet(content, -1, '«', '»', '…', 10)`. snippet() re-tokenizes each matched doc and its
   cost grows superlinearly with doc size — measured ~10 s per query on a tree holding one
-  1 MB note. `find` bounds this itself (docs past 16 KB get an equivalent excerpt another
+  1 MB note. `search` bounds this itself (docs past 16 KB get an equivalent excerpt another
   way); in hand-written SQL, guard it: `CASE WHEN length(text) <= 16384 THEN snippet(...)
   END`, or select `title`/`summary` instead of an excerpt.
 - Select `content.title`/`content.summary` (always exist, empty when absent) rather than
@@ -152,10 +154,11 @@ Worked traces: [EXAMPLES.md](EXAMPLES.md).
 
 - Missing CLI: `npm install -g sensemaking`. Missing config: `sense init` at the tree root.
   Discovery walks up from cwd; `--config <path>` overrides. Setting up or restructuring a
-  tree (features, frontmatter conventions, note design) is the `sense-setup` skill.
-- `map` and `status` report feature state (`features: links, sections, rank · off: embed
-  (features.embed)`). Invoking a capability whose feature is off is an error naming the
-  config key to enable — nothing silently falls back.
+  tree (presets, frontmatter conventions, note design) is the `sense-setup` skill.
+- `map` and `status` report each preset's coverage (files matched, embedded count) —
+  indexing derives from presets, so the coverage numbers are how you see what a config
+  actually indexes and embeds. A scope with fewer signals just uses fewer (a semantic-off
+  preset searches lexically); a saved search naming an unknown preset errors at `check`.
 - Save a query into `sense.config.json` only when it will be reused; run ad-hoc otherwise.
 - A one-line `summary:` per note is optional and pays twice: it appears in result rows and is a
   weighted search field. Date comparisons work for dates written as ISO 8601 (`2026-08-12`, or

@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
-import type { Config } from 'sensemaking';
+import type { Config, Preset } from 'sensemaking';
 import { open } from 'sensemaking';
 
 // Throwaway markdown trees for unit tests.
@@ -21,11 +21,14 @@ export function writeNote(baseDir: string, relPath: string, { frontmatter = {}, 
   writeFileSync(join(baseDir, relPath), `---\n${lines.join('\n')}\n---\n\n${body}\n`);
 }
 
-export function openTree(baseDir: string, features?: Config['features']) {
-  return open({ scan: { include: ['**/*.md'] }, queries: {}, features, baseDir, configPath: null });
+// v3 turns semantic on by default per preset; tests must never hit the network/model
+// download, so a bare call pins the default preset's semantic off. Pass presets explicitly
+// (e.g. the local fixture model pattern in embed.test.ts) to opt a test back in.
+export function openTree(baseDir: string, features?: Config['features'], presets?: Record<string, Preset>) {
+  return open({ presets: presets ?? { default: { include: ['**/*.md'], semantic: false } }, queries: {}, features, baseDir, configPath: null });
 }
 
-// For tests that need config beyond features (defaults, queries).
+// For tests that need config beyond features/presets (embed provider settings, queries).
 export function openConfig(cfg: Parameters<typeof open>[0]) {
   return open(cfg);
 }

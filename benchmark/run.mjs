@@ -25,6 +25,17 @@ const timed = (args, runs = 5) => timedCli(() => run(args), runs);
 
 const fail = (r) => (r.status === 0 ? r : null);
 
+// Dialect detection: pre-rename packages have no `search` verb, so their --help never
+// mentions it. Runs once; every row-mapping choice below reads off this one flag so old and
+// new packages still land in the same JSON shape for compare.mjs.
+const NEW_DIALECT = /search/.test(spawnSync(process.execPath, [cli, '--help'], { encoding: 'utf8' }).stdout ?? '');
+// find_ms: lexical ranked search (BM25 + link fusion, no vectors) -- old dialect is
+// already lexical-only, new dialect needs --lexical to opt vectors back out.
+const lexicalArgs = (terms, k = '10') => (NEW_DIALECT ? ['search', terms, '--lexical', '--k', k] : ['find', terms, '--k', k]);
+// semantic_find_ms: vector-participating search -- old dialect opts in with --semantic,
+// new dialect participates by default.
+const vectorArgs = (terms, k = '10') => (NEW_DIALECT ? ['search', terms, '--k', k] : ['find', terms, '--semantic', '--k', k]);
+
 // Largest note: peek target and the read-cost baseline. Also collect files for update benchmarks.
 const mdFiles = walkMd(tree).map((rel) => ({ rel, size: statSync(join(tree, rel)).size }));
 const largest = mdFiles.reduce((a, b) => (b.size > a.size ? b : a), { rel: null, size: 0 });
@@ -36,16 +47,16 @@ rmSync(join(tree, '.sense'), { recursive: true, force: true });
 const cold = timed(['status'], 1); // first open = full crawl
 const warm = fail(timed(['query', 'SELECT COUNT(*) AS n FROM frontmatter']));
 const search = fail(timed(['query', SEARCH, 'the']));
-const findR = fail(timed(['find', 'the', '--k', '10'], 3));
+const findR = fail(timed(lexicalArgs('the'), 3));
 // Non-null only on embed-enabled trees (vectors pre-built by the first run). The delta
-// vs find_ms is what --semantic pays per invocation: model load + query embed + scan.
-const semanticR = fail(timed(['find', 'the', '--semantic', '--k', '10'], 3));
+// vs find_ms is what vector participation pays per invocation: model load + query embed + scan.
+const semanticR = fail(timed(vectorArgs('the'), 3));
 const mapR = fail(timed(['map'], 3));
 // A `find` row is an output contract like the map/peek token counts: a row is a reference,
 // and its cost must not grow with the tree. Measured in json (the shape an agent parses),
 // per row actually returned.
 const findRowTokens = (() => {
-  const out = run(['find', 'the', '--k', '10', '--format', 'json']);
+  const out = run([...lexicalArgs('the'), '--format', 'json']);
   if (out.status !== 0) return null;
   try {
     const rows = JSON.parse(out.stdout);
@@ -60,7 +71,9 @@ const peekR = fail(timed(['peek', largest.rel], 3));
 let inproc = null;
 try {
   const lib = await import(pathToFileURL(join(pkgRoot, 'dist', 'esm', 'index.js')).href);
-  const cfg = { scan: { include: ['**/*.md'] }, queries: {}, baseDir: tree, configPath: null };
+  // open() takes an already-resolved config, not a file to migrate -- so the shape here has
+  // to match this package's own dialect (v1 `scan` pre-rename, v3 `presets` since).
+  const cfg = NEW_DIALECT ? { presets: { default: { include: ['**/*.md'] } }, queries: {}, baseDir: tree, configPath: null } : { scan: { include: ['**/*.md'] }, queries: {}, baseDir: tree, configPath: null };
   const openClose = () => {
     const t = process.hrtime.bigint();
     const { db } = lib.open(cfg);

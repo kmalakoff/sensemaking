@@ -1,7 +1,7 @@
 {
   "name": "sensemaking",
   "version": "0.8.0",
-  "description": "SQL over a tree of markdown notes: filter by frontmatter, search the prose, follow the links, read the structure",
+  "description": "Query and search a tree of markdown notes: SQL over frontmatter and links, ranked search over the prose — words, links, and meaning fused",
   "keywords": [
     "markdown",
     "frontmatter",
@@ -10,10 +10,16 @@
     "fts5",
     "query",
     "search",
-    "semantic",
+    "semantic-search",
+    "knowledge-base",
+    "rag",
     "obsidian",
     "notes",
     "agent",
+    "agent-memory",
+    "memory-consolidation",
+    "llm-wiki",
+    "dreaming",
     "cli"
   ],
   "homepage": "https://github.com/kmalakoff/sensemaking",

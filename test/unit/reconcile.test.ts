@@ -14,7 +14,7 @@ function write(baseDir: string, relPath: string, frontmatter: Record<string, unk
 }
 
 function openTree(baseDir: string) {
-  return open({ scan: { include: ['*.md'] }, queries: {}, baseDir, configPath: null });
+  return open({ presets: { default: { include: ['*.md'], semantic: false } }, queries: {}, baseDir, configPath: null });
 }
 
 describe('reconcile', () => {
@@ -143,7 +143,7 @@ describe('reconcile', () => {
     );
     second.db.close();
 
-    const rebuilt = rebuild({ scan: { include: ['*.md'] }, queries: {}, baseDir, configPath: null });
+    const rebuilt = rebuild({ presets: { default: { include: ['*.md'], semantic: false } }, queries: {}, baseDir, configPath: null });
     columns = rebuilt.db.prepare('PRAGMA table_info(frontmatter)').all() as Array<{ name: string }>;
     assert.ok(!columns.some((c) => c.name === 'ephemeral'), "rebuild's fresh crawl drops the lingering column");
     const count = (rebuilt.db.prepare('SELECT COUNT(*) AS n FROM frontmatter').get() as { n: number }).n;
@@ -204,7 +204,7 @@ describe('reconcile', () => {
         assert.equal((err as SenseError).code, 'COLUMN_LIMIT');
         assert.match((err as Error).message, /2000/);
         assert.match((err as Error).message, /sqlite\.org\/limits\.html/);
-        assert.match((err as Error).message, /scan\.include/);
+        assert.match((err as Error).message, /presets.+include/);
         return true;
       }
     );

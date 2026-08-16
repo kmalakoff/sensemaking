@@ -6,7 +6,7 @@ the filesystem, on the paths that earned it.
 ## A. "Do the notes say anything about X?"
 
 ```
-sense find "pricing OR billing OR invoicing" --k 10 --format json
+sense search "pricing OR billing OR invoicing" --k 10 --format json
 ```
 
 ```json
@@ -79,7 +79,7 @@ sense query "SELECT DISTINCT type FROM frontmatter"    # what a field's values a
 ## F. "The notes say it in different words"
 
 ```
-sense find "children dying from poor nutrition" --semantic --k 3 --format json
+sense search "children dying from poor nutrition" --k 3 --format json
 ```
 
 ```json
@@ -90,7 +90,9 @@ sense find "children dying from poor nutrition" --semantic --k 3 --format json
 ```
 
 A `via: "vector"` row never contained the terms — it is semantically near them; `similarity` is
-the cosine against the chunk `lines` names, a direct `Read` range. Only on trees whose config enables `features.embed`.
+the cosine against the chunk `lines` names, a direct `Read` range. Vector rows appear whenever
+the scope's preset has semantic on (the default); a result of only vector rows means the words
+themselves are nowhere in the scope.
 
 ## Consequences
 
@@ -98,9 +100,9 @@ the cosine against the chunk `lines` names, a direct `Read` range. Only on trees
 |---|---|---|
 | `SELECT text FROM content` | returns the tree's entire prose | `snippet(content, -1, '«', '»', '…', 10)` excerpts the match |
 | `snippet()` on a tree holding a megabyte-scale note | re-tokenizes the whole document per matched row: seconds per query | bound it: `CASE WHEN length(content.text) <= 16384 THEN snippet(...) END`, or select `summary` instead |
-| `sense find "pricing"` | matches only that word's stem | OR-in synonyms and instances: `"pricing OR billing OR invoicing"` |
-| `sense find "pricing model details"` | bare words AND-join; one absent word = zero rows | OR the words, or quote an exact phrase |
-| `sense find "customer-facing OR on-site"` | bare punctuation is FTS5 syntax (`-` reads as a column filter) | double-quote: `"customer-facing" OR "on-site"` |
+| `sense search "pricing"` | lexically matches only that word's stem (vector rows still widen by meaning) | OR-in synonyms and instances: `"pricing OR billing OR invoicing"` |
+| `sense search "pricing model details"` | bare words AND-join; one absent word = zero lexical rows | OR the words, or quote an exact phrase |
+| `sense search "customer-facing OR on-site"` | bare punctuation is FTS5 syntax (`-` reads as a column filter) | double-quote: `"customer-facing" OR "on-site"` |
 | `Read` of a large file for one section | costs the whole file | `peek`, then `Read` the line range |
 | row queries without `LIMIT` | unbounded output (aggregates are already bounded) | `LIMIT n` |
 | saving one-off queries to config | config churn | ad-hoc `sense query`; save reusable views |

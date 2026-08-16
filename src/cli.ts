@@ -23,7 +23,7 @@ function usage(name: string): string {
   return (
     `usage: ${name} <name> [params...] [--format table|json] [--config path]\n` +
     `       ${name} query "<sql>" [params...]\n` +
-    `       ${name} find "<terms>" [--where "<sql>"] [--k n] [--semantic]\n` +
+    `       ${name} search "<terms>" [--preset name] [--include glob ...] [--where "<sql>"] [--k n] [--lexical]\n` +
     `       ${name} map\n` +
     `       ${name} peek <path>\n` +
     `       ${name} --list\n` +
@@ -38,7 +38,7 @@ function usage(name: string): string {
 
 // Thrown errors -> exit 1 with the message verbatim; usage errors exit 2 directly.
 export default async function cli(argv: string[], name: string): Promise<void> {
-  let values: Record<string, string | boolean | undefined>;
+  let values: Record<string, string | boolean | string[] | undefined>;
   let positionals: string[];
   try {
     ({ values, positionals } = parseArgs({
@@ -48,7 +48,9 @@ export default async function cli(argv: string[], name: string): Promise<void> {
         config: { type: 'string' },
         where: { type: 'string' },
         k: { type: 'string' },
-        semantic: { type: 'boolean' },
+        preset: { type: 'string' },
+        include: { type: 'string', multiple: true },
+        lexical: { type: 'boolean', default: false },
         list: { type: 'boolean', default: false },
         force: { type: 'boolean', default: false },
         version: { type: 'boolean', default: false, short: 'v' },
@@ -96,13 +98,22 @@ export default async function cli(argv: string[], name: string): Promise<void> {
     if (values.list) {
       const queries = ctx.resolveConfig().queries;
       for (const queryName of Object.keys(queries).sort()) {
-        console.log(typeof queries[queryName] === 'string' ? queryName : `${queryName}  (find)`);
+        const entry = queries[queryName];
+        const isSavedSearch = typeof entry === 'object' && entry !== null && 'search' in entry;
+        console.log(isSavedSearch ? `${queryName}  (search)` : queryName);
       }
       return;
     }
 
     const [first, ...params] = positionals;
     if (!first) {
+      console.error(usage(name));
+      process.exit(2);
+    }
+
+    // find -> search (breaking rename): one release of a pointer instead of "unknown query".
+    if (first === 'find') {
+      console.error(`${name}: find is now search`);
       console.error(usage(name));
       process.exit(2);
     }

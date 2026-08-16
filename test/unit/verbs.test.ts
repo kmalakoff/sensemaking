@@ -3,7 +3,7 @@ import { spawnSync } from 'child_process';
 import { readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import type { Row } from 'sensemaking';
-import { find, mapTree, peek } from 'sensemaking';
+import { mapTree, peek, search } from 'sensemaking';
 import { renderPeek } from '../../src/output.ts';
 import { packageRoot, runCli } from '../lib/cli.ts';
 import { openConfig, openTree, tmpTree, writeNote } from '../lib/tree.ts';
@@ -19,10 +19,10 @@ function makeTree(): string {
   return baseDir;
 }
 
-describe('find', () => {
+describe('search', () => {
   it('BM25 matches carry via=match with a snippet', async () => {
     const { db, cfg } = openTree(makeTree());
-    const rows = (await find(db, cfg, 'price')) as Array<{ path: string; via: string; hit: string }>;
+    const rows = (await search(db, cfg, 'price')) as Array<{ path: string; via: string; hit: string }>;
     const floor = rows.find((r) => r.path === 'floor.md');
     assert.ok(floor, `expected floor.md in results: ${JSON.stringify(rows.map((r) => r.path))}`);
     assert.ok(floor.via.includes('match'));
@@ -31,7 +31,7 @@ describe('find', () => {
 
   it('link expansion surfaces a connected note that never contains the terms, via=link', async () => {
     const { db, cfg } = openTree(makeTree());
-    const rows = (await find(db, cfg, 'price')) as Array<{ path: string; via: string }>;
+    const rows = (await search(db, cfg, 'price')) as Array<{ path: string; via: string }>;
     const connected = rows.find((r) => r.path === 'context.md');
     assert.ok(connected, `expected context.md in results: ${JSON.stringify(rows.map((r) => r.path))}`);
     assert.equal(connected.via, 'link');
@@ -39,20 +39,20 @@ describe('find', () => {
 
   it('--where composes a frontmatter filter with the fused ranking', async () => {
     const { db, cfg } = openTree(makeTree());
-    const rows = (await find(db, cfg, 'price', { where: "f.status = 'active'" })) as Array<{ path: string }>;
+    const rows = (await search(db, cfg, 'price', { where: "f.status = 'active'" })) as Array<{ path: string }>;
     assert.ok(rows.every((r) => r.path !== 'archived.md'));
     assert.ok(rows.some((r) => r.path === 'floor.md'));
   });
 
   it('terms pass verbatim: invalid FTS5 syntax errors loudly', async () => {
     const { db, cfg } = openTree(makeTree());
-    await assert.rejects(find(db, cfg, 'price AND AND'), /fts5|syntax/);
+    await assert.rejects(search(db, cfg, 'price AND AND'), /fts5|syntax/);
   });
 
   it('terms pass verbatim: bare words AND-join, so an absent word means zero rows', async () => {
     const { db, cfg } = openTree(makeTree());
-    assert.deepEqual(await find(db, cfg, 'price nonexistentword'), []);
-    const rows = (await find(db, cfg, 'price OR nonexistentword')) as Array<{ path: string }>;
+    assert.deepEqual(await search(db, cfg, 'price nonexistentword'), []);
+    const rows = (await search(db, cfg, 'price OR nonexistentword')) as Array<{ path: string }>;
     assert.ok(
       rows.some((r) => r.path === 'floor.md'),
       'explicit OR is the caller expressing intent'
@@ -61,7 +61,7 @@ describe('find', () => {
 
   it('with links disabled it degrades to BM25-only', async () => {
     const { db, cfg } = openTree(makeTree(), { links: false });
-    const rows = (await find(db, cfg, 'price')) as Array<{ path: string; via: string }>;
+    const rows = (await search(db, cfg, 'price')) as Array<{ path: string; via: string }>;
     assert.ok(rows.length > 0);
     assert.ok(rows.every((r) => r.via === 'match'));
     assert.ok(!rows.some((r) => r.path === 'context.md'));
@@ -88,6 +88,20 @@ describe('mapTree', () => {
     const result = mapTree(db, cfg);
     assert.deepEqual(result.hubs, []);
     assert.equal(result.docs.count, 4);
+  });
+
+  it('reports per-preset coverage: files matched and embedded count', () => {
+    const baseDir = tmpTree();
+    write(baseDir, 'a/one.md', 'alpha content');
+    write(baseDir, 'b/two.md', 'beta content');
+    const { db, cfg } = openTree(baseDir, undefined, { default: { include: ['**/*.md'], semantic: false }, a: { include: ['a/**/*.md'], semantic: false }, b: { include: ['b/**/*.md'], semantic: false } });
+    const result = mapTree(db, cfg);
+    const byName = new Map(result.presets.map((p) => [p.name, p]));
+    assert.equal(byName.get('default')?.files, 2);
+    assert.equal(byName.get('a')?.files, 1);
+    assert.equal(byName.get('b')?.files, 1);
+    // semantic is off everywhere in this fixture, so nothing is embedded.
+    assert.equal(byName.get('a')?.embedded, 0);
   });
 });
 
@@ -159,7 +173,7 @@ describe('mapTree truncation is reported', () => {
   });
 });
 
-describe('find --where applies before the candidate cut', () => {
+describe('search --where applies before the candidate cut', () => {
   it('finds a filtered match ranked past the BM25 candidate pool', async () => {
     const baseDir = tmpTree();
     // 40 archived notes with a title hit outrank one active note with a body-only
@@ -168,7 +182,7 @@ describe('find --where applies before the candidate cut', () => {
     write(baseDir, 'live.md', 'A much longer note that mentions a widget once among many other unrelated words about several other topics entirely.', { title: 'Operations', status: 'active' });
 
     const { db, cfg } = openTree(baseDir);
-    const rows = (await find(db, cfg, 'widget', { where: "f.status = 'active'" })) as Array<{ path: string }>;
+    const rows = (await search(db, cfg, 'widget', { where: "f.status = 'active'" })) as Array<{ path: string }>;
     assert.deepEqual(
       rows.map((r) => r.path),
       ['live.md']
@@ -182,7 +196,7 @@ describe('find --where applies before the candidate cut', () => {
     write(baseDir, 'linked-active.md', 'no matching terms here either', { title: 'Ref', status: 'active' });
 
     const { db, cfg } = openTree(baseDir);
-    const rows = (await find(db, cfg, 'gadget', { where: "f.status = 'active'" })) as Array<{ path: string; via: string }>;
+    const rows = (await search(db, cfg, 'gadget', { where: "f.status = 'active'" })) as Array<{ path: string; via: string }>;
     assert.ok(
       rows.some((r) => r.path === 'linked-active.md'),
       `expected linked-active via link: ${JSON.stringify(rows)}`
@@ -191,13 +205,13 @@ describe('find --where applies before the candidate cut', () => {
   });
 });
 
-describe('find provenance', () => {
+describe('search provenance', () => {
   it('linkless tree: via is match only, never link', async () => {
     const base = tmpTree();
     writeNote(base, 'a.md', { body: 'alpha topic content' });
     writeNote(base, 'b.md', { body: 'alpha adjacent content' });
     const { db, cfg } = openTree(base);
-    const rows = await find(db, cfg, 'alpha');
+    const rows = await search(db, cfg, 'alpha');
     assert.ok(rows.length >= 2);
     for (const row of rows) assert.equal(row.via, 'match', `expected match, got ${row.via} for ${row.path}`);
     db.close();
@@ -209,7 +223,7 @@ describe('find provenance', () => {
     writeNote(base, 'spoke.md', { body: 'spoke detail' });
     writeNote(base, 'island.md', { body: 'alpha island, no links at all' });
     const { db, cfg } = openTree(base);
-    const rows = await find(db, cfg, 'alpha');
+    const rows = await search(db, cfg, 'alpha');
     const island = rows.find((r) => r.path === 'island.md');
     assert.ok(island, 'island matched');
     assert.equal(island.via, 'match');
@@ -221,7 +235,7 @@ describe('feature visibility', () => {
   it('map reports feature states; disabled features carry their config key', () => {
     const base = tmpTree();
     writeNote(base, 'a.md', { body: 'alpha' });
-    const { db, cfg } = openTree(base, { rank: false, embed: false });
+    const { db, cfg } = openTree(base, { rank: false });
     const result = mapTree(db, cfg);
     assert.deepEqual(result.features.on, ['links', 'sections']);
     assert.deepEqual(result.features.off, ['rank', 'embed']);
@@ -245,7 +259,7 @@ describe('field-report fixes', () => {
     writeNote(base, 'a.md', { body: 'body about end-to-end delivery' });
     const { db, cfg } = openTree(base);
     await assert.rejects(
-      () => find(db, cfg, 'end-to-end'),
+      () => search(db, cfg, 'end-to-end'),
       (err: Error) => {
         assert.match(err.message, /end-to-end/, 'names the term the user typed');
         assert.match(err.message, /double-quot/i, 'states the remedy');
@@ -259,7 +273,7 @@ describe('field-report fixes', () => {
     const base = tmpTree();
     writeNote(base, 'a.md', { body: 'body about delivery' });
     const { db, cfg } = openTree(base);
-    const rows = await find(db, cfg, 'delivery');
+    const rows = await search(db, cfg, 'delivery');
     assert.equal(rows.length, 1);
     db.close();
   });
@@ -278,25 +292,25 @@ describe('field-report fixes', () => {
   });
 });
 
-describe('find default scope', () => {
-  it('config default fences find; --where replaces it rather than ANDing', async () => {
+describe('search default scope (preset where)', () => {
+  it("a preset's where fences search; --where replaces it rather than ANDing", async () => {
     const base = tmpTree();
     writeNote(base, 'note.md', { frontmatter: { type: 'knowledge' }, body: 'alpha subject' });
     writeNote(base, 'raw.md', { frontmatter: { type: 'raw' }, body: 'alpha subject' });
-    const cfg = { scan: { include: ['**/*.md'] }, queries: {}, defaults: { find: { where: "f.type != 'raw'" } }, baseDir: base, configPath: null };
+    const cfg = { presets: { default: { include: ['**/*.md'], semantic: false, where: "f.type != 'raw'" } }, queries: {}, baseDir: base, configPath: null };
     const { db } = openConfig(cfg);
 
-    const fenced = await find(db, cfg, 'alpha');
+    const fenced = await search(db, cfg, 'alpha');
     assert.deepEqual(
       fenced.map((r) => r.path),
       ['note.md'],
-      'default scope excludes raw'
+      "the preset's where excludes raw"
     );
 
-    const widened = await find(db, cfg, 'alpha', { where: '1=1' });
-    assert.equal(widened.length, 2, '--where replaces the default, so the tree is reachable');
+    const widened = await search(db, cfg, 'alpha', { where: '1=1' });
+    assert.equal(widened.length, 2, '--where replaces the preset default, so the tree is reachable');
 
-    const narrowed = await find(db, cfg, 'alpha', { where: "f.type = 'raw'" });
+    const narrowed = await search(db, cfg, 'alpha', { where: "f.type = 'raw'" });
     assert.deepEqual(
       narrowed.map((r) => r.path),
       ['raw.md'],
@@ -331,7 +345,7 @@ describe('search error attribution', () => {
     writeNote(base, 'a.md', { body: 'body about end-to-end delivery' });
     const { db, cfg } = openTree(base);
     await assert.rejects(
-      () => find(db, cfg, 'end-to-end delivery', { where: 'f.nosuchfield = 1' }),
+      () => search(db, cfg, 'end-to-end delivery', { where: 'f.nosuchfield = 1' }),
       (err: Error) => {
         assert.doesNotMatch(err.message, /punctuation/, 'the term is innocent here');
         assert.match(err.message, /where condition/, 'the where clause is named instead');
@@ -343,14 +357,15 @@ describe('search error attribution', () => {
   });
 });
 
-describe('search error coverage beyond find', () => {
+describe('search error coverage beyond ad-hoc search', () => {
   const matchSql = 'SELECT f.path FROM frontmatter f JOIN content ON content.path = f.path WHERE content MATCH ? LIMIT 5';
 
-  it('a saved query using MATCH gets the same explained error as find', () => {
+  it('a saved query using MATCH gets the same explained error as search', () => {
     const base = tmpTree();
-    writeFileSync(join(base, 'sense.config.json'), JSON.stringify({ version: 2, scan: { include: ['**/*.md'] }, queries: { search: matchSql } }));
+    // "probe", not "search" -- "search" is a reserved verb name, so a saved query can never be named it.
+    writeFileSync(join(base, 'sense.config.json'), JSON.stringify({ version: 2, scan: { include: ['**/*.md'] }, queries: { probe: matchSql } }));
     writeNote(base, 'a.md', { body: 'about player-coach roles' });
-    const result = runCli(['search', 'player-coach'], { cwd: base });
+    const result = runCli(['probe', 'player-coach'], { cwd: base });
     assert.equal(result.status, 1);
     assert.match(result.stderr, /punctuation in `player-coach`/);
     assert.match(result.stderr, /double-quoting/);
@@ -376,14 +391,14 @@ describe('search error coverage beyond find', () => {
   });
 });
 
-describe('find on oversized docs', () => {
+describe('search on oversized docs', () => {
   it('overlapping terms never duplicate document text in the excerpt', async () => {
     const baseDir = tmpTree();
     const filler = 'lorem ipsum dolor sit amet consectetur adipiscing elit '.repeat(2000);
     write(baseDir, 'big.md', `${filler}\n\nwe test tests here and testing continues\n\n${filler}`, { title: 'Big' });
     const { db, cfg } = openTree(baseDir);
     // "test" occurs inside "tests"/"testing": overlapping spans must be absorbed, not re-emitted.
-    const rows = await find(db, cfg, 'test OR tests', { k: 5 });
+    const rows = await search(db, cfg, 'test OR tests', { k: 5 });
     const hit = rows.find((r) => r.path === 'big.md')?.hit as string;
     assert.ok(hit.includes('«test»'), hit);
     assert.ok(!/»«/.test(hit), `adjacent re-emitted spans in: ${hit}`);
@@ -406,7 +421,7 @@ describe('find on oversized docs', () => {
 
   it('computes a JS excerpt with the term highlighted and a section-backed lines range', async () => {
     const { db, cfg } = openTree(bigTree());
-    const rows = (await find(db, cfg, 'zzxyzzy')) as Array<{ path: string; hit: string | null; lines: string | null }>;
+    const rows = (await search(db, cfg, 'zzxyzzy')) as Array<{ path: string; hit: string | null; lines: string | null }>;
     const big = rows.find((r) => r.path === 'big.md');
     assert.ok(big, `expected big.md in results: ${JSON.stringify(rows.map((r) => r.path))}`);
     assert.ok(big.hit !== null, 'expected a JS-computed excerpt, not null');
@@ -416,7 +431,7 @@ describe('find on oversized docs', () => {
 
   it('a via=link row pulled in from the oversized doc still has a null hit', async () => {
     const { db, cfg } = openTree(bigTree());
-    const rows = (await find(db, cfg, 'zzxyzzy')) as Array<{ path: string; via: string; hit: string | null }>;
+    const rows = (await search(db, cfg, 'zzxyzzy')) as Array<{ path: string; via: string; hit: string | null }>;
     const other = rows.find((r) => r.path === 'other.md');
     assert.ok(other, `expected other.md via link: ${JSON.stringify(rows.map((r) => r.path))}`);
     assert.equal(other.via, 'link');
@@ -425,7 +440,7 @@ describe('find on oversized docs', () => {
 
   it('a small note in the same tree still gets an ordinary FTS5 snippet', async () => {
     const { db, cfg } = openTree(bigTree());
-    const rows = (await find(db, cfg, 'unrelated')) as Array<{ path: string; hit: string | null }>;
+    const rows = (await search(db, cfg, 'unrelated')) as Array<{ path: string; hit: string | null }>;
     const other = rows.find((r) => r.path === 'other.md');
     assert.ok(other, `expected other.md matched directly: ${JSON.stringify(rows.map((r) => r.path))}`);
     assert.ok(other.hit?.includes('«unrelated»'), `expected an ordinary snippet: ${other.hit}`);
@@ -434,9 +449,9 @@ describe('find on oversized docs', () => {
   it('completes well under a second, not the multi-second snippet() cliff', async () => {
     const { db, cfg } = openTree(bigTree());
     const start = Date.now();
-    await find(db, cfg, 'zzxyzzy');
+    await search(db, cfg, 'zzxyzzy');
     const elapsed = Date.now() - start;
-    assert.ok(elapsed < 2000, `find took ${elapsed}ms`);
+    assert.ok(elapsed < 2000, `search took ${elapsed}ms`);
   });
 });
 
@@ -501,5 +516,155 @@ describe('peek stays bounded (sections)', () => {
     const result = peek(db, cfg, 'hub.md');
     assert.equal(result.outbound.length, 20);
     assert.equal(result.outboundTotal, 30);
+  });
+});
+
+describe('find is now search', () => {
+  it('sense find exits 2 with a pointer, not "unknown query"', () => {
+    const base = tmpTree();
+    writeFileSync(join(base, 'sense.config.json'), JSON.stringify({ version: 3, presets: { default: { include: ['**/*.md'], semantic: false } }, queries: {} }));
+    writeNote(base, 'a.md', { body: 'alpha' });
+    const result = runCli(['find', 'alpha'], { cwd: base });
+    assert.equal(result.status, 2);
+    assert.match(result.stderr, /find is now search/);
+    assert.match(result.stderr, /usage:/);
+  });
+});
+
+describe('--preset scope', () => {
+  const twoPresets = { default: { include: ['**/*.md'], semantic: false }, wiki: { include: ['wiki/**/*.md'], semantic: false }, raw: { include: ['raw/**/*.md'], semantic: false } };
+
+  function twoPresetTree(): string {
+    const baseDir = tmpTree();
+    write(baseDir, 'wiki/page.md', 'alpha subject in the wiki', { title: 'Wiki page' });
+    write(baseDir, 'raw/source.md', 'alpha subject in raw', { title: 'Raw source' });
+    return baseDir;
+  }
+
+  it('filters rows to the named preset', async () => {
+    const { db, cfg } = openTree(twoPresetTree(), undefined, twoPresets);
+    const rows = await search(db, cfg, 'alpha', { preset: 'wiki' });
+    assert.deepEqual(
+      rows.map((r) => r.path),
+      ['wiki/page.md']
+    );
+    db.close();
+  });
+
+  it('an unknown preset throws, listing the declared names', async () => {
+    const { db, cfg } = openTree(twoPresetTree(), undefined, twoPresets);
+    await assert.rejects(search(db, cfg, 'alpha', { preset: 'nope' }), (err: Error) => {
+      assert.match(err.message, /unknown preset "nope"/);
+      assert.match(err.message, /wiki/);
+      assert.match(err.message, /raw/);
+      return true;
+    });
+    db.close();
+  });
+
+  it('with no --preset, the default preset (matching the whole tree here) is searched', async () => {
+    const { db, cfg } = openTree(twoPresetTree(), undefined, twoPresets);
+    const rows = await search(db, cfg, 'alpha');
+    assert.deepEqual(rows.map((r) => r.path).sort(), ['raw/source.md', 'wiki/page.md']);
+    db.close();
+  });
+
+  it('--include scopes ad hoc, without naming a preset', async () => {
+    const { db, cfg } = openTree(twoPresetTree(), undefined, twoPresets);
+    const rows = await search(db, cfg, 'alpha', { include: ['raw/**/*.md'] });
+    assert.deepEqual(
+      rows.map((r) => r.path),
+      ['raw/source.md']
+    );
+    db.close();
+  });
+
+  it('--preset at the CLI filters the table', () => {
+    const base = twoPresetTree();
+    writeFileSync(join(base, 'sense.config.json'), JSON.stringify({ version: 3, presets: twoPresets, queries: {} }));
+    const result = runCli(['search', 'alpha', '--preset', 'raw', '--format', 'json'], { cwd: base });
+    assert.equal(result.status, 0, result.stderr);
+    const rows = JSON.parse(result.stdout) as Array<{ path: string }>;
+    assert.deepEqual(
+      rows.map((r) => r.path),
+      ['raw/source.md']
+    );
+  });
+
+  it('--include at the CLI is repeatable', () => {
+    const base = twoPresetTree();
+    writeFileSync(join(base, 'sense.config.json'), JSON.stringify({ version: 3, presets: twoPresets, queries: {} }));
+    const result = runCli(['search', 'alpha', '--include', 'wiki/**/*.md', '--include', 'raw/**/*.md', '--format', 'json'], { cwd: base });
+    assert.equal(result.status, 0, result.stderr);
+    const rows = JSON.parse(result.stdout) as Array<{ path: string }>;
+    assert.deepEqual(rows.map((r) => r.path).sort(), ['raw/source.md', 'wiki/page.md']);
+  });
+
+  it('an unknown --preset at the CLI exits 1 naming the declared presets', () => {
+    const base = twoPresetTree();
+    writeFileSync(join(base, 'sense.config.json'), JSON.stringify({ version: 3, presets: twoPresets, queries: {} }));
+    const result = runCli(['search', 'alpha', '--preset', 'nope'], { cwd: base });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /unknown preset "nope"/);
+    assert.match(result.stderr, /wiki/);
+    assert.match(result.stderr, /raw/);
+  });
+});
+
+describe('search resolution precedence', () => {
+  it('k: flag > saved field > preset > default preset > built-in', async () => {
+    const baseDir = tmpTree();
+    for (let i = 0; i < 15; i++) write(baseDir, `n${String(i).padStart(2, '0')}.md`, 'alpha content shared by every note');
+
+    // built-in: no preset defines k, no saved field, no flag -> 10
+    const builtinDb = openTree(baseDir, undefined, { default: { include: ['**/*.md'], semantic: false } });
+    assert.equal((await search(builtinDb.db, builtinDb.cfg, 'alpha')).length, 10);
+    builtinDb.db.close();
+
+    // default preset's own k wins over the built-in
+    const presetDb = openTree(baseDir, undefined, { default: { include: ['**/*.md'], semantic: false, k: 3 } });
+    assert.equal((await search(presetDb.db, presetDb.cfg, 'alpha')).length, 3);
+    presetDb.db.close();
+
+    // a named preset's k wins over the default preset's
+    const namedDb = openTree(baseDir, undefined, { default: { include: ['**/*.md'], semantic: false, k: 3 }, big: { include: ['**/*.md'], semantic: false, k: 7 } });
+    assert.equal((await search(namedDb.db, namedDb.cfg, 'alpha', { preset: 'big' })).length, 7);
+    // a caller override (standing in for a saved field, or a CLI flag) wins outright
+    assert.equal((await search(namedDb.db, namedDb.cfg, 'alpha', { preset: 'big', k: 2 })).length, 2);
+    namedDb.db.close();
+  });
+
+  it('saved search k overrides its preset, and --k overrides the saved search', () => {
+    const baseDir = tmpTree();
+    for (let i = 0; i < 15; i++) write(baseDir, `n${String(i).padStart(2, '0')}.md`, 'alpha content shared by every note');
+    writeFileSync(join(baseDir, 'sense.config.json'), JSON.stringify({ version: 3, presets: { default: { include: ['**/*.md'], semantic: false, k: 3 } }, queries: { hot: { search: 'alpha', k: 6 } } }));
+
+    const saved = runCli(['hot', '--format', 'json'], { cwd: baseDir });
+    assert.equal(saved.status, 0, saved.stderr);
+    assert.equal(JSON.parse(saved.stdout).length, 6, 'saved k overrides the preset default');
+
+    const flagged = runCli(['hot', '--k', '2', '--format', 'json'], { cwd: baseDir });
+    assert.equal(flagged.status, 0, flagged.stderr);
+    assert.equal(JSON.parse(flagged.stdout).length, 2, '--k overrides the saved k');
+  });
+});
+
+describe('--lexical', () => {
+  it('is a no-op on a tree with semantic off (nothing to opt out of)', async () => {
+    const { db, cfg } = openTree(makeTree());
+    const bare = await search(db, cfg, 'price');
+    const lexical = await search(db, cfg, 'price', { semantic: false });
+    assert.deepEqual(bare, lexical);
+    db.close();
+  });
+
+  it('--lexical at the CLI is accepted and does not error on a semantic-off tree', () => {
+    const base = makeTree();
+    writeFileSync(join(base, 'sense.config.json'), JSON.stringify({ version: 3, presets: { default: { include: ['**/*.md'], semantic: false } }, queries: {} }));
+    const bare = runCli(['search', 'price', '--format', 'json'], { cwd: base });
+    const lexical = runCli(['search', 'price', '--lexical', '--format', 'json'], { cwd: base });
+    assert.equal(bare.status, 0, bare.stderr);
+    assert.equal(lexical.status, 0, lexical.stderr);
+    assert.equal(bare.stdout, lexical.stdout);
   });
 });

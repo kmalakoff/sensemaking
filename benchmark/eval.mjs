@@ -1,6 +1,9 @@
-// Retrieval-quality eval over a labeled corpus, in four passes through the shipped library:
-// bm25-only, fused (links), embed-on-but-not-invoked (must be row-identical to fused --
-// asserted before anything is scored), and semantic (expansion invoked). Reports point
+// Retrieval-quality eval over a labeled corpus, in three passes through the shipped library:
+// bm25-only, fused (links), and semantic (vectors participate). A fourth, hidden pass --
+// fused on an embed-configured corpus, called with semantic:false -- is run first as a guard:
+// it must be row-identical to the shown `fused` pass (vectors never built at all). That's the
+// v3 no-silent-change contract (plans/presets-config.md): a preset with semantic on doesn't
+// move a single row unless a search actually invokes vector participation. Reports point
 // metrics plus paired per-query deltas (fusion-tuning.md protocol: wins/losses and a
 // sign-test z, because point deltas below the noise floor are unreadable alone).
 // usage: node benchmark/eval.mjs [corpus] [--queries N] [--k N] [--split test|dev]
@@ -33,16 +36,26 @@ const lib = await import(pathToFileURL(join(ROOT, 'dist', 'esm', 'index.js')).hr
 const { queries, qrels } = readLabels(labelsDir, SPLIT);
 const qids = [...qrels.keys()].sort().slice(0, MAX_QUERIES === Infinity ? undefined : MAX_QUERIES);
 
+// embed: false -> preset semantic:false, vectors never built at all (no embed cost).
+// embed: true -> preset has no semantic key (v3 default on), vectors build lazily on the
+// first call that actually participates. searchSemantic: false always opts a call out
+// regardless of the preset; undefined lets the preset's own default (true) apply.
 const VARIANTS = [
-  { name: 'bm25-only', features: { links: false, rank: false, embed: false } },
-  { name: 'fused', features: undefined },
-  { name: 'embed-on', features: { embed: true } }, // not invoked: bit-identity guard vs fused
-  { name: 'semantic', features: { embed: true }, semantic: true },
+  { name: 'bm25-only', features: { links: false, rank: false }, embed: false, searchSemantic: false },
+  { name: 'fused', features: undefined, embed: false, searchSemantic: false },
+  { name: 'fused-embed-configured', features: undefined, embed: true, searchSemantic: false, hidden: true }, // guard only
+  { name: 'semantic', features: undefined, embed: true, searchSemantic: undefined },
 ];
 
 const results = [];
 for (const variant of VARIANTS) {
-  const cfg = { scan: { include: ['**/*.md'] }, queries: {}, features: variant.features, baseDir: tree, configPath: null };
+  const cfg = {
+    presets: { default: { include: ['**/*.md'], ...(variant.embed ? {} : { semantic: false }) } },
+    features: variant.features,
+    queries: {},
+    baseDir: tree,
+    configPath: null,
+  };
   const { db } = lib.open(cfg);
   const perQuery = new Map();
   let errors = 0;
@@ -53,7 +66,7 @@ for (const variant of VARIANTS) {
     const t0 = process.hrtime.bigint();
     let rows = [];
     try {
-      rows = await lib.find(db, cfg, orBag(text), { k: K, semantic: variant.semantic });
+      rows = await lib.search(db, cfg, orBag(text), { k: K, semantic: variant.searchSemantic });
     } catch {
       errors++;
     }
@@ -65,18 +78,20 @@ for (const variant of VARIANTS) {
   results.push({ ...variant, perQuery, errors, ms: ms / qids.length });
 }
 
-// Guard first: embed enabled but not invoked must not change a single row.
+// Guard first: semantic:false must fully disable vector participation, even on a corpus
+// whose preset has vectors on -- fused-embed-configured must not diverge from fused by a
+// single row.
 const fused = results.find((r) => r.name === 'fused');
-const embedOn = results.find((r) => r.name === 'embed-on');
-const divergent = qids.filter((qid) => fused.perQuery.get(qid)?.rows !== embedOn.perQuery.get(qid)?.rows);
+const fusedEmbedConfigured = results.find((r) => r.name === 'fused-embed-configured');
+const divergent = qids.filter((qid) => fused.perQuery.get(qid)?.rows !== fusedEmbedConfigured.perQuery.get(qid)?.rows);
 if (divergent.length > 0) {
-  console.error(`BIT-IDENTITY VIOLATION: embed-on changed ${divergent.length}/${qids.length} default queries (first: ${divergent[0]})`);
+  console.error(`NO-SILENT-CHANGE VIOLATION: semantic:false didn't fully disable vectors on the embed-configured corpus -- ${divergent.length}/${qids.length} queries diverged from fused (first: ${divergent[0]})`);
   process.exit(1);
 }
-console.log(`bit-identity: ok — embed enabled but not invoked is row-identical to fused across ${qids.length} queries\n`);
+console.log(`no-silent-change: ok — semantic:false on an embed-configured corpus is row-identical to fused (vectors never built) across ${qids.length} queries\n`);
 
 const mean = (r, key) => [...r.perQuery.values()].reduce((a, q) => a + q.m[key], 0) / qids.length;
-const shown = results.filter((r) => r.name !== 'embed-on');
+const shown = results.filter((r) => !r.hidden);
 console.log(`corpus: ${corpus} | split: ${SPLIT} | queries: ${qids.length} | k: ${K} | query form: OR bag of words\n`);
 console.log(`| metric | ${shown.map((r) => r.name).join(' | ')} |`);
 console.log(`|---|${shown.map(() => '---').join('|')}|`);

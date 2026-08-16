@@ -5,7 +5,7 @@ export interface Ctx {
   name: string;
   rest: string[]; // positionals after the command word
   format: 'table' | 'json';
-  values: { config?: string; where?: string; k?: string; force: boolean; semantic: boolean };
+  values: { config?: string; where?: string; k?: string; preset?: string; include?: string[]; force: boolean; lexical: boolean };
   resolveConfig(): ResolvedConfig;
   usageError(message: string): never;
 }

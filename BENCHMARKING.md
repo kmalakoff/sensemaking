@@ -77,33 +77,34 @@ Two kinds of metric per version:
 
 ## Results — obsidian-hub @ b11036f9 (6,566 notes, 14 MB)
 
-Apple Silicon, Node 26.7.0. 2026-08-15. `local` is the working tree about to be released;
+Apple Silicon, Node 26.7.0. 2026-08-16. `local` is the working tree about to be released;
 the baseline column is whatever `package.json` names, so a bare `compare.mjs` always reads
 "last release vs what ships next".
 
-| metric | 0.7.2 | local |
+| metric | 0.8.0 | local |
 |---|---|---|
-| cold crawl (wall) | 944 ms | 1021 ms |
-| warm query (`COUNT(*)`) | 74 ms | 73 ms |
-| BM25 search (canonical join) | 81 ms | 81 ms |
-| `find` (BM25 + link fusion) | 137 ms | 134 ms |
-| `find` row size (json) | ~66 tokens | ~70 tokens |
-| `map` (orient) | 81 ms / ~469 tokens | 79 ms / ~469 tokens |
-| `peek` largest note (~77,274 t) | 78 ms / ~581 tokens (0.8%) | 76 ms / ~581 tokens (0.8%) |
-| bulk change (500 files): first query | 1.17 s | 204 ms |
-| bulk change (500 files): with warm watcher | 103 ms | 104 ms |
-| in-process: cold index build | 925 ms | 1004 ms |
-| in-process: freshness check, no change | 29.5 ms | 29.1 ms |
-| in-process: update, 1 file touched | 124 ms | 30 ms |
-| in-process: update, 10 files modified | 141 ms | 31 ms |
+| cold crawl (wall) | 1004 ms | 1100 ms |
+| warm query (`COUNT(*)`) | 73 ms | 75 ms |
+| BM25 search (canonical join) | 79 ms | 81 ms |
+| lexical `search` (BM25 + link fusion) | 131 ms | 135 ms |
+| `search` row size (json) | ~70 tokens | ~70 tokens |
+| `map` (orient) | 77 ms / ~469 tokens | 85 ms / ~475 tokens |
+| `peek` largest note (~77,274 t) | 76 ms / ~581 tokens (0.8%) | 76 ms / ~581 tokens (0.8%) |
+| bulk change (500 files): first query | 204 ms | 216 ms |
+| bulk change (500 files): with warm watcher | 102 ms | 103 ms |
+| in-process: cold index build | 964 ms | 1052 ms |
+| in-process: freshness check, no change | 28 ms | 29.6 ms |
+| in-process: update, 1 file touched | 29.7 ms | 30.7 ms |
+| in-process: update, 10 files modified | 29.3 ms | 29.6 ms |
 
-The update rows are the release: incremental link resolution, PageRank skipped when the
-edge set is unchanged, and FTS deletes by rowid instead of an unindexed-column scan take
-updates from ~124 ms to ~30 ms and the 500-file bulk change from 1.17 s to 204 ms
-(plans/performance-findings.md). Two movements are intended, not noise: cold build is ~8%
-slower (diff-style upserts that preserve rowids and link resolutions cost more on first
-insert — the price of the update wins), and a `find` row grew 4 tokens because `lines` is
-now always present (the section pointer that used to exist only under `--semantic`).
+Two movements are designed, not noise: cold crawl is ~10% slower because vectors are on by
+default in v3 configs (the crawl writes per-chunk placeholder rows; embedding itself stays
+lazy), and `map` grew 6 tokens for the per-preset coverage block. The row formerly named
+`find` measures the same operation through the renamed verb (`search --lexical` here /
+`find` on old versions — the harness detects the dialect). The gate also caught and killed
+a quadratic before release: `preset_files` deletes scanned the whole table per doc (path
+trailed the primary key, and deletes ran on cold builds) — 2x notes cost ~3x until the key
+was reordered and the cold-build guard applied.
 
 Release history on this corpus: 0.2.1 could not index it at all (one `@`-prefixed YAML alias
 aborted the whole crawl; 0.3.0's lenient parser turned that into a per-file warning). 0.5.0
@@ -120,23 +121,27 @@ across copies stress link-ambiguity resolution harder than a natural tree. Run
 `node benchmark/run.mjs . <corpusPath>` per tree; regenerate scale rows together with the
 main table.
 
-Measured 2026-08-15, same machine and sitting as the table above (the `local` column):
+Measured 2026-08-16, same machine and sitting as the table above (the `local` column;
+vectors on by default, so cold crawls now include chunk bookkeeping and `semantic` rows
+exist at every size):
 
 | metric | 6.5k (hub) | 13k (x2) | 26k (x4) |
 |---|---|---|---|
-| cold crawl (wall) | 1.02 s | 3.08 s | 6.11 s |
-| warm query | 73 ms | 101 ms | 148 ms |
-| `find` | 134 ms | 202 ms | 334 ms |
-| `map` | 79 ms / ~469 t | 112 ms / ~540 t | 169 ms / ~540 t |
-| bulk change (500 files): first query | 204 ms | 244 ms | 324 ms |
-| bulk change (500 files): with warm watcher | 104 ms | 124 ms | 177 ms |
-| in-process: freshness check, no change | 29 ms | 52 ms | 98 ms |
-| in-process: update, 1 file touched | 30 ms | 53 ms | 102 ms |
+| cold crawl (wall) | 1.10 s | 2.15 s | 4.28 s |
+| warm query | 75 ms | 101 ms | 156 ms |
+| lexical `search` | 135 ms | 199 ms | 342 ms |
+| semantic `search` (steady state) | 217 ms | 347 ms | 1.12 s |
+| `map` | 85 ms / ~475 t | ~547 t | ~547 t |
+| bulk change (500 files): first query | 216 ms | 245 ms | 355 ms |
+| in-process: freshness check, no change | 30 ms | 52 ms | 120 ms |
+| in-process: update, 1 file touched | 31 ms | 56 ms | 126 ms |
 
 Every row is linear or better in note count across a 4x range. The freshness check — the
-cost every single invocation pays — is 98 ms at 26k notes, and updates now track it (the
+cost every single invocation pays — is 120 ms at 26k notes, and updates track it (the
 update work itself is the changed files' share, not the tree's). `map` and `peek` token
 counts stay flat by construction, which is the contract that matters for context.
+Semantic `search` at 26k is the one row to watch next round: its brute-force vector scan
+is linear but the constant is visible (~1.1 s).
 
 What the scale rows watch, in order of what actually breaks: the per-query freshness
 check (stats every file — linear, the cost every call pays), cold crawl (linear —
@@ -155,11 +160,13 @@ note, 300 distinct frontmatter fields. Each cliff was found by the shape sweep
 fixed, and is held fixed by this row per release: `node benchmark/run.mjs .
 .tmp/cache/stress-stress-1`.
 
-Measured 2026-08-15, same sitting:
+Measured 2026-08-16, same sitting (vectors on by default — the stress tree's heading-dense
+notes now also pay chunk bookkeeping at crawl, visible in its cold row):
 
 | metric | stress (2k notes, worst shapes) | guards |
 |---|---|---|
-| `find` | 303 ms | bounded excerpt: snippet() never runs on docs past 16 KB; a JS best-window excerpt (with a `lines` section pointer) covers them |
+| lexical `search` | 292 ms | bounded excerpt: snippet() never runs on docs past 16 KB; a JS best-window excerpt (with a `lines` section pointer) covers them |
+| cold crawl | 3.4 s | linear; heading-dense notes produce many chunks, all placeholder-only until the first semantic search |
 | `peek` largest note (~255k t) | 54 ms / ~476 tokens | every peek list caps at 20 with true totals |
 | `map` (300 fields) | 72 ms / ~355 tokens | all per-column aggregates in one scan |
 | in-process: update, 1 file touched | 12 ms | incremental link resolution; PageRank only when the edge set changed |
@@ -276,29 +283,33 @@ Read:
 
 ## Capabilities
 
-| | 0.2.1 | 0.3.0 | 0.6.0 | 0.7.2 | local |
-|---|---|---|---|---|---|
-| frontmatter filter + FTS5 search | ✓ | ✓ | ✓ | ✓ | ✓ |
-| links table, backlinks, dead links | — | ✓ | ✓ | ✓ | ✓ |
-| sections table, outline with line ranges | — | ✓ | ✓ | ✓ | ✓ |
-| PageRank (`_rank`), hub detection | — | ✓ | ✓ | ✓ | ✓ |
-| fused retrieval (`find`, `via` column) | — | ✓ | ✓ | ✓ | ✓ |
-| bounded orient/structure commands (`map`, `peek`) | — | ✓ | ✓ | ✓ | ✓ |
-| lenient frontmatter (syntax errors → warnings, values kept) | — | ✓ | ✓ | ✓ | ✓ |
-| config auto-migration | — | ✓ | ✓ | ✓ | ✓ |
-| feature toggles | — | ✓ | ✓ | ✓ | ✓ |
-| `--version` | — | ✓ | ✓ | ✓ | ✓ |
-| semantic expansion (`features.embed`, `find --semantic`, `via: vector`) | — | — | ✓ | ✓ | ✓ |
-| feature state reported by `map` and `status` | — | — | ✓ | ✓ | ✓ |
-| labeled-corpus retrieval eval (nDCG/MRR/hit, paired deltas) | — | — | ✓ | ✓ | ✓ |
-| saved-query assertions (`sense check`, `checks`) | — | — | — | ✓ | ✓ |
-| tree-declared find scope (`defaults.find.where`) | — | — | — | ✓ | ✓ |
-| `similarity` on semantic rows | — | — | — | ✓ | ✓ |
-| scale corpora (13k / 26k) measured per release | — | — | — | ✓ | ✓ |
-| saved finds (`queries` object form, `sense <name>` with baked-in settings) | — | — | — | — | ✓ |
-| bounded excerpts + `lines` on every `find` row | — | — | — | — | ✓ |
-| incremental link resolution; PageRank only on edge changes | — | — | — | — | ✓ |
-| derived `busy_timeout` (from observed reconcile, in `status`) | — | — | — | — | ✓ |
-| progress on stderr for long builds (TTY-aware, sparse when piped) | — | — | — | — | ✓ |
-| column-limit fence (named error at SQLite's 2,000) | — | — | — | — | ✓ |
-| stress corpus in the release gate | — | — | — | — | ✓ |
+| | 0.2.1 | 0.3.0 | 0.6.0 | 0.7.2 | 0.8.0 | local |
+|---|---|---|---|---|---|---|
+| frontmatter filter + FTS5 search | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| links table, backlinks, dead links | — | ✓ | ✓ | ✓ | ✓ | ✓ |
+| sections table, outline with line ranges | — | ✓ | ✓ | ✓ | ✓ | ✓ |
+| PageRank (`_rank`), hub detection | — | ✓ | ✓ | ✓ | ✓ | ✓ |
+| fused retrieval (`find`, `via` column) | — | ✓ | ✓ | ✓ | ✓ | ✓ |
+| bounded orient/structure commands (`map`, `peek`) | — | ✓ | ✓ | ✓ | ✓ | ✓ |
+| lenient frontmatter (syntax errors → warnings, values kept) | — | ✓ | ✓ | ✓ | ✓ | ✓ |
+| config auto-migration | — | ✓ | ✓ | ✓ | ✓ | ✓ |
+| feature toggles | — | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `--version` | — | ✓ | ✓ | ✓ | ✓ | ✓ |
+| semantic expansion (`features.embed`, `find --semantic`, `via: vector`) | — | — | ✓ | ✓ | ✓ | ✓ |
+| feature state reported by `map` and `status` | — | — | ✓ | ✓ | ✓ | ✓ |
+| labeled-corpus retrieval eval (nDCG/MRR/hit, paired deltas) | — | — | ✓ | ✓ | ✓ | ✓ |
+| saved-query assertions (`sense check`, `checks`) | — | — | — | ✓ | ✓ | ✓ |
+| tree-declared find scope (`defaults.find.where`) | — | — | — | ✓ | ✓ | ✓ |
+| `similarity` on semantic rows | — | — | — | ✓ | ✓ | ✓ |
+| scale corpora (13k / 26k) measured per release | — | — | — | ✓ | ✓ | ✓ |
+| saved finds (`queries` object form, `sense <name>` with baked-in settings) | — | — | — | — | ✓ | ✓ |
+| bounded excerpts + `lines` on every `find` row | — | — | — | — | ✓ | ✓ |
+| incremental link resolution; PageRank only on edge changes | — | — | — | — | ✓ | ✓ |
+| derived `busy_timeout` (from observed reconcile, in `status`) | — | — | — | — | ✓ | ✓ |
+| progress on stderr for long builds (TTY-aware, sparse when piped) | — | — | — | — | ✓ | ✓ |
+| column-limit fence (named error at SQLite's 2,000) | — | — | — | — | ✓ | ✓ |
+| stress corpus in the release gate | — | — | — | — | ✓ | ✓ |
+| presets (config v3: one bundle for scope + settings; indexing derived) | — | — | — | — | — | ✓ |
+| `search` verb (words + links + vectors fused by default; `--lexical` opt-out) | — | — | — | — | — | ✓ |
+| per-preset derived embedding (semantic-off presets cost no vectors) | — | — | — | — | — | ✓ |
+| per-preset coverage in `status`/`map`; named rebuild notices | — | — | — | — | — | ✓ |

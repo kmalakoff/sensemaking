@@ -4,6 +4,7 @@ import fastGlob from 'fast-glob';
 import removeMarkdown from 'remove-markdown';
 import { parseDocument } from 'yaml';
 import type { Config } from './config.ts';
+import { presetNames, presetSemanticEnabled } from './config.ts';
 import type { Feature } from './features/types.ts';
 
 // Filesystem -> rows. Pure data in, data + warnings out; db.ts does the SQL.
@@ -33,14 +34,34 @@ export interface FileStat {
   absPath: string;
   mtimeMs: number;
   size: number;
+  presets: string[]; // every declared preset covering this file (>= 1; union, overlap allowed)
+  embed: boolean; // true iff any covering preset has semantic !== false
 }
 
+// Presets are the file selection: each preset's include/exclude picks its files (fast-glob,
+// tsconfig-standard semantics, resolved relative to baseDir). Unlike the old layer model,
+// presets are views, not partitions -- they may overlap freely, and a file's set of covering
+// presets (not a single owner) is what indexing and embedding derive from. A preset whose
+// globs match nothing is valid. Files matched by no preset at all are simply not indexed.
 export function listFiles(cfg: Config, baseDir: string): FileStat[] {
-  const relPaths = fastGlob.sync(cfg.scan.include, { cwd: baseDir }).sort();
+  const coverage = new Map<string, Set<string>>();
+  for (const name of presetNames(cfg)) {
+    const preset = cfg.presets[name];
+    const matched = fastGlob.sync(preset.include, { cwd: baseDir, ignore: preset.exclude ?? [] });
+    for (const relPath of matched) {
+      const set = coverage.get(relPath) ?? new Set<string>();
+      set.add(name);
+      coverage.set(relPath, set);
+    }
+  }
+
+  const relPaths = [...coverage.keys()].sort();
   return relPaths.map((relPath) => {
     const absPath = join(baseDir, relPath);
     const st = statSync(absPath);
-    return { relPath, absPath, mtimeMs: st.mtimeMs, size: st.size };
+    const presets = [...(coverage.get(relPath) as Set<string>)].sort();
+    const embed = presets.some((name) => presetSemanticEnabled(cfg, name));
+    return { relPath, absPath, mtimeMs: st.mtimeMs, size: st.size, presets, embed };
   });
 }
 
@@ -48,6 +69,7 @@ export interface ParsedDoc {
   relPath: string;
   mtimeMs: number;
   size: number;
+  presets: string[];
   data: Record<string, string | number | bigint | null>;
   // title/summary are duplicated from frontmatter so bm25() can weight them above the body text.
   search: { title: string; summary: string; text: string };
@@ -125,6 +147,7 @@ export function parseFile(file: FileStat, extractors: Feature[] = []): { doc: Pa
       relPath: file.relPath,
       mtimeMs: file.mtimeMs,
       size: file.size,
+      presets: file.presets,
       data: mapped,
       search,
       extracted: Object.fromEntries(extractors.filter((f) => f.extract).map((f) => [f.name, f.extract?.(raw, content, search)])),

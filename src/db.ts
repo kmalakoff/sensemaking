@@ -22,10 +22,10 @@ const CORE_FRONTMATTER_COLUMNS = new Set(['path', '_mtime', '_size']);
 
 export const DB_FILENAME = 'cache.db';
 // Cache shape version, independent of the config's own `version`.
-// 5: frontmatter upsert is ON CONFLICT UPDATE (was OR REPLACE) so rowid is stable, and
-// content is coupled to that rowid instead of an UNINDEXED path column (was: 4 -- scalars
-// store as INTEGER/REAL/TEXT by YAML type).
-export const SCHEMA_VERSION = '5';
+// 7: presets replace layers -- frontmatter drops the `layer` column, a new
+// preset_files(preset, path) table tracks per-preset coverage for status/map (was: 6,
+// frontmatter gains the `layer` column).
+export const SCHEMA_VERSION = '8';
 
 // SQLite's compile-time SQLITE_MAX_COLUMN, default 2000 (https://www.sqlite.org/limits.html).
 const MAX_FRONTMATTER_COLUMNS = 2000;
@@ -75,6 +75,14 @@ function getColumns(db: DatabaseSync): Set<string> {
 function ensureSchema(db: DatabaseSync, cfg: Config): void {
   db.exec(`CREATE TABLE IF NOT EXISTS frontmatter ("path" TEXT PRIMARY KEY, "_mtime" REAL, "_size" INTEGER)`);
   db.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS content USING fts5(title, summary, text, path UNINDEXED, tokenize = 'porter unicode61')`);
+  // Coverage, not ownership: a path can appear under several presets. Rebuilt per-file
+  // alongside frontmatter/content at reconcile so status/map can report matched/embedded
+  // counts per preset without recomputing globs at read time.
+  // path leads the PK so the per-doc delete in reconcile is an index hit -- keyed the other
+  // way it scans the whole table per doc, which made cold builds quadratic (measured 3x cost
+  // per note-count doubling at 13k/26k). Coverage-by-preset reads get their own index.
+  db.exec(`CREATE TABLE IF NOT EXISTS preset_files ("path" TEXT, preset TEXT, PRIMARY KEY ("path", preset))`);
+  db.exec('CREATE INDEX IF NOT EXISTS preset_files_preset ON preset_files(preset)');
   for (const feature of activeFeatures(cfg)) feature.schema(db);
   if (getMeta(db, 'schema_version') === null) setMeta(db, 'schema_version', SCHEMA_VERSION);
   if (getMeta(db, 'features') === null) setMeta(db, 'features', featureSignature(cfg));
@@ -128,7 +136,10 @@ export function reconcile(db: DatabaseSync, cfg: Config, baseDir: string): { par
   const report = progress('reparsing files', toReparse.length);
   let parsedCount = 0;
   for (const file of toReparse) {
-    const { doc, warnings: fileWarnings } = parseFile(file, features);
+    // A doc only gets extract/store from features that apply to it (currently: embed, via
+    // FileStat.embed -- true iff a covering preset has semantic on).
+    const fileFeatures = features.filter((feature) => !feature.enabledForFile || feature.enabledForFile(cfg, file));
+    const { doc, warnings: fileWarnings } = parseFile(file, fileFeatures);
     report.tick(++parsedCount);
     warnings.push(...fileWarnings);
     for (const key of Object.keys(doc.data)) {
@@ -147,7 +158,7 @@ export function reconcile(db: DatabaseSync, cfg: Config, baseDir: string): { par
   if (allColumns.length > MAX_FRONTMATTER_COLUMNS) {
     throw new SenseError(
       'COLUMN_LIMIT',
-      `frontmatter would need ${allColumns.length} columns, crossing SQLite's compile-time SQLITE_MAX_COLUMN limit (default ${MAX_FRONTMATTER_COLUMNS}; see https://www.sqlite.org/limits.html). Narrow scan.include so fewer/other files are indexed, or fix whatever is generating unbounded frontmatter keys.`
+      `frontmatter would need ${allColumns.length} columns, crossing SQLite's compile-time SQLITE_MAX_COLUMN limit (default ${MAX_FRONTMATTER_COLUMNS}; see https://www.sqlite.org/limits.html). Narrow the presets' include globs so fewer/other files are indexed, or fix whatever is generating unbounded frontmatter keys.`
     );
   }
   // Columns the frontmatter upsert actually writes: core + parsed frontmatter keys, never a
@@ -171,6 +182,8 @@ export function reconcile(db: DatabaseSync, cfg: Config, baseDir: string): { par
     // frontmatter rowid (indexed via its PRIMARY KEY) instead of the UNINDEXED `path`
     // column, which a per-row DELETE would otherwise scan the whole table to find.
     const delBody = db.prepare(`DELETE FROM content WHERE rowid = (SELECT rowid FROM frontmatter WHERE "path" = ?)`);
+    const delPresetFiles = db.prepare(`DELETE FROM preset_files WHERE "path" = ?`);
+    const insertPresetFile = db.prepare(`INSERT INTO preset_files ("path", preset) VALUES (?, ?)`);
     if (vanished.length > 0) {
       const del = db.prepare(`DELETE FROM frontmatter WHERE "path" = ?`);
       for (const path of vanished) {
@@ -178,6 +191,7 @@ export function reconcile(db: DatabaseSync, cfg: Config, baseDir: string): { par
         // the frontmatter delete below would otherwise have already removed.
         delBody.run(path);
         del.run(path);
+        delPresetFiles.run(path);
         for (const feature of features) feature.remove?.(db, path, delta);
       }
     }
@@ -202,6 +216,12 @@ export function reconcile(db: DatabaseSync, cfg: Config, baseDir: string): { par
           for (const feature of features) feature.remove?.(db, doc.relPath, delta);
         }
         insertBody.run(doc.relPath, doc.search.title, doc.search.summary, doc.search.text, doc.relPath);
+        // Coverage is glob-derived, not content-derived, but only reparsed/added docs are
+        // touched here: a preset edit changes featureSignature and forces a full rebuild
+        // (see open()), so an unchanged doc's coverage is already correct on disk. New docs
+        // have no rows to clear -- skipping the delete keeps cold builds linear.
+        if (existing.has(doc.relPath)) delPresetFiles.run(doc.relPath);
+        for (const presetName of doc.presets) insertPresetFile.run(doc.relPath, presetName);
         for (const feature of features) feature.store?.(db, doc.relPath, doc.extracted[feature.name], delta);
       }
     }
@@ -222,6 +242,21 @@ export function reconcile(db: DatabaseSync, cfg: Config, baseDir: string): { par
   if (durationMs > prevMax) setMeta(db, 'reconcile_max_ms', String(durationMs));
 
   return { parsed: parsedDocs.length, warnings };
+}
+
+// Names what moved between two feature signatures (see config.featureSignature's format:
+// global features, embed provider, then one segment per preset) for the rebuild notice.
+function signatureDiff(before: string, after: string): string {
+  // Segment keys: `features`, `embed`, `preset:<name>` (config.featureSignature's format).
+  const keyOf = (part: string) => (part.startsWith('preset:') ? part.split(':').slice(0, 2).join(':') : part.split(':')[0]);
+  const parse = (sig: string) => new Map(sig.split('|').map((part) => [keyOf(part), part]));
+  const a = parse(before);
+  const b = parse(after);
+  const changed = new Set<string>();
+  for (const [key, val] of b) if (a.get(key) !== val) changed.add(key);
+  for (const key of a.keys()) if (!b.has(key)) changed.add(key);
+  const label = (key: string) => (key === 'embed' ? 'embed settings' : key.startsWith('preset:') ? `preset "${key.slice(7)}"` : 'features');
+  return changed.size === 0 ? 'features' : [...changed].map(label).join(', ');
 }
 
 export function open(cfg: ResolvedConfig): OpenResult {
@@ -246,6 +281,14 @@ export function open(cfg: ResolvedConfig): OpenResult {
   const features = getMeta(db, 'features');
   const wantFeatures = featureSignature(cfg);
   if ((version !== null && version !== SCHEMA_VERSION) || (features !== null && features !== wantFeatures)) {
+    // Indexing derives from presets, so a config edit rebuilding the cache must say so and
+    // name what changed -- silent rebuilds make derived indexing look like a hang or a bug.
+    if (version !== null && version !== SCHEMA_VERSION) {
+      console.error('sense: cache format changed (new sensemaking version); rebuilding the index');
+    } else {
+      const changed = signatureDiff(features ?? '', wantFeatures);
+      console.error(`sense: config change (${changed}) rebuilds the index`);
+    }
     db.close();
     rmSync(stateDir, { recursive: true, force: true });
     return open(cfg);

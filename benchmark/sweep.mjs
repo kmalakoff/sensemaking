@@ -4,7 +4,7 @@
 // cached originals stay clean, and copies are deleted after each point. Points run strictly
 // serially -- a shared CPU with another benchmark would swamp the signal this sweep hunts for.
 // usage: node benchmark/sweep.mjs [dimension ...] [--quick] [--out file]
-// dimensions: fields headings links filesize notes bulk probes (default: all)
+// dimensions: fields headings links filesize notes bulk probes presets (default: all)
 import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { appendFileSync, cpSync, mkdirSync, rmSync, statSync, utimesSync } from 'node:fs';
@@ -17,7 +17,7 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const CLI = join(ROOT, 'bin', 'cli.js');
 const WORK_ROOT = join(ROOT, '.tmp', 'sweep-work');
 
-const DIMENSION_NAMES = ['fields', 'headings', 'links', 'filesize', 'notes', 'bulk', 'probes'];
+const DIMENSION_NAMES = ['fields', 'headings', 'links', 'filesize', 'notes', 'bulk', 'probes', 'presets'];
 
 const argv = process.argv.slice(2);
 const QUICK = argv.includes('--quick');
@@ -97,7 +97,8 @@ async function measurePoint(spec) {
 
     const mapR = timed(work, ['map']);
     const peekR = timed(work, ['peek', target]);
-    const findR = timed(work, ['find', 'the', '--k', '10']);
+    // find_ms: lexical ranked search, no vectors -- --lexical is search's opt-out (default participates).
+    const findR = timed(work, ['search', 'the', '--lexical', '--k', '10']);
 
     return {
       cold_build_ms,
@@ -211,11 +212,11 @@ async function adversarialProbe() {
   console.log(`  crawl: ${JSON.stringify(result)}`);
 }
 
-// Vectors build lazily on the first --semantic query (embedPending tops up NULL rows), not
-// at reconcile -- so the warm-up call pays the embed cost and subsequent calls don't. Model
-// is assumed already cached in ~/.cache/sensemaking; this probe doesn't fetch it.
+// Vectors build lazily on the first semantic-participating query (embedPending tops up NULL
+// rows), not at reconcile -- so the warm-up call pays the embed cost and subsequent calls
+// don't. Model is assumed already cached in ~/.cache/sensemaking; this probe doesn't fetch it.
 async function semanticProbe() {
-  console.log('\n### probes: semantic (find --semantic warm-up + 3 timed, median)');
+  console.log('\n### probes: semantic (bare `search` warm-up + 3 timed, median)');
   const rows = [];
   for (const notes of [6000, 26000]) {
     const spec = { ...HUB, notes, embed: true };
@@ -223,12 +224,12 @@ async function semanticProbe() {
     const work = workingCopy(src);
     try {
       let t = process.hrtime.bigint();
-      const warm = runCli(work, ['find', 'the', '--semantic', '--k', '10']);
+      const warm = runCli(work, ['search', 'the', '--k', '10']);
       const warmup_ms = Math.round(Number(process.hrtime.bigint() - t) / 1e6);
       const semantic_find_ms = Math.round(
         median(() => {
           t = process.hrtime.bigint();
-          runCli(work, ['find', 'the', '--semantic', '--k', '10']);
+          runCli(work, ['search', 'the', '--k', '10']);
           return Number(process.hrtime.bigint() - t) / 1e6;
         }, 3)
       );
@@ -242,6 +243,51 @@ async function semanticProbe() {
   console.log('\n| notes | warmup_ms | semantic_find_ms (median of 3) |');
   console.log('|---|---|---|');
   for (const r of rows) console.log(`| ${r.notes} | ${r.warmup_ms} | ${r.semantic_find_ms} |`);
+}
+
+// Mixed-preset tree: `default` covers a/** (semantic on), `raw` covers b/** (semantic off).
+// Indexing/embedding is derived from presets (plans/presets-config.md), so files only a
+// semantic-false preset covers must end up with zero embeddings rows -- checked here after a
+// warm-up search actually triggers embedding (lazy, see semanticProbe above).
+async function presetsProbe() {
+  console.log('\n### presets: mixed semantic coverage (default = a/** semantic on, raw = b/** semantic off)\n');
+  const spec = {
+    ...HUB,
+    notes: 2000,
+    presets: [
+      { name: 'default', dir: 'a', semantic: true },
+      { name: 'raw', dir: 'b', semantic: false },
+    ],
+  };
+  const src = syntheticPath(spec);
+  const work = workingCopy(src);
+  try {
+    const t = process.hrtime.bigint();
+    const cold = runCli(work, ['status']);
+    const cold_crawl_ms = Math.round(Number(process.hrtime.bigint() - t) / 1e6);
+
+    runCli(work, ['search', 'the', '--k', '10']); // warm-up: triggers embedding for the default preset's coverage
+
+    const statusOut = runCli(work, ['status', '--format', 'json']);
+    const status = JSON.parse(statusOut.stdout);
+    const coverage = Object.fromEntries(status.presets.map((p) => [p.name, p]));
+    const pass = coverage.raw?.embedded === 0 && coverage.raw?.files > 0 && coverage.default?.embedded === coverage.default?.files && coverage.default?.files > 0;
+    record('presets', { notes: spec.notes }, { cold_crawl_ms, coverage, pass });
+    console.log(`  cold crawl: ${cold_crawl_ms} ms (status exit ${cold.status})`);
+    console.log(`  embedding derivation: ${pass ? 'PASS' : 'FAIL'} -- default files=${coverage.default?.files} embedded=${coverage.default?.embedded}; raw files=${coverage.raw?.files} embedded=${coverage.raw?.embedded} (must be 0)`);
+
+    const defaultR = timed(work, ['search', 'the', '--k', '10']);
+    const rawR = timed(work, ['search', 'the', '--preset', 'raw', '--k', '10']);
+    const includeR = timed(work, ['search', 'the', '--include', 'a/**/*.md', '--k', '10']);
+    record('presets', { notes: spec.notes }, { search_default_ms: defaultR.ms, search_raw_ms: rawR.ms, search_include_ms: includeR.ms });
+    console.log('\n| operation | ms |');
+    console.log('|---|---|');
+    console.log(`| \`search\` (default preset, semantic on) | ${defaultR.ms} |`);
+    console.log(`| \`search --preset raw\` (semantic off) | ${rawR.ms} |`);
+    console.log(`| \`search --include a/**/*.md\` (ad hoc scope override) | ${includeR.ms} |`);
+  } finally {
+    rmSync(work, { recursive: true, force: true });
+  }
 }
 
 for (const dimension of dimensions) {
@@ -288,5 +334,7 @@ for (const dimension of dimensions) {
     await adversarialProbe();
     if (!QUICK) await semanticProbe();
     else console.log('\n### probes: semantic skipped (--quick)');
+  } else if (dimension === 'presets') {
+    await presetsProbe();
   }
 }

@@ -3,6 +3,7 @@ import { mkdtempSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { pathToFileURL } from 'url';
+import { featureSignature } from '../../src/config.ts';
 import { packageRoot, runCli } from '../lib/cli.ts';
 
 function runWith(config: string, args: string[] = ['--list']) {
@@ -13,21 +14,39 @@ function runWith(config: string, args: string[] = ['--list']) {
 
 describe('config validation', () => {
   it('missing queries defaults to none, not a crash', () => {
-    const result = runWith('{"version":2,"scan":{"include":["*.md"]}}');
+    const result = runWith('{"version":3,"presets":{"default":{"include":["*.md"]}}}');
     assert.equal(result.status, 0, result.stderr);
   });
 
-  it('missing scan.include is a named error, not a TypeError', () => {
-    const result = runWith('{"version":2,"queries":{}}');
+  it('missing presets is a named error, not a TypeError', () => {
+    const result = runWith('{"version":3,"queries":{}}');
     assert.equal(result.status, 1);
-    assert.match(result.stderr, /scan\.include must be a non-empty array/);
+    assert.match(result.stderr, /presets must be a non-empty object/);
     assert.ok(!result.stderr.includes('TypeError'), result.stderr);
   });
 
-  it('empty include array is rejected', () => {
-    const result = runWith('{"version":2,"scan":{"include":[]}}');
+  it('empty presets object is rejected', () => {
+    const result = runWith('{"version":3,"presets":{},"queries":{}}');
     assert.equal(result.status, 1);
-    assert.match(result.stderr, /scan\.include/);
+    assert.match(result.stderr, /presets must be a non-empty object/);
+  });
+
+  it('a "default" preset is required', () => {
+    const result = runWith('{"version":3,"presets":{"wiki":{"include":["*.md"]}},"queries":{}}');
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /presets must include a "default" preset/);
+  });
+
+  it('empty include array within a preset is rejected', () => {
+    const result = runWith('{"version":3,"presets":{"default":{"include":[]}},"queries":{}}');
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /presets\.default\.include must be a non-empty array/);
+  });
+
+  it('every preset requires include, including "default" -- no exception for it', () => {
+    const result = runWith('{"version":3,"presets":{"default":{}},"queries":{}}');
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /presets\.default\.include must be a non-empty array/);
   });
 
   it('non-object config is rejected', () => {
@@ -37,69 +56,97 @@ describe('config validation', () => {
   });
 
   it('a typo subcommand on a queries-less config exits 2 with the unknown-query message', () => {
-    const result = runWith('{"version":2,"scan":{"include":["*.md"]}}', ['mapp']);
+    const result = runWith('{"version":3,"presets":{"default":{"include":["*.md"]}}}', ['mapp']);
     assert.equal(result.status, 2);
     assert.match(result.stderr, /unknown query: "mapp"/);
   });
 
   it('non-boolean feature value is rejected', () => {
-    const result = runWith('{"version":2,"scan":{"include":["*.md"]},"features":{"links":"yes"}}');
+    const result = runWith('{"version":3,"presets":{"default":{"include":["*.md"]}},"features":{"links":"yes"}}');
     assert.equal(result.status, 1);
     assert.match(result.stderr, /features\.links must be a boolean/);
   });
 
-  it('embed accepts true and the object form', () => {
-    assert.equal(runWith('{"version":2,"scan":{"include":["*.md"]},"features":{"embed":true}}').status, 0);
-    assert.equal(runWith('{"version":2,"scan":{"include":["*.md"]},"features":{"embed":{"type":"api","url":"http://x/v1"}}}').status, 0);
+  it('embed is not a features key', () => {
+    const result = runWith('{"version":3,"presets":{"default":{"include":["*.md"]}},"features":{"embed":true}}');
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /features has unknown key\(s\) embed/);
+  });
+
+  it('the top-level embed block accepts provider settings', () => {
+    assert.equal(runWith('{"version":3,"presets":{"default":{"include":["*.md"]}},"embed":{}}').status, 0);
+    assert.equal(runWith('{"version":3,"presets":{"default":{"include":["*.md"]}},"embed":{"type":"api","url":"http://x/v1"}}').status, 0);
   });
 
   it('embed with an unknown type is rejected', () => {
-    const result = runWith('{"version":2,"scan":{"include":["*.md"]},"features":{"embed":{"type":"weird"}}}');
+    const result = runWith('{"version":3,"presets":{"default":{"include":["*.md"]}},"embed":{"type":"weird"}}');
     assert.equal(result.status, 1);
-    assert.match(result.stderr, /features\.embed must be a boolean or \{/);
+    assert.match(result.stderr, /embed\.type must be "static" or "api"/);
+  });
+
+  it('a preset only accepts a boolean for semantic, not the embed object form', () => {
+    const result = runWith('{"version":3,"presets":{"default":{"include":["*.md"],"semantic":{"type":"api"}}},"queries":{}}');
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /presets\.default\.semantic must be a boolean/);
   });
 
   it('a newer config version fails the version gate, not shape validation', () => {
-    const result = runWith('{"version":3,"features":{"embed":{"provider":"x"}}}');
+    const result = runWith(`{"version":${4},"embed":{"provider":"x"}}`);
     assert.equal(result.status, 1);
-    assert.match(result.stderr, /config version 3 requires a newer sense/);
+    assert.match(result.stderr, /config version 4 requires a newer sense/);
   });
 
-  it('an unrecognised key is reported, not silently ignored', () => {
+  it('an unrecognised top-level key is reported, not silently ignored', () => {
     const dir = mkdtempSync(join(tmpdir(), 'sense-unknown-'));
     const configPath = join(dir, 'sense.config.json');
-    writeFileSync(configPath, JSON.stringify({ version: 2, scan: { include: ['*.md'], exclude: ['x/**'] }, queries: {} }));
+    writeFileSync(configPath, JSON.stringify({ version: 3, presets: { default: { include: ['*.md'] } }, queries: {}, bogus: true }));
     const result = runCli(['--list', '--config', configPath]);
     assert.equal(result.status, 0, 'still runs');
-    assert.match(result.stderr, /scan\.exclude/);
+    assert.match(result.stderr, /bogus/);
     assert.match(result.stderr, /does not read/);
   });
 
-  it('checks referencing an unknown query is a named config error', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'sense-checks-'));
-    const configPath = join(dir, 'sense.config.json');
-    writeFileSync(configPath, JSON.stringify({ version: 2, scan: { include: ['*.md'] }, queries: {}, checks: { nope: 'empty' } }));
-    const result = runCli(['--list', '--config', configPath]);
+  it('an unrecognised key inside a preset is a hard error, not a warning', () => {
+    const result = runWith('{"version":3,"presets":{"default":{"include":["*.md"],"bogus":true}},"queries":{}}');
     assert.equal(result.status, 1);
-    assert.match(result.stderr, /checks names "nope"/);
+    assert.match(result.stderr, /presets\.default has unknown key\(s\) bogus/);
   });
 
-  it('check fails when an expect-empty query returns rows, passes when empty', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'sense-checks2-'));
-    writeFileSync(join(dir, 'note.md'), '---\ntitle: t\n---\nbody with [[missing-target]]\n');
-    writeFileSync(
-      join(dir, 'sense.config.json'),
-      JSON.stringify({
-        version: 2,
-        scan: { include: ['**/*.md'] },
-        queries: { 'dead-links': 'SELECT src FROM links WHERE dst IS NULL', 'no-frontmatterless': 'SELECT path FROM frontmatter WHERE title IS NULL' },
-        checks: { 'dead-links': 'empty', 'no-frontmatterless': 'empty' },
-      })
-    );
-    const result = runCli(['check'], { cwd: dir });
-    assert.equal(result.status, 1, 'the dead link fails the run');
-    assert.match(result.stdout, /dead-links.*FAILED: expected empty, returned 1/);
-    assert.match(result.stdout, /no-frontmatterless.*ok \(empty, as asserted\)/);
+  it('checks is rejected with a named error, not silently ignored as an unknown key', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sense-checks-'));
+    const configPath = join(dir, 'sense.config.json');
+    writeFileSync(configPath, JSON.stringify({ version: 3, presets: { default: { include: ['*.md'] } }, queries: {}, checks: { nope: 'empty' } }));
+    const result = runCli(['--list', '--config', configPath]);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /checks was removed in v3/);
+  });
+
+  it('a saved search requires non-empty search text -- a scope without a question is just flags', () => {
+    const result = runWith('{"version":3,"presets":{"default":{"include":["*.md"]}},"queries":{"empty":{"search":"","k":5}}}');
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /queries\.empty\.search must be non-empty text/);
+  });
+
+  it('a saved search with an unknown key is rejected', () => {
+    const result = runWith('{"version":3,"presets":{"default":{"include":["*.md"]}},"queries":{"q":{"search":"pricing","semanticc":true}}}');
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /queries\.q has unknown key\(s\) semanticc/);
+  });
+
+  it('a { sql } saved query requires a non-empty string', () => {
+    const result = runWith('{"version":3,"presets":{"default":{"include":["*.md"]}},"queries":{"q":{"sql":""}}}');
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /queries\.q\.sql must be a non-empty string/);
+  });
+
+  it('a saved search preset must be a string, and include a non-empty glob array', () => {
+    const badPreset = runWith('{"version":3,"presets":{"default":{"include":["*.md"]}},"queries":{"q":{"search":"pricing","preset":5}}}');
+    assert.equal(badPreset.status, 1);
+    assert.match(badPreset.stderr, /queries\.q\.preset must be a preset name/);
+
+    const badInclude = runWith('{"version":3,"presets":{"default":{"include":["*.md"]}},"queries":{"q":{"search":"pricing","include":[]}}}');
+    assert.equal(badInclude.status, 1);
+    assert.match(badInclude.stderr, /queries\.q\.include must be a non-empty array/);
   });
 
   it('--help lists every command in the registry', async () => {
@@ -111,5 +158,22 @@ describe('config validation', () => {
     for (const name of Object.keys(COMMANDS)) {
       assert.ok(new RegExp(`\\b${name}\\b`).test(help), `${name} is a command but is missing from --help`);
     }
+  });
+});
+
+describe('featureSignature', () => {
+  it("changes when a preset's semantic flips, even though features/embed are unchanged", () => {
+    // featureSignature isn't part of the public barrel (internals stay module-private);
+    // reach it the same way test/unit/verbs.test.ts reaches other src-internal helpers.
+    const base = { presets: { default: { include: ['*.md'] }, raw: { include: ['raw/**/*.md'] } }, queries: {} };
+    const semanticOn = featureSignature(base);
+    const semanticOff = featureSignature({ ...base, presets: { ...base.presets, raw: { include: ['raw/**/*.md'], semantic: false } } });
+    assert.notEqual(semanticOn, semanticOff);
+  });
+
+  it("changes when a preset's include/exclude changes, so an edit that only reshapes coverage still rebuilds", () => {
+    const base = { presets: { default: { include: ['*.md'] } }, queries: {} };
+    const widened = featureSignature({ presets: { default: { include: ['**/*.md'] } }, queries: {} });
+    assert.notEqual(featureSignature(base), widened);
   });
 });

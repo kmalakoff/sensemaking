@@ -4,7 +4,7 @@
   "description": "Config for sense -- SQL over the frontmatter, content, links, and structure of a markdown tree.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["scan", "queries"],
+  "required": ["presets", "queries"],
   "properties": {
     "$schema": {
       "type": "string",
@@ -12,31 +12,54 @@
     },
     "version": {
       "type": "integer",
-      "enum": [1, 2],
+      "enum": [1, 2, 3],
       "description": "Config format version. Older versions are auto-migrated (and the file rewritten) on load; a version newer than this sense build supports makes it exit with an error rather than misinterpret the file. Omit to default to 1."
     },
-    "scan": {
+    "presets": {
       "type": "object",
-      "additionalProperties": false,
-      "required": ["include"],
-      "description": "Which files become rows in the `frontmatter` table.",
-      "properties": {
-        "include": {
-          "type": "array",
-          "items": { "type": "string" },
-          "minItems": 1,
-          "description": "Glob patterns (globby syntax), resolved relative to this config file's own directory -- never the invocation cwd."
+      "description": "File selection, index-time, and named search defaults. A preset is self-contained: no inheritance between presets, and no ordering -- presets may overlap freely (they are views, not partitions), and a preset whose globs match nothing is valid. A file is indexed iff any preset's include/exclude covers it (union across presets); it is embedded iff any covering preset has semantic on. `default` is used when a command names no preset, and must be declared. `sense init` generates `default` plus one `large` example.",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["include"],
+        "properties": {
+          "include": {
+            "type": "array",
+            "items": { "type": "string" },
+            "minItems": 1,
+            "description": "Glob patterns (globby syntax), resolved relative to this config file's own directory -- never the invocation cwd. Required for every preset, including `default`."
+          },
+          "exclude": {
+            "type": "array",
+            "items": { "type": "string" },
+            "minItems": 1,
+            "description": "Glob patterns excluded from this preset's `include`, tsconfig-standard semantics."
+          },
+          "k": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Default result count for `search` when this preset is in effect (named, or `default` when none is). A --k on the invocation, or a saved search's own `k`, overrides it. Defaults to 10 when the preset omits it too."
+          },
+          "semantic": {
+            "type": "boolean",
+            "description": "Vector participation for files this preset covers. Absent or true means on (the default); only ever meaningfully written as false. A file covered only by semantic-false presets is indexed but never embedded, so it searches lexically automatically -- no error, just fewer signals."
+          },
+          "where": {
+            "type": "string",
+            "description": "Standing SQL condition against frontmatter alias `f`, applied when `search` runs under this preset without an explicit --where. An explicit --where (or a saved search's own `where`) replaces it rather than ANDing with it, so a caller can always widen back to the preset's whole scope."
+          }
         }
       }
     },
     "features": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Independently toggleable features. Absent block or key means enabled; set false to disable. Toggling a feature rebuilds the cache. Commands degrade rather than fail: `find` without links is BM25-only, `map` without rank omits hubs, `peek` without sections omits the outline.",
+      "description": "Global feature defaults. Absent block or key means enabled. `embed` is not a member of this block -- vector participation is controlled per preset by `semantic` (see \"presets\" and the top-level \"embed\" block for provider settings). Toggling a feature rebuilds the cache. Commands degrade rather than fail: `search` without links is BM25-only, `map` without rank omits hubs, `peek` without sections omits the outline.",
       "properties": {
         "links": {
           "type": "boolean",
-          "description": "Extract wikilinks and relative markdown links into the `links` table (src, target as written, dst resolved path or NULL for dead links; an ambiguous basename resolves to the lexicographically first match). Powers backlinks, graph expansion in `find`, and `peek`'s link lists."
+          "description": "Extract wikilinks and relative markdown links into the `links` table (src, target as written, dst resolved path or NULL for dead links; an ambiguous basename resolves to the lexicographically first match). Powers backlinks, graph expansion in `search`, and `peek`'s link lists."
         },
         "sections": {
           "type": "boolean",
@@ -45,63 +68,60 @@
         "rank": {
           "type": "boolean",
           "description": "PageRank over resolved links into `frontmatter._rank` at reconcile -- a static importance prior. Powers `map`'s hub list; usable in any ORDER BY. Requires `links`."
-        },
-        "embed": {
-          "description": "Semantic vectors, opt-in (absent = off; most trees don't need them). When on, vectors are computed and kept fresh at reconcile; expansion runs only on `find --semantic` invocations -- default `find` results are unchanged. `true` = defaults (static type, minishlab/potion-retrieval-32M, downloaded to ~/.cache/sensemaking on first use). Object form: `model` (Hugging Face id or local path), `type` (`static` = built-in pure-JS Model2Vec loader; `api` = OpenAI-compatible POST /embeddings), `url` (api base, e.g. http://localhost:11434/v1), `key` (name of the env var holding the bearer token). Changing model or type rebuilds the cache like a feature toggle.",
-          "oneOf": [
-            { "type": "boolean" },
-            {
-              "type": "object",
-              "additionalProperties": false,
-              "properties": {
-                "model": { "type": "string" },
-                "type": { "type": "string", "enum": ["static", "api"] },
-                "url": { "type": "string" },
-                "key": { "type": "string" }
-              }
-            }
-          ]
         }
       }
     },
-    "defaults": {
+    "embed": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Tree-declared defaults for the commands.",
+      "description": "Embed provider settings only -- presence alone does not enable embedding. Vector participation is decided per preset by that preset's `semantic` field; this block only says which model/provider to use when at least one preset wants vectors. `model` (Hugging Face id or local path, default minishlab/potion-retrieval-32M), `type` (`static` = built-in pure-JS Model2Vec loader, default; `api` = OpenAI-compatible POST /embeddings), `url` (api base, e.g. http://localhost:11434/v1), `key` (name of the env var holding the bearer token). Changing model or type rebuilds the cache like a feature toggle.",
       "properties": {
-        "find": {
-          "type": "object",
-          "additionalProperties": false,
-          "description": "Default scope for `find`. Use when a tree holds a layer that should stay queryable but out of ordinary search -- generated output, or unverified source extractions that must not be cited as conclusions.",
-          "properties": {
-            "where": {
-              "type": "string",
-              "description": "SQL condition against frontmatter alias `f`, e.g. \"f.type != 'raw'\". Applied when `find` runs without --where; an explicit --where replaces it (so `--where \"1=1\"` searches the whole tree). Reported by `sense status`."
-            }
-          }
-        }
+        "model": { "type": "string" },
+        "type": { "type": "string", "enum": ["static", "api"] },
+        "url": { "type": "string" },
+        "key": { "type": "string" }
       }
-    },
-    "checks": {
-      "type": "object",
-      "description": "Assertions over saved queries, for trees whose queries encode invariants: `\"checks\": { \"dead-links\": \"empty\" }` makes `sense check` fail (exit 1) when that query returns rows. Without an entry, `check` reports zero-row queries as `ok, but returns 0 rows` -- informational, since an ordinary query returning nothing is sometimes a bug and sometimes just an empty result. Keys must name saved queries.",
-      "additionalProperties": { "type": "string", "enum": ["empty"] }
     },
     "queries": {
       "type": "object",
-      "description": "Named queries runnable as `sense <name> [params...]`, either a SQL string or a saved find. SQL string: `?` placeholders bind to CLI positional args in order. Tables: `frontmatter` (one row per file, one column per discovered frontmatter key, plus `path`/`_mtime`/`_size`/`_rank`), `content` (FTS5: `title`, `summary`, `text`, `path`), `links` (`src`, `target`, `dst`), and `sections` (`path`, `idx`, `level`, `heading`, `start_line`, `end_line`, `tokens`). `has(field, value)`: array membership on a JSON-array field, substring match on a string (so has(f.status, 'active') also matches 'inactive'), false on NULL. Exact matches: `=` for scalars, `EXISTS (SELECT 1 FROM json_each(f.tags) WHERE value = ?)` for array members. Canonical query: `SELECT f.path, content.title, content.summary, CASE WHEN length(content.text) <= 16384 THEN snippet(content, -1, '«', '»', '…', 10) END AS hit FROM frontmatter f JOIN content ON content.path = f.path WHERE content MATCH ? ORDER BY bm25(content, 10.0, 5.0, 1.0) LIMIT 10`. The CASE bounds snippet(), which re-tokenizes each matched document and costs seconds per query once a tree holds a megabyte-scale note; `find` applies the same bound internally. Saved find object: `sense <name>` behaves like `sense find <find> [--k] [--where] [--semantic]` with zero flags; it takes no positional parameters. Reserved frontmatter keys: `path`, `_mtime`, `_size`, `_rank`, `content`, `links`, `sections`. Reserved query names (unreachable as subcommands, either form): `init`, `query`, `find`, `map`, `peek`, `watch`, `status`, `rebuild`, `check`.",
+      "description": "Named queries runnable as `sense <name> [params...]`, one of three shapes: a raw SQL string, `{ sql }`, or a saved search. SQL (string or `{ sql }`): `?` placeholders bind to CLI positional args in order; deterministic and enumerating, including raw FTS5 `MATCH` for word search under your own SQL -- \"0 rows = not in the tree\" lives here. Tables: `frontmatter` (one row per file, one column per discovered frontmatter key, plus `path`/`_mtime`/`_size`/`_rank`), `content` (FTS5: `title`, `summary`, `text`, `path`), `links` (`src`, `target`, `dst`), `sections` (`path`, `idx`, `level`, `heading`, `start_line`, `end_line`, `tokens`), and `preset_files` (`preset`, `path`) -- which presets cover which files. `has(field, value)`: array membership on a JSON-array field, substring match on a string (so has(f.status, 'active') also matches 'inactive'), false on NULL. Exact matches: `=` for scalars, `EXISTS (SELECT 1 FROM json_each(f.tags) WHERE value = ?)` for array members. Canonical query: `SELECT f.path, content.title, content.summary, CASE WHEN length(content.text) <= 16384 THEN snippet(content, -1, '«', '»', '…', 10) END AS hit FROM frontmatter f JOIN content ON content.path = f.path WHERE content MATCH ? ORDER BY bm25(content, 10.0, 5.0, 1.0) LIMIT 10`. The CASE bounds snippet(), which re-tokenizes each matched document and costs seconds per query once a tree holds a megabyte-scale note; `search` applies the same bound internally. Saved search object: one text driving every engine the scoped preset has -- word match, links, vectors -- fused into one ranked list, `via` labeling which engine produced each row; `search` text must be non-empty (a saved query saves a question -- a scope without one is just flags). `preset` names one declared preset (defaults to `default`); `include` is an ad hoc glob scope that replaces the preset's include/exclude entirely, same as `search --include`; `where` and `k` behave like the `search` command's flags. `semantic: false` opts a query down to lexical only -- the rare precision opt-out, not a gate (semantic participation otherwise follows the scoped preset's `semantic` automatically). `sense <name>` behaves like `sense search <search> [--preset] [--include] [--where] [--k] [--lexical]` with zero flags; it takes no positional parameters. `sense check` probes every saved query/search (lexically, k=1 for searches) so a broken one fails loudly at check time -- it makes no assertion about the result itself; a returned row set is the reader's judgment. Reserved frontmatter keys: `path`, `_mtime`, `_size`, `_rank`, `content`, `links`, `sections`. Reserved query names (unreachable as subcommands, any shape): `init`, `query`, `search`, `find`, `map`, `peek`, `watch`, `status`, `rebuild`, `check`.",
       "additionalProperties": {
         "oneOf": [
           { "type": "string" },
           {
             "type": "object",
             "additionalProperties": false,
-            "required": ["find"],
+            "required": ["sql"],
             "properties": {
-              "find": { "type": "string", "description": "FTS5 MATCH terms, verbatim -- same syntax as `sense find \"<terms>\"`." },
-              "k": { "type": "integer", "minimum": 1, "description": "Result count, same as `find --k`. Defaults to 10. A --k on the invocation overrides this." },
-              "where": { "type": "string", "description": "SQL condition against frontmatter alias `f`, same as `find --where`. A --where on the invocation replaces this rather than ANDing with it." },
-              "semantic": { "type": "boolean", "description": "Adds vector expansion, same as `find --semantic`. Requires features.embed; `sense check` reports a saved find with semantic true as failed when embed is off, without running it." }
+              "sql": { "type": "string", "description": "Raw SQL, same as the string shape -- `?` placeholders bind to CLI positional args in order." }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["search"],
+            "properties": {
+              "search": {
+                "type": "string",
+                "minLength": 1,
+                "description": "One text driving every engine the scoped preset has -- word match, links, vectors -- fused into one ranked list. Same syntax as `sense search \"<text>\"`. Must be non-empty."
+              },
+              "preset": {
+                "type": "string",
+                "description": "Preset name to search under. Defaults to `default`. An unknown name is an error listing declared presets."
+              },
+              "include": {
+                "type": "array",
+                "items": { "type": "string" },
+                "minItems": 1,
+                "description": "Ad hoc glob scope, same as `search --include`. Replaces the preset's include/exclude entirely rather than layering on top of it."
+              },
+              "k": { "type": "integer", "minimum": 1, "description": "Result count, same as `search --k`. Defaults to the preset's own `k`, then 10. A --k on the invocation overrides this." },
+              "where": { "type": "string", "description": "SQL condition against frontmatter alias `f`, same as `search --where`. A --where on the invocation replaces this rather than ANDing with it." },
+              "semantic": {
+                "type": "boolean",
+                "description": "false opts this query down to lexical-only, same as `search --lexical` -- the rare precision opt-out. Semantic participation otherwise follows the scoped preset's `semantic` automatically, so true is redundant with the default."
+              }
             }
           }
         ]

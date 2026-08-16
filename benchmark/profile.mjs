@@ -2,7 +2,7 @@
 // pattern: this file re-invokes itself under --cpu-prof so the profile covers exactly one
 // scenario's work, then parses the resulting .cpuprofile and sums self time by callFrame.url.
 // usage: node benchmark/profile.mjs <treePath> [scenario ...]
-// scenarios: cold nochange update1 find map semantic (default: all applicable)
+// scenarios: cold nochange update1 search map semantic (default: all applicable)
 
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, utimesSync } from 'node:fs';
@@ -15,7 +15,7 @@ const ROOT = join(dirname(THIS_FILE), '..');
 const DIST_INDEX = join(ROOT, 'dist', 'esm', 'index.js');
 const PROFILE_DIR = join(ROOT, '.tmp', 'profile');
 
-const ALL_SCENARIOS = ['cold', 'nochange', 'update1', 'find', 'map', 'semantic'];
+const ALL_SCENARIOS = ['cold', 'nochange', 'update1', 'search', 'map', 'semantic'];
 
 // callFrame.url -> phase name, for frames whose url is specific enough to place. First
 // match wins; order goes feature modules before the db/commands modules that call them.
@@ -51,15 +51,15 @@ async function buildCfg(tree) {
   const configPath = join(tree, 'sense.config.json');
   // A tree with its own config gets its declared features (e.g. embed); a bare tree gets
   // the same minimal config run.mjs uses so cold/nochange/etc. are comparable across trees.
-  const cfg = existsSync(configPath) ? lib.loadConfig(configPath) : { scan: { include: ['**/*.md'] }, queries: {}, baseDir: tree, configPath: null };
+  const cfg = existsSync(configPath) ? lib.loadConfig(configPath) : { presets: { default: { include: ['**/*.md'] } }, queries: {}, baseDir: tree, configPath: null };
   return { lib, cfg };
 }
 
 async function runChild(scenario, tree) {
   const { lib, cfg } = await buildCfg(tree);
-  if (scenario === 'find' || scenario === 'semantic') {
+  if (scenario === 'search' || scenario === 'semantic') {
     const { db } = lib.open(cfg);
-    await lib.find(db, cfg, 'the', { k: 10, semantic: scenario === 'semantic' });
+    await lib.search(db, cfg, 'the', { k: 10, semantic: scenario === 'semantic' });
     db.close();
   } else if (scenario === 'map') {
     const { db } = lib.open(cfg);
@@ -79,6 +79,8 @@ function hasEmbedFeature(tree) {
   if (!existsSync(configPath)) return false;
   try {
     const cfg = JSON.parse(readFileSync(configPath, 'utf8'));
+    // v3: vectors follow presets (absent semantic = on); older configs keyed features.embed.
+    if (cfg.presets) return Object.values(cfg.presets).some((p) => p.semantic !== false);
     return Boolean(cfg.features?.embed);
   } catch {
     return false;
@@ -222,7 +224,7 @@ async function main() {
       continue;
     }
     if (scenario === 'semantic' && !embedOn) {
-      console.log(`\n== semantic ==  skipped: tree's sense.config.json lacks features.embed`);
+      console.log(`\n== semantic ==  skipped: no preset with semantic enabled in the tree's sense.config.json`);
       continue;
     }
     runScenario(scenario, tree);

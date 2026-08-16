@@ -1,11 +1,13 @@
+import { presetCoverage } from '../commands.ts';
 import { embedConfig, featureStates } from '../config.ts';
 import { docCount, getMeta, open } from '../db.ts';
+import { featuresLine, presetsLines } from '../output.ts';
 import { printWarnings } from './shared.ts';
 import type { Command } from './types.ts';
 
-// Vectors are computed on the first semantic query, not at reconcile, so a tree can be
-// embed-enabled with nothing embedded yet -- reported here because a fast `rebuild` on an
-// embed tree otherwise reads as "the feature isn't on".
+// Vectors are computed on the first semantic query, not at reconcile, so a tree can have a
+// semantic-on preset with nothing embedded yet -- reported here because a fast `rebuild` on
+// such a tree otherwise reads as "the feature isn't on".
 function vectorState(db: ReturnType<typeof open>['db']): { embedded: number; pending: number } | null {
   try {
     const row = db.prepare('SELECT COUNT(vector) AS embedded, COUNT(*) - COUNT(vector) AS pending FROM embeddings').get() as { embedded: number; pending: number };
@@ -23,6 +25,7 @@ const status: Command = (ctx) => {
   const features = featureStates(cfg);
   const e = embedConfig(cfg);
   const vectors = e ? vectorState(db) : null;
+  const presets = presetCoverage(db, cfg);
   const heartbeat = getMeta(db, 'watch_heartbeat');
   // Derived at open() (F): 3x the largest reconcile this cache has ever held its write
   // transaction for, floored at 30s -- read back from the connection rather than
@@ -34,7 +37,7 @@ const status: Command = (ctx) => {
     features: features.on,
     featuresOff: features.off,
     embed: e ? { type: e.type, model: e.model, ...(vectors ?? {}) } : null,
-    findDefaultWhere: cfg.defaults?.find?.where ?? null,
+    presets,
     watcherHeartbeatSecondsAgo: heartbeat ? Math.round((Date.now() - Date.parse(heartbeat)) / 1000) : null,
     busyTimeoutMs,
   };
@@ -44,10 +47,9 @@ const status: Command = (ctx) => {
   } else {
     console.log(`db: ${result.db}`);
     console.log(`docs: ${result.docs}`);
-    const off = features.off.length > 0 ? ` · off: ${features.off.map((name) => `${name} (features.${name})`).join(', ')}` : '';
-    console.log(`features: ${features.on.join(', ')}${off}`);
-    if (e) console.log(`embed: ${e.type} ${e.model}${vectors ? ` (vectors: ${vectors.embedded} embedded, ${vectors.pending} pending — embedded on first --semantic query)` : ''}`);
-    if (result.findDefaultWhere) console.log(`find default scope: ${result.findDefaultWhere} (--where replaces it)`);
+    console.log(featuresLine(features));
+    if (e) console.log(`embed: ${e.type} ${e.model}${vectors ? ` (vectors: ${vectors.embedded} embedded, ${vectors.pending} pending — embedded on the first semantic search)` : ''}`);
+    for (const line of presetsLines(presets)) console.log(line);
     console.log(result.watcherHeartbeatSecondsAgo === null ? 'watcher: no watcher' : `watcher: last heartbeat ${result.watcherHeartbeatSecondsAgo}s ago`);
     console.log(`busy_timeout: ${result.busyTimeoutMs}ms (derived: 3x the largest reconcile this cache has recorded, floored at 30000ms)`);
   }

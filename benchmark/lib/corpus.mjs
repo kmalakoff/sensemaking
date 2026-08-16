@@ -139,14 +139,30 @@ const SYNTHETIC_DEFAULTS = {
   bigNoteBytes: 0, // filesize dimension: pad note 0's body to ~this many bytes
   adversarial: false, // remove-markdown probe: pathological bodies instead of prose
   embed: false, // semantic dimension: write features.embed into sense.config.json
+  presets: null, // presets dimension: [{name, dir, semantic}] -> write a v3 presets config instead, one folder per preset
 };
+
+// JSON.stringify with a top-level array replacer only sorts/filters the outer object's
+// keys -- a nested object (e.g. spec.presets entries) would have every key stripped since
+// none of them are in that outer allow-list. Recursive key sorting keeps the hash stable
+// (and, for the flat specs every other dimension uses, byte-identical to the old replacer).
+function stableStringify(v) {
+  if (Array.isArray(v)) return `[${v.map(stableStringify).join(',')}]`;
+  if (v && typeof v === 'object') {
+    return `{${Object.keys(v)
+      .sort()
+      .map((k) => `${JSON.stringify(k)}:${stableStringify(v[k])}`)
+      .join(',')}}`;
+  }
+  return JSON.stringify(v);
+}
 
 // Cache key from the param values (not the catalog name -- synthetic corpora are requested
 // by spec object, see syntheticPath). A short hash covers every field so an unlisted param
 // still busts the cache; the descriptive prefix keeps .tmp/cache/ readable.
 function specKey(spec) {
   const full = { ...SYNTHETIC_DEFAULTS, ...spec };
-  const json = JSON.stringify(full, Object.keys(full).sort());
+  const json = stableStringify(full);
   let hash = 2166136261;
   for (let i = 0; i < json.length; i++) {
     hash ^= json.charCodeAt(i);
@@ -319,18 +335,22 @@ BUILDERS.synthetic = (spec, dest) => {
   const pickWord = zipfPicker(rand);
 
   // A few subdirectories at varying depth -- "spread across levels", not a balanced tree.
-  const dirCount = Math.max(1, Math.min(40, Math.ceil(cfg.notes / 50)));
-  const dirs = Array.from({ length: dirCount }, () => {
-    const depth = 1 + Math.floor(rand() * cfg.dirDepth);
-    return Array.from({ length: depth }, () => `d${Math.floor(rand() * 20)}`).join('/');
-  });
+  // presets mode wants the opposite: one fixed, named folder per declared preset, so each
+  // preset's include glob covers exactly (and only) its own folder.
+  const dirs = cfg.presets
+    ? cfg.presets.map((p) => p.dir)
+    : Array.from({ length: Math.max(1, Math.min(40, Math.ceil(cfg.notes / 50))) }, () => {
+        const depth = 1 + Math.floor(rand() * cfg.dirDepth);
+        return Array.from({ length: depth }, () => `d${Math.floor(rand() * 20)}`).join('/');
+      });
 
   const basenames = Array.from({ length: cfg.notes }, (_, i) => `note-${String(i).padStart(6, '0')}`);
   const fieldPool = Array.from({ length: cfg.distinctFields }, (_, i) => `field${i}`);
   const FIELD_TYPES = ['string', 'int', 'date', 'array'];
 
   for (let i = 0; i < cfg.notes; i++) {
-    const dir = dirs[Math.floor(rand() * dirs.length)];
+    // presets mode: round-robin so every folder gets an even share; otherwise random, matching the existing shape sweeps.
+    const dir = cfg.presets ? dirs[i % dirs.length] : dirs[Math.floor(rand() * dirs.length)];
     mkdirSync(join(dest, dir), { recursive: true });
 
     const fm = { title: `${pickWord()} ${pickWord()}` };
@@ -350,8 +370,13 @@ BUILDERS.synthetic = (spec, dest) => {
     writeFileSync(join(dest, dir, `${basenames[i]}.md`), `${frontmatter}${body}\n`);
   }
 
-  const features = cfg.embed ? ', "features": {"embed": true}' : '';
-  writeFileSync(join(dest, 'sense.config.json'), `{"version": 2, "scan": {"include": ["**/*.md"]}, "queries": {}${features}}\n`);
+  if (cfg.presets) {
+    const presets = Object.fromEntries(cfg.presets.map((p) => [p.name, { include: [`${p.dir}/**/*.md`], ...(p.semantic === false ? { semantic: false } : {}) }]));
+    writeFileSync(join(dest, 'sense.config.json'), `${JSON.stringify({ version: 3, presets, queries: {} }, null, 2)}\n`);
+  } else {
+    const features = cfg.embed ? ', "features": {"embed": true}' : '';
+    writeFileSync(join(dest, 'sense.config.json'), `{"version": 2, "scan": {"include": ["**/*.md"]}, "queries": {}${features}}\n`);
+  }
 };
 
 // Synthetic tree for a param spec (not a catalog name) -- lets sweep.mjs request corpora

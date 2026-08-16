@@ -1,7 +1,8 @@
 # sensemaking
 
-SQL over a tree of markdown notes: filter by frontmatter, search the prose, follow the links,
-read the structure. A CLI that starts, answers, and exits — no server, no build step.
+Query and search a tree of markdown notes: SQL over frontmatter and links, ranked search over
+the prose — words, links, and meaning fused. A CLI that starts, answers, and exits — no
+server, no build step.
 
 ## Problem
 
@@ -22,7 +23,7 @@ cd your-notes && sense init
 
 ```bash
 sense map                                        # orient: fields, hub notes, recent changes
-sense find "revenue OR earnings" --k 10          # locate: ranked references with excerpts
+sense search "revenue OR earnings" --k 10        # locate: words + links + meaning, one ranked list
 sense peek notes/q3-report.md                    # structure: outline + links, before reading
 sense query "SELECT path FROM frontmatter WHERE has(tags, ?)" urgent
 ```
@@ -60,62 +61,65 @@ ORDER BY bm25(content, 10.0, 5.0, 1.0) LIMIT 10
 | command | does |
 |---|---|
 | `map` | doc count, frontmatter field coverage, top hubs by link rank, recent changes |
-| `find "<terms>" [--where "<sql>"] [--k n] [--semantic]` | BM25 + link-graph expansion, fused; `via` marks each row `match`, `link`, or `match+link` |
+| `search "<text>" [--preset name] [--include glob] [--where "<sql>"] [--k n] [--lexical]` | words + links + vectors, one fused ranked list; `via` labels each row's evidence |
 | `peek <path>` | frontmatter + heading outline (`[L143-162, ~380t]`) + links both ways — first 20 per list, each with its total; the `links` table has the rest |
 | `query "<sql>" [params...]` | ad-hoc SQL over all the tables; `?` binds positional args |
 | `<name> [params...]` | run a query saved in the config; `--list` names them |
 | `init` | write a starter `sense.config.json` |
-| `status` | index location, doc count, feature state, watcher heartbeat |
-| `check` | prepare and run the saved queries, so a broken one fails here instead of mid-task |
+| `status` | index location, doc count, per-preset coverage, watcher heartbeat |
+| `check` | run every saved query and search, so a broken one fails here instead of mid-task |
 | `rebuild` | delete the cache and re-crawl |
 | `watch` | keep the index warm in the background (optional; see [WATCH.md](WATCH.md)) |
 
-`find` seeds a personalized-PageRank walk with the BM25 matches, so a note that never contains
-the terms but is linked from ones that do still surfaces. Terms pass verbatim to FTS5 `MATCH`
-(bare words AND-join; operators are yours to write). `--where` takes any SQL condition against
-frontmatter alias `f`. On trees with the `embed` feature, `--semantic` additionally expands by
-meaning — explicit per query, never silent; rows it adds are labeled `via: vector` and carry
-`similarity` (cosine against the best-matching chunk). A `lines` column points at the section
-that earned a row — a direct read range. `--format json` on any command returns structured
-output; `--version` and `--help` do what they say.
+`search` runs one text through every engine its scope has — FTS5 word match (BM25-ranked,
+bare words AND-join, operators are yours), a personalized-PageRank walk over the link graph,
+and vector similarity — fused into one list. `via` labels each row's evidence (`match`,
+`link`, `vector`, combinations); `similarity` is the cosine against the best-matching chunk;
+`lines` points at the section that earned the row — a direct read range. Rows that only
+vectors produced are the "these words aren't in the tree, this is what's near in meaning"
+signal. `--preset` picks a named settings bundle from the config, `--lexical` skips vectors
+for one command, `--where` filters on frontmatter. `--format json` on any command returns
+structured output; `--version` and `--help` do what they say.
 
 ## Config
 
 `sense init` writes `sense.config.json`; discovery walks up from cwd like git
-(`--config <path>` overrides). Name reusable queries and run them as `sense <name> [params...]`:
+(`--config <path>` overrides). Three keys: **presets** (named, self-contained setting
+bundles), **queries** (saved commands), and the version.
 
 ```json
 {
   "$schema": "https://unpkg.com/sensemaking/schema.json",
-  "version": 2,
-  "scan": { "include": ["**/*.md"] },
-  "features": { "links": true, "sections": true, "rank": true },
-  "defaults": { "find": { "where": "f.type != 'generated'" } },
+  "version": 3,
+  "presets": {
+    "default": { "include": ["**/*.md"], "k": 10 },
+    "raw":     { "include": ["raw/**/*.md"], "k": 5, "semantic": false }
+  },
   "queries": {
     "dead-links": "SELECT src, target FROM links WHERE dst IS NULL",
     "by-tag": "SELECT path, title FROM frontmatter WHERE has(tags, ?) ORDER BY path",
-    "hot": { "find": "pricing OR billing", "k": 20 }
-  },
-  "checks": { "dead-links": "empty" }
+    "hot": { "search": "pricing OR billing", "preset": "raw" }
+  }
 }
 ```
 
-A query entry is a SQL string, or a saved `find` with its settings baked in — `sense hot`
-then needs no flags. `defaults.find.where` scopes `find` tree-wide (an explicit `--where`
-replaces it, so `--where "1=1"` always reaches everything). `checks` turns a saved query
-into an assertion: `sense check` fails when a query marked `empty` returns rows. Every key
-is documented in [schema.json](schema.json), which editors read for autocomplete.
+A preset bundles `include`/`exclude` globs (which files), `k` (result count), `semantic`
+(vectors, on unless `false`), and `where` (a standing SQL filter). Bare commands use
+`default`; `--preset` names another; flags override single fields. **Indexing derives from
+the presets**: a file is indexed if any preset includes it, and embedded if any covering
+preset has semantic on — so a `semantic: false` preset's files cost no vectors, and
+`status` shows each preset's coverage. Editing a preset rebuilds the cache and says which
+preset caused it.
 
-Features toggle independently; disabling one degrades its command instead of failing it (`find`
-goes BM25-only without `links`, `map` drops hubs without `rank`, `peek` drops the outline
-without `sections`). Toggling rebuilds the cache. Older config versions auto-migrate on load,
-noted on stderr.
+A query entry is a SQL string (`?` binds positional args) or a saved search with its
+settings baked in — `sense hot` needs no flags. `sense check` runs them all, so a typo'd
+column fails at check time instead of mid-task. Older config versions auto-migrate on
+load, noted on stderr.
 
-`embed` is opt-in — the only feature off by default, since most trees don't need vectors.
-`"embed": true` uses the built-in static model (downloaded to `~/.cache/sensemaking` on first
-use, never in the package), or `{ "model", "type": "static"|"api", "url", "key" }` points at any Model2Vec model,
-local path, or OpenAI-compatible endpoint (Ollama, LM Studio, hosted). With it on, vectors stay
-fresh at reconcile and `find --semantic` uses them; default `find` results are unchanged.
+Vectors use the built-in static model (downloaded to `~/.cache/sensemaking` on first use,
+never in the package); an optional top-level `"embed": { "model", "type", "url", "key" }`
+block points at any Model2Vec model, local path, or OpenAI-compatible endpoint (Ollama,
+LM Studio, hosted). Embedding happens on the first semantic search, with progress.
 
 `has(field, value)` is the one custom SQL function: array membership on JSON-array fields,
 substring on strings, false on missing keys. Frontmatter parsing is lenient — syntax errors are
@@ -159,6 +163,10 @@ features, frontmatter conventions, and note size are decisions with consequences
   agent-maintained wiki navigated by an `index.md` and links, which he notes needs real search
   infrastructure past a few hundred pages. `sense map` derives that index from the notes instead of
   maintaining it; `find` is the hybrid local search it calls for.
+- Agent memory patterns — llm-wiki's raw/wiki split, Claude Code's dreaming-style nightly
+  consolidation — are trees of small notes with metadata, links, and layers of differing
+  authority. sense is the query layer such patterns need (filter by metadata and age, scope
+  by layer, surface near-duplicates semantically), not an implementation of any one of them.
 
 ## Alternatives
 
@@ -166,9 +174,10 @@ features, frontmatter conventions, and note size are decisions with consequences
   query it headless.
 - **Index-on-build tools (MarkdownDB)** — query a snapshot; `sense` reconciles on every query.
 - **Note CLIs (zk)** — fixed schema; `sense` filters on arbitrary frontmatter.
-- **RAG / vector stores** — similarity can't express `WHERE status = 'active'`. Here vectors are
-  the optional `embed` feature: same SQLite file, filters compose, expansion is explicit per
-  query (`find --semantic`) and labeled — no second store, no daemon, no native builds.
+- **RAG / vector stores** — similarity can't express `WHERE status = 'active'`. Here vectors
+  are one signal inside `search`: same SQLite file, filters compose, every row labels its
+  evidence (`via`), and a preset turns vectors off per layer of the tree — no second store,
+  no daemon, no native builds.
 
 Dependencies: [yaml](https://github.com/eemeli/yaml),
 [remove-markdown](https://github.com/zuchka/remove-markdown),

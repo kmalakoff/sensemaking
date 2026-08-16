@@ -57,18 +57,28 @@ function renderRows(rows: Row[], format: 'table' | 'json', width = process.stdou
   return [formatRow(columns), widths.map((w) => '-'.repeat(w)).join('  '), ...cells.map(formatRow)].join('\n');
 }
 
-// Text renderers for the layer commands; cli.ts prints what these return.
+// Text renderers for the top-level commands; cli.ts prints what these return.
 
-function featuresLine(features: { on: string[]; off: string[] }): string {
-  const off = features.off.length > 0 ? ` · off: ${features.off.map((name) => `${name} (features.${name})`).join(', ')}` : '';
+// `embed` is not a features-block key (it's derived from presets), so its off hint reads
+// differently from links/sections/rank's plain `features.<name>`.
+export function featureOffHint(name: string): string {
+  return name === 'embed' ? 'no preset has semantic on' : `features.${name}`;
+}
+
+export function featuresLine(features: { on: string[]; off: string[] }): string {
+  const off = features.off.length > 0 ? ` · off: ${features.off.map((name) => `${name} (${featureOffHint(name)})`).join(', ')}` : '';
   return `features: ${features.on.join(', ')}${off}`;
 }
 
-export function renderMap(result: { docs: { count: number; bytes: number }; fields: Row[]; fieldsTotal: number; features: { on: string[]; off: string[] }; hubs: Row[]; recent: Row[] }): string {
-  const parts = [`docs: ${result.docs.count} (${Math.round(result.docs.bytes / 1024)} KB)`, `${featuresLine(result.features)}\n`, renderRows(result.fields, 'table')];
+export function presetsLines(presets: Array<{ name: string; files: number; embedded: number }>): string[] {
+  return ['presets:', ...presets.map((p) => `  ${p.name}: ${p.files} file(s), ${p.embedded} embedded`)];
+}
+
+export function renderMap(result: { docs: { count: number; bytes: number }; fields: Row[]; fieldsTotal: number; features: { on: string[]; off: string[] }; presets: Array<{ name: string; files: number; embedded: number }>; hubs: Row[]; recent: Row[] }): string {
+  const parts = [`docs: ${result.docs.count} (${Math.round(result.docs.bytes / 1024)} KB)`, featuresLine(result.features), '', ...presetsLines(result.presets), '', renderRows(result.fields, 'table')];
   if (result.fieldsTotal > result.fields.length) parts.push(`(+${result.fieldsTotal - result.fields.length} more fields)`);
   if (result.hubs.length > 0) parts.push('\nhubs (by link rank):', renderRows(result.hubs, 'table'));
-  else if (result.features.off.includes('rank')) parts.push('\nhubs: off (features.rank)');
+  else if (result.features.off.includes('rank')) parts.push(`\nhubs: off (${featureOffHint('rank')})`);
   parts.push('\nrecent:', renderRows(result.recent, 'table'));
   return parts.join('\n');
 }

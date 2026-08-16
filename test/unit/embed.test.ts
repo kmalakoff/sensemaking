@@ -3,8 +3,9 @@ import { mkdtempSync, writeFileSync } from 'fs';
 import { createServer, type Server } from 'http';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { find } from 'sensemaking';
-import { openTree, tmpTree, writeNote } from '../lib/tree.ts';
+import type { Config } from 'sensemaking';
+import { presetCoverage, search } from 'sensemaking';
+import { openConfig, tmpTree, writeNote } from '../lib/tree.ts';
 
 // Local Model2Vec fixture: WordLevel vocab, 8-dim f32 matrix, apple ≡ pomme (identical
 // rows) -- a vector match exists exactly where FTS5 has zero term overlap.
@@ -46,10 +47,16 @@ function fruitTree(): string {
   return baseDir;
 }
 
+// Every test in this file opts semantic back on for the fixture tree -- the local Model2Vec
+// fixture above never touches the network.
+function openSemantic(baseDir: string, embed: Config['embed']) {
+  return openConfig({ presets: { default: { include: ['**/*.md'] } }, embed, queries: {}, baseDir, configPath: null });
+}
+
 describe('embed feature', () => {
   it('semantic expansion surfaces a note FTS5 cannot reach, labeled via=vector with a lines range', async () => {
-    const { db, cfg } = openTree(fruitTree(), { embed: { model: writeModel(), type: 'static' } });
-    const rows = (await find(db, cfg, 'pomme', { semantic: true })) as Array<{ path: string; via: string; lines: string }>;
+    const { db, cfg } = openSemantic(fruitTree(), { model: writeModel(), type: 'static' });
+    const rows = (await search(db, cfg, 'pomme', { semantic: true })) as Array<{ path: string; via: string; lines: string }>;
     db.close();
     const hit = rows[0];
     assert.equal(hit.path, 'a.md', JSON.stringify(rows));
@@ -58,33 +65,37 @@ describe('embed feature', () => {
   });
 
   it('a term both matched and vector-near composes via=match+vector', async () => {
-    const { db, cfg } = openTree(fruitTree(), { embed: { model: writeModel(), type: 'static' } });
-    const rows = (await find(db, cfg, 'apple', { semantic: true })) as Array<{ path: string; via: string }>;
+    const { db, cfg } = openSemantic(fruitTree(), { model: writeModel(), type: 'static' });
+    const rows = (await search(db, cfg, 'apple', { semantic: true })) as Array<{ path: string; via: string }>;
     db.close();
     assert.equal(rows[0].path, 'a.md');
     // link expansion re-includes match seeds, so the full composition is match+link+vector
     assert.match(rows[0].via, /^match\+.*vector$/);
   });
 
-  it('bit-identity: with embed enabled but not invoked, find results are unchanged', async () => {
+  it('bit-identity: explicit --lexical opt-out matches a tree that never embeds at all', async () => {
+    // Semantic participation is automatic, not opt-in (no flag needed to reach it), so a
+    // bare search on a semantic-on preset is *not* the identity baseline here -- the
+    // explicit opt-out (--lexical / semantic: false) is what must be bit-identical to a
+    // tree with no embedding capability at all.
     const treeA = fruitTree();
     const treeB = fruitTree();
-    const on = openTree(treeA, { embed: { model: writeModel(), type: 'static' } });
-    const off = openTree(treeB);
-    const rowsOn = await find(on.db, on.cfg, 'apple OR stone');
-    const rowsOff = await find(off.db, off.cfg, 'apple OR stone');
+    const on = openSemantic(treeA, { model: writeModel(), type: 'static' });
+    const off = openConfig({ presets: { default: { include: ['**/*.md'], semantic: false } }, queries: {}, baseDir: treeB, configPath: null });
+    const rowsOn = await search(on.db, on.cfg, 'apple OR stone', { semantic: false });
+    const rowsOff = await search(off.db, off.cfg, 'apple OR stone');
     on.db.close();
     off.db.close();
     assert.deepEqual(rowsOn, rowsOff);
   });
 
-  it('--semantic without features.embed is a named error', async () => {
-    const { db, cfg } = openTree(fruitTree());
-    await assert.rejects(find(db, cfg, 'pomme', { semantic: true }), (err: Error & { code?: string }) => {
-      assert.equal(err.code, 'EMBED_DISABLED');
-      return true;
-    });
+  it('requesting semantic on a tree where no preset embeds searches lexically -- fewer signals is not an error', async () => {
+    const { db, cfg } = openConfig({ presets: { default: { include: ['**/*.md'], semantic: false } }, queries: {}, baseDir: fruitTree(), configPath: null });
+    const rows = (await search(db, cfg, 'pomme', { semantic: true })) as Array<{ path: string; via: string }>;
     db.close();
+    // 'pomme' has no lexical match anywhere in the fixture and no preset embeds, so this is
+    // simply zero rows, not an error.
+    assert.deepEqual(rows, []);
   });
 });
 
@@ -115,8 +126,8 @@ describe('embed api type', () => {
   after(() => server.close());
 
   it('expands through an OpenAI-compatible endpoint', async () => {
-    const { db, cfg } = openTree(fruitTree(), { embed: { model: 'test-model', type: 'api', url } });
-    const rows = (await find(db, cfg, 'pomme', { semantic: true })) as Array<{ path: string; via: string }>;
+    const { db, cfg } = openSemantic(fruitTree(), { model: 'test-model', type: 'api', url });
+    const rows = (await search(db, cfg, 'pomme', { semantic: true })) as Array<{ path: string; via: string }>;
     db.close();
     assert.equal(rows[0].path, 'a.md', JSON.stringify(rows));
     assert.equal(rows[0].via, 'vector');
@@ -125,19 +136,21 @@ describe('embed api type', () => {
 
 describe('semantic absence signal', () => {
   it('vector rows carry cosine similarity: a real match runs high, absent vocabulary near zero', async () => {
-    const { db, cfg } = openTree(fruitTree(), { embed: { model: writeModel(), type: 'static' } });
+    const { db, cfg } = openSemantic(fruitTree(), { model: writeModel(), type: 'static' });
 
-    const absent = await find(db, cfg, 'zzznotaword');
-    assert.equal(absent.length, 0, 'lexical find answers absence with zero rows');
+    // Semantic participation is automatic on a semantic-on preset, so the lexical baseline
+    // needs the explicit opt-out -- a bare call here would already include vector rows.
+    const absent = await search(db, cfg, 'zzznotaword', { semantic: false });
+    assert.equal(absent.length, 0, 'lexical search answers absence with zero rows');
 
-    const semantic = (await find(db, cfg, 'zzznotaword', { semantic: true })) as Array<{ via: string; similarity: number }>;
+    const semantic = (await search(db, cfg, 'zzznotaword', { semantic: true })) as Array<{ via: string; similarity: number }>;
     assert.ok(semantic.length > 0, 'nearest-neighbour search always returns a neighbour');
     for (const row of semantic) {
       assert.equal(row.via, 'vector');
       assert.ok(Math.abs(row.similarity) < 0.05, `unknown vocabulary embeds to ~zero, got ${row.similarity}`);
     }
 
-    const real = (await find(db, cfg, 'pomme', { semantic: true })) as Array<{ path: string; similarity: number }>;
+    const real = (await search(db, cfg, 'pomme', { semantic: true })) as Array<{ path: string; similarity: number }>;
     assert.ok(real[0].similarity > 0.9, `apple ≡ pomme in the fixture, got ${real[0].similarity}`);
     db.close();
   });
@@ -148,13 +161,83 @@ describe('similarity provenance', () => {
     const base = tmpTree();
     // Chunk 1 (heading "Walls"): vector-far from the query. Chunk 2 ("Orchard"): vector-identical.
     writeNote(base, 'two.md', { body: '# Walls\n\nstone walls here\n\n# Orchard\n\nAn apple every day\n' });
-    const { db, cfg } = openTree(base, { embed: { model: writeModel(), type: 'static' } });
-    const rows = (await find(db, cfg, 'pomme', { semantic: true })) as Array<{ path: string; similarity: number; lines: string }>;
+    const { db, cfg } = openSemantic(base, { model: writeModel(), type: 'static' });
+    const rows = (await search(db, cfg, 'pomme', { semantic: true })) as Array<{ path: string; similarity: number; lines: string }>;
     db.close();
     const hit = rows.find((r) => r.path === 'two.md');
     assert.ok(hit, JSON.stringify(rows));
     assert.ok(hit.similarity > 0.9, `best chunk is the orchard section, got ${hit.similarity}`);
     const [start] = hit.lines.replace('L', '').split('-').map(Number);
     assert.ok(start >= 5, `lines should point at the orchard chunk, got ${hit.lines}`);
+  });
+});
+
+describe('per-preset semantic', () => {
+  it("preset A semantic-on, preset B semantic-off: embeddings rows exist only for A's docs", () => {
+    const baseDir = tmpTree();
+    writeNote(baseDir, 'a/one.md', { frontmatter: { title: 'Fruit' }, body: 'An apple every day' });
+    writeNote(baseDir, 'b/two.md', { frontmatter: { title: 'Walls' }, body: 'stone walls' });
+
+    const { db } = openConfig({
+      presets: { default: { include: ['**/*.md'], semantic: false }, a: { include: ['a/**/*.md'] }, b: { include: ['b/**/*.md'], semantic: false } },
+      embed: { model: writeModel(), type: 'static' },
+      queries: {},
+      baseDir,
+      configPath: null,
+    });
+
+    const rows = db.prepare('SELECT DISTINCT "path" FROM embeddings').all() as Array<{ path: string }>;
+    assert.deepEqual(
+      rows.map((r) => r.path),
+      ['a/one.md']
+    );
+
+    const coverage = db.prepare('SELECT preset, path FROM preset_files ORDER BY preset, path').all() as Array<{ preset: string; path: string }>;
+    assert.deepEqual(coverage, [
+      { preset: 'a', path: 'a/one.md' },
+      { preset: 'b', path: 'b/two.md' },
+      { preset: 'default', path: 'a/one.md' },
+      { preset: 'default', path: 'b/two.md' },
+    ]);
+    db.close();
+  });
+
+  it('per-preset coverage counts real vectors, not the NULL placeholder rows reconcile writes', () => {
+    const baseDir = tmpTree();
+    writeNote(baseDir, 'a/one.md', { frontmatter: { title: 'Fruit' }, body: 'An apple every day' });
+
+    const cfgObj = {
+      presets: { default: { include: ['**/*.md'] } },
+      embed: { model: writeModel(), type: 'static' as const },
+      queries: {},
+      baseDir,
+      configPath: null,
+    };
+    const { db, cfg } = openConfig(cfgObj);
+    // Vectors are lazy: rows exist with vector NULL until the first semantic search. Coverage
+    // saying "1 embedded" here contradicted status's own "0 embedded, 1 pending" line.
+    const before = presetCoverage(db, cfg);
+    assert.deepEqual(before, [{ name: 'default', files: 1, embedded: 0 }]);
+    db.close();
+  });
+
+  it('a search scoped to the semantic-off preset stays lexical, even though the tree overall has embeddings', async () => {
+    const baseDir = tmpTree();
+    writeNote(baseDir, 'a/one.md', { frontmatter: { title: 'Fruit' }, body: 'An apple every day' });
+    writeNote(baseDir, 'b/two.md', { frontmatter: { title: 'Stone' }, body: 'pomme reference for the disabled preset' });
+
+    const { db, cfg } = openConfig({
+      presets: { default: { include: ['**/*.md'], semantic: false }, a: { include: ['a/**/*.md'] }, b: { include: ['b/**/*.md'], semantic: false } },
+      embed: { model: writeModel(), type: 'static' },
+      queries: {},
+      baseDir,
+      configPath: null,
+    });
+
+    const rows = (await search(db, cfg, 'pomme', { preset: 'b', semantic: true })) as Array<{ path: string; via: string }>;
+    db.close();
+    const hitB = rows.find((r) => r.path === 'b/two.md');
+    assert.ok(hitB, JSON.stringify(rows));
+    assert.equal(hitB.via, 'match', 'semantic-off preset must be reached lexically only, never via vector');
   });
 });

@@ -67,7 +67,7 @@ const embedMsPerDoc = (now() - tEmbed) / files.length;
 // --- bm25 candidate lists via the real index (identical SQL to find's candidate query) ---
 const ROOT = join(new URL('.', import.meta.url).pathname, '..');
 const lib = await import(pathToFileURL(join(ROOT, 'dist', 'esm', 'index.js')).href);
-const cfg = { scan: { include: ['**/*.md'] }, queries: {}, features: { links: false, rank: false }, baseDir: tree, configPath: null };
+const cfg = { presets: { default: { include: ['**/*.md'], semantic: false } }, queries: {}, features: { links: false, rank: false }, baseDir: tree, configPath: null };
 const { db } = lib.open(cfg);
 const bm25Stmt = db.prepare(`SELECT content.path AS path FROM content WHERE content MATCH ? ORDER BY ${WEIGHTED_BM25} LIMIT ${FETCH}`);
 

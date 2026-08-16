@@ -10,7 +10,7 @@ export const COMMANDS: Record<string, () => Promise<{ default: Command }>> = {
   check: () => import('./check.ts'),
   rebuild: () => import('./rebuild.ts'),
   query: () => import('./query.ts'),
-  find: () => import('./find.ts'),
+  search: () => import('./search.ts'),
   map: () => import('./map.ts'),
   peek: () => import('./peek.ts'),
 };

@@ -71,9 +71,15 @@ export const embed: Feature = {
   remove(db, path) {
     db.prepare('DELETE FROM embeddings WHERE "path" = ?').run(path);
   },
+  // A doc covered only by semantic-false presets never had extract() run for it (db.ts's
+  // per-file filter skips it), so extracted is undefined here -- store nothing, i.e. no rows.
   store(db, path, extracted) {
+    if (!extracted) return;
     const insert = db.prepare('INSERT INTO embeddings ("path", chunk, start_line, end_line, scale, vector) VALUES (?, ?, ?, ?, NULL, NULL)');
     (extracted as Chunk[]).forEach((c, idx) => insert.run(path, idx, c.startLine, c.endLine));
+  },
+  enabledForFile(_cfg, file) {
+    return file.embed;
   },
 };
 
@@ -166,7 +172,7 @@ const providers = new Map<string, Promise<EmbedProvider>>();
 
 function getProvider(cfg: Config): Promise<EmbedProvider> {
   const e = embedConfig(cfg);
-  if (!e) throw new SenseError('EMBED_DISABLED', 'semantic expansion needs features.embed in sense.config.json (e.g. "features": { "embed": true })');
+  if (!e) throw new SenseError('EMBED_DISABLED', 'semantic search needs at least one preset with vectors on (semantic !== false); every declared preset in sense.config.json has "semantic": false');
   const sig = `${e.type}:${e.model}:${e.url ?? ''}`;
   let p = providers.get(sig);
   if (!p) {
@@ -208,7 +214,9 @@ export async function embedPending(db: DatabaseSync, cfg: Config, baseDir: strin
   for (const [path, chunkIdxs] of byPath) {
     let chunks: Chunk[];
     try {
-      chunks = parseFile({ relPath: path, absPath: join(baseDir, path), mtimeMs: 0, size: 0 }, [embed]).doc.extracted.embed as Chunk[];
+      // presets/embed are irrelevant here -- re-deriving chunk text for a doc that already
+      // has embeddings rows means it was covered by a semantic-on preset at reconcile time.
+      chunks = parseFile({ relPath: path, absPath: join(baseDir, path), mtimeMs: 0, size: 0, presets: [], embed: true }, [embed]).doc.extracted.embed as Chunk[];
     } catch {
       continue; // vanished since reconcile; the next reconcile removes its rows
     }

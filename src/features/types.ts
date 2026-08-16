@@ -1,5 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
-import type { FeatureName } from '../config.ts';
+import type { Config, FeatureName } from '../config.ts';
 import type { FileStat } from '../scan.ts';
 
 // What changed this reconcile, so afterReconcile hooks can act on the delta instead of
@@ -29,4 +29,8 @@ export interface Feature {
   // After all rows are current, inside the reconcile transaction (resolution, rank).
   // Hooks run in registry order and communicate through fields on `delta`.
   afterReconcile?(db: DatabaseSync, delta: ReconcileDelta): void;
+  // Per-file opt-out (currently only embed, via FileStat.embed): absent means the feature
+  // applies to every file it's otherwise on for. Checked per file before extract/store so a
+  // doc covered only by semantic-false presets gets no rows for it at all.
+  enabledForFile?(cfg: Config, file: FileStat): boolean;
 }

@@ -57,7 +57,11 @@ consumers install it, and the only remedy is another release.
    capability would type (a release that added semantic search added `semantic-search`),
    check each is present, and drop keywords for things sense no longer emphasizes —
    keywords are how npm search finds the package, and they only change when capabilities
-   do, so this review belongs to the release that changes them.
+   do, so this review belongs to the release that changes them. Form: npm's indexer
+   tokenizes hyphens as word separators (verified empirically 2026-08-15 against the
+   registry search API), so `knowledge-base` matches both "knowledge-base" and
+   "knowledge base" queries, while a closed compound (`knowledgebase`) matches only
+   itself — always prefer the hyphenated form for multi-word keywords.
    Re-check every measured claim in the docs against the run from step 2; a number that no
    longer holds is worse than no number, because the next reader trusts it. Prefer linking
    BENCHMARKING.md over copying figures that drift.
@@ -92,6 +96,22 @@ and what a consumer would notice — new config keys, changed output shapes, cha
 classes, bug fixes only — and suggests a bump if asked. It does not choose one, and does not
 encode a bump policy here.
 
-Cache-affecting changes are separate and not a judgement call: bump `SCHEMA_VERSION` in
-`src/db.ts` so existing trees rebuild on first query instead of reading rows written in an
-older format.
+Two storage formats version themselves, and neither is a judgement call:
+
+- **The cache.** Any change to what reconcile writes: bump `SCHEMA_VERSION` in `src/db.ts`,
+  so existing trees rebuild on first query instead of reading rows written in an older
+  format. Consumers pay one re-crawl (and embed trees re-embed on their next `--semantic`)
+  — worth saying in the consumer notes so it doesn't read as a hang.
+- **The config file.** A change that makes an existing `sense.config.json` wrong — a
+  renamed or removed key, a changed default, a restructured block — bumps
+  `SUPPORTED_CONFIG_VERSION` in `src/config.ts`, adds a step to `MIGRATIONS` that rewrites
+  the old shape, and extends `version`'s enum in `schema.json`. A purely additive change
+  (a new optional key, a new accepted value shape) leaves every old config valid and does
+  not bump; saved finds are the example — `queries` gained an object form and v2 configs
+  kept working untouched.
+
+Whether or not either version moved, the release verifies both paths on a scratch tree: a
+config from the oldest supported version still auto-migrates (`sense <any command>` prints
+the migration line and rewrites the file), and a cache written by the previous release
+rebuilds rather than erroring. `test/unit/config-version.test.ts` covers the migration
+chain; the scratch run is what proves it against the packed build.
