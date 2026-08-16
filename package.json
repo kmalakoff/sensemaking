@@ -1,6 +1,6 @@
 {
   "name": "sensemaking",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "Query and search a tree of markdown notes: SQL over frontmatter and links, ranked search over the prose — words, links, and meaning fused",
   "keywords": [
     "markdown",
