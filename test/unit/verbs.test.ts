@@ -728,9 +728,9 @@ describe('per-command flag parsing', () => {
   });
 });
 
-// getopts reports an unset string flag as "" and a flag passed once as a bare string, where
-// the old parser gave undefined and a one-element array. Both shapes reach code that reads
-// them as "flag absent" or "list", so each is pinned here rather than left to the port.
+// An omitted string flag has to read as absent, not as an empty string, and a flag passed
+// once has to read as a list -- `?? saved.field` and --include depend on those two shapes.
+// Both survived a parser swap and back, so each is pinned here rather than assumed.
 describe('flag value shapes', () => {
   it('an omitted --k is absent, not an empty string that reads as 0', () => {
     const base = makeTree();
@@ -764,15 +764,15 @@ describe('flag value shapes', () => {
     const joined = runCli(['search', 'price', '--k=-1'], { cwd: base });
     assert.equal(joined.status, 2);
     assert.match(joined.stderr, /--k expects a positive integer/);
-    // getopts reads the leading dash as a new option, so this lands as an unknown flag --
-    // a blunter message than the old parser gave, but still a usage error, never a default.
+    // parseArgs calls a dashed value ambiguous rather than guessing: still exit 2, never
+    // a silent default.
     const spaced = runCli(['search', 'price', '--k', '-1'], { cwd: base });
     assert.equal(spaced.status, 2);
   });
 });
 
-// parse() throws ExitError rather than returning, so --help cannot fall through into the
-// command body. rebuild is the cheapest command where falling through would be visible.
+// parse() exits rather than returning, so --help cannot fall through into the command body.
+// rebuild is the cheapest command where falling through would be visible.
 describe('--help never runs the command', () => {
   it('rebuild --help prints usage and builds no cache', () => {
     const base = makeTree();
