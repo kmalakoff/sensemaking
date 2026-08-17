@@ -1,11 +1,13 @@
 import type { WatchEvent } from '../watch.ts';
 import { runWatch } from '../watch.ts';
-import { printWarnings } from './shared.ts';
+import { USAGE } from './index.ts';
+import { CONFIG, parse, printWarnings } from './shared.ts';
 import type { Command } from './types.ts';
 
 const watch: Command = async (ctx) => {
-  await runWatch(ctx.resolveConfig(), {
-    force: ctx.values.force,
+  const { values } = parse(ctx.argv, `usage: ${ctx.name} ${USAGE.watch}`, { force: { type: 'boolean', default: false }, ...CONFIG });
+  await runWatch(ctx.resolveConfig(values.config as string | undefined), {
+    force: values.force as boolean,
     onEvent: (event: WatchEvent) => {
       if (event.type === 'started') {
         console.log(`${ctx.name} watch: watching ${event.baseDir}`);

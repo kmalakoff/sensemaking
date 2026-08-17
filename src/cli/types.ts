@@ -1,12 +1,10 @@
 import type { ResolvedConfig } from '../config.ts';
 
-// Handed to every command; argv parsing stays in cli.ts.
+// Handed to every command; each command parses its own argv via shared.ts's `parse`.
 export interface Ctx {
   name: string;
-  rest: string[]; // positionals after the command word
-  format: 'table' | 'json';
-  values: { config?: string; where?: string; k?: string; preset?: string; include?: string[]; force: boolean; lexical: boolean };
-  resolveConfig(): ResolvedConfig;
+  argv: string[]; // argv after the command word
+  resolveConfig(configPath?: string): ResolvedConfig;
   usageError(message: string): never;
 }
 

@@ -1,12 +1,16 @@
 import { search } from '../commands.ts';
 import { printRows } from '../output.ts';
-import { parseK, withDb } from './shared.ts';
+import { USAGE } from './index.ts';
+import { CONFIG, FORMAT, formatOf, parse, parseK, SEARCH_FLAGS, withDb } from './shared.ts';
 import type { Command } from './types.ts';
 
 const searchCmd: Command = async (ctx) => {
-  const [terms] = ctx.rest;
-  if (!terms) ctx.usageError(`usage: ${ctx.name} search "<terms>" [--preset name] [--include glob ...] [--where "<sql>"] [--k n] [--lexical]`);
-  const k = parseK(ctx);
-  await withDb(ctx, async (db, cfg) => printRows(await search(db, cfg, terms, { k, where: ctx.values.where, preset: ctx.values.preset, include: ctx.values.include, semantic: ctx.values.lexical ? false : undefined }), ctx.format));
+  const usage = `usage: ${ctx.name} ${USAGE.search}`;
+  const { values, positionals } = parse(ctx.argv, usage, { ...SEARCH_FLAGS, ...FORMAT, ...CONFIG });
+  const [terms] = positionals;
+  if (!terms) ctx.usageError(usage);
+  const k = parseK(values.k as string | undefined, ctx.usageError);
+  const format = formatOf(values);
+  await withDb(ctx, values.config as string | undefined, async (db, cfg) => printRows(await search(db, cfg, terms, { k, where: values.where as string | undefined, preset: values.preset as string | undefined, include: values.include as string[] | undefined, semantic: values.lexical ? false : undefined }), format));
 };
 export default searchCmd;

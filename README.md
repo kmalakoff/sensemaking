@@ -78,7 +78,7 @@ and vector similarity — fused into one list. `via` labels each row's evidence 
 `lines` points at the section that earned the row — a direct read range. Rows that only
 vectors produced are the "these words aren't in the tree, this is what's near in meaning"
 signal. `--preset` picks a named settings bundle from the config, `--lexical` skips vectors
-for one command, `--where` filters on frontmatter. `--format json` on any command returns
+for one command, `--where` filters on frontmatter. `--format json` on any reporting command returns
 structured output; `--version` and `--help` do what they say.
 
 ## Config

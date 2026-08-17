@@ -668,3 +668,62 @@ describe('--lexical', () => {
     assert.equal(bare.stdout, lexical.stdout);
   });
 });
+
+describe('per-command flag parsing', () => {
+  it('a foreign flag exits 2: init does not accept --k', () => {
+    const base = tmpTree();
+    const result = runCli(['init', '--k', '5'], { cwd: base });
+    assert.equal(result.status, 2);
+    assert.match(result.stderr, /usage: sense init/);
+  });
+
+  it('a foreign flag exits 2: status does not accept --force', () => {
+    const base = makeTree();
+    writeFileSync(join(base, 'sense.config.json'), JSON.stringify({ version: 3, presets: { default: { include: ['**/*.md'], semantic: false } }, queries: {} }));
+    const result = runCli(['status', '--force'], { cwd: base });
+    assert.equal(result.status, 2);
+    assert.match(result.stderr, /usage: sense status/);
+  });
+
+  it('sense map --list rejects --list and exits 2 (map runs its own parser, not the top-level one)', () => {
+    const base = makeTree();
+    writeFileSync(join(base, 'sense.config.json'), JSON.stringify({ version: 3, presets: { default: { include: ['**/*.md'], semantic: false } }, queries: {} }));
+    const result = runCli(['map', '--list'], { cwd: base });
+    assert.equal(result.status, 2);
+    assert.match(result.stderr, /usage: sense map/);
+  });
+
+  it('--version and --list are top-level only: sense status --version errors', () => {
+    const base = makeTree();
+    writeFileSync(join(base, 'sense.config.json'), JSON.stringify({ version: 3, presets: { default: { include: ['**/*.md'], semantic: false } }, queries: {} }));
+    const result = runCli(['status', '--version'], { cwd: base });
+    assert.equal(result.status, 2);
+  });
+
+  it('sense search -h exits 0 and prints the search usage line', () => {
+    const result = runCli(['search', '-h']);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /usage: sense search "<terms>"/);
+  });
+
+  it('flags before the command word no longer parse', () => {
+    const base = makeTree();
+    writeFileSync(join(base, 'sense.config.json'), JSON.stringify({ version: 3, presets: { default: { include: ['**/*.md'], semantic: false } }, queries: {} }));
+    const result = runCli(['--format', 'json', 'status'], { cwd: base });
+    assert.equal(result.status, 2);
+  });
+
+  it('top-level --list still works', () => {
+    const base = makeTree();
+    writeFileSync(join(base, 'sense.config.json'), JSON.stringify({ version: 3, presets: { default: { include: ['**/*.md'], semantic: false } }, queries: { hot: { search: 'price' } } }));
+    const result = runCli(['--list'], { cwd: base });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /hot\s+\(search\)/);
+  });
+
+  it('top-level --version still works', () => {
+    const result = runCli(['--version']);
+    assert.equal(result.status, 0);
+    assert.match(result.stdout, /^v\d+\.\d+\.\d+/);
+  });
+});

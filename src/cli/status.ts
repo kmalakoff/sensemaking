@@ -2,7 +2,8 @@ import { presetCoverage } from '../commands.ts';
 import { embedConfig, featureStates } from '../config.ts';
 import { docCount, getMeta, open } from '../db.ts';
 import { featuresLine, presetsLines } from '../output.ts';
-import { printWarnings } from './shared.ts';
+import { USAGE } from './index.ts';
+import { CONFIG, FORMAT, formatOf, parse, printWarnings } from './shared.ts';
 import type { Command } from './types.ts';
 
 // Vectors are computed on the first semantic query, not at reconcile, so a tree can have a
@@ -18,7 +19,9 @@ function vectorState(db: ReturnType<typeof open>['db']): { embedded: number; pen
 }
 
 const status: Command = (ctx) => {
-  const cfg = ctx.resolveConfig();
+  const { values } = parse(ctx.argv, `usage: ${ctx.name} ${USAGE.status}`, { ...FORMAT, ...CONFIG });
+  const format = formatOf(values);
+  const cfg = ctx.resolveConfig(values.config as string | undefined);
   const { db, dbPath, warnings } = open(cfg);
   printWarnings(warnings);
 
@@ -42,7 +45,7 @@ const status: Command = (ctx) => {
     busyTimeoutMs,
   };
 
-  if (ctx.format === 'json') {
+  if (format === 'json') {
     console.log(JSON.stringify(result, null, 2));
   } else {
     console.log(`db: ${result.db}`);

@@ -2,7 +2,8 @@ import { search } from '../commands.ts';
 import { open } from '../db.ts';
 import type { Row } from '../output.ts';
 import { printRows } from '../output.ts';
-import { printWarnings } from './shared.ts';
+import { USAGE } from './index.ts';
+import { CONFIG, FORMAT, formatOf, parse, printWarnings } from './shared.ts';
 import type { Command } from './types.ts';
 
 // A saved query that returns zero rows looks identical to a true empty result, so a broken
@@ -16,7 +17,9 @@ import type { Command } from './types.ts';
 // semantically (a semantic pass costs model time and, on api trees, network). Whether a
 // result being empty is good or bad is the reader's judgment -- there is no assertion path.
 const check: Command = async (ctx) => {
-  const cfg = ctx.resolveConfig();
+  const { values } = parse(ctx.argv, `usage: ${ctx.name} ${USAGE.check}`, { ...FORMAT, ...CONFIG });
+  const format = formatOf(values);
+  const cfg = ctx.resolveConfig(values.config as string | undefined);
   const { db, warnings } = open(cfg);
   printWarnings(warnings);
 
@@ -54,7 +57,7 @@ const check: Command = async (ctx) => {
     console.log('no saved queries in config');
     return;
   }
-  printRows(rows, ctx.format);
+  printRows(rows, format);
   if (failed > 0) process.exit(1);
 };
 export default check;

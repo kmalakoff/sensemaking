@@ -1,7 +1,10 @@
 import { initConfig } from '../config.ts';
+import { USAGE } from './index.ts';
+import { parse } from './shared.ts';
 import type { Command } from './types.ts';
 
 const init: Command = (ctx) => {
+  parse(ctx.argv, `usage: ${ctx.name} ${USAGE.init}`, {});
   const configPath = initConfig(process.cwd());
   console.log(`created ${configPath}`);
   console.log(`query away: ${ctx.name} query "SELECT path FROM frontmatter LIMIT 10"`);

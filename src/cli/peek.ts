@@ -1,14 +1,18 @@
 import { peek } from '../commands.ts';
 import { renderPeek } from '../output.ts';
-import { withDb } from './shared.ts';
+import { USAGE } from './index.ts';
+import { CONFIG, FORMAT, formatOf, parse, withDb } from './shared.ts';
 import type { Command } from './types.ts';
 
 const peekCmd: Command = (ctx) => {
-  const [pathArg] = ctx.rest;
-  if (!pathArg) ctx.usageError(`usage: ${ctx.name} peek <path>`);
-  return withDb(ctx, (db, cfg) => {
+  const usage = `usage: ${ctx.name} ${USAGE.peek}`;
+  const { values, positionals } = parse(ctx.argv, usage, { ...FORMAT, ...CONFIG });
+  const [pathArg] = positionals;
+  if (!pathArg) ctx.usageError(usage);
+  const format = formatOf(values);
+  return withDb(ctx, values.config as string | undefined, (db, cfg) => {
     const result = peek(db, cfg, pathArg);
-    console.log(ctx.format === 'json' ? JSON.stringify(result, null, 2) : renderPeek(result));
+    console.log(format === 'json' ? JSON.stringify(result, null, 2) : renderPeek(result));
   });
 };
 export default peekCmd;
