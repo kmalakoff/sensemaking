@@ -1,7 +1,7 @@
-import assert from 'assert';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
-import { tmpdir } from 'os';
-import { join } from 'path';
+import assert from 'node:assert';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { CONFIG_FILENAME, initConfig, loadConfig, SenseError, SUPPORTED_CONFIG_VERSION } from 'sensemaking';
 
 describe('init', () => {

@@ -1,8 +1,8 @@
-import assert from 'assert';
-import { mkdtempSync, writeFileSync } from 'fs';
+import assert from 'node:assert';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createServer, type Server } from 'http';
-import { tmpdir } from 'os';
-import { join } from 'path';
 import type { Config } from 'sensemaking';
 import { presetCoverage, search } from 'sensemaking';
 import { openConfig, tmpTree, writeNote } from '../lib/tree.ts';

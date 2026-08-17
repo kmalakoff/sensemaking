@@ -1,6 +1,6 @@
-import assert from 'assert';
-import { mkdirSync, rmSync, utimesSync, writeFileSync } from 'fs';
-import { join } from 'path';
+import assert from 'node:assert';
+import { mkdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { rebuild } from 'sensemaking';
 import { openTree, tmpTree, writeNote } from '../lib/tree.ts';
 

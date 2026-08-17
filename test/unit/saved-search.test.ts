@@ -1,6 +1,6 @@
-import assert from 'assert';
-import { writeFileSync } from 'fs';
-import { join } from 'path';
+import assert from 'node:assert';
+import { writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { runCli } from '../lib/cli.ts';
 import { tmpTree, writeNote } from '../lib/tree.ts';
 

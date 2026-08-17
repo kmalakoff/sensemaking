@@ -1,3 +1,8 @@
+// The package's Node floor (>=22.16) is set here and nowhere else: node:sqlite arrived in
+// 22.5, but FTS5 -- which search.ts's whole lexical half is built on -- and
+// StatementSync.columns() both landed in 22.16. 22.15 fails with "no such module: fts5".
+// Nothing outside this file, features/, and commands.ts needs anything past Node 12, so
+// raise the floor only for a sqlite capability, and lower it for nothing.
 import { mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';

@@ -1,8 +1,8 @@
-import assert from 'assert';
-import { mkdtempSync, writeFileSync } from 'fs';
-import { tmpdir } from 'os';
-import { join } from 'path';
-import { pathToFileURL } from 'url';
+import assert from 'node:assert';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { featureSignature } from '../../src/config.ts';
 import { packageRoot, runCli } from '../lib/cli.ts';
 

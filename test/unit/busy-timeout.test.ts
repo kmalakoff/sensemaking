@@ -1,4 +1,4 @@
-import assert from 'assert';
+import assert from 'node:assert';
 import { openTree, tmpTree, writeNote } from '../lib/tree.ts';
 
 // Fix F: busy_timeout derives from what reconcile has observed itself take, not a

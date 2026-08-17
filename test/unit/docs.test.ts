@@ -1,8 +1,8 @@
-import assert from 'assert';
-import { readFileSync } from 'fs';
-import { join } from 'path';
+import assert from 'node:assert';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { SUPPORTED_CONFIG_VERSION } from 'sensemaking';
-import { pathToFileURL } from 'url';
 import { packageRoot } from '../lib/cli.ts';
 
 // Published surfaces drift silently: nothing fails when the README stops describing what

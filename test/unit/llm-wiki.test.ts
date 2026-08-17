@@ -1,7 +1,7 @@
-import assert from 'assert';
-import { mkdtempSync, writeFileSync } from 'fs';
-import { tmpdir } from 'os';
-import { join } from 'path';
+import assert from 'node:assert';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { runCli } from '../lib/cli.ts';
 import { tmpTree, writeNote } from '../lib/tree.ts';
 

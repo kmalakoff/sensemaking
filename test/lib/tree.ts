@@ -1,6 +1,6 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from 'fs';
-import { tmpdir } from 'os';
-import { dirname, join } from 'path';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import type { Config, Preset } from 'sensemaking';
 import { open } from 'sensemaking';
 

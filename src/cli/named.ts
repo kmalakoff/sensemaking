@@ -1,5 +1,6 @@
 import { search } from '../commands.ts';
 import { printRows } from '../output.ts';
+import { usageError } from './exit.ts';
 import { CONFIG, FORMAT, formatOf, parse, parseK, runSql, SEARCH_FLAGS, withDb } from './shared.ts';
 import type { Ctx } from './types.ts';
 
@@ -15,11 +16,7 @@ export default async function named(ctx: Ctx, queryName: string): Promise<void> 
 
   const cfg = ctx.resolveConfig(configPath);
   const entry = cfg.queries[queryName];
-  if (entry === undefined) {
-    console.error(`unknown query: "${queryName}"`);
-    console.error(`valid queries: ${Object.keys(cfg.queries).sort().join(', ')}`);
-    process.exit(2);
-  }
+  if (entry === undefined) usageError(`unknown query: "${queryName}"`, `valid queries: ${Object.keys(cfg.queries).sort().join(', ')}`);
 
   if (typeof entry === 'string') {
     runSql(cfg, entry, params, format, `query "${queryName}"`);

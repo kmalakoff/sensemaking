@@ -70,7 +70,7 @@ consumers install it, and the only remedy is another release.
    package; every check so far ran against the repo. `npm pack --dry-run` and read the file
    list — everything intended (`dist`, `skills`, `schema.json`), nothing stray. Then a
    clean-install smoke test: `npm pack`, install the tarball into a temp dir, and on a
-   scratch tree run `sense --version`, `sense init`, `sense map`, `sense find`, one
+   scratch tree run `sense --version`, `sense init`, `sense map`, `sense search`, one
    `sense query` — this catches works-in-repo-broken-when-packed failures (a missing file,
    a path that only resolves in the checkout). Finally compare against the published
    package (`npm view sensemaking files description keywords engines version`): every

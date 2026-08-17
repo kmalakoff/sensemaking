@@ -21,6 +21,9 @@ npm install -g sensemaking
 cd your-notes && sense init
 ```
 
+Needs Node 22.16 or newer: that is the first release whose built-in SQLite carries FTS5, which
+`sense search` indexes prose with.
+
 ```bash
 sense map                                        # orient: fields, hub notes, recent changes
 sense search "revenue OR earnings" --k 10        # locate: words + links + meaning, one ranked list
@@ -182,7 +185,9 @@ features, frontmatter conventions, and note size are decisions with consequences
 Dependencies: [yaml](https://github.com/eemeli/yaml),
 [remove-markdown](https://github.com/zuchka/remove-markdown),
 [fast-glob](https://github.com/mrmlnc/fast-glob),
-[@huggingface/tokenizers](https://github.com/huggingface/tokenizers.js) (pure JS), and Node's
+[@huggingface/tokenizers](https://github.com/huggingface/tokenizers.js) (pure JS),
+[getopts-compat](https://github.com/kmalakoff/getopts) and
+[exit-compat](https://github.com/kmalakoff/exit-compat) for the CLI, and Node's
 built-in SQLite. No native builds.
 
 ## License

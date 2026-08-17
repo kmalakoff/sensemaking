@@ -1,4 +1,4 @@
-import assert from 'assert';
+import assert from 'node:assert';
 import { openConfig, tmpTree, writeNote } from '../lib/tree.ts';
 
 // Preset coverage: a file is indexed iff any preset's include/exclude covers it (union).

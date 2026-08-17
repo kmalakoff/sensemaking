@@ -1,9 +1,9 @@
-import assert from 'assert';
-import { cpSync, mkdtempSync } from 'fs';
-import { tmpdir } from 'os';
-import { dirname, join } from 'path';
+import assert from 'node:assert';
+import { cpSync, mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { open } from 'sensemaking';
-import { fileURLToPath } from 'url';
 
 const fixturesDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'fixtures');
 

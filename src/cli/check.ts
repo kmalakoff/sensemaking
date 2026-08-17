@@ -2,6 +2,7 @@ import { search } from '../commands.ts';
 import { open } from '../db.ts';
 import type { Row } from '../output.ts';
 import { printRows } from '../output.ts';
+import { ExitError } from './exit.ts';
 import { USAGE } from './index.ts';
 import { CONFIG, FORMAT, formatOf, parse, printWarnings } from './shared.ts';
 import type { Command } from './types.ts';
@@ -58,6 +59,6 @@ const check: Command = async (ctx) => {
     return;
   }
   printRows(rows, format);
-  if (failed > 0) process.exit(1);
+  if (failed > 0) throw new ExitError(1);
 };
 export default check;

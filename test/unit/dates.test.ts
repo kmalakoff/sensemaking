@@ -1,4 +1,4 @@
-import assert from 'assert';
+import assert from 'node:assert';
 import { openTree, tmpTree, writeNote } from '../lib/tree.ts';
 
 // TaskNotes/Obsidian convention: dateCreated: YYYY-MM-DDTHH:MM:SS.sss±HH:MM.

@@ -1,7 +1,7 @@
-import assert from 'assert';
-import { mkdtempSync, readFileSync, writeFileSync } from 'fs';
-import { tmpdir } from 'os';
-import { join } from 'path';
+import assert from 'node:assert';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { loadConfig, SUPPORTED_CONFIG_VERSION } from 'sensemaking';
 import { runCli as spawnCli } from '../lib/cli.ts';
 

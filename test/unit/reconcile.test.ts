@@ -1,7 +1,7 @@
-import assert from 'assert';
-import { mkdtempSync, rmSync, utimesSync, writeFileSync } from 'fs';
-import { tmpdir } from 'os';
-import { join } from 'path';
+import assert from 'node:assert';
+import { mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { open, rebuild, SenseError } from 'sensemaking';
 
 function tmpTree(): string {
