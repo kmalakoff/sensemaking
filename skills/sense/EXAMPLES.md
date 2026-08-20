@@ -1,7 +1,6 @@
 # sense: worked examples
 
-Outputs below are illustrative. Every result is a reference; reading happens afterward, through
-the filesystem, on the paths that earned it.
+Outputs below are illustrative. Every result is a reference; reading happens afterward, through the filesystem, on the paths that earned it.
 
 ## A. "Do the notes say anything about X?"
 
@@ -18,9 +17,7 @@ sense search "pricing OR billing OR invoicing" --k 10 --format json
 ]
 ```
 
-Tens of tokens per row; often the `summary` answers the question with no read at all. A row with
-`via: "link"` never contained the terms — it is linked from notes that did. `lines`, when
-set, is the section that earned the row, a direct `Read` range.
+Tens of tokens per row; often the `summary` answers the question with no read at all. A row with `via: "link"` never contained the terms. It is linked from notes that did. `lines`, when set, is the section that earned the row, a direct `Read` range.
 
 ## B. Known-field filtering (no search)
 
@@ -28,11 +25,9 @@ set, is the section that earned the row, a direct `Read` range.
 sense query "SELECT path, title, status FROM frontmatter WHERE status = 'active' AND has(tags, ?)" pricing --format json
 ```
 
-Plain SQL on discovered columns. Combine with search by joining `content` and adding
-`AND content MATCH ?` — filter and rank in one query.
+Plain SQL on discovered columns. Combine with search by joining `content` and adding `AND content MATCH ?`: filter and rank in one query.
 
-Per-member counts on an array field (GROUP BY on the raw column would split `["a","b"]` from
-`["b","a"]`):
+Per-member counts on an array field (GROUP BY on the raw column would split `["a","b"]` from `["b","a"]`):
 
 ```
 sense query "SELECT j.value AS tag, COUNT(*) n FROM frontmatter, json_each(frontmatter.tags) j GROUP BY j.value ORDER BY n DESC"
@@ -55,8 +50,7 @@ links out (7): notes/pricing-model.md, ...
 backlinks (2): notes/_index.md, notes/roadmap.md
 ```
 
-The note is ~4,400 tokens; the peek is ~500. If only one section matters, `Read` its line range
-(~400 tokens) — a tenth of the file.
+The note is ~4,400 tokens; the peek is ~500. If only one section matters, `Read` its line range (~400 tokens), a tenth of the file.
 
 ## D. The graph
 
@@ -89,10 +83,7 @@ sense search "children dying from poor nutrition" --k 3 --format json
 ]
 ```
 
-A `via: "vector"` row never contained the terms — it is semantically near them; `similarity` is
-the cosine against the chunk `lines` names, a direct `Read` range. Vector rows appear whenever
-the scope's preset has semantic on (the default); a result of only vector rows means the words
-themselves are nowhere in the scope.
+A `via: "vector"` row never contained the terms. It is semantically near them; `similarity` is the cosine against the chunk `lines` names, a direct `Read` range. Vector rows appear whenever the scope's preset has semantic on (the default); a result of only vector rows means the words themselves are nowhere in the scope.
 
 ## Consequences
 

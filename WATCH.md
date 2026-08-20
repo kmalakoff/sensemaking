@@ -1,12 +1,10 @@
 # Running `sense watch` as an OS-managed service
 
-`sense watch` never forks or daemonizes — supervision (start at login, restart on crash,
-logging) is the OS's job. Two ready-made setups:
+`sense watch` never forks or daemonizes. Supervision (start at login, restart on crash, logging) is the OS's job. Two ready-made setups:
 
 ## launchd (macOS)
 
-`~/Library/LaunchAgents/com.sense.watch.plist` (adjust the sense path — `which sense` — and the
-config path):
+`~/Library/LaunchAgents/com.sense.watch.plist` (adjust the sense path, found with `which sense`, and the config path):
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -61,7 +59,5 @@ systemctl --user enable --now sense-watch.service
 
 ## Coordination notes
 
-- A second `sense watch` on the same tree refuses to start while another's heartbeat is fresh
-  (override with `--force`); check with `sense status`.
-- A stopped watcher never causes a wrong answer — every query runs its own freshness check. The
-  watcher only does the parsing early.
+- A second `sense watch` on the same tree refuses to start while another's heartbeat is fresh (override with `--force`); check with `sense status`.
+- A stopped watcher never causes a wrong answer. Every query runs its own freshness check. The watcher only does the parsing early.

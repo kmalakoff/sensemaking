@@ -1,13 +1,10 @@
 # sense-setup: worked configurations
 
-Four tree shapes, each with its config and the commands an agent actually runs. Field
-names and folder names are illustrative — your tree defines its own.
+Four tree shapes, each with its config and the commands an agent actually runs. Field names and folder names are illustrative; your tree defines its own.
 
 ## A. Compiled wiki over immutable sources (the llm-wiki pattern)
 
-`raw/` holds ingested sources — big, never hand-edited. `wiki/` holds agent-compiled
-pages — linked, curated. The human drops sources and asks questions; the agent compiles
-and cites.
+`raw/` holds ingested sources: big, never hand-edited. `wiki/` holds agent-compiled pages: linked, curated. The human drops sources and asks questions; the agent compiles and cites.
 
 ```json
 {
@@ -31,17 +28,11 @@ sense search "rotary embeddings" --preset raw   # cite from sources; lexical, k=
 sense dead-links                                # rows are broken citations to fix
 ```
 
-What the shape buys: bare search never ranks raw noise above compiled pages; raw pays no
-vector/link cost; the compile queue, stub list, and citation integrity are one saved
-query each. The maintenance loop is `uncompiled` → write the wiki page citing its sources
-→ `dead-links` stays empty.
+What the shape buys: bare search never ranks raw noise above compiled pages; raw pays no vector/link cost; the compile queue, stub list, and citation integrity are one saved query each. The maintenance loop is `uncompiled` → write the wiki page citing its sources → `dead-links` stays empty.
 
 ## B. Nightly agent memory, consolidated (the dreaming pattern)
 
-`memory/` accumulates small notes written at session end, each with `project`,
-`created`, and `kind` (observation / steer / decision) frontmatter. A consolidation agent
-runs periodically: prune, merge, surface contradictions for the human. Retired notes move
-to `archive/` — still queryable, no longer embedded or ranked.
+`memory/` accumulates small notes written at session end, each with `project`, `created`, and `kind` (observation / steer / decision) frontmatter. A consolidation agent runs periodically: prune, merge, surface contradictions for the human. Retired notes move to `archive/`: still queryable, no longer embedded or ranked.
 
 ```json
 {
@@ -69,17 +60,11 @@ sense retirement                                # old + uncited → move to arch
 sense unfiled                                   # rows are notes missing a project — file them
 ```
 
-Presets are structural (live vs archived); per-project filtering is metadata (`project = ?`)
-— one tree serves every project. Semantic search over the memory preset is the
-near-duplicate detector: search a new note's own summary and read `similarity` within the
-results. Whether an old steer was overridden is a question for the human — found by
-search, never decided by it.
+Presets are structural (live vs archived); per-project filtering is metadata (`project = ?`). One tree serves every project. Semantic search over the memory preset is the near-duplicate detector: search a new note's own summary and read `similarity` within the results. Whether an old steer was overridden is a question for the human, found by search, never decided by it.
 
 ## C. Evidence corpus: claims trace to sources
 
-`sources/` (immutable imports), `notes/` (one reading note per source), `reviews/`
-(synthesis whose claims must cite notes). The same shape fits incident reports and
-postmortems, user research and findings, due diligence and memos.
+`sources/` (immutable imports), `notes/` (one reading note per source), `reviews/` (synthesis whose claims must cite notes). The same shape fits incident reports and postmortems, user research and findings, due diligence and memos.
 
 ```json
 {
@@ -105,8 +90,7 @@ sense unread                                    # the reading queue: sources no 
 
 ## D. A plain vault: zero configuration
 
-Someone else's Obsidian vault, heterogeneous, no structure worth declaring — the
-`sense init` starter untouched. The workflow is discovery:
+Someone else's Obsidian vault, heterogeneous with no structure worth declaring. The `sense init` starter is left untouched. The workflow is discovery:
 
 ```
 sense map                                       # fields in use, hub notes, recent changes
@@ -115,7 +99,4 @@ sense query "SELECT j.value AS tag, COUNT(*) n FROM frontmatter, json_each(front
 sense peek "Plugins/dataview.md"                # outline + links before reading
 ```
 
-Presets earn their place only when a tree has parts deserving different treatment; a tree
-that is one kind of thing needs none of the vocabulary above. On a big vault, raise
-`default`'s `k` and read `lines` ranges instead of whole files — or start from the
-starter's `large` preset.
+Presets earn their place only when a tree has parts deserving different treatment; a tree that is one kind of thing needs none of the vocabulary above. On a big vault, raise `default`'s `k` and read `lines` ranges instead of whole files, or start from the starter's `large` preset.

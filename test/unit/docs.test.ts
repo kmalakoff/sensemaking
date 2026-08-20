@@ -37,8 +37,9 @@ describe('published docs', () => {
     const opening = readme()
       .split(/^#\s.*$/m)[1]
       .trim()
-      .split('.')[0]
-      .replace(/\s+/g, ' ');
+      .split(/\n{2,}/)[0]
+      .replace(/\s+/g, ' ')
+      .replace(/\.$/, '');
     assert.equal(pkg.description, opening);
   });
 });
