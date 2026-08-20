@@ -1,6 +1,6 @@
 {
   "name": "sensemaking",
-  "version": "0.9.4",
+  "version": "0.9.5",
   "description": "Query and search your markdown notes with context-aware progressive disclosure: SQL over frontmatter, links, and text, plus semantic search and link-graph ranking. No server, no build step",
   "keywords": [
     "markdown",
