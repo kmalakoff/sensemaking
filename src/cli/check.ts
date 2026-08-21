@@ -28,7 +28,7 @@ const check: Command = async (ctx) => {
   for (const [name, entry] of Object.entries(cfg.queries ?? {})) {
     if (typeof entry === 'object' && entry !== null && 'search' in entry) {
       try {
-        const count = (await search(db, cfg, entry.search, { k: 1, where: entry.where, preset: entry.preset, include: entry.include, semantic: false })).length;
+        const count = (await search(db, cfg, entry.search, { k: 1, where: entry.where, preset: entry.preset, include: entry.include, exclude: entry.exclude, semantic: false })).length;
         rows.push({ query: name, params: '—', rows: '—', status: count === 0 ? 'ok, but matches 0 notes (lexical probe)' : 'ok (probe run with k=1)' });
       } catch (err) {
         failed++;

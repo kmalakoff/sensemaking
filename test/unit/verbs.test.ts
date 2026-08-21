@@ -4,6 +4,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Row } from 'sensemaking';
 import { mapTree, peek, search } from 'sensemaking';
+import { resolveNote, scopedPaths } from '../../src/commands.ts';
 import { renderPeek } from '../../src/output.ts';
 import { packageRoot, runCli } from '../lib/cli.ts';
 import { openConfig, openTree, tmpTree, writeNote } from '../lib/tree.ts';
@@ -105,6 +106,97 @@ describe('mapTree', () => {
   });
 });
 
+describe('mapTree scope', () => {
+  const mapPresets = { default: { include: ['**/*.md'], semantic: false }, wiki: { include: ['wiki/**/*.md'], semantic: false }, raw: { include: ['raw/**/*.md'], semantic: false } };
+
+  function scopedMapTree(): string {
+    const baseDir = tmpTree();
+    write(baseDir, 'wiki/hub.md', 'the wiki hub', { title: 'Wiki hub', wikifield: 'x', status: 'active' });
+    write(baseDir, 'wiki/spoke.md', 'cites [[hub]]', { title: 'Wiki spoke', wikifield: 'y', status: 'active' });
+    write(baseDir, 'raw/core.md', 'the raw core', { title: 'Raw core', rawfield: 'x', status: 'archived' });
+    write(baseDir, 'raw/leaf.md', 'cites [[core]]', { title: 'Raw leaf', rawfield: 'y', status: 'archived' });
+    return baseDir;
+  }
+
+  it('with no scope flags, mapTree scopes to the default preset (broad here, so the whole tree)', () => {
+    const { db, cfg } = openTree(scopedMapTree(), undefined, mapPresets);
+    const bare = mapTree(db, cfg);
+    const explicitEmpty = mapTree(db, cfg, {});
+    assert.deepEqual(bare, explicitEmpty);
+    assert.equal(bare.docs.count, 4, "the default preset here is '**/*.md', so it covers the whole tree");
+    assert.equal(bare.recent.length, 4);
+  });
+
+  it('with no scope flags, a narrow default preset scopes bare map to it, not the whole index', () => {
+    const narrowDefault = { default: { include: ['wiki/**/*.md'], semantic: false }, raw: { include: ['raw/**/*.md'], semantic: false } };
+    const { db, cfg } = openTree(scopedMapTree(), undefined, narrowDefault);
+    const bare = mapTree(db, cfg);
+    assert.equal(bare.docs.count, 2, 'raw notes are indexed by the raw preset but fall outside the default scope');
+    assert.ok((bare.recent as Array<{ path: string }>).every((r) => r.path.startsWith('wiki/')));
+  });
+
+  it('--preset narrows docs, fields, hubs, and recent to the preset subset', () => {
+    const { db, cfg } = openTree(scopedMapTree(), undefined, mapPresets);
+    const result = mapTree(db, cfg, { preset: 'wiki' });
+    assert.equal(result.docs.count, 2);
+    const byField = new Map(result.fields.map((f) => [f.field, f]));
+    assert.equal(byField.get('wikifield')?.coverage, 2);
+    assert.equal(byField.get('rawfield')?.coverage, 0, 'raw-only field has zero coverage inside the wiki scope');
+    assert.ok(
+      (result.hubs as Array<{ path: string }>).every((h) => h.path.startsWith('wiki/')),
+      `hubs leaked out of scope: ${JSON.stringify(result.hubs)}`
+    );
+    assert.ok(
+      (result.hubs as Array<{ path: string }>).some((h) => h.path === 'wiki/hub.md'),
+      'the linked-to wiki note is still a hub within scope'
+    );
+    assert.equal(result.recent.length, 2);
+    assert.ok((result.recent as Array<{ path: string }>).every((r) => r.path.startsWith('wiki/')));
+    // Preset coverage and feature states are global config facts, not narrowed by scope.
+    assert.ok(result.presets.some((p) => p.name === 'raw'));
+  });
+
+  it('--include narrows ad hoc, without naming a preset', () => {
+    const { db, cfg } = openTree(scopedMapTree(), undefined, mapPresets);
+    const result = mapTree(db, cfg, { include: ['raw/**/*.md'] });
+    assert.equal(result.docs.count, 2);
+    assert.ok((result.recent as Array<{ path: string }>).every((r) => r.path.startsWith('raw/')));
+  });
+
+  it('--exclude narrows ad hoc, without naming a preset', () => {
+    const { db, cfg } = openTree(scopedMapTree(), undefined, mapPresets);
+    const result = mapTree(db, cfg, { exclude: ['raw/**'] });
+    assert.equal(result.docs.count, 2);
+    assert.ok((result.recent as Array<{ path: string }>).every((r) => r.path.startsWith('wiki/')));
+  });
+
+  it('--where narrows to the matching frontmatter condition', () => {
+    const { db, cfg } = openTree(scopedMapTree(), undefined, mapPresets);
+    const result = mapTree(db, cfg, { where: "f.status = 'active'" });
+    assert.equal(result.docs.count, 2);
+    assert.ok((result.recent as Array<{ path: string }>).every((r) => r.path.startsWith('wiki/')));
+  });
+
+  it('sense map --preset scopes the CLI output', () => {
+    const base = scopedMapTree();
+    writeFileSync(join(base, 'sense.config.json'), JSON.stringify({ version: 3, presets: mapPresets, queries: {} }));
+    const result = runCli(['map', '--preset', 'wiki', '--format', 'json'], { cwd: base });
+    assert.equal(result.status, 0, result.stderr);
+    const parsed = JSON.parse(result.stdout) as { docs: { count: number }; recent: Array<{ path: string }> };
+    assert.equal(parsed.docs.count, 2);
+    assert.ok(parsed.recent.every((r) => r.path.startsWith('wiki/')));
+  });
+
+  it('sense map with no flags scopes to the default preset (the whole tree here)', () => {
+    const base = scopedMapTree();
+    writeFileSync(join(base, 'sense.config.json'), JSON.stringify({ version: 3, presets: mapPresets, queries: {} }));
+    const result = runCli(['map', '--format', 'json'], { cwd: base });
+    assert.equal(result.status, 0, result.stderr);
+    const parsed = JSON.parse(result.stdout) as { docs: { count: number } };
+    assert.equal(parsed.docs.count, 4);
+  });
+});
+
 describe('peek', () => {
   function structured(): string {
     const baseDir = tmpTree();
@@ -137,6 +229,23 @@ describe('peek', () => {
   });
 });
 
+describe('resolveNote (shared by peek and path)', () => {
+  it('resolves a unique basename, case insensitive and .md stripped', () => {
+    const paths = ['dir/Note.md', 'other.md'];
+    assert.equal(resolveNote(paths, 'note'), 'dir/Note.md');
+    assert.equal(resolveNote(paths, 'NOTE.md'), 'dir/Note.md');
+  });
+
+  it('an ambiguous basename throws NOTE_AMBIGUOUS', () => {
+    const paths = ['a/dup.md', 'b/dup.md'];
+    assert.throws(() => resolveNote(paths, 'dup'), /ambiguous/);
+  });
+
+  it('no match throws NOTE_NOT_FOUND', () => {
+    assert.throws(() => resolveNote(['a.md'], 'missing'), /no note matches/);
+  });
+});
+
 describe('peek stays bounded', () => {
   it('caps link lists at 20 and reports totals', () => {
     const baseDir = tmpTree();
@@ -147,6 +256,75 @@ describe('peek stays bounded', () => {
     const result = peek(db, cfg, 'hub.md');
     assert.equal(result.backlinksTotal, 30);
     assert.equal(result.backlinks.length, 20);
+  });
+});
+
+describe('peek nearby expansion', () => {
+  // gp -> parent -> start -> mid -> far: a chain long enough to exercise both directions
+  // at depth 2, one hop past what outbound/backlinks already show.
+  function chain(): string {
+    const baseDir = tmpTree();
+    write(baseDir, 'far.md', 'end of the forward chain');
+    write(baseDir, 'mid.md', 'See [[far]].');
+    write(baseDir, 'start.md', 'See [[mid]].');
+    write(baseDir, 'parent.md', 'See [[start]].');
+    write(baseDir, 'gp.md', 'See [[parent]].');
+    return baseDir;
+  }
+
+  it('lists notes beyond the immediate ring, forward and reverse, at depth 2', () => {
+    const { db, cfg } = openTree(chain());
+    const result = peek(db, cfg, 'start.md');
+    assert.deepEqual(result.outbound, ['mid.md']);
+    assert.deepEqual(result.backlinks, ['parent.md']);
+    assert.deepEqual(
+      result.nearby.map((n) => [n.path, n.depth, n.direction]).sort(),
+      [
+        ['far.md', 2, 'forward'],
+        ['gp.md', 2, 'reverse'],
+      ].sort()
+    );
+  });
+
+  it('a scope excluding an intermediate node keeps what it bridges to out of the expansion', () => {
+    const { db, cfg } = openTree(chain());
+    // mid.md is the sole bridge to far.md; excluding it drops far.md from the forward
+    // expansion but leaves the unrelated reverse side (gp.md via parent.md) intact.
+    const scoped = peek(db, cfg, 'start.md', { where: `f."path" != 'mid.md'` });
+    assert.deepEqual(
+      scoped.nearby.map((n) => [n.path, n.depth, n.direction]),
+      [['gp.md', 2, 'reverse']]
+    );
+    // The immediate outline is unscoped -- scope only narrows the expansion, per
+    // plans/graph-algorithms.md ("a bare single-note peek outline ignores scope harmlessly").
+    assert.deepEqual(scoped.outbound, ['mid.md']);
+  });
+
+  it('is empty, not an error, when links is off', () => {
+    const baseDir = tmpTree();
+    write(baseDir, 'start.md', 'See [[mid]].');
+    write(baseDir, 'mid.md', 'text');
+    const { db, cfg } = openTree(baseDir, { links: false });
+    const result = peek(db, cfg, 'start.md');
+    assert.deepEqual(result.nearby, []);
+    assert.ok(result.off.includes('links'));
+  });
+
+  it('caps the expansion at the fixed depth-2 ring bound', () => {
+    const baseDir = tmpTree();
+    write(baseDir, 'hub.md', 'See [[mid]].');
+    let midBody = '';
+    for (let i = 0; i < 15; i++) {
+      const name = `f${String(i).padStart(2, '0')}`;
+      write(baseDir, `${name}.md`, 'leaf');
+      midBody += `see [[${name}]]\n`;
+    }
+    write(baseDir, 'mid.md', midBody);
+
+    const { db, cfg } = openTree(baseDir);
+    const result = peek(db, cfg, 'hub.md');
+    const forwardNearby = result.nearby.filter((n) => n.direction === 'forward');
+    assert.equal(forwardNearby.length, 10);
   });
 });
 
@@ -579,6 +757,28 @@ describe('--preset scope', () => {
     db.close();
   });
 
+  it('--exclude scopes ad hoc, without naming a preset', async () => {
+    const { db, cfg } = openTree(twoPresetTree(), undefined, twoPresets);
+    const rows = await search(db, cfg, 'alpha', { exclude: ['wiki/**'] });
+    assert.deepEqual(
+      rows.map((r) => r.path),
+      ['raw/source.md']
+    );
+    db.close();
+  });
+
+  it('include and exclude override independently: an ad hoc --include no longer drops the preset exclude', async () => {
+    const baseDir = twoPresetTree();
+    const presetWithExclude = { default: { include: ['**/*.md'], exclude: ['raw/**'], semantic: false } };
+    const { db, cfg } = openTree(baseDir, undefined, presetWithExclude);
+    const rows = await search(db, cfg, 'alpha', { include: ['**/*.md'] });
+    assert.deepEqual(
+      rows.map((r) => r.path),
+      ['wiki/page.md']
+    );
+    db.close();
+  });
+
   it('--preset at the CLI filters the table', () => {
     const base = twoPresetTree();
     writeFileSync(join(base, 'sense.config.json'), JSON.stringify({ version: 3, presets: twoPresets, queries: {} }));
@@ -600,6 +800,18 @@ describe('--preset scope', () => {
     assert.deepEqual(rows.map((r) => r.path).sort(), ['raw/source.md', 'wiki/page.md']);
   });
 
+  it('--exclude at the CLI narrows an --include scope', () => {
+    const base = twoPresetTree();
+    writeFileSync(join(base, 'sense.config.json'), JSON.stringify({ version: 3, presets: twoPresets, queries: {} }));
+    const result = runCli(['search', 'alpha', '--include', '**/*.md', '--exclude', 'raw/**', '--format', 'json'], { cwd: base });
+    assert.equal(result.status, 0, result.stderr);
+    const rows = JSON.parse(result.stdout) as Array<{ path: string }>;
+    assert.deepEqual(
+      rows.map((r) => r.path),
+      ['wiki/page.md']
+    );
+  });
+
   it('an unknown --preset at the CLI exits 1 naming the declared presets', () => {
     const base = twoPresetTree();
     writeFileSync(join(base, 'sense.config.json'), JSON.stringify({ version: 3, presets: twoPresets, queries: {} }));
@@ -608,6 +820,23 @@ describe('--preset scope', () => {
     assert.match(result.stderr, /unknown preset "nope"/);
     assert.match(result.stderr, /wiki/);
     assert.match(result.stderr, /raw/);
+  });
+});
+
+describe('scopedPaths', () => {
+  it('resolves the same include/exclude/preset coverage search() does, narrowed further by where', () => {
+    const baseDir = tmpTree();
+    write(baseDir, 'wiki/page.md', 'alpha subject in the wiki', { status: 'active' });
+    write(baseDir, 'wiki/old.md', 'alpha subject too', { status: 'archived' });
+    write(baseDir, 'raw/source.md', 'alpha subject in raw', { status: 'active' });
+    const { db, cfg } = openTree(baseDir, undefined, { default: { include: ['**/*.md'], semantic: false } });
+
+    assert.deepEqual([...scopedPaths(db, cfg, {})].sort(), ['raw/source.md', 'wiki/old.md', 'wiki/page.md']);
+    assert.deepEqual([...scopedPaths(db, cfg, { include: ['wiki/**/*.md'] })].sort(), ['wiki/old.md', 'wiki/page.md']);
+    assert.deepEqual([...scopedPaths(db, cfg, { exclude: ['wiki/**'] })], ['raw/source.md']);
+    assert.deepEqual([...scopedPaths(db, cfg, { where: "f.status = 'active'" })].sort(), ['raw/source.md', 'wiki/page.md']);
+
+    db.close();
   });
 });
 

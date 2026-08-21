@@ -2,14 +2,15 @@ import { readFileSync } from 'node:fs';
 import { join, matchesGlob } from 'node:path';
 import posix from 'node:path/posix';
 import type { DatabaseSync } from 'node:sqlite';
-import type { FeatureName, ResolvedConfig } from './config.ts';
+import type { FeatureName, ResolvedConfig, SearchOverrides } from './config.ts';
 import { anyPresetEmbeds, featureEnabled, featureStates, presetNames, resolveSearch } from './config.ts';
 import { SenseError } from './errors.ts';
-import { semanticCandidates } from './features/embed.ts';
+import { semanticCandidates, similarNotes } from './features/embed.ts';
 import { linkEdges } from './features/index.ts';
 import { personalizedRank } from './graph.ts';
 import type { Row } from './output.ts';
 import { searchError } from './search-error.ts';
+import { traverse } from './traverse.ts';
 
 // The three commands: mapTree (orient), search (locate), peek (structure).
 // Each returns data; cli.ts renders. All of them degrade when a feature is off.
@@ -122,7 +123,8 @@ export interface SearchOptions {
   k?: number;
   where?: string; // SQL fragment against frontmatter alias `f`, e.g. "f.status = 'active'"
   preset?: string; // named preset; unknown name throws listing declared presets, undefined -> "default"
-  include?: string[]; // ad hoc scope override (repeatable --include); replaces the preset's include/exclude
+  include?: string[]; // ad hoc scope override (repeatable --include); independent of exclude
+  exclude?: string[]; // ad hoc scope override (repeatable --exclude); independent of include
   semantic?: boolean; // false opts out of vector participation regardless of the preset
 }
 
@@ -153,9 +155,10 @@ export async function search(db: DatabaseSync, cfg: ResolvedConfig, terms: strin
   const allPaths = (db.prepare('SELECT "path" FROM frontmatter').all() as Array<{ path: string }>).map((r) => r.path);
   // A preset scope reads preset_files -- the coverage reconcile actually indexed with
   // (fast-glob semantics); re-matching globs here with node:path's matchesGlob could
-  // silently disagree with it. Ad-hoc --include has no persisted coverage, so only that
-  // path pays the JS glob match.
-  const scopedPaths = opts.include ? new Set(allPaths.filter((p) => inScope(p, include, exclude))) : new Set((db.prepare('SELECT "path" FROM preset_files WHERE preset = ?').all(effective.presetName) as Array<{ path: string }>).map((r) => r.path));
+  // silently disagree with it. An ad-hoc --include or --exclude has no persisted coverage,
+  // so only that path pays the JS glob match.
+  const adHocScope = opts.include !== undefined || opts.exclude !== undefined;
+  const scopedPaths = adHocScope ? new Set(allPaths.filter((p) => inScope(p, include, exclude))) : new Set((db.prepare('SELECT "path" FROM preset_files WHERE preset = ?').all(effective.presetName) as Array<{ path: string }>).map((r) => r.path));
   // A scope narrower than the whole index needs a bigger candidate pool before filtering, or
   // filtering can starve k even though enough in-scope matches exist further down the ranked
   // list that a plain over-fetch wouldn't have reached.
@@ -281,6 +284,21 @@ export async function search(db: DatabaseSync, cfg: ResolvedConfig, terms: strin
   return rows;
 }
 
+// The scope resolver for non-search commands (path, peek, map): same coverage rule search()
+// applies (preset_files for a named preset, JS glob matching for an ad hoc include/exclude),
+// then narrowed by the resolved `where`.
+export function scopedPaths(db: DatabaseSync, cfg: ResolvedConfig, overrides: SearchOverrides): Set<string> {
+  const effective = resolveSearch(cfg, overrides);
+  const { include, exclude, where } = effective;
+  const allPaths = (db.prepare('SELECT "path" FROM frontmatter').all() as Array<{ path: string }>).map((r) => r.path);
+  const adHocScope = overrides.include !== undefined || overrides.exclude !== undefined;
+  const paths = adHocScope ? new Set(allPaths.filter((p) => inScope(p, include, exclude))) : new Set((db.prepare('SELECT "path" FROM preset_files WHERE preset = ?').all(effective.presetName) as Array<{ path: string }>).map((r) => r.path));
+  if (!where) return paths;
+  const whereRows = db.prepare(`SELECT "path" FROM frontmatter f WHERE (${where})`).all() as Array<{ path: string }>;
+  const wherePaths = new Set(whereRows.map((r) => r.path));
+  return new Set([...paths].filter((p) => wherePaths.has(p)));
+}
+
 export interface PresetCoverage {
   name: string;
   files: number;
@@ -322,9 +340,24 @@ function chunk<T>(items: T[], size: number): T[][] {
   return out;
 }
 
-// mapTree: what is this tree. Fixed-size output regardless of tree size.
-export function mapTree(db: DatabaseSync, cfg: ResolvedConfig): TreeMap {
-  const docs = db.prepare('SELECT COUNT(*) AS count, COALESCE(SUM("_size"), 0) AS bytes FROM frontmatter').get() as { count: number; bytes: number };
+// Materializes the resolved scope into a temp table (same shape as traverse.ts's
+// allowed_nodes) so every mapTree query can join/filter against it cheaply.
+function setupMapScope(db: DatabaseSync, paths: Set<string>): void {
+  db.exec('DROP TABLE IF EXISTS _map_scope');
+  db.exec('CREATE TEMP TABLE _map_scope ("path" TEXT PRIMARY KEY)');
+  db.prepare('INSERT INTO _map_scope SELECT DISTINCT value FROM json_each(?1)').run(JSON.stringify([...paths]));
+}
+
+// mapTree: what is this scope. Fixed-size output regardless of tree size. Scopes to the
+// resolved preset like every command (the `default` preset when no flags are given); a broad
+// default or --preset all gives the whole-index view. presetCoverage and features stay global
+// config facts, not narrowed by scope, per plans/graph-algorithms.md's scope table.
+export function mapTree(db: DatabaseSync, cfg: ResolvedConfig, overrides: SearchOverrides = {}): TreeMap {
+  setupMapScope(db, scopedPaths(db, cfg, overrides));
+  const scopeWhere = 'WHERE "path" IN (SELECT "path" FROM _map_scope)';
+  const scopeAnd = 'AND f."path" IN (SELECT "path" FROM _map_scope)';
+
+  const docs = db.prepare(`SELECT COUNT(*) AS count, COALESCE(SUM("_size"), 0) AS bytes FROM frontmatter ${scopeWhere}`).get() as { count: number; bytes: number };
 
   const columns = (db.prepare('PRAGMA table_info(frontmatter)').all() as Array<{ name: string }>).map((r) => r.name).filter((name) => !INTERNAL_COLUMNS.has(name));
   // Observed storage class, not a declared one: these columns are added dynamically and
@@ -339,17 +372,29 @@ export function mapTree(db: DatabaseSync, cfg: ResolvedConfig): TreeMap {
       const quoted = `"${name.split('"').join('""')}"`;
       return `COUNT(${quoted}) AS n${i}, GROUP_CONCAT(DISTINCT typeof(${quoted})) FILTER (WHERE ${quoted} IS NOT NULL) AS t${i}`;
     });
-    const result = db.prepare(`SELECT ${exprs.join(', ')} FROM frontmatter`).get() as Record<string, number | string | null>;
+    const result = db.prepare(`SELECT ${exprs.join(', ')} FROM frontmatter ${scopeWhere}`).get() as Record<string, number | string | null>;
     group.forEach((name, i) => allFields.push({ field: name, coverage: result[`n${i}`] as number, type: (result[`t${i}`] as string) ?? '' }));
   }
   allFields.sort((a, b) => (b.coverage as number) - (a.coverage as number));
   const fields = allFields.slice(0, 20);
 
-  const hubs = featureEnabled(cfg, 'rank') ? (db.prepare(`SELECT f."path" AS path, round(f."_rank" * 100, 2) AS rank, content.title FROM frontmatter f JOIN content ON content.path = f."path" WHERE f."_rank" IS NOT NULL ORDER BY f."_rank" DESC LIMIT 8`).all() as Row[]) : [];
+  const hubs = featureEnabled(cfg, 'rank') ? (db.prepare(`SELECT f."path" AS path, round(f."_rank" * 100, 2) AS rank, content.title FROM frontmatter f JOIN content ON content.path = f."path" WHERE f."_rank" IS NOT NULL ${scopeAnd} ORDER BY f."_rank" DESC LIMIT 8`).all() as Row[]) : [];
 
-  const recent = db.prepare(`SELECT "path", datetime("_mtime" / 1000, 'unixepoch') AS modified FROM frontmatter ORDER BY "_mtime" DESC LIMIT 5`).all() as Row[];
+  const recent = db.prepare(`SELECT "path", datetime("_mtime" / 1000, 'unixepoch') AS modified FROM frontmatter ${scopeWhere} ORDER BY "_mtime" DESC LIMIT 5`).all() as Row[];
 
   return { docs, fields, fieldsTotal: allFields.length, features: featureStates(cfg), presets: presetCoverage(db, cfg), hubs, recent };
+}
+
+// Note resolution shared by peek and path: an exact path, or a unique basename (case
+// insensitive, .md stripped).
+export function resolveNote(paths: string[], arg: string): string {
+  const exact = paths.find((p) => p === arg);
+  if (exact) return exact;
+  const base = posix.basename(arg).replace(/\.md$/i, '').toLowerCase();
+  const matches = paths.filter((p) => posix.basename(p).replace(/\.md$/i, '').toLowerCase() === base);
+  if (matches.length === 1) return matches[0];
+  if (matches.length > 1) throw new SenseError('NOTE_AMBIGUOUS', `"${arg}" is ambiguous: ${matches.join(', ')}`);
+  throw new SenseError('NOTE_NOT_FOUND', `no note matches "${arg}"`);
 }
 
 export interface Peek {
@@ -367,23 +412,23 @@ export interface Peek {
   outboundTotal: number;
   backlinksTotal: number;
   unresolvedTotal: number;
+  // Bounded k-hop expansion beyond the immediate ring already shown by outbound/backlinks
+  // (depth starts at 2). Item 3 of plans/graph-algorithms.md.
+  nearby: Array<{ path: string; depth: number; direction: 'forward' | 'reverse' }>;
   off: FeatureName[]; // disabled features whose blocks are omitted (not empty)
 }
 
 const PEEK_LIST_LIMIT = 20;
+// Fixed-cost contract for the nearby expansion: depth 2 (one ring past outbound/backlinks)
+// and a hard cap so a peek stays a few hundred tokens on any note.
+const NEARBY_DEPTH = 2;
+const NEARBY_CAP = 10;
 
 // peek: everything about one note except its prose -- frontmatter, outline with line
 // ranges + token estimates (so the follow-up Read is a range, not the file), links both ways.
-export function peek(db: DatabaseSync, cfg: ResolvedConfig, pathArg: string): Peek {
+export function peek(db: DatabaseSync, cfg: ResolvedConfig, pathArg: string, overrides: SearchOverrides = {}): Peek {
   const paths = (db.prepare('SELECT "path" FROM frontmatter').all() as Array<{ path: string }>).map((r) => r.path);
-  let path = paths.find((p) => p === pathArg);
-  if (!path) {
-    const base = posix.basename(pathArg).replace(/\.md$/i, '').toLowerCase();
-    const matches = paths.filter((p) => posix.basename(p).replace(/\.md$/i, '').toLowerCase() === base);
-    if (matches.length === 1) path = matches[0];
-    else if (matches.length > 1) throw new SenseError('NOTE_AMBIGUOUS', `"${pathArg}" is ambiguous: ${matches.join(', ')}`);
-    else throw new SenseError('NOTE_NOT_FOUND', `no note matches "${pathArg}"`);
-  }
+  const path = resolveNote(paths, pathArg);
 
   const row = db.prepare('SELECT * FROM frontmatter WHERE "path" = ?').get(path) as Row;
   const frontmatter: Row = {};
@@ -398,12 +443,18 @@ export function peek(db: DatabaseSync, cfg: ResolvedConfig, pathArg: string): Pe
   let backlinks: string[] = [];
   let unresolved: string[] = [];
   let backlinksTotal = 0;
+  let nearby: Peek['nearby'] = [];
+  const allowed = scopedPaths(db, cfg, overrides);
   if (featureEnabled(cfg, 'links')) {
     const out = db.prepare('SELECT target, dst FROM links WHERE src = ? ORDER BY target').all(path) as Array<{ target: string; dst: string | null }>;
     outbound = [...new Set(out.filter((l) => l.dst !== null).map((l) => l.dst as string))];
     unresolved = out.filter((l) => l.dst === null).map((l) => l.target);
     backlinksTotal = (db.prepare('SELECT COUNT(DISTINCT src) AS n FROM links WHERE dst = ?').get(path) as { n: number }).n;
     backlinks = (db.prepare('SELECT DISTINCT src FROM links WHERE dst = ? ORDER BY src LIMIT ?').all(path, PEEK_LIST_LIMIT) as Array<{ src: string }>).map((r) => r.src);
+
+    const forward = traverse(db, { seeds: [path], direction: 'forward', depth: NEARBY_DEPTH, cap: NEARBY_CAP, allowed });
+    const reverse = traverse(db, { seeds: [path], direction: 'reverse', depth: NEARBY_DEPTH, cap: NEARBY_CAP, allowed });
+    nearby = [...forward.filter((h) => h.depth > 1).map((h) => ({ path: h.path, depth: h.depth, direction: 'forward' as const })), ...reverse.filter((h) => h.depth > 1).map((h) => ({ path: h.path, depth: h.depth, direction: 'reverse' as const }))].slice(0, NEARBY_CAP);
   }
 
   return {
@@ -418,6 +469,24 @@ export function peek(db: DatabaseSync, cfg: ResolvedConfig, pathArg: string): Pe
     outboundTotal: outbound.length,
     backlinksTotal,
     unresolvedTotal: unresolved.length,
+    nearby,
     off: (['sections', 'links'] as FeatureName[]).filter((name) => !featureEnabled(cfg, name)),
   };
+}
+
+// related: notes most similar to `path` by vector cosine, excluding self and every note
+// structurally linked to it either way (full, untruncated -- unlike peek's truncated
+// backlinks list). Split out of peek because a full-corpus embeddings scan is expensive
+// (~480ms at 26k notes) and peek's whole point is a cheap default.
+export function relatedNotes(db: DatabaseSync, cfg: ResolvedConfig, pathArg: string, overrides: SearchOverrides, k: number): Array<{ path: string; similarity: number }> {
+  const paths = (db.prepare('SELECT "path" FROM frontmatter').all() as Array<{ path: string }>).map((r) => r.path);
+  const path = resolveNote(paths, pathArg);
+
+  const outbound = (db.prepare('SELECT DISTINCT dst FROM links WHERE src = ? AND dst IS NOT NULL').all(path) as Array<{ dst: string }>).map((r) => r.dst);
+  const backlinks = (db.prepare('SELECT DISTINCT src FROM links WHERE dst = ?').all(path) as Array<{ src: string }>).map((r) => r.src);
+  const exclude = new Set([path, ...outbound, ...backlinks]);
+
+  const allowed = scopedPaths(db, cfg, overrides);
+  if (!scopeHasEmbeddings(db, cfg, allowed)) return [];
+  return similarNotes(db, cfg, path, { exclude, allowed, k });
 }

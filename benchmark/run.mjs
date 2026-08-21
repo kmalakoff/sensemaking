@@ -7,16 +7,19 @@ import { spawn, spawnSync } from 'node:child_process';
 import { appendFileSync, rmSync, statSync, utimesSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { CORPUS_NAMES, corpusPath } from './lib/corpus.mjs';
 import { futureDate, median as sharedMedian, timedCli, walkMd } from './lib/measure.mjs';
 
 const [pkgRootArg, treeArg] = process.argv.slice(2);
 if (!pkgRootArg || !treeArg) {
-  console.error('usage: node bench/run.mjs <package-root> <notes-dir>');
+  console.error('usage: node bench/run.mjs <package-root> <notes-dir|corpus-name>');
   process.exit(2);
 }
 // Absolute from the start: spawns below run with cwd set to the tree.
 const pkgRoot = resolve(pkgRootArg);
-const tree = resolve(treeArg);
+// A known corpus name builds and caches itself (atomic, fetch-once) rather than needing a
+// pre-materialized path; anything else is treated as a directory path.
+const tree = CORPUS_NAMES.includes(treeArg) ? corpusPath(treeArg) : resolve(treeArg);
 const cli = join(pkgRoot, 'bin', 'cli.js');
 
 const run = (args) => spawnSync(process.execPath, [cli, ...args], { cwd: tree, encoding: 'utf8', maxBuffer: 64e6 });
@@ -66,6 +69,10 @@ const findRowTokens = (() => {
   }
 })();
 const peekR = fail(timed(['peek', largest.rel], 3));
+// related_ms: the similar-but-unlinked command. It scans every embedding chunk in the tree
+// per call (semantic-search cost class), unlike peek's cheap local queries. Runs after the
+// semantic search above, which has warmed the embeddings this scan reads.
+const relatedR = fail(timed(['related', largest.rel], 3));
 
 // --- in-process (library) ---
 let inproc = null;
@@ -145,6 +152,8 @@ console.log(
       map_tokens: mapR ? Math.round(mapR.bytes / 4) : null,
       peek_ms: peekR?.ms ?? null,
       peek_tokens: peekR ? Math.round(peekR.bytes / 4) : null,
+      related_ms: relatedR?.ms ?? null,
+      related_tokens: relatedR ? Math.round(relatedR.bytes / 4) : null,
       largest_note_tokens: Math.round(largest.size / 4),
       bulk_files: BULK,
       bulk_change_ms: bulkCold?.ms ?? null,

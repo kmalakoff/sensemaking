@@ -11,13 +11,15 @@ import type { Ctx } from './types.ts';
 // Spreadable option fragments -- one flag name keeps one meaning across every command's table.
 export const FORMAT: ParseArgsOptionsConfig = { format: { type: 'string', default: 'table' } };
 export const CONFIG: ParseArgsOptionsConfig = { config: { type: 'string' } };
-export const SEARCH_FLAGS: ParseArgsOptionsConfig = {
+// The scope vocabulary every scoped command shares: named preset, ad hoc include/exclude
+// globs, a where SQL condition. search adds k and lexical on top.
+export const SCOPE: ParseArgsOptionsConfig = {
   where: { type: 'string' },
-  k: { type: 'string' },
   preset: { type: 'string' },
   include: { type: 'string', multiple: true },
-  lexical: { type: 'boolean', default: false },
+  exclude: { type: 'string', multiple: true },
 };
+export const SEARCH_FLAGS: ParseArgsOptionsConfig = { ...SCOPE, k: { type: 'string' }, lexical: { type: 'boolean', default: false } };
 
 type Values = Record<string, string | boolean | string[] | undefined>;
 

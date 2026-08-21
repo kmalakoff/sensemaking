@@ -39,11 +39,12 @@ export interface Preset {
 }
 
 // A saved `search` invocation: `sense <name>` runs like
-// `sense search <search> [--preset] [--include] [--where] [--k] [--semantic]`.
+// `sense search <search> [--preset] [--include] [--exclude] [--where] [--k] [--semantic]`.
 export interface SavedSearch {
   search: string;
   preset?: string;
   include?: string[];
+  exclude?: string[];
   where?: string;
   k?: number;
   semantic?: boolean;
@@ -159,6 +160,7 @@ export interface SearchOverrides {
   k?: number;
   where?: string;
   include?: string[];
+  exclude?: string[];
   semantic?: boolean;
 }
 
@@ -181,11 +183,12 @@ export function resolveSearch(cfg: Config, opts: SearchOverrides = {}): Effectiv
   const { name: presetName, preset } = resolvePreset(cfg, opts.preset);
   const k = opts.k ?? preset.k ?? 10;
   const where = opts.where ?? preset.where;
-  // An explicit include (CLI --include, or a saved search's own `include`) is a full ad hoc
-  // scope override -- it replaces the preset's include/exclude pair rather than layering on
-  // top of it, the same "replaces, doesn't AND" rule --where already uses.
+  // include and exclude override independently: an explicit --include narrows scope without
+  // dropping the preset's exclude, and an explicit --exclude applies without dropping the
+  // preset's include. Each field follows the same "explicit replaces the preset's own value"
+  // rule --where already uses, just per-field.
   const include = opts.include ?? preset.include;
-  const exclude = opts.include ? undefined : preset.exclude;
+  const exclude = opts.exclude ?? preset.exclude;
   const semantic = opts.semantic !== undefined ? opts.semantic : preset.semantic !== false;
   return { presetName, k, where, include, exclude, semantic };
 }
@@ -308,7 +311,7 @@ const KNOWN_KEYS = new Set(['$schema', 'version', 'presets', 'features', 'embed'
 const KNOWN_PRESET_KEYS = new Set(['include', 'exclude', 'k', 'semantic', 'where']);
 const KNOWN_FEATURE_KEYS = new Set(['links', 'sections', 'rank']);
 const KNOWN_EMBED_KEYS = new Set(['model', 'type', 'url', 'key']);
-const SAVED_SEARCH_KEYS = new Set(['search', 'preset', 'include', 'where', 'k', 'semantic']);
+const SAVED_SEARCH_KEYS = new Set(['search', 'preset', 'include', 'exclude', 'where', 'k', 'semantic']);
 
 function unknownConfigKeys(cfg: Record<string, unknown>): string[] {
   return Object.keys(cfg).filter((k) => !KNOWN_KEYS.has(k));
@@ -393,11 +396,11 @@ function validatePreset(name: string, value: unknown, configPath: string): void 
   }
 }
 
-// A queries.<name> entry: a SQL string, { sql }, or a saved search { search, preset?, include?, where?, k?, semantic? }.
+// A queries.<name> entry: a SQL string, { sql }, or a saved search { search, preset?, include?, exclude?, where?, k?, semantic? }.
 function validateSavedQuery(name: string, value: unknown, configPath: string): void {
   if (typeof value === 'string') return;
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    throw new SenseError('CONFIG_INVALID', `${configPath}: queries.${name} must be a SQL string, { sql }, or { search, preset?, include?, where?, k?, semantic? }`);
+    throw new SenseError('CONFIG_INVALID', `${configPath}: queries.${name} must be a SQL string, { sql }, or { search, preset?, include?, exclude?, where?, k?, semantic? }`);
   }
   const entry = value as Record<string, unknown>;
   if ('sql' in entry) {
@@ -413,7 +416,7 @@ function validateSavedQuery(name: string, value: unknown, configPath: string): v
   if ('search' in entry) {
     const unknown = Object.keys(entry).filter((k) => !SAVED_SEARCH_KEYS.has(k));
     if (unknown.length > 0) {
-      throw new SenseError('CONFIG_INVALID', `${configPath}: queries.${name} has unknown key(s) ${unknown.join(', ')}; a saved search takes search, preset, include, where, k, semantic`);
+      throw new SenseError('CONFIG_INVALID', `${configPath}: queries.${name} has unknown key(s) ${unknown.join(', ')}; a saved search takes search, preset, include, exclude, where, k, semantic`);
     }
     // A saved query saves a question; a scope without a question is just flags.
     if (typeof entry.search !== 'string' || entry.search.trim() === '') {
@@ -424,6 +427,9 @@ function validateSavedQuery(name: string, value: unknown, configPath: string): v
     }
     if (entry.include !== undefined && !isNonEmptyStringArray(entry.include)) {
       throw new SenseError('CONFIG_INVALID', `${configPath}: queries.${name}.include must be a non-empty array of glob strings`);
+    }
+    if (entry.exclude !== undefined && !isNonEmptyStringArray(entry.exclude)) {
+      throw new SenseError('CONFIG_INVALID', `${configPath}: queries.${name}.exclude must be a non-empty array of glob strings`);
     }
     if (entry.where !== undefined && typeof entry.where !== 'string') {
       throw new SenseError('CONFIG_INVALID', `${configPath}: queries.${name}.where must be a SQL condition string`);
@@ -436,7 +442,7 @@ function validateSavedQuery(name: string, value: unknown, configPath: string): v
     }
     return;
   }
-  throw new SenseError('CONFIG_INVALID', `${configPath}: queries.${name} must be a SQL string, { sql }, or { search, preset?, include?, where?, k?, semantic? }`);
+  throw new SenseError('CONFIG_INVALID', `${configPath}: queries.${name} must be a SQL string, { sql }, or { search, preset?, include?, exclude?, where?, k?, semantic? }`);
 }
 
 function validateConfig(parsed: unknown, configPath: string): Config {

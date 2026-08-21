@@ -8,7 +8,7 @@ import type { Ctx } from './types.ts';
 // Flags cover both shapes -- SEARCH_FLAGS override a saved search's fields the same way they
 // override a preset's.
 export default async function named(ctx: Ctx, queryName: string): Promise<void> {
-  const usage = `usage: ${ctx.name} ${queryName} [params...] [--format table|json] [--config path] [--where "<sql>"] [--k n] [--preset name] [--include glob ...] [--lexical]`;
+  const usage = `usage: ${ctx.name} ${queryName} [params...] [--format table|json] [--config path] [--where "<sql>"] [--k n] [--preset name] [--include glob ...] [--exclude glob ...] [--lexical]`;
   const { values, positionals: params } = parse(ctx.argv, usage, { ...SEARCH_FLAGS, ...FORMAT, ...CONFIG });
   const format = formatOf(values);
   const configPath = values.config as string | undefined;
@@ -38,8 +38,9 @@ export default async function named(ctx: Ctx, queryName: string): Promise<void> 
   const where = (values.where as string | undefined) ?? entry.where;
   const preset = (values.preset as string | undefined) ?? entry.preset;
   const include = (values.include as string[] | undefined) ?? entry.include;
+  const exclude = (values.exclude as string[] | undefined) ?? entry.exclude;
   // --lexical upgrades a saved search's semantic behavior the same way --where/--k
   // override; absent means the saved value (the flag has no default false override).
   const semantic = values.lexical ? false : entry.semantic;
-  await withDb(ctx, configPath, async (db, resolvedCfg) => printRows(await search(db, resolvedCfg, entry.search, { k, where, preset, include, semantic }), format));
+  await withDb(ctx, configPath, async (db, resolvedCfg) => printRows(await search(db, resolvedCfg, entry.search, { k, where, preset, include, exclude, semantic }), format));
 }

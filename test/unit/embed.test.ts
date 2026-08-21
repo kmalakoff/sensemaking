@@ -4,7 +4,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer, type Server } from 'http';
 import type { Config } from 'sensemaking';
-import { presetCoverage, search } from 'sensemaking';
+import { peek, presetCoverage, search } from 'sensemaking';
+import { relatedNotes } from '../../src/commands.ts';
+import { similarNotes } from '../../src/features/embed.ts';
 import { openConfig, tmpTree, writeNote } from '../lib/tree.ts';
 
 // Local Model2Vec fixture: WordLevel vocab, 8-dim f32 matrix, apple ≡ pomme (identical
@@ -44,6 +46,20 @@ function fruitTree(): string {
   const baseDir = tmpTree();
   writeNote(baseDir, 'a.md', { frontmatter: { title: 'Fruit' }, body: 'An apple every day' });
   writeNote(baseDir, 'b.md', { frontmatter: { title: 'Walls' }, body: 'stone walls' });
+  return baseDir;
+}
+
+// target links out to linked.md and is linked back by backlinker.md, both deliberately
+// apple-similar so a naive similarity list would surface them -- related must exclude both.
+// similar.md is apple-similar but not linked at all (the case related should surface).
+// unrelated.md is stone-similar (orthogonal in the fixture matrix).
+function relatedTree(): string {
+  const baseDir = tmpTree();
+  writeNote(baseDir, 'target.md', { frontmatter: { title: 'Target' }, body: 'An apple every day. See [[linked]].' });
+  writeNote(baseDir, 'linked.md', { frontmatter: { title: 'Linked' }, body: 'An apple every day.' });
+  writeNote(baseDir, 'backlinker.md', { frontmatter: { title: 'Backlinker' }, body: 'An apple every day. See [[target]].' });
+  writeNote(baseDir, 'similar.md', { frontmatter: { title: 'Similar' }, body: 'pomme reference here.' });
+  writeNote(baseDir, 'unrelated.md', { frontmatter: { title: 'Unrelated' }, body: 'stone walls only.' });
   return baseDir;
 }
 
@@ -239,5 +255,107 @@ describe('per-preset semantic', () => {
     const hitB = rows.find((r) => r.path === 'b/two.md');
     assert.ok(hitB, JSON.stringify(rows));
     assert.equal(hitB.via, 'match', 'semantic-off preset must be reached lexically only, never via vector');
+  });
+});
+
+describe('related command', () => {
+  it('surfaces a semantically similar note that is not linked, excluding self/outbound/backlinks', async () => {
+    const { db, cfg } = openSemantic(relatedTree(), { model: writeModel(), type: 'static' });
+    // Vectors are lazy (embeddings rows start with vector NULL); relatedNotes deliberately
+    // never calls embedPending, so warm the table the way a prior semantic `search` would
+    // in real use.
+    await search(db, cfg, 'apple', { semantic: true });
+    // Sanity-check the fixture's link shape (what related must exclude).
+    const peeked = peek(db, cfg, 'target.md');
+    assert.deepEqual(peeked.outbound, ['linked.md']);
+    assert.deepEqual(peeked.backlinks, ['backlinker.md']);
+    const result = relatedNotes(db, cfg, 'target.md', {}, 5);
+    db.close();
+    const paths = result.map((r) => r.path);
+    assert.ok(paths.includes('similar.md'), JSON.stringify(result));
+    assert.ok(!paths.includes('linked.md'), JSON.stringify(result));
+    assert.ok(!paths.includes('backlinker.md'), JSON.stringify(result));
+    assert.ok(!paths.includes('target.md'), JSON.stringify(result));
+    const similar = result.find((r) => r.path === 'similar.md');
+    assert.ok(similar && similar.similarity > 0.9, `apple ≡ pomme in the fixture, got ${JSON.stringify(result)}`);
+  });
+
+  it('respects scope: a --where that drops a candidate keeps it out of related', async () => {
+    const { db, cfg } = openSemantic(relatedTree(), { model: writeModel(), type: 'static' });
+    await search(db, cfg, 'apple', { semantic: true });
+    const result = relatedNotes(db, cfg, 'target.md', { where: `f."path" != 'similar.md'` }, 5);
+    db.close();
+    assert.ok(!result.map((r) => r.path).includes('similar.md'), JSON.stringify(result));
+  });
+
+  it('excludes every backlink, including those past the old display cap (>20)', async () => {
+    const baseDir = tmpTree();
+    writeNote(baseDir, 'target.md', { frontmatter: { title: 'Target' }, body: 'An apple every day.' });
+    // 22 apple-similar backlinkers. peek's backlinks display truncates at 20; related's
+    // exclude set is built from the full, untruncated links table, so none of the 22 leaks in.
+    for (let i = 0; i < 22; i++) writeNote(baseDir, `back${String(i).padStart(2, '0')}.md`, { frontmatter: { title: `Back ${i}` }, body: 'An apple every day. See [[target]].' });
+    const { db, cfg } = openSemantic(baseDir, { model: writeModel(), type: 'static' });
+    await search(db, cfg, 'apple', { semantic: true });
+    const peeked = peek(db, cfg, 'target.md');
+    assert.equal(peeked.backlinksTotal, 22);
+    assert.equal(peeked.backlinks.length, 20, 'peek display list is truncated; related must not inherit that truncation');
+    const result = relatedNotes(db, cfg, 'target.md', {}, 5);
+    db.close();
+    assert.deepEqual(result, [], `every apple-similar note here is a backlink, so related must be empty: ${JSON.stringify(result)}`);
+  });
+
+  it('is [] when embeddings are off, not an error (embeddings table absent)', () => {
+    const { db, cfg } = openConfig({ presets: { default: { include: ['**/*.md'], semantic: false } }, queries: {}, baseDir: relatedTree(), configPath: null });
+    const result = relatedNotes(db, cfg, 'target.md', {}, 5);
+    db.close();
+    assert.deepEqual(result, []);
+  });
+
+  it('is [] when vectors are on but not yet computed (lazy placeholder rows, no prior semantic search)', () => {
+    const { db, cfg } = openConfig({ presets: { default: { include: ['**/*.md'] } }, queries: {}, baseDir: relatedTree(), configPath: null });
+    const result = relatedNotes(db, cfg, 'target.md', {}, 5);
+    db.close();
+    assert.deepEqual(result, []);
+  });
+});
+
+describe('similarNotes (unit)', () => {
+  it('ranks by cosine, honoring exclude and self-exclusion', async () => {
+    const { db, cfg } = openSemantic(relatedTree(), { model: writeModel(), type: 'static' });
+    await search(db, cfg, 'apple', { semantic: true }); // warm the lazy vectors, see peek related tests above
+    const result = similarNotes(db, cfg, 'target.md', { exclude: new Set(['linked.md', 'backlinker.md']), k: 5 });
+    db.close();
+    assert.deepEqual(
+      result.map((r) => r.path),
+      ['similar.md', 'unrelated.md']
+    );
+    assert.ok(result[0].similarity > result[1].similarity, JSON.stringify(result));
+  });
+
+  it('honors an allowed set (scope)', async () => {
+    const { db, cfg } = openSemantic(relatedTree(), { model: writeModel(), type: 'static' });
+    await search(db, cfg, 'apple', { semantic: true });
+    const result = similarNotes(db, cfg, 'target.md', { exclude: new Set(['linked.md', 'backlinker.md']), allowed: new Set(['similar.md']), k: 5 });
+    db.close();
+    assert.deepEqual(
+      result.map((r) => r.path),
+      ['similar.md']
+    );
+  });
+
+  it('returns [] when the target note has no stored vectors, even though the embeddings table exists', () => {
+    // default covers everything but opts target.md out of vectors; preset "b" embeds only
+    // unrelated.md, so the embeddings table exists (unlike the table-absent case above) but
+    // carries no row at all for target.md.
+    const { db, cfg } = openConfig({
+      presets: { default: { include: ['**/*.md'], semantic: false }, b: { include: ['unrelated.md'] } },
+      embed: { model: writeModel(), type: 'static' },
+      queries: {},
+      baseDir: relatedTree(),
+      configPath: null,
+    });
+    const result = similarNotes(db, cfg, 'target.md', { exclude: new Set(), k: 5 });
+    db.close();
+    assert.deepEqual(result, []);
   });
 });

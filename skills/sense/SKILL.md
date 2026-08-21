@@ -1,6 +1,6 @@
 ---
 name: sense
-description: Query a markdown tree with the sense CLI: filter notes by frontmatter, full-text search the prose, follow wikilinks/backlinks, and read note outlines. Use when the user wants to query, filter, count, search, or report on a folder of markdown notes, when you need to find which notes discuss a topic before reading them, when you want a note's backlinks or structure, when a directory has a sense.config.json, or when asked to add a named query to one.
+description: Query a markdown tree with the sense CLI: filter notes by frontmatter, full-text search the prose, follow wikilinks/backlinks, trace how notes connect (link path, k-hop neighborhood, similar-but-unlinked), and read note outlines. Use when the user wants to query, filter, count, search, or report on a folder of markdown notes, when you need to find which notes discuss a topic before reading them, when you want a note's backlinks or structure, when you want to know how two notes connect or what surrounds one in the link graph, when a directory has a sense.config.json, or when asked to add a named query to one.
 ---
 
 # sense
@@ -14,7 +14,9 @@ Every result is a reference (path, metadata, excerpt), never file contents; pros
 - A deterministic, factual answer over known fields (counts, filters, "which notes have X") is SQL: `sense query`, a named query, or `search --where`. Enumerates every match; same result regardless of phrasing.
 - Locating notes about something is `search`, one text through every engine the scope has: word match (bare words AND-join, one absent word = zero lexical rows; write `a OR b OR c` for any-word), link-graph expansion, and vector similarity, fused into one ranked list. Read `via` per row: `match` rows contained your words; `vector`-only rows did not. A `vector`-only row means the search words don't appear in that note; it showed up because the model judged it semantically related. Vector rows are conceptual similarity, not typo-tolerance; false positives are expected, labeled, and bounded by `--k`. `--lexical` skips vectors for one command when word-presence is the question.
 - `map` answers "what is this tree" (fields, hub notes, recent changes) when the tree is unfamiliar.
-- `peek <path>` prices a file before you pay for it: outline with `[L143-162, ~380t]` ranges, links both ways. Every list shows its first 20 with the true total; the `sections` and `links` tables hold the rest, so a peek costs a few hundred tokens on any note, heading-dense monsters included.
+- `peek <path>` prices a file before you pay for it: outline with `[L143-162, ~380t]` ranges and links both ways, plus a bounded `nearby` (notes a few hops out, forward and reverse). Every list shows its first 20 with the true total; the `sections` and `links` tables hold the rest, so a peek costs a few hundred tokens on any note.
+- `path <a> <b>` walks the link graph for a chain connecting two notes, or reports none within the depth bound: it answers how they connect, not just that both exist.
+- `related <note>` ranks notes near in meaning to one note that it does not already link to: the links it is missing. It reads the meaning-vectors, so it needs vectors on for the scope and scans them, costing about what a semantic `search` does, not what a `peek` does.
 - When you know the file and need its contents, `Read` it. sense adds nothing there. On large files peek's ranges let you read just one section; small files are often cheaper whole.
 
 Output defaults to a table, built for humans; `--format json` returns the same rows machine-parseable. That also makes a saved query usable as a CI/hook gate with zero added mechanism: `[ "$(sense <query> --format json)" = "[]" ]` is true exactly when the query returned no rows.
@@ -25,6 +27,8 @@ Output defaults to a table, built for humans; `--format json` returns the same r
 sense search "pricing OR billing OR invoicing" --where "f.status = 'active'" --k 10
 sense search "sourcing quotes" --preset raw     # a named settings bundle from the config
 sense peek notes/pricing-model.md               # a unique basename also works
+sense path onboarding.md pricing-model.md       # link chain between two notes, or none within the bound
+sense related notes/pricing-model.md            # notes similar by meaning it does not yet link to
 sense map
 sense query "<sql>" [params...]                 # ad-hoc SQL; ? binds positional args, count-checked
 sense <name> [params...]                        # named query or saved search from sense.config.json
@@ -35,7 +39,7 @@ sense --list | status | rebuild | check
 - When a search misses, the recall levers are: OR-in synonyms and concrete instances (the index only knows the words in the files; a note about a specific tool rarely names its category), raise `--k` (a row costs tens of tokens), and widen the scope (`--preset`, or `--include` for an ad-hoc glob). Vector rows already cover the meaning-over-words gap by default. Each widening adds candidates and dilutes ranking, so the noise trade-off runs both ways.
 - A frontmatter query enumerates its matches deterministically; search ranks by term overlap, so results shift as phrasing shifts. Trade-off: a query needs a known field, search doesn't.
 - The `via` column says what produced each row: `match` (words hit), `link` (connected to notes that hit), `vector` (near in meaning), and combinations. The `lines` column, when set, points at the section that earned the row (the best-matching chunk on vector rows, the term cluster's section on large lexical notes) and is a direct `Read` range; null means the whole note is the reference.
-- Scope comes from presets: bare `search` uses the config's `default` preset; `--preset <name>` picks another (unknown names error, listing what's declared); `--include <glob>` is an ad-hoc scope that replaces the preset's globs for one command. `--where` takes any SQL condition against frontmatter alias `f`, not only field equality: `"f.status = 'active' AND has(f.tags, 'x')"`, `"datetime(f.created) >= datetime(?)"`, and filters within the scope. `sense status` shows every preset with its coverage.
+- Scope is one vocabulary shared by `search`, `map`, `peek`, `path`, and `related`: bare command uses the config's `default` preset; `--preset <name>` picks another (unknown names error, listing what's declared); `--include <glob>` and `--exclude <glob>` are ad-hoc globs for one command, each overriding its own side of the preset (an `--include` no longer drops the preset's `exclude`). `--where` takes any SQL condition against frontmatter alias `f`, not only field equality: `"f.status = 'active' AND has(f.tags, 'x')"`, `"datetime(f.created) >= datetime(?)"`. There is no whole-index flag: a broad `default` preset, or a declared `all` preset (`include ["**/*"]`), is the whole tree. `sense status` shows every preset with its coverage.
 - `score` is a rank-fusion value: it ranks rows within one result set and is not comparable across queries, not a relevance magnitude. It encodes how many signals fired and at what rank, so a perfect lexical hit and a weak vector-only hit can read the same number. With vectors active, rows carry `similarity`: the cosine (-1 to 1) of the query against that file's best-matching chunk (the same chunk the `lines` range points at). It orders vector evidence within a result set; the range it spans depends on the corpus and the embedding model, and compresses on small trees, where even a nonsense query has a moderately near neighbour somewhere. Compare similarities within a result set rather than against a fixed cutoff carried between trees.
 - Absence evidence lives in the labels: `search --lexical` (or a semantic-off scope) returns 0 rows when the words are nowhere in the tree. Default `search` always returns up to `k` rows (nearest-neighbour search has a nearest neighbour for any input), so a result of only `via: vector` rows IS the absence signal for the words themselves; `similarity` and the snippet are the evidence for judging whether a vector row is a real conceptual hit.
 - Besides SQL strings, a config entry can save a whole search: `"hot": { "search": "pricing OR billing", "preset": "raw", "k": 20 }` runs as `sense hot`. The scenario's settings ride along with the name, so repeat runs need no flags. An invocation-level `--preset`, `--k`, `--where`, or `--lexical` overrides the saved value; `--list` marks these entries `(search)`.
@@ -50,9 +54,27 @@ sense query "SELECT name FROM pragma_table_info('frontmatter')"          # what 
 sense query "SELECT DISTINCT status FROM frontmatter"                    # what values a field takes
 sense query "SELECT src FROM links WHERE dst = ?" notes/pricing-model.md  # backlinks
 sense query "SELECT src, target FROM links WHERE dst IS NULL"            # dead links
-sense query "SELECT path FROM frontmatter WHERE path NOT IN (SELECT dst FROM links WHERE dst IS NOT NULL)"  # orphans
+sense query "SELECT path FROM frontmatter WHERE path NOT IN (SELECT dst FROM links WHERE dst IS NOT NULL) AND path NOT IN (SELECT src FROM links)"  # linked neither way (fine if intentional; linking is optional)
 sense query "SELECT heading, start_line, tokens FROM sections WHERE path = ?" a.md   # budget a read
 sense query "SELECT j.value, COUNT(*) n FROM frontmatter, json_each(frontmatter.tags) j GROUP BY j.value ORDER BY n DESC"   # count per array member
+```
+
+`path` and `peek`'s `nearby` cover the common graph walks; custom ones are bounded `WITH RECURSIVE` over `links`. Bound the depth: an unbounded walk on a densely linked tree enumerates paths exponentially. Pass these through `sense query "<sql>" <seed>` or save as `{ "sql": "..." }`.
+
+```
+-- notes within 2 hops of a seed, links both ways (UNION dedups, so it terminates)
+WITH RECURSIVE hop(path, d) AS (
+  SELECT ?, 0
+  UNION
+  SELECT CASE WHEN l.src = hop.path THEN l.dst ELSE l.src END, hop.d + 1
+  FROM hop JOIN links l ON (l.src = hop.path OR l.dst = hop.path) AND l.dst IS NOT NULL
+  WHERE hop.d < 2
+)
+SELECT DISTINCT path FROM hop WHERE d > 0;
+
+-- notes cited alongside a seed: they share a note that links to both (co-citation)
+SELECT DISTINCT b.dst FROM links a JOIN links b ON a.src = b.src
+WHERE a.dst = ? AND b.dst IS NOT NULL AND b.dst <> a.dst;
 ```
 
 - `content MATCH` takes FTS5 syntax: `a OR b`, `"phrase"`, `pref*`, `NEAR(a b, 5)`, `summary: term`. Stemmed; markdown stripped at index time. Double-quote any term with punctuation. Bare `customer-facing` errors (`-` reads as a column filter), bare apostrophes are syntax errors: write `"customer-facing"`, `"founder's"`.

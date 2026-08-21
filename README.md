@@ -52,8 +52,10 @@ ORDER BY bm25(content, 10.0, 5.0, 1.0) LIMIT 10
 | command | does |
 |---|---|
 | `map` | doc count, frontmatter field coverage, top hubs by link rank, recent changes |
-| `search "<text>" [--preset name] [--include glob] [--where "<sql>"] [--k n] [--lexical]` | words + links + vectors, one fused ranked list; `via` labels each row's evidence |
-| `peek <path>` | frontmatter + heading outline (`[L143-162, ~380t]`) + links both ways: first 20 per list, each with its total; the `links` table has the rest |
+| `search "<text>" [--preset name] [--include glob] [--exclude glob] [--where "<sql>"] [--k n] [--lexical]` | words + links + vectors, one fused ranked list; `via` labels each row's evidence |
+| `peek <path> [--preset name] [--where "<sql>"]` | frontmatter + heading outline (`[L143-162, ~380t]`) + links both ways (first 20 per list, each with its total), plus `nearby` (notes a few hops out) |
+| `path <a> <b> [--max-depth n] [--preset name] [--where "<sql>"]` | shortest link chain between two notes, or none within the bound |
+| `related <note> [--k n] [--preset name] [--where "<sql>"]` | notes similar in meaning that `<note>` does not yet link to; reads vectors, so semantic-search cost |
 | `query "<sql>" [params...]` | ad-hoc SQL over all the tables; `?` binds positional args |
 | `<name> [params...]` | run a query saved in the config; `--list` names them |
 | `init` | write a starter `sense.config.json` |

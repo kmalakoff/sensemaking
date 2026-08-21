@@ -83,7 +83,21 @@ export function renderMap(result: { docs: { count: number; bytes: number }; fiel
   return parts.join('\n');
 }
 
-export function renderPeek(result: { path: string; tokens: number; frontmatter: Row; sections: Row[]; outbound: string[]; backlinks: string[]; unresolved: string[]; sectionsTotal: number; outboundTotal: number; backlinksTotal: number; unresolvedTotal: number; off: string[] }): string {
+export function renderPeek(result: {
+  path: string;
+  tokens: number;
+  frontmatter: Row;
+  sections: Row[];
+  outbound: string[];
+  backlinks: string[];
+  unresolved: string[];
+  sectionsTotal: number;
+  outboundTotal: number;
+  backlinksTotal: number;
+  unresolvedTotal: number;
+  nearby: Array<{ path: string; depth: number; direction: 'forward' | 'reverse' }>;
+  off: string[];
+}): string {
   const lines = [`${result.path}  (~${result.tokens} tokens)`];
   for (const [key, value] of Object.entries(result.frontmatter)) lines.push(`  ${key}: ${value}`);
   if (result.sections.length > 0) {
@@ -93,14 +107,18 @@ export function renderPeek(result: { path: string; tokens: number; frontmatter: 
   } else if (result.off.includes('sections')) lines.push('', 'sections: off (features.sections)');
   if (result.off.includes('links')) {
     lines.push('', 'links: off (features.links)');
-    return lines.join('\n');
+  } else {
+    const linkLine = (label: string, shown: string[], total: number) => {
+      if (total > 0) lines.push(`${label} (${total}): ${shown.join(', ')}${total > shown.length ? `, +${total - shown.length} more` : ''}`);
+    };
+    if (result.outboundTotal + result.unresolvedTotal + result.backlinksTotal > 0) lines.push('');
+    linkLine('links out', result.outbound, result.outboundTotal);
+    linkLine('unresolved', result.unresolved, result.unresolvedTotal);
+    linkLine('backlinks', result.backlinks, result.backlinksTotal);
+    if (result.nearby.length > 0) {
+      lines.push('', `nearby (${result.nearby.length}):`);
+      for (const n of result.nearby) lines.push(`  ${n.direction} +${n.depth}: ${n.path}`);
+    }
   }
-  const linkLine = (label: string, shown: string[], total: number) => {
-    if (total > 0) lines.push(`${label} (${total}): ${shown.join(', ')}${total > shown.length ? `, +${total - shown.length} more` : ''}`);
-  };
-  if (result.outboundTotal + result.unresolvedTotal + result.backlinksTotal > 0) lines.push('');
-  linkLine('links out', result.outbound, result.outboundTotal);
-  linkLine('unresolved', result.unresolved, result.unresolvedTotal);
-  linkLine('backlinks', result.backlinks, result.backlinksTotal);
   return lines.join('\n');
 }

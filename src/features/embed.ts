@@ -288,3 +288,34 @@ export async function semanticCandidates(db: DatabaseSync, cfg: Config, terms: s
     .slice(0, fetch)
     .map(([path, b]) => ({ path, lines: b.lines, similarity: Math.round(b.score * 1000) / 1000 }));
 }
+
+// "Related, not yet linked" for `sense related`: notes most similar to `path` by cosine, over
+// vectors already stored -- no embedPending call, so this stays sync. Returns [] when the
+// target or the corpus has no stored vectors: graceful degrade, not an error. A single linear
+// scan of embeddings, note-to-note similarity is the max cosine over all (target chunk, other
+// chunk) pairs.
+export function similarNotes(db: DatabaseSync, _cfg: Config, path: string, opts: { exclude: Set<string>; allowed?: Set<string>; k: number }): Array<{ path: string; similarity: number }> {
+  const targetRows = db.prepare('SELECT scale, vector FROM embeddings WHERE "path" = ? AND vector IS NOT NULL').all(path) as Array<{ scale: number; vector: Uint8Array }>;
+  if (targetRows.length === 0) return [];
+  const target = targetRows.map((row) => ({ v: new Int8Array(row.vector.buffer, row.vector.byteOffset, row.vector.byteLength), scale: row.scale }));
+
+  const rows = db.prepare('SELECT "path", scale, vector FROM embeddings WHERE vector IS NOT NULL').all() as Array<{ path: string; scale: number; vector: Uint8Array }>;
+  const best = new Map<string, number>();
+  for (const row of rows) {
+    if (row.path === path || opts.exclude.has(row.path) || (opts.allowed && !opts.allowed.has(row.path))) continue;
+    const other = new Int8Array(row.vector.buffer, row.vector.byteOffset, row.vector.byteLength);
+    for (const t of target) {
+      let dot = 0;
+      const len = Math.min(t.v.length, other.length);
+      for (let d = 0; d < len; d++) dot += t.v[d] * other[d];
+      const score = dot * t.scale * row.scale;
+      const existing = best.get(row.path);
+      if (existing === undefined || score > existing) best.set(row.path, score);
+    }
+  }
+
+  return [...best.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, opts.k)
+    .map(([p, score]) => ({ path: p, similarity: Math.round(score * 1000) / 1000 }));
+}

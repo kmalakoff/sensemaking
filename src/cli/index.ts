@@ -10,9 +10,11 @@ export const USAGE = {
   check: 'check [--format table|json] [--config path]',
   rebuild: 'rebuild [--config path]',
   query: 'query "<sql>" [params...] [--format table|json] [--config path]',
-  search: 'search "<terms>" [--preset name] [--include glob ...] [--where "<sql>"] [--k n] [--lexical] [--format table|json] [--config path]',
+  search: 'search "<terms>" [--preset name] [--include glob ...] [--exclude glob ...] [--where "<sql>"] [--k n] [--lexical] [--format table|json] [--config path]',
   map: 'map [--format table|json] [--config path]',
-  peek: 'peek <path> [--format table|json] [--config path]',
+  peek: 'peek <path> [--preset name] [--include glob ...] [--exclude glob ...] [--where "<sql>"] [--format table|json] [--config path]',
+  path: 'path <a> <b> [--preset name] [--include glob ...] [--exclude glob ...] [--where "<sql>"] [--max-depth n] [--format table|json] [--config path]',
+  related: 'related <note> [--preset name] [--include glob ...] [--exclude glob ...] [--where "<sql>"] [--k n] [--format table|json] [--config path]',
 } as const;
 
 // Lazy registry: a command's imports load only when it runs, so a heavy dependency in one
@@ -28,6 +30,8 @@ export const COMMANDS: Record<string, () => Promise<{ default: Command }>> = {
   search: () => import('./search.ts'),
   map: () => import('./map.ts'),
   peek: () => import('./peek.ts'),
+  path: () => import('./path.ts'),
+  related: () => import('./related.ts'),
 };
 
 export type { Command, Ctx } from './types.ts';
