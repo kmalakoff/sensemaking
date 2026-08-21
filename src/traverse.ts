@@ -1,17 +1,8 @@
-// Bounded SQL traversal over the links table: frontier-by-frontier BFS via a temp visited
-// table and one indexed anti-join per ring. Never loads the whole edge list -- see
-// plans/graph-algorithms.md's "Organizing principle".
+// Frontier-by-frontier BFS through a temp visited table, one indexed anti-join per ring: a
+// local question touches a neighborhood, never the whole edge list.
 import type { DatabaseSync } from 'node:sqlite';
 
 type Direction = 'forward' | 'reverse' | 'both';
-
-interface TraverseOptions {
-  seeds: string[];
-  direction: Direction;
-  depth: number;
-  cap?: number;
-  allowed?: Set<string>;
-}
 
 interface FindPathOptions {
   directed?: boolean;
@@ -58,28 +49,6 @@ LIMIT ?3
 RETURNING path`;
 }
 
-// Bounded frontier expansion from one or more seeds. Seeds are depth 0 and excluded from
-// the result; only newly reached nodes (depth >= 1) come back. Stops at `depth` rings or
-// when a ring reaches nothing new.
-export function traverse(db: DatabaseSync, opts: TraverseOptions): Array<{ path: string; depth: number }> {
-  const seeds = [...new Set(opts.seeds)];
-  if (seeds.length === 0 || opts.depth <= 0) return [];
-
-  resetVisited(db);
-  db.prepare('INSERT INTO visited (path, depth, pred) SELECT DISTINCT value, 0, NULL FROM json_each(?1)').run(JSON.stringify(seeds));
-  if (opts.allowed) setupAllowed(db, opts.allowed);
-
-  const stmt = db.prepare(ringSql(opts.direction, !!opts.allowed));
-  const cap = opts.cap ?? -1;
-  const results: Array<{ path: string; depth: number }> = [];
-  for (let ring = 1; ring <= opts.depth; ring++) {
-    const rows = stmt.all(ring - 1, ring, cap) as Array<{ path: string }>;
-    if (rows.length === 0) break;
-    for (const row of rows) results.push({ path: row.path, depth: ring });
-  }
-  return results;
-}
-
 function reconstructPath(db: DatabaseSync, to: string): string[] {
   const lookup = db.prepare('SELECT pred FROM visited WHERE path = ?');
   const path: string[] = [];
@@ -92,10 +61,8 @@ function reconstructPath(db: DatabaseSync, to: string): string[] {
   return path.reverse();
 }
 
-// Shortest path via the same ring expansion, one BFS from `from` tracking a predecessor
-// per visited node. `directed` false (default) walks both directions, matching
-// personalizedRank's undirected treatment (graph.ts). Returns null if `to` is unreached
-// within `maxDepth` rings (unbounded if omitted).
+// One BFS from `from`, tracking a predecessor per node. Undirected by default, matching
+// personalizedRank; null when `to` is unreached within `maxDepth`.
 export function findPath(db: DatabaseSync, from: string, to: string, opts: FindPathOptions = {}): string[] | null {
   if (from === to) return [from];
 

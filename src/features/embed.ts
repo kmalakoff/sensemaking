@@ -9,14 +9,14 @@ import { progress } from '../progress.ts';
 import { parseFile } from '../scan.ts';
 import type { Feature } from './types.ts';
 
-// embeddings(path, chunk, start_line, end_line, scale, vector): heading-based chunks,
-// int8 vectors with a per-vector dequantization scale, vector NULL = not yet embedded.
-// Reconcile stores dirty rows inside its transaction; embedding tops up on the next
-// semantic query (embedPending), so staleness costs recall, never correctness.
+// Heading-based chunks, int8 vectors with a per-vector scale, NULL vector = not yet embedded.
+// Reconcile writes dirty rows; embedding tops up on the next search, so staleness costs recall.
 
 // Storage lever fixed by the bake-off (BENCHMARKING.md): int8 at 256 dims is
 // quality-free vs f32-512 when fused. Queries stay f32 at the same dims.
 const STORE_DIMS = 256;
+// Seed chunks that participate in a `related` scan; see similarNotes for the measurement.
+const TARGET_CHUNK_CAP = 16;
 const BATCH = 64;
 
 export interface EmbedProvider {
@@ -31,10 +31,8 @@ interface Chunk {
   text: string;
 }
 
-// Deterministic chunker used at reconcile (line ranges stored) and at embed time (text
-// re-derived from the file -- chunk text is never stored). Heading-delimited with the
-// preamble kept; whole file when no headings. The title/summary prefix mirrors the
-// bm25 column weighting.
+// Deterministic, so embed time can re-derive text from stored line ranges. Heading-delimited,
+// preamble kept, whole file when no headings; the title/summary prefix mirrors bm25 weighting.
 function chunksOf(raw: string, search?: { title: string; summary: string }): Chunk[] {
   const lines = raw.split('\n');
   const starts: number[] = [];
@@ -71,8 +69,8 @@ export const embed: Feature = {
   remove(db, path) {
     db.prepare('DELETE FROM embeddings WHERE "path" = ?').run(path);
   },
-  // A doc covered only by semantic-false presets never had extract() run for it (db.ts's
-  // per-file filter skips it), so extracted is undefined here -- store nothing, i.e. no rows.
+  // A tree with no embedding model never had extract() run for the doc (db.ts's per-file
+  // filter skips it), so extracted is undefined here -- store nothing, i.e. no rows.
   store(db, path, extracted) {
     if (!extracted) return;
     const insert = db.prepare('INSERT INTO embeddings ("path", chunk, start_line, end_line, scale, vector) VALUES (?, ?, ?, ?, NULL, NULL)');
@@ -87,6 +85,49 @@ export const embed: Feature = {
 // Encode convention from model2vec/model.py: no special tokens, drop unk ids, mean-pool,
 // L2-normalize.
 
+const MODEL_FILES = ['model.safetensors', 'tokenizer.json'];
+// The pair, for messages that name what a local model directory must contain.
+export const MODEL_FILENAMES = MODEL_FILES.join(' and ');
+
+// A Hugging Face repo id: one slash, HF's charset. Anything else is a path, used as one rather
+// than flattened into a cache key Windows would reject.
+const HF_MODEL_ID = /^[A-Za-z0-9][\w.-]*\/[A-Za-z0-9][\w.-]*$/;
+
+// Downloadable iff it names a Hugging Face repo; a local path is the caller's to populate.
+export function isDownloadable(model: string): boolean {
+  return HF_MODEL_ID.test(model);
+}
+
+// Machine-wide, not per-tree: `.sense/` is the index a rebuild throws away, while a 124 MB
+// model is shared by every tree on the machine. Honors XDG_CACHE_HOME where it is set;
+// elsewhere ~/.cache, which is also where Hugging Face's own libraries keep theirs.
+function cacheRoot(): string {
+  const xdg = process.env.XDG_CACHE_HOME;
+  return join(xdg && xdg.length > 0 ? xdg : join(homedir(), '.cache'), 'sensemaking', 'models');
+}
+
+// A model is either a local directory the caller pointed at, or the cache `sense download`
+// fills. Nothing here fetches: an absent model degrades search to its other signals rather
+// than pulling 124 MB out of a command that reads like a query.
+export function modelDir(model: string): string {
+  if (!HF_MODEL_ID.test(model)) return model;
+  return join(cacheRoot(), model.replace(/\//g, '--'));
+}
+
+// Both files, so an interrupted download reads as absent and the next one resumes it.
+export function hasModelFiles(model: string): boolean {
+  const dir = modelDir(model);
+  return MODEL_FILES.every((file) => existsSync(join(dir, file)));
+}
+
+// api providers have nothing to download, so they are never "missing" here; an unreachable
+// endpoint surfaces as an EMBED_MODEL error at call time instead.
+export function modelPresent(cfg: Config): boolean {
+  const e = embedConfig(cfg);
+  if (!e) return false;
+  return e.type === 'api' || hasModelFiles(e.model);
+}
+
 function fetchToFile(url: string, dest: string): Promise<void> {
   return fetch(url).then(async (res) => {
     if (!res.ok) throw new SenseError('EMBED_MODEL', `model download failed: ${url} -> HTTP ${res.status}`);
@@ -95,16 +136,30 @@ function fetchToFile(url: string, dest: string): Promise<void> {
   });
 }
 
+// The only code path that touches the network for weights. `sense download` calls it; no
+// query ever does. Idempotent: a file already on disk is left alone.
+export async function downloadModel(model: string, onFile?: (file: string, dir: string) => void): Promise<string> {
+  if (!isDownloadable(model)) {
+    throw new SenseError('EMBED_MODEL', `embed.model "${model}" is a local path, not a Hugging Face model id, so there is nothing to download; put model.safetensors and tokenizer.json in that directory, or name a model id like "minishlab/potion-retrieval-32M"`);
+  }
+  const dir = modelDir(model);
+  mkdirSync(dir, { recursive: true });
+  for (const file of MODEL_FILES) {
+    if (existsSync(join(dir, file))) continue;
+    onFile?.(file, dir);
+    await fetchToFile(`https://huggingface.co/${model}/resolve/main/${file}`, join(dir, file));
+  }
+  return dir;
+}
+
 async function staticProvider(model: string): Promise<EmbedProvider> {
-  let dir = model;
-  if (!existsSync(join(dir, 'model.safetensors'))) {
-    dir = join(homedir(), '.cache', 'sensemaking', 'models', model.replace(/\//g, '--'));
-    mkdirSync(dir, { recursive: true });
-    for (const file of ['model.safetensors', 'tokenizer.json']) {
-      if (!existsSync(join(dir, file))) {
-        console.error(`fetching ${model}/${file} into ${dir} (once; delete to refetch)`);
-        await fetchToFile(`https://huggingface.co/${model}/resolve/main/${file}`, join(dir, file));
-      }
+  const dir = modelDir(model);
+  for (const file of MODEL_FILES) {
+    if (!existsSync(join(dir, file))) {
+      // A local path the caller controls gets told what is missing where; only a repo id can
+      // be fixed by downloading.
+      const fix = isDownloadable(model) ? 'run `sense download`' : `expected ${MODEL_FILENAMES} in that directory`;
+      throw new SenseError('EMBED_MODEL_MISSING', `embed model ${model} is not available (looked in ${dir}); ${fix}`);
     }
   }
 
@@ -172,7 +227,7 @@ const providers = new Map<string, Promise<EmbedProvider>>();
 
 function getProvider(cfg: Config): Promise<EmbedProvider> {
   const e = embedConfig(cfg);
-  if (!e) throw new SenseError('EMBED_DISABLED', 'semantic search needs at least one preset with vectors on (semantic !== false); every declared preset in sense.config.json has "semantic": false');
+  if (!e) throw new SenseError('EMBED_DISABLED', 'this tree has no embedding model: add an "embed" block naming one to sense.config.json, then run `sense download`');
   const sig = `${e.type}:${e.model}:${e.url ?? ''}`;
   let p = providers.get(sig);
   if (!p) {
@@ -215,7 +270,7 @@ export async function embedPending(db: DatabaseSync, cfg: Config, baseDir: strin
     let chunks: Chunk[];
     try {
       // presets/embed are irrelevant here -- re-deriving chunk text for a doc that already
-      // has embeddings rows means it was covered by a semantic-on preset at reconcile time.
+      // has embeddings rows means the tree had an embedding model at reconcile time.
       chunks = parseFile({ relPath: path, absPath: join(baseDir, path), mtimeMs: 0, size: 0, presets: [], embed: true }, [embed]).doc.extracted.embed as Chunk[];
     } catch {
       continue; // vanished since reconcile; the next reconcile removes its rows
@@ -224,7 +279,7 @@ export async function embedPending(db: DatabaseSync, cfg: Config, baseDir: strin
   }
 
   const update = db.prepare('UPDATE embeddings SET scale = ?, vector = ? WHERE "path" = ? AND chunk = ?');
-  // The lazy build is the one long silence a first --semantic query hits (measured 23s at
+  // The lazy build is the one long silence a first search hits (measured 23s at
   // 26k notes); progress makes it distinguishable from a hang.
   const report = progress('embedding chunks', jobs.length);
   for (let i = 0; i < jobs.length; i += BATCH) {
@@ -248,14 +303,9 @@ export async function embedPending(db: DatabaseSync, cfg: Config, baseDir: strin
   report.finish();
 }
 
-// Top candidates by cosine for a semantic find: best chunk per file, its line range
-// riding along. FTS5 operators in the terms are lexical syntax, not meaning -- stripped
-// before embedding.
-// Returns the cosine similarity alongside each candidate: stored and query vectors are both
-// L2-normalised before quantisation, so the dot product is cosine in [-1, 1]. `find` surfaces
-// it because the fused rank score cannot express match quality -- nearest-neighbour search
-// always returns a nearest neighbour, so without a magnitude an agent cannot tell a real hit
-// from the best of a bad lot.
+// Best chunk per file by cosine, its line range riding along; FTS5 operators are stripped as
+// lexical syntax. Similarity comes back because the fused score cannot express match quality,
+// and nearest-neighbour search always returns a neighbour however far away.
 export async function semanticCandidates(db: DatabaseSync, cfg: Config, terms: string, fetch: number): Promise<Array<{ path: string; lines: string; similarity: number }>> {
   const baseDir = (cfg as Partial<ResolvedConfig>).baseDir;
   if (!baseDir) throw new SenseError('EMBED_MODEL', 'semantic expansion needs a config with baseDir (use loadConfig/open)');
@@ -289,15 +339,15 @@ export async function semanticCandidates(db: DatabaseSync, cfg: Config, terms: s
     .map(([path, b]) => ({ path, lines: b.lines, similarity: Math.round(b.score * 1000) / 1000 }));
 }
 
-// "Related, not yet linked" for `sense related`: notes most similar to `path` by cosine, over
-// vectors already stored -- no embedPending call, so this stays sync. Returns [] when the
-// target or the corpus has no stored vectors: graceful degrade, not an error. A single linear
-// scan of embeddings, note-to-note similarity is the max cosine over all (target chunk, other
-// chunk) pairs.
+// Note-to-note similarity is the max cosine over (target chunk, other chunk) pairs, one linear
+// scan of stored vectors. Reads only what is stored, so it stays sync.
 export function similarNotes(db: DatabaseSync, _cfg: Config, path: string, opts: { exclude: Set<string>; allowed?: Set<string>; k: number }): Array<{ path: string; similarity: number }> {
-  const targetRows = db.prepare('SELECT scale, vector FROM embeddings WHERE "path" = ? AND vector IS NOT NULL').all(path) as Array<{ scale: number; vector: Uint8Array }>;
+  // Cost is target_chunks x stored_chunks, so a heading-dense seed multiplies a full-corpus
+  // scan (12.7s at 201 chunks/note). Sample evenly, so late sections still get a vote.
+  const targetRows = db.prepare('SELECT scale, vector FROM embeddings WHERE "path" = ? AND vector IS NOT NULL ORDER BY chunk').all(path) as Array<{ scale: number; vector: Uint8Array }>;
   if (targetRows.length === 0) return [];
-  const target = targetRows.map((row) => ({ v: new Int8Array(row.vector.buffer, row.vector.byteOffset, row.vector.byteLength), scale: row.scale }));
+  const step = Math.max(1, Math.ceil(targetRows.length / TARGET_CHUNK_CAP));
+  const target = targetRows.filter((_, i) => i % step === 0).map((row) => ({ v: new Int8Array(row.vector.buffer, row.vector.byteOffset, row.vector.byteLength), scale: row.scale }));
 
   const rows = db.prepare('SELECT "path", scale, vector FROM embeddings WHERE vector IS NOT NULL').all() as Array<{ path: string; scale: number; vector: Uint8Array }>;
   const best = new Map<string, number>();

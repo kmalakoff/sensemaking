@@ -1,8 +1,5 @@
-// Performance shape sweep (plans/performance.md Phase 2): synthetic corpora that isolate one
-// dimension at a time, holding the rest at hub-like values. Corpora build into .tmp/cache
-// (fetch-once, see lib/cache.mjs); every measurement runs against a working COPY so the
-// cached originals stay clean, and copies are deleted after each point. Points run strictly
-// serially -- a shared CPU with another benchmark would swamp the signal this sweep hunts for.
+// Shape sweep: synthetic corpora isolating one dimension at a time, the rest held hub-like.
+// Every point runs against a working copy, strictly serially -- a shared CPU swamps the signal.
 // usage: node benchmark/sweep.mjs [dimension ...] [--quick] [--out file]
 // dimensions: fields headings links filesize notes bulk probes presets (default: all)
 import { spawnSync } from 'node:child_process';
@@ -39,7 +36,7 @@ for (const d of requested) {
 }
 const dimensions = requested.length ? requested : DIMENSION_NAMES;
 
-// Hub-like values every dimension holds the non-swept params at (matches plans/performance.md).
+// Hub-like values every dimension holds the non-swept params at.
 const HUB = { notes: 6000, noteTokens: 500, headingsPerNote: 8, linksPerNote: 5, distinctFields: 30, fieldsPerNote: 8, seed: 1 };
 
 const lib = await import(pathToFileURL(join(ROOT, 'dist', 'esm', 'index.js')).href);
@@ -65,11 +62,8 @@ const runCli = (cwd, args) => spawnSync(process.execPath, [CLI, ...args], { cwd,
 
 const timed = (cwd, args, runs = 3) => timedCli(() => runCli(cwd, args), runs);
 
-// Three in-process measurements (cold build, no-change open, one-file-touched open) plus
-// three wall CLI measurements (map, peek, find). peek and the touch both target the largest
-// note (run.mjs's convention): on uniform synthetic points every note ties, and on the
-// filesize dimension the big note is the whole point -- mdFiles[0] sorts by path and could
-// miss it.
+// Three in-process measurements plus three wall CLI ones. peek and the touch target the
+// largest note: on the filesize dimension that note is the whole point.
 async function measurePoint(spec) {
   const src = syntheticPath(spec);
   const work = workingCopy(src);
@@ -245,10 +239,8 @@ async function semanticProbe() {
   for (const r of rows) console.log(`| ${r.notes} | ${r.warmup_ms} | ${r.semantic_find_ms} |`);
 }
 
-// Mixed-preset tree: `default` covers a/** (semantic on), `raw` covers b/** (semantic off).
-// Indexing/embedding is derived from presets (plans/presets-config.md), so files only a
-// semantic-false preset covers must end up with zero embeddings rows -- checked here after a
-// warm-up search actually triggers embedding (lazy, see semanticProbe above).
+// Mixed-preset tree: files only a semantic-false preset covers must end up with zero
+// embeddings rows, checked after a warm-up search triggers the lazy embedding.
 async function presetsProbe() {
   console.log('\n### presets: mixed semantic coverage (default = a/** semantic on, raw = b/** semantic off)\n');
   const spec = {

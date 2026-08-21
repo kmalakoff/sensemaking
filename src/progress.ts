@@ -1,7 +1,5 @@
-// Long-work progress on stderr only: stdout stays the parseable answer, so progress can
-// never corrupt --format json (the same channel warnings already use). TTY-aware: a human
-// terminal gets one self-overwriting line; a non-TTY consumer (agent, pipe, CI) gets at
-// most a few append-only lines -- an agent transcript gains lines, not redraw frames.
+// Progress on stderr only, so it can never corrupt --format json. A TTY gets one
+// self-overwriting line; a pipe gets a few append-only ones, not redraw frames.
 
 const NON_TTY_MILESTONES = 4;
 

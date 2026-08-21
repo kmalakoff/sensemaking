@@ -1,11 +1,5 @@
-// Retrieval-quality eval over a labeled corpus, in three passes through the shipped library:
-// bm25-only, fused (links), and semantic (vectors participate). A fourth, hidden pass --
-// fused on an embed-configured corpus, called with semantic:false -- is run first as a guard:
-// it must be row-identical to the shown `fused` pass (vectors never built at all). That's the
-// v3 no-silent-change contract (plans/presets-config.md): a preset with semantic on doesn't
-// move a single row unless a search actually invokes vector participation. Reports point
-// metrics plus paired per-query deltas (fusion-tuning.md protocol: wins/losses and a
-// sign-test z, because point deltas below the noise floor are unreadable alone).
+// Retrieval quality in three passes (bm25-only, fused, semantic) plus a hidden guard pass: a
+// semantic:false preset must be row-identical to `fused`. Paired deltas with a sign-test z.
 // usage: node benchmark/eval.mjs [corpus] [--queries N] [--k N] [--split test|dev]
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -36,10 +30,8 @@ const lib = await import(pathToFileURL(join(ROOT, 'dist', 'esm', 'index.js')).hr
 const { queries, qrels } = readLabels(labelsDir, SPLIT);
 const qids = [...qrels.keys()].sort().slice(0, MAX_QUERIES === Infinity ? undefined : MAX_QUERIES);
 
-// embed: false -> preset semantic:false, vectors never built at all (no embed cost).
-// embed: true -> preset has no semantic key (v3 default on), vectors build lazily on the
-// first call that actually participates. searchSemantic: false always opts a call out
-// regardless of the preset; undefined lets the preset's own default (true) apply.
+// embed false -> preset semantic:false, vectors never built. embed true -> vectors build
+// lazily on the first participating call.
 const VARIANTS = [
   { name: 'bm25-only', features: { links: false, rank: false }, embed: false, searchSemantic: false },
   { name: 'fused', features: undefined, embed: false, searchSemantic: false },

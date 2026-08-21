@@ -142,10 +142,8 @@ const SYNTHETIC_DEFAULTS = {
   presets: null, // presets dimension: [{name, dir, semantic}] -> write a v3 presets config instead, one folder per preset
 };
 
-// JSON.stringify with a top-level array replacer only sorts/filters the outer object's
-// keys -- a nested object (e.g. spec.presets entries) would have every key stripped since
-// none of them are in that outer allow-list. Recursive key sorting keeps the hash stable
-// (and, for the flat specs every other dimension uses, byte-identical to the old replacer).
+// Recursive key sort, so nested spec objects keep a stable hash; a top-level replacer would
+// strip every key of a nested object instead.
 function stableStringify(v) {
   if (Array.isArray(v)) return `[${v.map(stableStringify).join(',')}]`;
   if (v && typeof v === 'object') {
@@ -186,19 +184,13 @@ const CORPORA = {
     url: 'https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/nfcorpus.zip',
     version: 'beir-1',
   },
-  // FEVER dev split: verifiable claims labeled with their Wikipedia evidence pages.
-  // Pages keep their sentence link annotations as wikilinks -- the corpus that can
-  // measure link fusion. Tree = only pages cited as evidence; links to pages outside
-  // it are dead (dst NULL), as in a real partial tree.
-  // Scale rows: the same real corpus replicated N times under one root. Tests the
-  // per-query freshness stat-walk and reconcile at the note counts the README claims;
-  // duplicate basenames across copies also stress link-ambiguity resolution.
+  // FEVER: claims labeled with their Wikipedia evidence pages, sentence links kept as
+  // wikilinks -- the only corpus that can measure link fusion. Scale rows replicate one real
+  // corpus N times, so duplicate basenames also stress link-ambiguity resolution.
   'obsidian-hub-x2': { type: 'replicate', source: 'obsidian-hub', copies: 2, version: 'x2-hub-1' },
   'obsidian-hub-x4': { type: 'replicate', source: 'obsidian-hub', copies: 4, version: 'x4-hub-1' },
-  // Every fixed shape cliff in one tree (plans/performance-findings.md): a 1MB note
-  // (bounded snippet), 200 headings/note (peek cap), 100 links/note (incremental resolve,
-  // conditional rank), 300 distinct fields (single-scan map). The release gate runs run.mjs
-  // on it so a cliff regression moves a row instead of shipping.
+  // Every fixed shape cliff in one tree: 1MB note, 200 headings/note, 100 links/note, 300
+  // fields. The release gate runs it so a cliff regression moves a row instead of shipping.
   stress: { type: 'synthetic', notes: 2000, noteTokens: 500, headingsPerNote: 200, linksPerNote: 100, distinctFields: 300, fieldsPerNote: 8, seed: 42, bigNoteBytes: 1_000_000, version: 'stress-1' },
   fever: {
     type: 'fever',
@@ -238,10 +230,8 @@ const BUILDERS = {
     execFileSync('cp', [join(inner, 'queries.jsonl'), labels]);
     execFileSync('bash', ['-c', `cp ${JSON.stringify(join(inner, 'qrels'))}/*.tsv ${JSON.stringify(labels)}`]);
   },
-  // FEVER wiki pages arrive as jsonl shards inside a 1.7GB zip (deleted after the build);
-  // each page's `lines` field annotates sentences with (anchor, target) link pairs.
-  // Targets are display-form titles; page ids escape punctuation (-LRB- etc.), so link
-  // targets normalize to id form to match filenames. Labels convert to BEIR format.
+  // Pages arrive as jsonl shards in a 1.7GB zip; `lines` annotates sentences with (anchor,
+  // target) pairs. Targets are display titles, so they normalize to id form to match filenames.
   fever(spec, dest) {
     const toId = (t) => t.replace(/ /g, '_').replace(/\(/g, '-LRB-').replace(/\)/g, '-RRB-').replace(/:/g, '-COLON-');
     const fromId = (t) =>

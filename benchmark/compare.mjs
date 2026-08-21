@@ -1,11 +1,6 @@
-// Full benchmark flow: install versions, copy the tree per version, run run.mjs for each,
-// print a ready-to-paste markdown table.
+// Run run.mjs per version against its own copy of the tree, print a pasteable table. The
+// baseline is package.json's version, so a bare run answers "did the working tree regress?".
 // usage: node benchmark/compare.mjs [corpus-or-dir] [version...]
-// Defaults: obsidian-hub corpus, the released baseline vs 'local' (this working tree) -- so a
-// bare `node benchmark/compare.mjs` answers "did the working tree regress?". The baseline is
-// package.json's own version: the bump happens after a release, so during development it names
-// the last release, and no version is written down anywhere in the harness. Named corpora and
-// npm installs cache under .tmp/ (published versions are immutable; delete .tmp to refetch).
 import { spawnSync } from 'node:child_process';
 import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';

@@ -14,7 +14,7 @@ function write(baseDir: string, relPath: string, frontmatter: Record<string, unk
 }
 
 function openTree(baseDir: string) {
-  return open({ presets: { default: { include: ['*.md'], semantic: false } }, queries: {}, baseDir, configPath: null });
+  return open({ presets: { default: { include: ['*.md'] } }, queries: {}, baseDir, configPath: null });
 }
 
 describe('reconcile', () => {
@@ -143,7 +143,7 @@ describe('reconcile', () => {
     );
     second.db.close();
 
-    const rebuilt = rebuild({ presets: { default: { include: ['*.md'], semantic: false } }, queries: {}, baseDir, configPath: null });
+    const rebuilt = rebuild({ presets: { default: { include: ['*.md'] } }, queries: {}, baseDir, configPath: null });
     columns = rebuilt.db.prepare('PRAGMA table_info(frontmatter)').all() as Array<{ name: string }>;
     assert.ok(!columns.some((c) => c.name === 'ephemeral'), "rebuild's fresh crawl drops the lingering column");
     const count = (rebuilt.db.prepare('SELECT COUNT(*) AS n FROM frontmatter').get() as { n: number }).n;

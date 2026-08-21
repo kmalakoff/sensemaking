@@ -5,12 +5,11 @@ import type { DatabaseSync } from 'node:sqlite';
 import type { FeatureName, ResolvedConfig, SearchOverrides } from './config.ts';
 import { anyPresetEmbeds, featureEnabled, featureStates, presetNames, resolveSearch } from './config.ts';
 import { SenseError } from './errors.ts';
-import { semanticCandidates, similarNotes } from './features/embed.ts';
+import { embedPending, modelPresent, semanticCandidates, similarNotes } from './features/embed.ts';
 import { linkEdges } from './features/index.ts';
 import { personalizedRank } from './graph.ts';
 import type { Row } from './output.ts';
 import { searchError } from './search-error.ts';
-import { traverse } from './traverse.ts';
 
 // The three commands: mapTree (orient), search (locate), peek (structure).
 // Each returns data; cli.ts renders. All of them degrade when a feature is off.
@@ -18,11 +17,8 @@ import { traverse } from './traverse.ts';
 const WEIGHTED_BM25 = 'bm25(content, 10.0, 5.0, 1.0)';
 const RRF_K = 60;
 
-// FTS5 snippet() re-tokenizes the whole doc per candidate row, superlinearly: measured
-// 2ms at 4KB docs but 189ms at 64KB for one query's pool, and ~10s for a single 1MB doc
-// (plans/performance-findings.md finding A). 16KB keeps the whole pool's snippet cost in
-// the low-ms range; bigger docs get the JS-computed excerpt, linear and only for the rows
-// actually returned.
+// snippet() re-tokenizes each candidate doc, superlinearly: ~10s for one 1MB doc
+// (BENCHMARKING.md). Past this bound, rows get the linear JS excerpt instead.
 const SNIPPET_BOUND = 16_384;
 const EXCERPT_WINDOW = 160;
 
@@ -125,12 +121,15 @@ export interface SearchOptions {
   preset?: string; // named preset; unknown name throws listing declared presets, undefined -> "default"
   include?: string[]; // ad hoc scope override (repeatable --include); independent of exclude
   exclude?: string[]; // ad hoc scope override (repeatable --exclude); independent of include
-  semantic?: boolean; // false opts out of vector participation regardless of the preset
+  noExclude?: boolean; // --no-exclude: drop the preset's exclude for this command
+  // Validation probe, no CLI flag: everything `check` validates lives in the lexical half, and
+  // a vector pass would embed the tree (or bill an api) to prove a saved search parses.
+  probe?: boolean;
 }
 
 // node:path's matchesGlob is experimental (stable behind an unstable-API flag) as of the
-// engines floor (Node >=22.16); scope filtering only ever needs single-pattern matching, so
-// it's used here in JS rather than pulling fast-glob's directory walk into the query path.
+// engines floor (Node >=22.20); scope filtering only ever needs single-pattern matching, so
+// it's used here in JS rather than running a directory walk in the query path.
 function inScope(path: string, include: string[], exclude?: string[]): boolean {
   if (!include.some((g) => matchesGlob(path, g))) return false;
   if (exclude?.some((g) => matchesGlob(path, g))) return false;
@@ -143,21 +142,16 @@ function scopeHasEmbeddings(db: DatabaseSync, cfg: ResolvedConfig, scopedPaths: 
   return rows.some((r) => scopedPaths.has(r.path));
 }
 
-// BM25 + link-graph expansion, fused by reciprocal rank. `via` says which signal produced
-// each row so the agent knows what evidence it is trusting.
-// Resolution precedence (built-ins <- preset <- caller overrides) lives in
-// src/config.ts:resolveSearch; `opts` here is whatever the caller (a saved search merged
-// with any CLI flag, or a bare CLI invocation) already resolved.
+// BM25 + link expansion + vectors, fused by reciprocal rank; `via` names the signal per row.
+// `opts` arrives already resolved (config.ts:resolveSearch).
 export async function search(db: DatabaseSync, cfg: ResolvedConfig, terms: string, opts: SearchOptions = {}): Promise<Row[]> {
   const effective = resolveSearch(cfg, opts);
   const { k, include, exclude } = effective;
 
   const allPaths = (db.prepare('SELECT "path" FROM frontmatter').all() as Array<{ path: string }>).map((r) => r.path);
-  // A preset scope reads preset_files -- the coverage reconcile actually indexed with
-  // (fast-glob semantics); re-matching globs here with node:path's matchesGlob could
-  // silently disagree with it. An ad-hoc --include or --exclude has no persisted coverage,
-  // so only that path pays the JS glob match.
-  const adHocScope = opts.include !== undefined || opts.exclude !== undefined;
+  // A preset scope reads the coverage reconcile indexed; re-matching globs here could disagree
+  // with it. Only ad-hoc scope flags, which have no persisted coverage, pay the JS match.
+  const adHocScope = opts.include !== undefined || opts.exclude !== undefined || opts.noExclude === true;
   const scopedPaths = adHocScope ? new Set(allPaths.filter((p) => inScope(p, include, exclude))) : new Set((db.prepare('SELECT "path" FROM preset_files WHERE preset = ?').all(effective.presetName) as Array<{ path: string }>).map((r) => r.path));
   // A scope narrower than the whole index needs a bigger candidate pool before filtering, or
   // filtering can starve k even though enough in-scope matches exist further down the ranked
@@ -165,17 +159,17 @@ export async function search(db: DatabaseSync, cfg: ResolvedConfig, terms: strin
   const scopeActive = scopedPaths.size < allPaths.length;
   const fetch = scopeActive ? Math.max(k * 5, 50) : Math.max(k * 3, 30);
 
-  // Semantic participation: vectors run only when the effective setting allows it AND the
-  // scope actually has embedded files -- a scope covered only by semantic-false presets (or
-  // by no preset embedding at all) searches lexically, automatically, no error.
-  const semanticEnabled = effective.semantic && scopeHasEmbeddings(db, cfg, scopedPaths);
+  // Asking for vectors without a model is a misconfiguration, not a mode: degrading would make
+  // the same search answer differently before and after a download. semantic:false never asks.
+  const wantsVectors = !opts.probe && effective.semantic && anyPresetEmbeds(cfg);
+  if (wantsVectors && !modelPresent(cfg)) {
+    throw new SenseError('EMBED_MODEL_MISSING', `preset "${effective.presetName}" searches with vectors, but the embedding model is not available; run \`sense download\`, or set "semantic": false on that preset to search on words and links`);
+  }
+  const semanticEnabled = wantsVectors && scopeHasEmbeddings(db, cfg, scopedPaths);
 
-  // Terms pass verbatim to FTS5 MATCH: bare words AND-join, operators are the caller's.
-  // Invalid syntax propagates as an error, zero matches return zero -- no silent rewrites.
-  // --where applies inside the candidate query (a post-filter over the top-N would drop
-  // matches ranked past the pool) and again on the final select for link-derived rows.
-  // An explicit --where replaces the preset's declared where rather than ANDing with it,
-  // so a caller can always widen back to the whole scope.
+  // Terms pass verbatim to MATCH; invalid syntax errors rather than being rewritten. --where
+  // applies inside the candidate query (a post-filter would drop matches ranked past the pool)
+  // and again on the final select, for link-derived rows.
   const scope = effective.where;
   const whereJoin = scope ? `JOIN frontmatter f ON f."path" = content.path` : '';
   const whereCond = scope ? `AND (${scope})` : '';
@@ -204,10 +198,8 @@ export async function search(db: DatabaseSync, cfg: ResolvedConfig, terms: strin
 
   const edges = featureEnabled(cfg, 'links') && matchRows.length > 0 ? linkEdges(db) : [];
   if (edges.length > 0) {
-    // `linked` gates the label only, not the score: PPR restart mass gives every seed a
-    // nonzero rank even without an incident edge, which is not link evidence — but dropping
-    // that mass from the score list reweights fusion toward connectivity and measurably
-    // wrecks ranking on link-dense corpora (FEVER hit@10 0.997 -> 0.907; fusion-tuning.md).
+    // Gates the label only, not the score: restart mass ranks every seed without an incident
+    // edge, but dropping it from the score reweights fusion (FEVER hit@10 0.997 -> 0.907).
     const linked = new Set(edges.flat());
     const seeds = new Map(matchRows.map((r, i) => [r.path, 1 / (i + 1)]));
     const ranked = [...personalizedRank(allPaths, edges, seeds)]
@@ -244,24 +236,22 @@ export async function search(db: DatabaseSync, cfg: ResolvedConfig, terms: strin
     });
   }
 
-  db.exec('DROP TABLE IF EXISTS _find');
-  db.exec('CREATE TEMP TABLE _find ("path" TEXT PRIMARY KEY, score REAL, via TEXT, hit TEXT, lines TEXT, similarity REAL)');
-  const insert = db.prepare('INSERT INTO _find ("path", score, via, hit, lines, similarity) VALUES (?, ?, ?, ?, ?, ?)');
+  db.exec('DROP TABLE IF EXISTS _search');
+  db.exec('CREATE TEMP TABLE _search ("path" TEXT PRIMARY KEY, score REAL, via TEXT, hit TEXT, lines TEXT, similarity REAL)');
+  const insert = db.prepare('INSERT INTO _search ("path", score, via, hit, lines, similarity) VALUES (?, ?, ?, ?, ?, ?)');
   for (const [path, c] of candidates) insert.run(path, c.score, c.via, hits.get(path) ?? null, chunkLines.get(path) ?? null, chunkSimilarity.get(path) ?? null);
 
-  // Every candidate list was already filtered to scopedPaths above, so _find only ever holds
-  // in-scope rows -- the final select just needs --where again, same as before, for rows
-  // whichever candidate query didn't itself apply it to (link-derived rows never touched
-  // whereCond above).
+  // Already scope-filtered above; the final select reapplies --where only for link-derived
+  // rows, which never passed through whereCond.
   const where = scope ? `WHERE (${scope})` : '';
   // lines is always present now: semantic rows carry their chunk's range, oversized-doc
   // lexical rows gain one below, everything else stays null. similarity stays semantic-only.
-  const similarityCol = semanticEnabled ? ', _find.similarity' : '';
+  const similarityCol = semanticEnabled ? ', _search.similarity' : '';
   const rows = db
     .prepare(
-      `SELECT f."path" AS path, content.title, content.summary, _find.hit, _find.via, round(_find.score, 4) AS score, _find.lines${similarityCol}
-       FROM _find JOIN frontmatter f ON f."path" = _find."path" JOIN content ON content.path = _find."path"
-       ${where} ORDER BY _find.score DESC LIMIT ?`
+      `SELECT f."path" AS path, content.title, content.summary, _search.hit, _search.via, round(_search.score, 4) AS score, _search.lines${similarityCol}
+       FROM _search JOIN frontmatter f ON f."path" = _search."path" JOIN content ON content.path = _search."path"
+       ${where} ORDER BY _search.score DESC LIMIT ?`
     )
     .all(k) as Row[];
 
@@ -291,7 +281,7 @@ export function scopedPaths(db: DatabaseSync, cfg: ResolvedConfig, overrides: Se
   const effective = resolveSearch(cfg, overrides);
   const { include, exclude, where } = effective;
   const allPaths = (db.prepare('SELECT "path" FROM frontmatter').all() as Array<{ path: string }>).map((r) => r.path);
-  const adHocScope = overrides.include !== undefined || overrides.exclude !== undefined;
+  const adHocScope = overrides.include !== undefined || overrides.exclude !== undefined || overrides.noExclude === true;
   const paths = adHocScope ? new Set(allPaths.filter((p) => inScope(p, include, exclude))) : new Set((db.prepare('SELECT "path" FROM preset_files WHERE preset = ?').all(effective.presetName) as Array<{ path: string }>).map((r) => r.path));
   if (!where) return paths;
   const whereRows = db.prepare(`SELECT "path" FROM frontmatter f WHERE (${where})`).all() as Array<{ path: string }>;
@@ -305,10 +295,8 @@ export interface PresetCoverage {
   embedded: number;
 }
 
-// Indexing and embedding are both derived from presets rather than declared directly, so
-// that derivation must stay visible: how many files each preset actually matched, and how
-// many of those are covered by embedding. Read from preset_files (rebuilt at reconcile), not
-// recomputed from globs, so this always reflects what's actually on disk in the cache.
+// Indexing derives from presets, so the derivation stays visible. Read from preset_files, not
+// recomputed from globs, so it reflects the cache rather than the config.
 export function presetCoverage(db: DatabaseSync, cfg: ResolvedConfig): PresetCoverage[] {
   const embedActive = anyPresetEmbeds(cfg);
   return presetNames(cfg).map((name) => {
@@ -348,10 +336,8 @@ function setupMapScope(db: DatabaseSync, paths: Set<string>): void {
   db.prepare('INSERT INTO _map_scope SELECT DISTINCT value FROM json_each(?1)').run(JSON.stringify([...paths]));
 }
 
-// mapTree: what is this scope. Fixed-size output regardless of tree size. Scopes to the
-// resolved preset like every command (the `default` preset when no flags are given); a broad
-// default or --preset all gives the whole-index view. presetCoverage and features stay global
-// config facts, not narrowed by scope, per plans/graph-algorithms.md's scope table.
+// What is this scope: fixed-size output regardless of tree size. Coverage and features stay
+// global -- they describe the tree, not the current question.
 export function mapTree(db: DatabaseSync, cfg: ResolvedConfig, overrides: SearchOverrides = {}): TreeMap {
   setupMapScope(db, scopedPaths(db, cfg, overrides));
   const scopeWhere = 'WHERE "path" IN (SELECT "path" FROM _map_scope)';
@@ -360,12 +346,8 @@ export function mapTree(db: DatabaseSync, cfg: ResolvedConfig, overrides: Search
   const docs = db.prepare(`SELECT COUNT(*) AS count, COALESCE(SUM("_size"), 0) AS bytes FROM frontmatter ${scopeWhere}`).get() as { count: number; bytes: number };
 
   const columns = (db.prepare('PRAGMA table_info(frontmatter)').all() as Array<{ name: string }>).map((r) => r.name).filter((name) => !INTERNAL_COLUMNS.has(name));
-  // Observed storage class, not a declared one: these columns are added dynamically and
-  // SQLite types per value, so a field can be text in most notes and numeric in a few.
-  // Listing every distinct type makes both the type and any drift visible.
-  // One aggregate scan per chunk of columns rather than one scan per column: COUNT already
-  // ignores NULL, and FILTER keeps typeof() looking only at the non-null rows COUNT counted,
-  // matching the old per-column `WHERE ... IS NOT NULL` exactly.
+  // Observed types, not declared: SQLite types per value, so a field can be text in most notes
+  // and numeric in a few. One aggregate scan per chunk of columns; FILTER matches COUNT's nulls.
   const allFields: Row[] = [];
   for (const group of chunk(columns, MAP_COLUMN_CHUNK)) {
     const exprs = group.map((name, i) => {
@@ -413,16 +395,11 @@ export interface Peek {
   backlinksTotal: number;
   unresolvedTotal: number;
   // Bounded k-hop expansion beyond the immediate ring already shown by outbound/backlinks
-  // (depth starts at 2). Item 3 of plans/graph-algorithms.md.
-  nearby: Array<{ path: string; depth: number; direction: 'forward' | 'reverse' }>;
+  // (depth starts at 2).
   off: FeatureName[]; // disabled features whose blocks are omitted (not empty)
 }
 
 const PEEK_LIST_LIMIT = 20;
-// Fixed-cost contract for the nearby expansion: depth 2 (one ring past outbound/backlinks)
-// and a hard cap so a peek stays a few hundred tokens on any note.
-const NEARBY_DEPTH = 2;
-const NEARBY_CAP = 10;
 
 // peek: everything about one note except its prose -- frontmatter, outline with line
 // ranges + token estimates (so the follow-up Read is a range, not the file), links both ways.
@@ -443,18 +420,13 @@ export function peek(db: DatabaseSync, cfg: ResolvedConfig, pathArg: string, ove
   let backlinks: string[] = [];
   let unresolved: string[] = [];
   let backlinksTotal = 0;
-  let nearby: Peek['nearby'] = [];
-  const allowed = scopedPaths(db, cfg, overrides);
+  const _allowed = scopedPaths(db, cfg, overrides);
   if (featureEnabled(cfg, 'links')) {
     const out = db.prepare('SELECT target, dst FROM links WHERE src = ? ORDER BY target').all(path) as Array<{ target: string; dst: string | null }>;
     outbound = [...new Set(out.filter((l) => l.dst !== null).map((l) => l.dst as string))];
     unresolved = out.filter((l) => l.dst === null).map((l) => l.target);
     backlinksTotal = (db.prepare('SELECT COUNT(DISTINCT src) AS n FROM links WHERE dst = ?').get(path) as { n: number }).n;
     backlinks = (db.prepare('SELECT DISTINCT src FROM links WHERE dst = ? ORDER BY src LIMIT ?').all(path, PEEK_LIST_LIMIT) as Array<{ src: string }>).map((r) => r.src);
-
-    const forward = traverse(db, { seeds: [path], direction: 'forward', depth: NEARBY_DEPTH, cap: NEARBY_CAP, allowed });
-    const reverse = traverse(db, { seeds: [path], direction: 'reverse', depth: NEARBY_DEPTH, cap: NEARBY_CAP, allowed });
-    nearby = [...forward.filter((h) => h.depth > 1).map((h) => ({ path: h.path, depth: h.depth, direction: 'forward' as const })), ...reverse.filter((h) => h.depth > 1).map((h) => ({ path: h.path, depth: h.depth, direction: 'reverse' as const }))].slice(0, NEARBY_CAP);
   }
 
   return {
@@ -469,16 +441,13 @@ export function peek(db: DatabaseSync, cfg: ResolvedConfig, pathArg: string, ove
     outboundTotal: outbound.length,
     backlinksTotal,
     unresolvedTotal: unresolved.length,
-    nearby,
     off: (['sections', 'links'] as FeatureName[]).filter((name) => !featureEnabled(cfg, name)),
   };
 }
 
-// related: notes most similar to `path` by vector cosine, excluding self and every note
-// structurally linked to it either way (full, untruncated -- unlike peek's truncated
-// backlinks list). Split out of peek because a full-corpus embeddings scan is expensive
-// (~480ms at 26k notes) and peek's whole point is a cheap default.
-export function relatedNotes(db: DatabaseSync, cfg: ResolvedConfig, pathArg: string, overrides: SearchOverrides, k: number): Array<{ path: string; similarity: number }> {
+// Notes most similar by cosine, excluding self and everything already linked either way.
+// Its own command, not a peek section: a full embeddings scan is ~480ms at 26k notes.
+export async function relatedNotes(db: DatabaseSync, cfg: ResolvedConfig, pathArg: string, overrides: SearchOverrides, k: number): Promise<Array<{ path: string; similarity: number }>> {
   const paths = (db.prepare('SELECT "path" FROM frontmatter').all() as Array<{ path: string }>).map((r) => r.path);
   const path = resolveNote(paths, pathArg);
 
@@ -488,5 +457,11 @@ export function relatedNotes(db: DatabaseSync, cfg: ResolvedConfig, pathArg: str
 
   const allowed = scopedPaths(db, cfg, overrides);
   if (!scopeHasEmbeddings(db, cfg, allowed)) return [];
+  // Vectors are the only signal, so [] would read as "nothing is related" rather than "no
+  // model". Top up pending rows too, or a fresh index answers 0 until some search runs.
+  if (!modelPresent(cfg)) {
+    throw new SenseError('EMBED_MODEL_MISSING', 'related ranks notes by meaning, so it needs the embedding model, which is not downloaded; run `sense download` (search still works without it, on words and links)');
+  }
+  await embedPending(db, cfg, cfg.baseDir);
   return similarNotes(db, cfg, path, { exclude, allowed, k });
 }

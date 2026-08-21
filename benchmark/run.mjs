@@ -1,10 +1,8 @@
-// Benchmark one sensemaking package against one tree; prints a JSON row for BENCHMARKING.md.
+// Benchmark one package against one tree; prints a JSON row for BENCHMARKING.md. Wall-time
+// metrics spawn the CLI (what an agent pays); in-process ones time the engine alone.
 // usage: node benchmark/run.mjs <package-root> <notes-dir>
-// Wall-time metrics spawn the CLI (what a calling agent pays, ~40ms Node startup included);
-// in-process metrics import the library and time the engine alone (index build, freshness
-// check, incremental update).
 import { spawn, spawnSync } from 'node:child_process';
-import { appendFileSync, rmSync, statSync, utimesSync } from 'node:fs';
+import { appendFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { CORPUS_NAMES, corpusPath } from './lib/corpus.mjs';
@@ -31,10 +29,21 @@ const fail = (r) => (r.status === 0 ? r : null);
 // Dialect detection: pre-rename packages have no `search` verb, so their --help never
 // mentions it. Runs once; every row-mapping choice below reads off this one flag so old and
 // new packages still land in the same JSON shape for compare.mjs.
-const NEW_DIALECT = /search/.test(spawnSync(process.execPath, [cli, '--help'], { encoding: 'utf8' }).stdout ?? '');
+const HELP = spawnSync(process.execPath, [cli, '--help'], { encoding: 'utf8' }).stdout ?? '';
+const NEW_DIALECT = /search/.test(HELP);
+// Ad-hoc SQL was `query` until it became `sql`, which took the name back from the search
+// sense of "query". Read off --help so one harness measures every generation.
+const SQL_VERB = /\bsense sql\b/.test(HELP) ? 'sql' : 'query';
+// Both rows must measure the same files, differing only in vector participation: two presets
+// over one glob, so there is no config edit between rows to force a rebuild.
+const TWO_SCOPES = JSON.stringify({
+  version: 3,
+  presets: { default: { include: ['**/*.md'] }, lexical: { include: ['**/*.md'], semantic: false } },
+  queries: {},
+});
 // find_ms: lexical ranked search (BM25 + link fusion, no vectors) -- old dialect is
-// already lexical-only, new dialect needs --lexical to opt vectors back out.
-const lexicalArgs = (terms, k = '10') => (NEW_DIALECT ? ['search', terms, '--lexical', '--k', k] : ['find', terms, '--k', k]);
+// already lexical-only, preset-era packages scope to the semantic:false preset above.
+const lexicalArgs = (terms, k = '10') => (NEW_DIALECT ? ['search', terms, '--preset', 'lexical', '--k', k] : ['find', terms, '--k', k]);
 // semantic_find_ms: vector-participating search -- old dialect opts in with --semantic,
 // new dialect participates by default.
 const vectorArgs = (terms, k = '10') => (NEW_DIALECT ? ['search', terms, '--k', k] : ['find', terms, '--semantic', '--k', k]);
@@ -46,10 +55,11 @@ const largest = mdFiles.reduce((a, b) => (b.size > a.size ? b : a), { rel: null,
 const SEARCH = `SELECT f.path, content.title, snippet(content, -1, '«', '»', '…', 10) AS hit FROM frontmatter f JOIN content ON content.path = f.path WHERE content MATCH ? ORDER BY bm25(content, 10.0, 5.0, 1.0) LIMIT 10`;
 
 // --- wall-time (CLI) ---
+if (NEW_DIALECT) writeFileSync(join(tree, 'sense.config.json'), TWO_SCOPES);
 rmSync(join(tree, '.sense'), { recursive: true, force: true });
 const cold = timed(['status'], 1); // first open = full crawl
-const warm = fail(timed(['query', 'SELECT COUNT(*) AS n FROM frontmatter']));
-const search = fail(timed(['query', SEARCH, 'the']));
+const warm = fail(timed([SQL_VERB, 'SELECT COUNT(*) AS n FROM frontmatter']));
+const search = fail(timed([SQL_VERB, SEARCH, 'the']));
 const findR = fail(timed(lexicalArgs('the'), 3));
 // Non-null only on embed-enabled trees (vectors pre-built by the first run). The delta
 // vs find_ms is what vector participation pays per invocation: model load + query embed + scan.
@@ -120,9 +130,9 @@ const touchMany = () => {
   const future = new Date(Date.now() + 120_000 + Math.random() * 60_000);
   for (const f of mdFiles.slice(0, BULK)) utimesSync(join(tree, f.rel), future, future);
 };
-run(['query', 'SELECT 1']); // warm the cache first
+run([SQL_VERB, 'SELECT 1']); // warm the cache first
 touchMany();
-const bulkCold = fail(timed(['query', 'SELECT COUNT(*) AS n FROM frontmatter'], 1));
+const bulkCold = fail(timed([SQL_VERB, 'SELECT COUNT(*) AS n FROM frontmatter'], 1));
 
 // Same change with a watcher already running: it reparses in the background, so the
 // first query pays only the freshness check.
@@ -132,7 +142,7 @@ try {
   await new Promise((r) => setTimeout(r, 1500)); // watcher startup + initial reconcile
   touchMany();
   await new Promise((r) => setTimeout(r, 1500 + 1.5 * (bulkCold?.ms ?? 4000))); // debounce + background reparse, scaled to the measured reparse cost
-  bulkWatch = fail(timed(['query', 'SELECT COUNT(*) AS n FROM frontmatter'], 1));
+  bulkWatch = fail(timed([SQL_VERB, 'SELECT COUNT(*) AS n FROM frontmatter'], 1));
   watcher.kill('SIGTERM');
   await new Promise((r) => setTimeout(r, 300));
 } catch {}

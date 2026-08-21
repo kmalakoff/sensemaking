@@ -3,7 +3,7 @@ import type { Row } from '../output.ts';
 import { printRows } from '../output.ts';
 import { findPath } from '../traverse.ts';
 import { USAGE } from './index.ts';
-import { CONFIG, FORMAT, formatOf, parse, SCOPE, withDb } from './shared.ts';
+import { CONFIG, FORMAT, formatOf, parse, SCOPE, scopeOf, withDb } from './shared.ts';
 import type { Command } from './types.ts';
 
 // --max-depth must be a positive integer, mirroring shared.ts's parseK.
@@ -25,7 +25,7 @@ const pathCmd: Command = (ctx) => {
     const paths = (db.prepare('SELECT "path" FROM frontmatter').all() as Array<{ path: string }>).map((r) => r.path);
     const from = resolveNote(paths, a);
     const to = resolveNote(paths, b);
-    const allowed = scopedPaths(db, cfg, { preset: values.preset as string | undefined, include: values.include as string[] | undefined, exclude: values.exclude as string[] | undefined, where: values.where as string | undefined });
+    const allowed = scopedPaths(db, cfg, scopeOf(values));
     const hops = findPath(db, from, to, { maxDepth, allowed });
 
     if (format === 'json') {

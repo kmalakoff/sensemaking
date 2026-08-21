@@ -10,7 +10,7 @@ const fixturesDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'fixture
 function openFixtures() {
   const baseDir = mkdtempSync(join(tmpdir(), 'sense-test-'));
   cpSync(fixturesDir, baseDir, { recursive: true });
-  return open({ presets: { default: { include: ['*.md'], semantic: false } }, queries: {}, baseDir, configPath: null });
+  return open({ presets: { default: { include: ['*.md'] } }, queries: {}, baseDir, configPath: null });
 }
 
 describe('db', () => {

@@ -16,7 +16,7 @@ function write(baseDir: string, relPath: string, frontmatter: Record<string, unk
 // v3 turns semantic on by default per preset; these tests never need vectors and must
 // never touch the network, so the default preset's semantic is pinned off explicitly.
 function openTree(baseDir: string) {
-  return open({ presets: { default: { include: ['*.md'], semantic: false } }, queries: {}, baseDir, configPath: null });
+  return open({ presets: { default: { include: ['*.md'] } }, queries: {}, baseDir, configPath: null });
 }
 
 const WEIGHTED = 'bm25(content, 10.0, 5.0, 1.0)';

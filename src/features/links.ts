@@ -80,13 +80,9 @@ function resolveAll(db: DatabaseSync, files: FileStat[]): boolean {
   return resolveRows(db, rows, pathSet, byBase);
 }
 
-// Re-resolve only what this reconcile could have affected: (a) links whose src was just
-// re-stored (their rows are fresh, dst reset to NULL by store()), (b) links whose target's
-// basename matches a file that appeared or disappeared this reconcile (resolution and
-// lexicographic-tie ambiguity hinge on exactly that set), and (c) links whose dst was a
-// path that just vanished. All three are indexed lookups (src is the links PK's leading
-// column; target_base and dst each have their own index), so this reads only the rows this
-// reconcile could plausibly have changed, not the whole table.
+// Re-resolve only what this reconcile could have touched: re-stored sources, links whose
+// target basename matches an added/vanished file, and links whose dst just vanished. All
+// three are indexed lookups, so this never reads the whole table.
 function resolveIncremental(db: DatabaseSync, delta: ReconcileDelta): boolean {
   const pathSet = new Set(delta.files.map((f) => f.relPath));
   const byBase = buildByBase(delta.files);
@@ -117,16 +113,13 @@ function resolveIncremental(db: DatabaseSync, delta: ReconcileDelta): boolean {
   return resolveRows(db, [...candidates.values()], pathSet, byBase);
 }
 
-// Resolved edges, for rank and for find's graph expansion.
+// Resolved edges, for rank and for search's graph expansion.
 export function linkEdges(db: DatabaseSync): [string, string][] {
   return (db.prepare('SELECT src, dst FROM links WHERE dst IS NOT NULL').all() as Array<{ src: string; dst: string }>).map((r) => [r.src, r.dst]);
 }
 
-// A removed path's outbound link rows are already gone by the time afterReconcile runs
-// (remove() below deletes them for vanished files AND for reparsed existing files), so
-// afterReconcile can't tell from the links table alone whether deleted rows carried edges.
-// remove() records that here, keyed on the reconcile's own delta object -- state dies with
-// the reconcile, including on ROLLBACK, and distinct reconciles never share it.
+// remove() has already deleted the rows by the time afterReconcile runs, so it records here
+// whether they carried edges. Keyed on the delta object, so the state dies with the reconcile.
 const removedWithLinks = new WeakMap<ReconcileDelta, Set<string>>();
 
 function recordRemoved(delta: ReconcileDelta, path: string): void {
@@ -188,10 +181,8 @@ export const links: Feature = {
     const removeHadLinks = (removedWithLinks.get(delta)?.size ?? 0) > 0;
 
     const churn = delta.reparsed.length + delta.vanished.length;
-    // Fallback rule: correctness over cleverness once too much of the tree moved in one
-    // reconcile -- a full pass is the one guaranteed to match resolveTarget's ambiguity
-    // rules exactly. A cold build reparses ~every file, so it clears this threshold on its
-    // own without a separate check.
+    // Past this share of the tree, a full pass is the only one guaranteed to match
+    // resolveTarget's ambiguity rules. A cold build clears the threshold on its own.
     const large = delta.files.length === 0 || churn > 0.2 * delta.files.length;
 
     const dstChanged = large ? resolveAll(db, delta.files) : resolveIncremental(db, delta);

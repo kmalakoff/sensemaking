@@ -6,18 +6,21 @@ export const CONFIG_FILENAME = 'sense.config.json';
 export const STATE_DIR = '.sense';
 
 // Highest sense.config.json `version` this build understands. Older versions auto-migrate on load.
-export const SUPPORTED_CONFIG_VERSION = 3;
+export const SUPPORTED_CONFIG_VERSION = 4;
+// v1 and v2 were `scan`/`find`-shaped; v3 introduced `presets`. Only the former need the
+// legacy shape check before migrating.
+const FIRST_PRESET_VERSION = 3;
 
 // Each feature owns its tables, parse-time extraction, and reconcile step; commands degrade when one is off.
 // links/sections/rank are opt-out toggles in the top-level `features` block; embed is not a
-// member of that block -- it is derived from whether any declared preset has semantic on.
+// member of that block -- it is on exactly when an `embed` block names a model.
 const FEATURE_NAMES = ['links', 'sections', 'rank', 'embed'] as const;
 // v1 -> v2 migration only: the features v2 introduced as opt-out (embed was opt-in then).
 const V2_OPT_OUT_NAMES = ['links', 'sections', 'rank'] as const;
 export type FeatureName = (typeof FEATURE_NAMES)[number];
 
-// `embed` config is provider settings only -- presence toggles nothing. Vector participation
-// is controlled per preset by `semantic`.
+// `embed` names the model and gives the tree vectors at all; a preset's `semantic` says
+// whether that scope uses them.
 export interface EmbedConfig {
   model?: string;
   type?: 'static' | 'api';
@@ -34,12 +37,15 @@ export interface Preset {
   include: string[];
   exclude?: string[];
   k?: number; // result count for `search` scoped to this preset; default 10
-  semantic?: boolean; // vectors on/off for files this preset covers. Default true; only ever written as false.
+  // Vectors for the files this preset covers, and for searches scoped to it. Default true;
+  // only ever written as false. A layer searched for exact wording (ingested sources,
+  // archives, generated output) sets it false and costs no embedding at all.
+  semantic?: boolean;
   where?: string; // standing SQL condition against frontmatter alias `f`
 }
 
 // A saved `search` invocation: `sense <name>` runs like
-// `sense search <search> [--preset] [--include] [--exclude] [--where] [--k] [--semantic]`.
+// `sense search <search> [--preset] [--include] [--exclude] [--where] [--k]`.
 export interface SavedSearch {
   search: string;
   preset?: string;
@@ -47,24 +53,23 @@ export interface SavedSearch {
   exclude?: string[];
   where?: string;
   k?: number;
-  semantic?: boolean;
 }
 
-// A queries.<name> entry: raw SQL, an explicit SQL wrapper, or a saved search.
-export type SavedQuery = string | { sql: string } | SavedSearch;
+// An entry names the verb it runs, one to one with the commands: { sql } runs like
+// `sense sql`, { search } like `sense search`.
+export type SavedQuery = { sql: string } | SavedSearch;
 
 export interface Config {
   // Editor-only pointer to schema.json; never read by sense.
   $schema?: string;
   version?: number;
   // File selection, index-time, and per-preset search defaults. A file is indexed iff any
-  // preset's include/exclude covers it (union); embedded iff any covering preset has
-  // semantic !== false. `default` is used when a command names no preset.
+  // preset's include/exclude covers it (union). `default` is used when a command names no preset.
   presets: Record<string, Preset>;
   // Global feature defaults; absent block or key means enabled. embed is not a member here --
-  // see Preset.semantic.
+  // see the `embed` block.
   features?: { links?: boolean; sections?: boolean; rank?: boolean };
-  // Embed provider settings only. Presence alone does not enable embedding -- see Preset.semantic.
+  // Names the embedding model. Present means every indexed file gets vectors; absent means none do.
   embed?: EmbedConfig;
   queries: Record<string, SavedQuery>;
 }
@@ -82,19 +87,23 @@ export function presetNames(cfg: Config): string[] {
   return Object.keys(cfg.presets);
 }
 
-// A preset's own resolved vector participation: absent or true means on, false means off.
+// Whether the tree names a model at all.
+export function embedEnabled(cfg: Config): boolean {
+  return typeof cfg.embed?.model === 'string' && cfg.embed.model.length > 0;
+}
+
+// A preset's own vector participation: absent or true means on, false means off.
 export function presetSemanticEnabled(cfg: Config, name: string): boolean {
   return cfg.presets[name]?.semantic !== false;
 }
 
-// Whether embedding needs to run at all: true when at least one declared preset wants vectors.
+// Whether embedding needs to run: a model is named AND some preset wants vectors.
 export function anyPresetEmbeds(cfg: Config): boolean {
-  return presetNames(cfg).some((name) => presetSemanticEnabled(cfg, name));
+  return embedEnabled(cfg) && presetNames(cfg).some((name) => presetSemanticEnabled(cfg, name));
 }
 
 // Opt-out features (default on): absent block or key means enabled. `rank` additionally
-// requires `links`. `embed` is derived, not a features-block member: on iff any declared
-// preset has semantic on.
+// requires `links`. `embed` is derived, not a features-block member: on iff `embed` names a model.
 export function featureEnabled(cfg: Config, name: FeatureName): boolean {
   if (name === 'embed') return anyPresetEmbeds(cfg);
   const enabled = cfg.features?.[name] !== false;
@@ -106,26 +115,26 @@ export function enabledFeatures(cfg: Config): FeatureName[] {
   return FEATURE_NAMES.filter((name) => featureEnabled(cfg, name));
 }
 
-// Every feature with its current state; commands surface this so "off" and "empty" stay
-// distinguishable in output.
+// Feature states, so "off" and "empty" stay distinguishable in output. `embed` is excluded:
+// it is not a features-block toggle, and `status` reports it on its own line.
 export function featureStates(cfg: Config): { on: FeatureName[]; off: FeatureName[] } {
+  const reported = FEATURE_NAMES.filter((name) => name !== 'embed');
   return {
-    on: FEATURE_NAMES.filter((name) => featureEnabled(cfg, name)),
-    off: FEATURE_NAMES.filter((name) => !featureEnabled(cfg, name)),
+    on: reported.filter((name) => featureEnabled(cfg, name)),
+    off: reported.filter((name) => !featureEnabled(cfg, name)),
   };
 }
 
-// Resolved embed provider settings, or null when no preset wants embeddings at all.
+// Resolved embed provider settings, or null when the config names no model. There is no
+// fallback to DEFAULT_EMBED_MODEL: that constant is a template `init` and the v4 migration
+// write into the file, never an implicit runtime default.
 export function embedConfig(cfg: Config): { model: string; type: 'static' | 'api'; url?: string; key?: string } | null {
-  if (!anyPresetEmbeds(cfg)) return null;
-  const e = cfg.embed ?? {};
-  return { model: e.model ?? DEFAULT_EMBED_MODEL, type: e.type ?? 'static', url: e.url, key: e.key };
+  if (!embedEnabled(cfg)) return null;
+  const e = cfg.embed as EmbedConfig;
+  return { model: e.model as string, type: e.type ?? 'static', url: e.url, key: e.key };
 }
 
-// Cache-key string: embed carries its type + model so a model change rebuilds like a toggle,
-// and every declared preset carries its include/exclude/semantic so an edit to any of those
-// rebuilds too -- indexing and embedding are both derived from presets, so any change to the
-// derivation inputs must invalidate the cache.
+// Cache key over everything indexing derives from, so any change to those inputs rebuilds.
 export function featureSignature(cfg: Config): string {
   const globalPart = enabledFeatures(cfg)
     .filter((name) => name !== 'embed')
@@ -161,7 +170,7 @@ export interface SearchOverrides {
   where?: string;
   include?: string[];
   exclude?: string[];
-  semantic?: boolean;
+  noExclude?: boolean; // drop the preset's exclude for this command; --exclude still applies
 }
 
 export interface EffectiveSearch {
@@ -170,33 +179,25 @@ export interface EffectiveSearch {
   where?: string;
   include: string[];
   exclude?: string[];
-  semantic: boolean;
+  semantic: boolean; // the resolved preset's vector participation
 }
 
-// Resolution precedence: built-ins (k=10, semantic on, whole-index scope) <- named preset's
-// fields (or `default` when none named) <- caller overrides. Each stage overrides only the
-// fields it sets. `opts` here is expected to already carry whatever a saved query and an
-// explicit CLI flag resolved between themselves (src/cli/named.ts does that `cli ?? saved`
-// merge before calling in) -- one `??` per field composes the full four-stage chain, since
-// `??` is associative field-by-field.
+// Precedence, per field: built-ins <- named preset (or `default`) <- caller overrides.
+// `opts` arrives with any saved-query/CLI merge already resolved (src/cli/named.ts).
 export function resolveSearch(cfg: Config, opts: SearchOverrides = {}): EffectiveSearch {
   const { name: presetName, preset } = resolvePreset(cfg, opts.preset);
   const k = opts.k ?? preset.k ?? 10;
   const where = opts.where ?? preset.where;
-  // include and exclude override independently: an explicit --include narrows scope without
-  // dropping the preset's exclude, and an explicit --exclude applies without dropping the
-  // preset's include. Each field follows the same "explicit replaces the preset's own value"
-  // rule --where already uses, just per-field.
+  // Each overrides its own side only, so neither clears the other.
   const include = opts.include ?? preset.include;
-  const exclude = opts.exclude ?? preset.exclude;
-  const semantic = opts.semantic !== undefined ? opts.semantic : preset.semantic !== false;
-  return { presetName, k, where, include, exclude, semantic };
+  // --no-exclude widens past the preset's exclusions; an explicit --exclude alongside it is
+  // still the scope for this command, since it says what to leave out rather than what to keep.
+  const exclude = opts.exclude ?? (opts.noExclude ? undefined : preset.exclude);
+  return { presetName, k, where, include, exclude, semantic: preset.semantic !== false };
 }
 
-// Pure per-version steps; loadConfig chains them from the file's version up to SUPPORTED_CONFIG_VERSION.
-// Intermediate shapes predate the current Config type (v1 has no features block, v2 has
-// scan/find not presets/search), so steps work loosely-typed and only the final result is cast
-// back to Config.
+// Pure per-version steps, chained by loadConfig. Intermediate shapes predate the Config type,
+// so steps are loosely typed and only the final result is cast back.
 const MIGRATIONS: Record<number, (cfg: Record<string, unknown>) => Record<string, unknown>> = {
   // v1 -> v2: features block introduced, opt-out features enabled (matches the old implicit
   // behavior of `links` etc. not existing). embed stays absent -- opt-in.
@@ -215,7 +216,9 @@ const MIGRATIONS: Record<number, (cfg: Record<string, unknown>) => Record<string
         continue;
       }
       const entry = value as { find: string; k?: number; where?: string; semantic?: boolean };
-      const search: SavedSearch = { search: entry.find };
+      // Loosely typed on purpose: this step emits the v3 shape, which still had `semantic`.
+      // The v3 -> v4 step below strips it.
+      const search: Record<string, unknown> = { search: entry.find };
       if (entry.k !== undefined) search.k = entry.k;
       if (entry.where !== undefined) search.where = entry.where;
       // semantic: true was opt-in; it is now the default, so it drops. semantic: false is kept.
@@ -226,11 +229,7 @@ const MIGRATIONS: Record<number, (cfg: Record<string, unknown>) => Record<string
     const prevDefaults = defaults as { find?: { where?: string } } | undefined;
     const defaultWhere = prevDefaults?.find?.where;
 
-    // features.embed: true/absent -> simply removed (v3 default is on). An explicit `false`
-    // becomes semantic: false on every preset this migration produces -- there is only ever
-    // one (`default`), since v2 has no notion of multiple scopes, but the rule is written to
-    // apply to "every migrated preset" rather than hardcoded to `default` in case a later
-    // migration step ever produces more than one.
+    // features.embed false becomes semantic:false on every preset produced here.
     const prevFeatures = (features as Record<string, unknown> | undefined) ?? {};
     const embedWasOff = prevFeatures.embed === false;
     // Object form carried provider settings (model/type/url/key), not a toggle -- they move
@@ -254,6 +253,40 @@ const MIGRATIONS: Record<number, (cfg: Record<string, unknown>) => Record<string
     if (Object.keys(restFeatures).length > 0) result.features = restFeatures;
     return result;
   },
+  // v3 -> v4: write the model into the file, wrap bare-string queries as { sql }, drop a saved
+  // search's `semantic` (its preset decides). Same effective model, so nothing re-embeds.
+  3: (cfg) => {
+    const presets = cfg.presets as Record<string, Record<string, unknown>>;
+    const embedded = Object.values(presets).some((p) => p.semantic !== false);
+
+    const nextQueries: Record<string, unknown> = {};
+    for (const [name, value] of Object.entries((cfg.queries as Record<string, unknown> | undefined) ?? {})) {
+      // v3's bare string meant SQL by inference; v4 makes every entry name its verb.
+      if (typeof value === 'string') {
+        nextQueries[name] = { sql: value };
+        continue;
+      }
+      if (typeof value !== 'object' || value === null || !('search' in value)) {
+        nextQueries[name] = value;
+        continue;
+      }
+      const { semantic: _semantic, ...rest } = value as Record<string, unknown>;
+      nextQueries[name] = rest;
+    }
+
+    const prev = (cfg.embed as Record<string, unknown> | undefined) ?? {};
+    const result: Record<string, unknown> = { ...cfg, version: 4, queries: nextQueries };
+    if (embedded) {
+      result.embed = { model: (prev.model as string | undefined) ?? DEFAULT_EMBED_MODEL, type: (prev.type as string | undefined) ?? 'static', ...(prev.url !== undefined ? { url: prev.url } : {}), ...(prev.key !== undefined ? { key: prev.key } : {}) };
+    } else {
+      delete result.embed;
+      // Dropping settings silently would look like a bug in a tree that had configured an
+      // api endpoint and then turned vectors off; say it, since v4 has no way to carry
+      // provider settings for a tree that does not embed.
+      if (Object.keys(prev).length > 0) console.error('sense: every preset has "semantic": false, so v4 drops the "embed" block (vectors stay off); re-add it, or set a preset\'s semantic back to true, to turn them on');
+    }
+    return result;
+  },
 };
 
 export function migrateConfig(cfg: Config): { cfg: Config; from: number } {
@@ -275,6 +308,9 @@ function starterConfig(): Config {
       default: { include: ['**/*.md'], k: 10 },
       large: { include: ['**/*.md'], k: 20 },
     },
+    // Written out rather than defaulted in code: this line is what makes `sense download`
+    // fetch 124 MB, so it belongs where it can be read and changed.
+    embed: { model: DEFAULT_EMBED_MODEL, type: 'static' },
     queries: {},
   };
 }
@@ -300,18 +336,13 @@ export function findConfigPath(startDir: string): string | null {
   }
 }
 
-// Shape check for hand-edited files: a typo'd config fails with a named error, not a
-// TypeError from whatever code touched the missing field first. `queries` is optional
-// on disk (absent = none); `presets` has no usable default.
-// Unknown top-level keys are reported as a soft warning (cli.ts prints it) rather than an
-// error, so a config carrying a stray field still runs -- but unknown keys inside a preset,
-// features, embed, or saved-query block are hard errors: those blocks are small and fully
-// owned, so a typo there is far more likely a mistake than a forward-compat field.
+// Shape check for hand-edited files, so a typo names itself instead of surfacing as a
+// TypeError. Unknown top-level keys warn (forward compat); unknown keys inside a block error.
 const KNOWN_KEYS = new Set(['$schema', 'version', 'presets', 'features', 'embed', 'queries']);
 const KNOWN_PRESET_KEYS = new Set(['include', 'exclude', 'k', 'semantic', 'where']);
 const KNOWN_FEATURE_KEYS = new Set(['links', 'sections', 'rank']);
 const KNOWN_EMBED_KEYS = new Set(['model', 'type', 'url', 'key']);
-const SAVED_SEARCH_KEYS = new Set(['search', 'preset', 'include', 'exclude', 'where', 'k', 'semantic']);
+const SAVED_SEARCH_KEYS = new Set(['search', 'preset', 'include', 'exclude', 'where', 'k']);
 
 function unknownConfigKeys(cfg: Record<string, unknown>): string[] {
   return Object.keys(cfg).filter((k) => !KNOWN_KEYS.has(k));
@@ -338,7 +369,7 @@ function validateFeaturesBlock(value: unknown, configPath: string): void {
   const block = value as Record<string, unknown>;
   const unknown = Object.keys(block).filter((k) => !KNOWN_FEATURE_KEYS.has(k));
   if (unknown.length > 0) {
-    throw new SenseError('CONFIG_INVALID', `${configPath}: features has unknown key(s) ${unknown.join(', ')}; embed is not a features key -- see the top-level "embed" block and each preset's "semantic"`);
+    throw new SenseError('CONFIG_INVALID', `${configPath}: features has unknown key(s) ${unknown.join(', ')}; embed is not a features key -- see the top-level "embed" block`);
   }
   for (const [name, v] of Object.entries(block)) {
     if (typeof v !== 'boolean') {
@@ -358,6 +389,11 @@ function validateEmbedBlock(value: unknown, configPath: string): void {
   }
   if (embed.model !== undefined && typeof embed.model !== 'string') {
     throw new SenseError('CONFIG_INVALID', `${configPath}: embed.model must be a string`);
+  }
+  // The block exists to name a model; provider settings without one would read as "vectors
+  // configured" while embedding stays off, which is the ambiguity v4 removed.
+  if (embed.model === undefined || embed.model === '') {
+    throw new SenseError('CONFIG_INVALID', `${configPath}: embed.model is required when the "embed" block is present (it is what turns vectors on); remove the block to index without vectors`);
   }
   if (embed.type !== undefined && embed.type !== 'static' && embed.type !== 'api') {
     throw new SenseError('CONFIG_INVALID', `${configPath}: embed.type must be "static" or "api"`);
@@ -385,22 +421,26 @@ function validatePreset(name: string, value: unknown, configPath: string): void 
   if (preset.exclude !== undefined && !isNonEmptyStringArray(preset.exclude)) {
     throw new SenseError('CONFIG_INVALID', `${configPath}: presets.${name}.exclude must be a non-empty array of glob strings`);
   }
-  if (preset.k !== undefined && (typeof preset.k !== 'number' || !Number.isInteger(preset.k) || preset.k <= 0)) {
-    throw new SenseError('CONFIG_INVALID', `${configPath}: presets.${name}.k must be a positive integer`);
-  }
   if (preset.semantic !== undefined && typeof preset.semantic !== 'boolean') {
     throw new SenseError('CONFIG_INVALID', `${configPath}: presets.${name}.semantic must be a boolean`);
+  }
+  if (preset.k !== undefined && (typeof preset.k !== 'number' || !Number.isInteger(preset.k) || preset.k <= 0)) {
+    throw new SenseError('CONFIG_INVALID', `${configPath}: presets.${name}.k must be a positive integer`);
   }
   if (preset.where !== undefined && typeof preset.where !== 'string') {
     throw new SenseError('CONFIG_INVALID', `${configPath}: presets.${name}.where must be a SQL condition string`);
   }
 }
 
-// A queries.<name> entry: a SQL string, { sql }, or a saved search { search, preset?, include?, exclude?, where?, k?, semantic? }.
+// A queries.<name> entry: { sql } or a saved search { search, preset?, include?, exclude?, where?, k? }.
 function validateSavedQuery(name: string, value: unknown, configPath: string): void {
-  if (typeof value === 'string') return;
+  // A bare string used to mean SQL. It now fails rather than being inferred: an entry says
+  // which of the two verbs it runs, the same choice the CLI makes explicit.
+  if (typeof value === 'string') {
+    throw new SenseError('CONFIG_INVALID', `${configPath}: queries.${name} must say which verb it runs: { "sql": ${JSON.stringify(value.length > 40 ? `${value.slice(0, 37)}...` : value)} } to run it as SQL, or { "search": "..." } for a ranked search`);
+  }
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    throw new SenseError('CONFIG_INVALID', `${configPath}: queries.${name} must be a SQL string, { sql }, or { search, preset?, include?, exclude?, where?, k?, semantic? }`);
+    throw new SenseError('CONFIG_INVALID', `${configPath}: queries.${name} must be { sql } or { search, preset?, include?, exclude?, where?, k? }`);
   }
   const entry = value as Record<string, unknown>;
   if ('sql' in entry) {
@@ -416,9 +456,9 @@ function validateSavedQuery(name: string, value: unknown, configPath: string): v
   if ('search' in entry) {
     const unknown = Object.keys(entry).filter((k) => !SAVED_SEARCH_KEYS.has(k));
     if (unknown.length > 0) {
-      throw new SenseError('CONFIG_INVALID', `${configPath}: queries.${name} has unknown key(s) ${unknown.join(', ')}; a saved search takes search, preset, include, exclude, where, k, semantic`);
+      throw new SenseError('CONFIG_INVALID', `${configPath}: queries.${name} has unknown key(s) ${unknown.join(', ')}; a saved search takes search, preset, include, exclude, where, k`);
     }
-    // A saved query saves a question; a scope without a question is just flags.
+    // A saved entry saves a question; a scope without a question is just flags.
     if (typeof entry.search !== 'string' || entry.search.trim() === '') {
       throw new SenseError('CONFIG_INVALID', `${configPath}: queries.${name}.search must be non-empty text`);
     }
@@ -437,12 +477,9 @@ function validateSavedQuery(name: string, value: unknown, configPath: string): v
     if (entry.k !== undefined && (typeof entry.k !== 'number' || !Number.isInteger(entry.k) || entry.k <= 0)) {
       throw new SenseError('CONFIG_INVALID', `${configPath}: queries.${name}.k must be a positive integer`);
     }
-    if (entry.semantic !== undefined && typeof entry.semantic !== 'boolean') {
-      throw new SenseError('CONFIG_INVALID', `${configPath}: queries.${name}.semantic must be a boolean`);
-    }
     return;
   }
-  throw new SenseError('CONFIG_INVALID', `${configPath}: queries.${name} must be a SQL string, { sql }, or { search, preset?, include?, exclude?, where?, k?, semantic? }`);
+  throw new SenseError('CONFIG_INVALID', `${configPath}: queries.${name} must be { sql } or { search, preset?, include?, exclude?, where?, k? }`);
 }
 
 function validateConfig(parsed: unknown, configPath: string): Config {
@@ -451,10 +488,7 @@ function validateConfig(parsed: unknown, configPath: string): Config {
   }
   const cfg = parsed as Record<string, unknown>;
 
-  // `checks` (assertions over saved queries) was removed in v3, not merely deprecated: a
-  // hand-written v3 config still carrying it gets a named rejection rather than a silent
-  // "unknown key" warning, since silence here would hide that the assertion behavior it
-  // implies no longer exists.
+  // `checks` is rejected by name, not warned: silence would hide that assertions are gone.
   if (cfg.checks !== undefined) {
     throw new SenseError('CONFIG_INVALID', `${configPath}: checks was removed in v3 -- sense check no longer asserts on saved queries; a returned row set is the reader's judgment`);
   }
@@ -472,7 +506,7 @@ function validateConfig(parsed: unknown, configPath: string): Config {
 
   if (cfg.queries === undefined) cfg.queries = {};
   if (typeof cfg.queries !== 'object' || cfg.queries === null || Array.isArray(cfg.queries)) {
-    throw new SenseError('CONFIG_INVALID', `${configPath}: queries must be an object of name -> SQL string, { sql }, or saved search`);
+    throw new SenseError('CONFIG_INVALID', `${configPath}: queries must be an object of name -> { sql } or { search }`);
   }
   const queries = cfg.queries as Record<string, unknown>;
   for (const [name, value] of Object.entries(queries)) {
@@ -519,15 +553,12 @@ export function loadConfig(explicitPath?: string): ResolvedConfig {
     throw new SenseError('CONFIG_VERSION_UNSUPPORTED', `config version ${version} requires a newer sense`);
   }
 
-  // validateConfig only understands the current v3 shape (presets, saved-query object
-  // shapes); a pre-v3 file on disk is scan/find-shaped and must migrate before it can pass
-  // that check. Validate just enough of the old shape to migrate safely, migrate, then run
-  // the full v3 validateConfig on the migrated result -- the shape that actually lands on
-  // disk and in ResolvedConfig.
+  // validateConfig only knows the current shape, so scan-shaped files (pre-v3) get a minimal
+  // check, migrate, then the full one on the result.
   let cfg: Config;
   let migratedFrom: number | undefined;
   if (version < SUPPORTED_CONFIG_VERSION) {
-    validateLegacyScan(parsed, configPath);
+    if (version < FIRST_PRESET_VERSION) validateLegacyScan(parsed, configPath);
     const result = migrateConfig(parsed as unknown as Config);
     cfg = validateConfig(result.cfg, configPath);
     migratedFrom = result.from;

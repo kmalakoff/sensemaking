@@ -21,11 +21,11 @@ export function writeNote(baseDir: string, relPath: string, { frontmatter = {}, 
   writeFileSync(join(baseDir, relPath), `---\n${lines.join('\n')}\n---\n\n${body}\n`);
 }
 
-// v3 turns semantic on by default per preset; tests must never hit the network/model
-// download, so a bare call pins the default preset's semantic off. Pass presets explicitly
-// (e.g. the local fixture model pattern in embed.test.ts) to opt a test back in.
+// v4 makes the `embed` block the whole vector switch, so a tree without one has no vectors
+// and never reaches the model. That is what a bare call gives you. Tests that want vectors
+// pass an `embed` block pointing at a local fixture model (see embed.test.ts).
 export function openTree(baseDir: string, features?: Config['features'], presets?: Record<string, Preset>) {
-  return open({ presets: presets ?? { default: { include: ['**/*.md'], semantic: false } }, queries: {}, features, baseDir, configPath: null });
+  return open({ presets: presets ?? { default: { include: ['**/*.md'] } }, queries: {}, features, baseDir, configPath: null });
 }
 
 // For tests that need config beyond features/presets (embed provider settings, queries).

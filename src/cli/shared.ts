@@ -1,6 +1,6 @@
 import type { ParseArgsOptionsConfig } from 'node:util';
 import { parseArgs } from 'node:util';
-import type { ResolvedConfig } from '../config.ts';
+import type { ResolvedConfig, SearchOverrides } from '../config.ts';
 import type { OpenResult } from '../db.ts';
 import { open } from '../db.ts';
 import type { Row } from '../output.ts';
@@ -12,16 +12,32 @@ import type { Ctx } from './types.ts';
 export const FORMAT: ParseArgsOptionsConfig = { format: { type: 'string', default: 'table' } };
 export const CONFIG: ParseArgsOptionsConfig = { config: { type: 'string' } };
 // The scope vocabulary every scoped command shares: named preset, ad hoc include/exclude
-// globs, a where SQL condition. search adds k and lexical on top.
+// globs, a where SQL condition. search adds k on top.
 export const SCOPE: ParseArgsOptionsConfig = {
   where: { type: 'string' },
   preset: { type: 'string' },
   include: { type: 'string', multiple: true },
   exclude: { type: 'string', multiple: true },
+  // Widening, which no other flag can express: --include and --exclude each override their
+  // own side of the preset, so neither can drop an exclusion the preset declares.
+  'no-exclude': { type: 'boolean', default: false },
 };
-export const SEARCH_FLAGS: ParseArgsOptionsConfig = { ...SCOPE, k: { type: 'string' }, lexical: { type: 'boolean', default: false } };
+export const SEARCH_FLAGS: ParseArgsOptionsConfig = { ...SCOPE, k: { type: 'string' } };
 
 type Values = Record<string, string | boolean | string[] | undefined>;
+
+// The SCOPE fragment's parsed values as the overrides every scoped command passes down. One
+// place to read them, so a new scope field is added to the fragment and here, not in each
+// command's call.
+export function scopeOf(values: Values): SearchOverrides {
+  return {
+    preset: values.preset as string | undefined,
+    include: values.include as string[] | undefined,
+    exclude: values.exclude as string[] | undefined,
+    where: values.where as string | undefined,
+    noExclude: values['no-exclude'] === true,
+  };
+}
 
 export function formatOf(values: Values): 'table' | 'json' {
   return values.format === 'json' ? 'json' : 'table';

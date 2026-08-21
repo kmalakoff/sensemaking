@@ -1,5 +1,5 @@
 import assert from 'node:assert';
-import { findPath, traverse } from '../../src/traverse.ts';
+import { findPath } from '../../src/traverse.ts';
 import { openTree, tmpTree, writeNote } from '../lib/tree.ts';
 
 // a -> b, a -> c, b -> d, c -> d, d -> e, e -> (dead link), o isolated
@@ -14,104 +14,6 @@ function makeGraph() {
   const { db } = openTree(baseDir);
   return db;
 }
-
-describe('traverse', () => {
-  it('forward: rings expand along outbound links, seeds excluded', () => {
-    const db = makeGraph();
-    const result = traverse(db, { seeds: ['a.md'], direction: 'forward', depth: 3 });
-    assert.deepEqual(
-      result.map((r) => [r.path, r.depth]).sort(),
-      [
-        ['b.md', 1],
-        ['c.md', 1],
-        ['d.md', 2],
-        ['e.md', 3],
-      ].sort()
-    );
-  });
-
-  it('reverse: rings expand along inbound links', () => {
-    const db = makeGraph();
-    const result = traverse(db, { seeds: ['e.md'], direction: 'reverse', depth: 3 });
-    assert.deepEqual(
-      result.map((r) => [r.path, r.depth]).sort(),
-      [
-        ['d.md', 1],
-        ['b.md', 2],
-        ['c.md', 2],
-        ['a.md', 3],
-      ].sort()
-    );
-  });
-
-  it('both: undirected, walks either direction', () => {
-    const db = makeGraph();
-    const result = traverse(db, { seeds: ['d.md'], direction: 'both', depth: 2 });
-    assert.deepEqual(
-      result.map((r) => [r.path, r.depth]).sort(),
-      [
-        ['b.md', 1],
-        ['c.md', 1],
-        ['e.md', 1],
-        ['a.md', 2],
-      ].sort()
-    );
-  });
-
-  it('depth stops the walk short of full reachability', () => {
-    const db = makeGraph();
-    const result = traverse(db, { seeds: ['a.md'], direction: 'forward', depth: 1 });
-    assert.deepEqual(result.map((r) => r.path).sort(), ['b.md', 'c.md']);
-  });
-
-  it('dead (unresolved) links are never followed', () => {
-    const db = makeGraph();
-    const result = traverse(db, { seeds: ['e.md'], direction: 'forward', depth: 1 });
-    assert.deepEqual(result, []);
-  });
-
-  it('an isolated node reaches nothing', () => {
-    const db = makeGraph();
-    const result = traverse(db, { seeds: ['o.md'], direction: 'both', depth: 3 });
-    assert.deepEqual(result, []);
-  });
-
-  it('cap bounds nodes returned per ring', () => {
-    const db = makeGraph();
-    const result = traverse(db, { seeds: ['a.md'], direction: 'forward', depth: 1, cap: 1 });
-    assert.equal(result.length, 1);
-    assert.equal(result[0].path, 'b.md', 'deterministic tie-break: lexicographically first');
-  });
-
-  it('allowed restricts which nodes are walked into', () => {
-    const db = makeGraph();
-    const result = traverse(db, { seeds: ['a.md'], direction: 'forward', depth: 3, allowed: new Set(['c.md', 'd.md', 'e.md']) });
-    assert.deepEqual(
-      result.map((r) => [r.path, r.depth]).sort(),
-      [
-        ['c.md', 1],
-        ['d.md', 2],
-        ['e.md', 3],
-      ].sort(),
-      'b.md is excluded, so the only forward route left is through c.md'
-    );
-  });
-
-  it('no allowed set: no restriction', () => {
-    const db = makeGraph();
-    const result = traverse(db, { seeds: ['a.md'], direction: 'forward', depth: 3 });
-    assert.equal(result.length, 4);
-  });
-
-  it('multiple seeds expand together', () => {
-    const db = makeGraph();
-    const result = traverse(db, { seeds: ['b.md', 'c.md'], direction: 'forward', depth: 1 });
-    assert.deepEqual(
-      result.map((r) => r.path),
-      ['d.md']
-    );
-  });
-});
 
 describe('findPath', () => {
   it('undirected shortest path, tie-broken deterministically', () => {

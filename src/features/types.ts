@@ -2,11 +2,8 @@ import type { DatabaseSync } from 'node:sqlite';
 import type { Config, FeatureName } from '../config.ts';
 import type { FileStat } from '../scan.ts';
 
-// What changed this reconcile, so afterReconcile hooks can act on the delta instead of
-// re-reading the whole tree. `reparsed`/`added`/`vanished` are relPaths; `added` is the
-// subset of `reparsed` that are brand-new files (not just modified). One delta object per
-// reconcile: hooks communicate through it (links sets `linksChanged` for rank), and any
-// state keyed on it dies with the reconcile -- including on ROLLBACK.
+// What changed this reconcile, so hooks act on the delta rather than re-reading the tree.
+// `added` is the brand-new subset of `reparsed`. Hooks communicate through this one object.
 export interface ReconcileDelta {
   files: FileStat[];
   reparsed: string[];
@@ -31,6 +28,6 @@ export interface Feature {
   afterReconcile?(db: DatabaseSync, delta: ReconcileDelta): void;
   // Per-file opt-out (currently only embed, via FileStat.embed): absent means the feature
   // applies to every file it's otherwise on for. Checked per file before extract/store so a
-  // doc covered only by semantic-false presets gets no rows for it at all.
+  // doc in a tree with no embedding model gets no rows for it at all.
   enabledForFile?(cfg: Config, file: FileStat): boolean;
 }

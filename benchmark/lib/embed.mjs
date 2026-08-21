@@ -1,7 +1,5 @@
-// Static-model embedding shared by bakeoff/sweep: fetch-once by pinned revision,
-// safetensors matrix + pure-JS tokenizer, model2vec encode convention
-// (model2vec/model.py: no special tokens, drop unk ids, mean-pool, L2-normalize —
-// this model's config.json has normalize: true).
+// Static-model embedding for bakeoff/sweep: fetch-once by pinned revision, safetensors plus
+// pure-JS tokenizer. model2vec encode: no special tokens, drop unk ids, mean-pool, normalize.
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';

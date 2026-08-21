@@ -4,10 +4,8 @@ import { COMMANDS, USAGE } from './cli/index.ts';
 import type { Ctx } from './cli/types.ts';
 import { loadConfig, SUPPORTED_CONFIG_VERSION } from './config.ts';
 
-// Parsing and dispatch only. Commands live in src/cli/, one file each, lazy-loaded --
-// nothing tree- or dependency-heavy may be imported at the top of this file. Flags parse
-// per command (each command's own parse() call); this file only handles the bare top-level
-// flags (--version/--help/--list/--config) and dispatch.
+// Parsing and dispatch only; commands lazy-load from src/cli/, so nothing heavy is imported
+// here. Flags parse per command -- this file handles only --version/--help/--list/--config.
 
 // Works from dist/cjs and dist/esm alike: walk up past the dist type-marker package.json.
 function packageVersion(): string {
@@ -73,9 +71,9 @@ export default async function cli(argv: string[], name: string): Promise<void> {
       if (values.list) {
         const queries = resolveConfigFor(name, values.config as string | undefined).queries;
         for (const queryName of Object.keys(queries).sort()) {
-          const entry = queries[queryName];
-          const isSavedSearch = typeof entry === 'object' && entry !== null && 'search' in entry;
-          console.log(isSavedSearch ? `${queryName}  (search)` : queryName);
+          // Every entry names its verb, so --list can label both kinds rather than only
+          // marking the exception.
+          console.log(`${queryName}  (${'search' in queries[queryName] ? 'search' : 'sql'})`);
         }
         return;
       }
@@ -88,9 +86,11 @@ export default async function cli(argv: string[], name: string): Promise<void> {
     process.exit(2);
   }
 
-  // find -> search (breaking rename): one release of a pointer instead of "unknown query".
-  if (first === 'find') {
-    console.error(`${name}: find is now search`);
+  // Breaking renames get one release of a pointer instead of an "unknown" error: find ->
+  // search, and query -> sql (which took its name back from the search sense of "query").
+  const RENAMED: Record<string, string> = { find: 'search', query: 'sql' };
+  if (RENAMED[first]) {
+    console.error(`${name}: ${first} is now ${RENAMED[first]}`);
     console.error(usage(name));
     process.exit(2);
   }

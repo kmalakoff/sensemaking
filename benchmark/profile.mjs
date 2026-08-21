@@ -1,6 +1,5 @@
-// CPU profile of the library's own operations, phase-by-phase. Self-profiling child
-// pattern: this file re-invokes itself under --cpu-prof so the profile covers exactly one
-// scenario's work, then parses the resulting .cpuprofile and sums self time by callFrame.url.
+// Phase-by-phase CPU profile. Re-invokes itself under --cpu-prof so the profile covers one
+// scenario's work, then sums self time by callFrame.url.
 // usage: node benchmark/profile.mjs <treePath> [scenario ...]
 // scenarios: cold nochange update1 search map semantic (default: all applicable)
 
@@ -119,10 +118,8 @@ function parseProfile(path) {
   const parentOf = new Map();
   for (const n of profile.nodes) for (const c of n.children || []) parentOf.set(c, n.id);
 
-  // V8 charges self time to the innermost frame, which for fs reads / regex exec / sqlite
-  // calls is a native binding with an empty url -- so a leaf-only url match would dump
-  // most of parse/yaml/sqlite into "other". Climb to the nearest ancestor whose own url
-  // is specific enough to place, and inherit its phase.
+  // V8 charges self time to the innermost frame, which for native bindings has an empty url.
+  // Climb to the nearest ancestor with a placeable url and inherit its phase.
   const classifyCache = new Map();
   function classify(nodeId) {
     if (classifyCache.has(nodeId)) return classifyCache.get(nodeId);

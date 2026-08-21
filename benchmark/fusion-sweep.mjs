@@ -1,10 +1,5 @@
-// Dev sweep for the constants that survive the explicit-expansion design (2026-08-13
-// correction: vectors are per-query opt-in, so the lexical-confidence gate is superseded —
-// the caller states what it would have inferred; this sweep's earlier gate run showed hard
-// gates hurt NFCorpus and soft gates were flat, consistent with dropping it). What remains
-// tunable under the fusion-tuning protocol: the vector candidate pool and the vector
-// list's RRF weight when expansion is invoked. Reports paired per-query deltas vs the
-// bake-off shape (w=1, pool=30). Dev only — test runs and the FEVER guard are eval-side.
+// Dev sweep over the two tunable fusion constants: the vector candidate pool and the vector
+// list's RRF weight. Paired per-query deltas against the bake-off shape (w=1, pool=30).
 // usage: node benchmark/fusion-sweep.mjs [corpus] [--split dev] [--dims 256] [--f32] [--k N]
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';

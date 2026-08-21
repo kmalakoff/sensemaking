@@ -1,7 +1,7 @@
 import { peek } from '../commands.ts';
 import { renderPeek } from '../output.ts';
 import { USAGE } from './index.ts';
-import { CONFIG, FORMAT, formatOf, parse, SCOPE, withDb } from './shared.ts';
+import { CONFIG, FORMAT, formatOf, parse, SCOPE, scopeOf, withDb } from './shared.ts';
 import type { Command } from './types.ts';
 
 const peekCmd: Command = (ctx) => {
@@ -11,7 +11,7 @@ const peekCmd: Command = (ctx) => {
   if (!pathArg) ctx.usageError(usage);
   const format = formatOf(values);
   return withDb(ctx, values.config as string | undefined, (db, cfg) => {
-    const overrides = { preset: values.preset as string | undefined, include: values.include as string[] | undefined, exclude: values.exclude as string[] | undefined, where: values.where as string | undefined };
+    const overrides = scopeOf(values);
     const result = peek(db, cfg, pathArg, overrides);
     console.log(format === 'json' ? JSON.stringify(result, null, 2) : renderPeek(result));
   });

@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadConfig, SUPPORTED_CONFIG_VERSION } from 'sensemaking';
+import { DEFAULT_EMBED_MODEL } from '../../src/config.ts';
 import { runCli as spawnCli } from '../lib/cli.ts';
 
 const runCli = (configPath: string) => spawnCli(['--list', '--config', configPath]);
@@ -84,10 +85,8 @@ describe('config version', () => {
   });
 
   it('regression: a bare v2 config on disk migrates through the CLI entry point, not just loadConfig direct calls', () => {
-    // validateConfig only understands the current v3 shape; loadConfig must migrate a
-    // pre-v3 file before validating it, not the other way around (a v2 file validated
-    // against the v3 shape errors "presets must be a non-empty object" and the documented
-    // migration path never runs).
+    // loadConfig must migrate before validating: a pre-preset file checked against the current
+    // shape errors on `presets` and the migration never runs.
     const configPath = writeRaw({ version: 2, scan: { include: ['*.md'] }, queries: {} });
     const result = runCli(configPath);
     assert.equal(result.status, 0, result.stderr);
@@ -98,7 +97,7 @@ describe('config version', () => {
     assert.equal(migrated.scan, undefined);
   });
 
-  it('v2 -> v3 is mechanical-minimal: scan->presets.default.include, find->search, defaults.find.where->presets.default.where, semantic:true drops', () => {
+  it('v2 -> v4 chains: scan->presets.default.include, find->search, defaults.find.where->presets.default.where, semantic drops entirely', () => {
     const configPath = writeRaw({
       version: 2,
       scan: { include: ['*.md'] },
@@ -116,9 +115,11 @@ describe('config version', () => {
     assert.deepEqual(resolved.presets, { default: { include: ['*.md'], where: "type != 'raw'" } });
     // embed was absent in the v2 source and no migration step writes it -- it stays absent.
     assert.deepEqual(resolved.features, { links: true });
-    assert.equal(resolved.queries.raw, 'SELECT 1');
+    // v3's bare string meant SQL by inference; v4 wraps it so the entry names its verb.
+    assert.deepEqual(resolved.queries.raw, { sql: 'SELECT 1' });
     assert.deepEqual(resolved.queries.saved, { search: 'pricing', k: 5, where: "status='active'" });
-    assert.deepEqual(resolved.queries.savedLex, { search: 'billing', semantic: false });
+    // v3 kept `semantic: false` on a saved search; v4 has no such key, so it drops.
+    assert.deepEqual(resolved.queries.savedLex, { search: 'billing' });
 
     const onDisk = JSON.parse(readFileSync(configPath, 'utf8'));
     assert.equal(onDisk.scan, undefined);
@@ -128,11 +129,44 @@ describe('config version', () => {
     assert.deepEqual(onDisk.features, { links: true });
   });
 
-  it('v2 -> v3: an explicit features.embed:false in the source becomes presets.default.semantic:false, and features.embed itself is dropped', () => {
+  it('v2 -> v4: features.embed:false becomes presets.default.semantic:false and no embed block', () => {
     const configPath = writeRaw({ version: 2, scan: { include: ['*.md'] }, features: { embed: false }, queries: {} });
     const resolved = loadConfig(configPath);
     assert.deepEqual(resolved.presets, { default: { include: ['*.md'], semantic: false } });
+    assert.equal(resolved.embed, undefined);
     assert.equal(resolved.features, undefined);
+  });
+
+  it('v3 -> v4: a tree that embedded gets the model written into the file, and its signature does not move', () => {
+    const configPath = writeRaw({ version: 3, presets: { default: { include: ['*.md'] } }, queries: {} });
+    const resolved = loadConfig(configPath);
+    assert.equal(resolved.migratedFrom, 3);
+    assert.deepEqual(resolved.embed, { model: DEFAULT_EMBED_MODEL, type: 'static' });
+    const onDisk = JSON.parse(readFileSync(configPath, 'utf8'));
+    assert.equal(onDisk.version, SUPPORTED_CONFIG_VERSION);
+    assert.deepEqual(onDisk.embed, { model: DEFAULT_EMBED_MODEL, type: 'static' });
+  });
+
+  it('v3 -> v4: presets keep semantic; all-false means no embed block, so vectors stay off', () => {
+    const configPath = writeRaw({ version: 3, presets: { default: { include: ['*.md'], semantic: false }, raw: { include: ['raw/*.md'], semantic: false } }, queries: {} });
+    const resolved = loadConfig(configPath);
+    assert.equal(resolved.embed, undefined);
+    assert.deepEqual(resolved.presets, { default: { include: ['*.md'], semantic: false }, raw: { include: ['raw/*.md'], semantic: false } });
+  });
+
+  it('v3 -> v4: a mixed tree keeps its lexical preset and gains the model for the rest', () => {
+    const configPath = writeRaw({ version: 3, presets: { default: { include: ['wiki/*.md'] }, raw: { include: ['raw/*.md'], semantic: false } }, queries: {} });
+    const resolved = loadConfig(configPath);
+    assert.deepEqual(resolved.embed, { model: DEFAULT_EMBED_MODEL, type: 'static' });
+    assert.equal(resolved.presets.raw.semantic, false, 'the lexical layer stays lexical');
+    assert.equal(resolved.presets.default.semantic, undefined, 'the meaning layer keeps the default');
+  });
+
+  it('v3 -> v4: an api embed block keeps model, type, url and key verbatim', () => {
+    const provider = { model: 'custom/m', type: 'api', url: 'http://localhost:11434/v1', key: 'MY_KEY' };
+    const configPath = writeRaw({ version: 3, presets: { default: { include: ['*.md'] } }, embed: provider, queries: {} });
+    const resolved = loadConfig(configPath);
+    assert.deepEqual(resolved.embed, provider);
   });
 
   it('v2 -> v3: checks is dropped with a stderr note, and its queries are carried over as ordinary saved queries', () => {
@@ -154,7 +188,7 @@ describe('config version', () => {
       console.error = originalError;
     }
     assert.match(stderr, /checks.*removed in v3/);
-    assert.equal(resolved.queries['dead-links'], 'SELECT src FROM links WHERE dst IS NULL');
+    assert.deepEqual(resolved.queries['dead-links'], { sql: 'SELECT src FROM links WHERE dst IS NULL' });
     const onDisk = JSON.parse(readFileSync(configPath, 'utf8'));
     assert.equal(onDisk.checks, undefined);
   });

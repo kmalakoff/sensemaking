@@ -131,7 +131,7 @@ describe('links feature', () => {
     const incrementalRows = incremental.db.prepare('SELECT src, target, dst FROM links ORDER BY src, target').all();
     incremental.db.close();
 
-    const rebuilt = rebuild({ presets: { default: { include: ['**/*.md'], semantic: false } }, queries: {}, baseDir, configPath: null });
+    const rebuilt = rebuild({ presets: { default: { include: ['**/*.md'] } }, queries: {}, baseDir, configPath: null });
     const rebuiltRows = rebuilt.db.prepare('SELECT src, target, dst FROM links ORDER BY src, target').all();
     rebuilt.db.close();
 

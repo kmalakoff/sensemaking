@@ -1,8 +1,5 @@
-// The package's Node floor (>=22.16) is set here and nowhere else: node:sqlite arrived in
-// 22.5, but FTS5 -- which search.ts's whole lexical half is built on -- and
-// StatementSync.columns() both landed in 22.16. 22.15 fails with "no such module: fts5".
-// Nothing outside this file, features/, and commands.ts needs anything past Node 12, so
-// raise the floor only for a sqlite capability, and lower it for nothing.
+// The Node floor (>=22.20) is explained here and nowhere else: 22.20 is the first release with
+// both FTS5 and row-returning INSERT ... RETURNING. Raise it only for a load-bearing capability.
 import { mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -15,21 +12,16 @@ import { progress } from './progress.ts';
 import type { ParsedDoc } from './scan.ts';
 import { listFiles, parseFile, RESERVED_COLUMNS } from './scan.ts';
 
-// path/_mtime/_size are core: every reparse legitimately rewrites them. Every other
-// RESERVED_COLUMNS entry that shows up as a real frontmatter column (currently only
-// rank's `_rank`) is feature-owned -- scan.ts already refuses to let frontmatter set it,
-// so it must never appear in the upsert below, or a reparse would blow its last computed
-// value away with NULL on every touch, not just the reconciles that recompute it.
+// Feature-owned columns (`_rank`) must stay out of the upsert: a reparse would null the last
+// computed value on every touch, not just the reconciles that recompute it.
 const CORE_FRONTMATTER_COLUMNS = new Set(['path', '_mtime', '_size']);
 
 // Rows -> SQLite: core schema, reconcile loop, has(). Parsing lives in scan.ts;
 // everything beyond frontmatter + content lives in src/features/.
 
 export const DB_FILENAME = 'cache.db';
-// Cache shape version, independent of the config's own `version`.
-// 7: presets replace layers -- frontmatter drops the `layer` column, a new
-// preset_files(preset, path) table tracks per-preset coverage for status/map (was: 6,
-// frontmatter gains the `layer` column).
+// Cache shape version, independent of the config's own `version`. Bumping it rebuilds
+// existing trees on first query.
 export const SCHEMA_VERSION = '8';
 
 // SQLite's compile-time SQLITE_MAX_COLUMN, default 2000 (https://www.sqlite.org/limits.html).
@@ -80,12 +72,8 @@ function getColumns(db: DatabaseSync): Set<string> {
 function ensureSchema(db: DatabaseSync, cfg: Config): void {
   db.exec(`CREATE TABLE IF NOT EXISTS frontmatter ("path" TEXT PRIMARY KEY, "_mtime" REAL, "_size" INTEGER)`);
   db.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS content USING fts5(title, summary, text, path UNINDEXED, tokenize = 'porter unicode61')`);
-  // Coverage, not ownership: a path can appear under several presets. Rebuilt per-file
-  // alongside frontmatter/content at reconcile so status/map can report matched/embedded
-  // counts per preset without recomputing globs at read time.
-  // path leads the PK so the per-doc delete in reconcile is an index hit -- keyed the other
-  // way it scans the whole table per doc, which made cold builds quadratic (measured 3x cost
-  // per note-count doubling at 13k/26k). Coverage-by-preset reads get their own index.
+  // Coverage, not ownership: a path can appear under several presets. path leads the PK so the
+  // per-doc delete is an index hit -- keyed the other way, cold builds went quadratic.
   db.exec(`CREATE TABLE IF NOT EXISTS preset_files ("path" TEXT, preset TEXT, PRIMARY KEY ("path", preset))`);
   db.exec('CREATE INDEX IF NOT EXISTS preset_files_preset ON preset_files(preset)');
   for (const feature of activeFeatures(cfg)) feature.schema(db);
@@ -142,7 +130,7 @@ export function reconcile(db: DatabaseSync, cfg: Config, baseDir: string): { par
   let parsedCount = 0;
   for (const file of toReparse) {
     // A doc only gets extract/store from features that apply to it (currently: embed, via
-    // FileStat.embed -- true iff a covering preset has semantic on).
+    // FileStat.embed -- true iff the config names an embedding model).
     const fileFeatures = features.filter((feature) => !feature.enabledForFile || feature.enabledForFile(cfg, file));
     const { doc, warnings: fileWarnings } = parseFile(file, fileFeatures);
     report.tick(++parsedCount);
@@ -212,19 +200,14 @@ export function reconcile(db: DatabaseSync, cfg: Config, baseDir: string): { par
         });
         // Frontmatter upsert first: content's rowid lookup below depends on this row existing.
         insert.run(...values);
-        // Delete-before-insert only for docs that have rows: an FTS5 DELETE by rowid on a
-        // cold build (empty table, nothing to delete) is wasted work, and doing it
-        // unconditionally previously made the crawl quadratic when it scanned by column --
-        // measured 4x time per note-count doubling at 13k/26k notes.
+        // Only for docs that have rows: an unconditional delete made cold crawls quadratic.
         if (existing.has(doc.relPath)) {
           delBody.run(doc.relPath);
           for (const feature of features) feature.remove?.(db, doc.relPath, delta);
         }
         insertBody.run(doc.relPath, doc.search.title, doc.search.summary, doc.search.text, doc.relPath);
-        // Coverage is glob-derived, not content-derived, but only reparsed/added docs are
-        // touched here: a preset edit changes featureSignature and forces a full rebuild
-        // (see open()), so an unchanged doc's coverage is already correct on disk. New docs
-        // have no rows to clear -- skipping the delete keeps cold builds linear.
+        // A preset edit forces a full rebuild, so an unchanged doc's coverage is already
+        // correct; new docs have nothing to clear, which keeps cold builds linear.
         if (existing.has(doc.relPath)) delPresetFiles.run(doc.relPath);
         for (const presetName of doc.presets) insertPresetFile.run(doc.relPath, presetName);
         for (const feature of features) feature.store?.(db, doc.relPath, doc.extracted[feature.name], delta);
@@ -271,10 +254,8 @@ export function open(cfg: ResolvedConfig): OpenResult {
 
   const db = new DatabaseSync(dbPath);
   db.exec('PRAGMA journal_mode = WAL');
-  // Covers a concurrent watcher's bulk reconcile: the write transaction for 500 changed
-  // files measures ~5s at 26k notes, so 5s expired exactly at the boundary and queries
-  // racing the watcher got SQLITE_BUSY. 30s bounds the wait at ~3x the largest measured
-  // reconcile; a query that outwaits it still fails loudly.
+  // Covers a concurrent watcher's bulk reconcile (~5s for 500 files at 26k notes). A query
+  // that outwaits it still fails loudly.
   db.exec('PRAGMA busy_timeout = 30000');
   registerFunctions(db);
 
@@ -301,11 +282,8 @@ export function open(cfg: ResolvedConfig): OpenResult {
 
   ensureSchema(db, cfg);
 
-  // Derived from reconcile's own recorded max (F): 3x the largest reconcile this cache has
-  // ever held its write transaction for, floored at the 30s default and capped at 10min so
-  // one pathological build can't pin every later open to an unbounded wait. Installed
-  // before reconcile() below -- this open's own reconcile is exactly the operation that
-  // races a concurrent watcher's transaction and needs the derived wait.
+  // 3x the largest reconcile this cache has recorded, floored at 30s and capped at 10min.
+  // Installed before reconcile() -- that call is the one that races a watcher's transaction.
   const recordedMaxMs = Number(getMeta(db, 'reconcile_max_ms') ?? '0');
   db.exec(`PRAGMA busy_timeout = ${Math.min(Math.max(30000, 3 * recordedMaxMs), 600_000)}`);
 

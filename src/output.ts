@@ -18,11 +18,8 @@ export function printRows(rows: Row[], format: 'table' | 'json'): void {
   }
 }
 
-// Table output is for reading; a row wider than the terminal wraps into an unreadable
-// block (a `find` header measured 330 chars once `summary` is present, which drove one
-// user to pipe --format json through a script for every interactive query). Widest
-// columns give up space first, down to a floor, and only as far as the terminal needs.
-// --format json is never truncated: it is the machine-readable surface.
+// Tables are for reading, and a row wider than the terminal wraps unreadably: widest columns
+// give up space first, down to a floor. --format json is never truncated.
 const MIN_COLUMN = 12;
 const TRUNCATED = '…';
 
@@ -59,10 +56,10 @@ function renderRows(rows: Row[], format: 'table' | 'json', width = process.stdou
 
 // Text renderers for the top-level commands; cli.ts prints what these return.
 
-// `embed` is not a features-block key (it's derived from presets), so its off hint reads
-// differently from links/sections/rank's plain `features.<name>`.
+// Names the config key that turns a feature back on. Only the three features-block toggles
+// reach here; `embed` has its own status line.
 export function featureOffHint(name: string): string {
-  return name === 'embed' ? 'no preset has semantic on' : `features.${name}`;
+  return `features.${name}`;
 }
 
 export function featuresLine(features: { on: string[]; off: string[] }): string {
@@ -83,21 +80,7 @@ export function renderMap(result: { docs: { count: number; bytes: number }; fiel
   return parts.join('\n');
 }
 
-export function renderPeek(result: {
-  path: string;
-  tokens: number;
-  frontmatter: Row;
-  sections: Row[];
-  outbound: string[];
-  backlinks: string[];
-  unresolved: string[];
-  sectionsTotal: number;
-  outboundTotal: number;
-  backlinksTotal: number;
-  unresolvedTotal: number;
-  nearby: Array<{ path: string; depth: number; direction: 'forward' | 'reverse' }>;
-  off: string[];
-}): string {
+export function renderPeek(result: { path: string; tokens: number; frontmatter: Row; sections: Row[]; outbound: string[]; backlinks: string[]; unresolved: string[]; sectionsTotal: number; outboundTotal: number; backlinksTotal: number; unresolvedTotal: number; off: string[] }): string {
   const lines = [`${result.path}  (~${result.tokens} tokens)`];
   for (const [key, value] of Object.entries(result.frontmatter)) lines.push(`  ${key}: ${value}`);
   if (result.sections.length > 0) {
@@ -115,10 +98,6 @@ export function renderPeek(result: {
     linkLine('links out', result.outbound, result.outboundTotal);
     linkLine('unresolved', result.unresolved, result.unresolvedTotal);
     linkLine('backlinks', result.backlinks, result.backlinksTotal);
-    if (result.nearby.length > 0) {
-      lines.push('', `nearby (${result.nearby.length}):`);
-      for (const n of result.nearby) lines.push(`  ${n.direction} +${n.depth}: ${n.path}`);
-    }
   }
   return lines.join('\n');
 }

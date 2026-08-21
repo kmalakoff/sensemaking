@@ -1,8 +1,5 @@
-// Offline model bake-off (semantic-search-design.md, sequence step 2): embed a labeled
-// corpus with the candidate static model at each lever setting (f32 / truncated dims /
-// int8 storage), score cosine-only and bm25+vector RRF against the qrels, and print the
-// numbers next to the acceptance thresholds. No core code — find's future fusion is
-// simulated with the same candidate pool and RRF constant as src/commands.ts.
+// Offline model bake-off: embed a labeled corpus at each lever (f32 / dims / int8), score
+// cosine-only and bm25+vector RRF against the qrels, using src/commands.ts's pool and constant.
 // usage: node benchmark/bakeoff.mjs [corpus] [--queries N] [--k N]
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -151,7 +148,7 @@ for (const r of rows) {
 }
 
 // Original silent-fusion thresholds, superseded 2026-08-13 by the explicit-expansion
-// reframe (semantic-search-design.md "Gate and acceptance") — kept for continuity with
+// reframe — kept for continuity with
 // recorded results; the current bar is recall-when-invoked.
 console.log('\nsuperseded silent-fusion thresholds (nfcorpus: ΔnDCG ≥ +0.02, Δhit ≥ +0.03; latency ≤ 2× links-fused ms/query):');
 for (const r of rows) {

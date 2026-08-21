@@ -14,7 +14,7 @@ function makeVault(): string {
   writeNote(baseDir, 'd.md', { body: 'See [[e]].' });
   writeNote(baseDir, 'e.md', { body: 'Dead link: [[ghost]].' });
   writeNote(baseDir, 'o.md', { body: 'solo, no links in or out' });
-  writeFileSync(join(baseDir, 'sense.config.json'), JSON.stringify({ version: 3, presets: { default: { include: ['**/*.md'], semantic: false } }, queries: {} }, null, 2));
+  writeFileSync(join(baseDir, 'sense.config.json'), JSON.stringify({ version: 4, presets: { default: { include: ['**/*.md'] } }, queries: {} }, null, 2));
   return baseDir;
 }
 

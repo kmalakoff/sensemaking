@@ -95,7 +95,7 @@ describe('mapTree', () => {
     const baseDir = tmpTree();
     write(baseDir, 'a/one.md', 'alpha content');
     write(baseDir, 'b/two.md', 'beta content');
-    const { db, cfg } = openTree(baseDir, undefined, { default: { include: ['**/*.md'], semantic: false }, a: { include: ['a/**/*.md'], semantic: false }, b: { include: ['b/**/*.md'], semantic: false } });
+    const { db, cfg } = openTree(baseDir, undefined, { default: { include: ['**/*.md'] }, a: { include: ['a/**/*.md'] }, b: { include: ['b/**/*.md'] } });
     const result = mapTree(db, cfg);
     const byName = new Map(result.presets.map((p) => [p.name, p]));
     assert.equal(byName.get('default')?.files, 2);
@@ -107,7 +107,7 @@ describe('mapTree', () => {
 });
 
 describe('mapTree scope', () => {
-  const mapPresets = { default: { include: ['**/*.md'], semantic: false }, wiki: { include: ['wiki/**/*.md'], semantic: false }, raw: { include: ['raw/**/*.md'], semantic: false } };
+  const mapPresets = { default: { include: ['**/*.md'] }, wiki: { include: ['wiki/**/*.md'] }, raw: { include: ['raw/**/*.md'] } };
 
   function scopedMapTree(): string {
     const baseDir = tmpTree();
@@ -128,7 +128,7 @@ describe('mapTree scope', () => {
   });
 
   it('with no scope flags, a narrow default preset scopes bare map to it, not the whole index', () => {
-    const narrowDefault = { default: { include: ['wiki/**/*.md'], semantic: false }, raw: { include: ['raw/**/*.md'], semantic: false } };
+    const narrowDefault = { default: { include: ['wiki/**/*.md'] }, raw: { include: ['raw/**/*.md'] } };
     const { db, cfg } = openTree(scopedMapTree(), undefined, narrowDefault);
     const bare = mapTree(db, cfg);
     assert.equal(bare.docs.count, 2, 'raw notes are indexed by the raw preset but fall outside the default scope');
@@ -179,7 +179,7 @@ describe('mapTree scope', () => {
 
   it('sense map --preset scopes the CLI output', () => {
     const base = scopedMapTree();
-    writeFileSync(join(base, 'sense.config.json'), JSON.stringify({ version: 3, presets: mapPresets, queries: {} }));
+    writeFileSync(join(base, 'sense.config.json'), JSON.stringify({ version: 4, presets: mapPresets, queries: {} }));
     const result = runCli(['map', '--preset', 'wiki', '--format', 'json'], { cwd: base });
     assert.equal(result.status, 0, result.stderr);
     const parsed = JSON.parse(result.stdout) as { docs: { count: number }; recent: Array<{ path: string }> };
@@ -189,7 +189,7 @@ describe('mapTree scope', () => {
 
   it('sense map with no flags scopes to the default preset (the whole tree here)', () => {
     const base = scopedMapTree();
-    writeFileSync(join(base, 'sense.config.json'), JSON.stringify({ version: 3, presets: mapPresets, queries: {} }));
+    writeFileSync(join(base, 'sense.config.json'), JSON.stringify({ version: 4, presets: mapPresets, queries: {} }));
     const result = runCli(['map', '--format', 'json'], { cwd: base });
     assert.equal(result.status, 0, result.stderr);
     const parsed = JSON.parse(result.stdout) as { docs: { count: number } };
@@ -256,75 +256,6 @@ describe('peek stays bounded', () => {
     const result = peek(db, cfg, 'hub.md');
     assert.equal(result.backlinksTotal, 30);
     assert.equal(result.backlinks.length, 20);
-  });
-});
-
-describe('peek nearby expansion', () => {
-  // gp -> parent -> start -> mid -> far: a chain long enough to exercise both directions
-  // at depth 2, one hop past what outbound/backlinks already show.
-  function chain(): string {
-    const baseDir = tmpTree();
-    write(baseDir, 'far.md', 'end of the forward chain');
-    write(baseDir, 'mid.md', 'See [[far]].');
-    write(baseDir, 'start.md', 'See [[mid]].');
-    write(baseDir, 'parent.md', 'See [[start]].');
-    write(baseDir, 'gp.md', 'See [[parent]].');
-    return baseDir;
-  }
-
-  it('lists notes beyond the immediate ring, forward and reverse, at depth 2', () => {
-    const { db, cfg } = openTree(chain());
-    const result = peek(db, cfg, 'start.md');
-    assert.deepEqual(result.outbound, ['mid.md']);
-    assert.deepEqual(result.backlinks, ['parent.md']);
-    assert.deepEqual(
-      result.nearby.map((n) => [n.path, n.depth, n.direction]).sort(),
-      [
-        ['far.md', 2, 'forward'],
-        ['gp.md', 2, 'reverse'],
-      ].sort()
-    );
-  });
-
-  it('a scope excluding an intermediate node keeps what it bridges to out of the expansion', () => {
-    const { db, cfg } = openTree(chain());
-    // mid.md is the sole bridge to far.md; excluding it drops far.md from the forward
-    // expansion but leaves the unrelated reverse side (gp.md via parent.md) intact.
-    const scoped = peek(db, cfg, 'start.md', { where: `f."path" != 'mid.md'` });
-    assert.deepEqual(
-      scoped.nearby.map((n) => [n.path, n.depth, n.direction]),
-      [['gp.md', 2, 'reverse']]
-    );
-    // The immediate outline is unscoped -- scope only narrows the expansion, per
-    // plans/graph-algorithms.md ("a bare single-note peek outline ignores scope harmlessly").
-    assert.deepEqual(scoped.outbound, ['mid.md']);
-  });
-
-  it('is empty, not an error, when links is off', () => {
-    const baseDir = tmpTree();
-    write(baseDir, 'start.md', 'See [[mid]].');
-    write(baseDir, 'mid.md', 'text');
-    const { db, cfg } = openTree(baseDir, { links: false });
-    const result = peek(db, cfg, 'start.md');
-    assert.deepEqual(result.nearby, []);
-    assert.ok(result.off.includes('links'));
-  });
-
-  it('caps the expansion at the fixed depth-2 ring bound', () => {
-    const baseDir = tmpTree();
-    write(baseDir, 'hub.md', 'See [[mid]].');
-    let midBody = '';
-    for (let i = 0; i < 15; i++) {
-      const name = `f${String(i).padStart(2, '0')}`;
-      write(baseDir, `${name}.md`, 'leaf');
-      midBody += `see [[${name}]]\n`;
-    }
-    write(baseDir, 'mid.md', midBody);
-
-    const { db, cfg } = openTree(baseDir);
-    const result = peek(db, cfg, 'hub.md');
-    const forwardNearby = result.nearby.filter((n) => n.direction === 'forward');
-    assert.equal(forwardNearby.length, 10);
   });
 });
 
@@ -416,7 +347,9 @@ describe('feature visibility', () => {
     const { db, cfg } = openTree(base, { rank: false });
     const result = mapTree(db, cfg);
     assert.deepEqual(result.features.on, ['links', 'sections']);
-    assert.deepEqual(result.features.off, ['rank', 'embed']);
+    // embed is not one of the features-block toggles, so it is absent from both lists here;
+    // `status` reports it on its own line, with the reason when it is off.
+    assert.deepEqual(result.features.off, ['rank']);
     db.close();
   });
 
@@ -475,7 +408,7 @@ describe('search default scope (preset where)', () => {
     const base = tmpTree();
     writeNote(base, 'note.md', { frontmatter: { type: 'knowledge' }, body: 'alpha subject' });
     writeNote(base, 'raw.md', { frontmatter: { type: 'raw' }, body: 'alpha subject' });
-    const cfg = { presets: { default: { include: ['**/*.md'], semantic: false, where: "f.type != 'raw'" } }, queries: {}, baseDir: base, configPath: null };
+    const cfg = { presets: { default: { include: ['**/*.md'], where: "f.type != 'raw'" } }, queries: {}, baseDir: base, configPath: null };
     const { db } = openConfig(cfg);
 
     const fenced = await search(db, cfg, 'alpha');
@@ -504,7 +437,7 @@ describe('table output', () => {
     writeFileSync(join(base, 'sense.config.json'), JSON.stringify({ version: 2, scan: { include: ['**/*.md'] }, queries: {} }));
     writeNote(base, 'a.md', { frontmatter: { summary: 'x'.repeat(400) }, body: 'body' });
     const run = (format: string) =>
-      spawnSync(process.execPath, ['-e', `process.stdout.columns=100; require(${JSON.stringify(join(packageRoot, 'dist', 'cjs', 'cli.js'))})(['query','SELECT f.path, f.summary FROM frontmatter f','--format','${format}'],'sense')`], {
+      spawnSync(process.execPath, ['-e', `process.stdout.columns=100; require(${JSON.stringify(join(packageRoot, 'dist', 'cjs', 'cli.js'))})(['sql','SELECT f.path, f.summary FROM frontmatter f','--format','${format}'],'sense')`], {
         cwd: base,
         encoding: 'utf8',
       });
@@ -541,7 +474,7 @@ describe('search error coverage beyond ad-hoc search', () => {
   it('a saved query using MATCH gets the same explained error as search', () => {
     const base = tmpTree();
     // "probe", not "search" -- "search" is a reserved verb name, so a saved query can never be named it.
-    writeFileSync(join(base, 'sense.config.json'), JSON.stringify({ version: 2, scan: { include: ['**/*.md'] }, queries: { probe: matchSql } }));
+    writeFileSync(join(base, 'sense.config.json'), JSON.stringify({ version: 4, presets: { default: { include: ['**/*.md'] } }, queries: { probe: { sql: matchSql } } }));
     writeNote(base, 'a.md', { body: 'about player-coach roles' });
     const result = runCli(['probe', 'player-coach'], { cwd: base });
     assert.equal(result.status, 1);
@@ -549,11 +482,11 @@ describe('search error coverage beyond ad-hoc search', () => {
     assert.match(result.stderr, /double-quoting/);
   });
 
-  it('ad-hoc sense query with MATCH gets it too', () => {
+  it('ad-hoc sense sql with MATCH gets it too', () => {
     const base = tmpTree();
     writeFileSync(join(base, 'sense.config.json'), JSON.stringify({ version: 2, scan: { include: ['**/*.md'] }, queries: {} }));
     writeNote(base, 'a.md', { body: 'text' });
-    const result = runCli(['query', matchSql, 'player-coach'], { cwd: base });
+    const result = runCli(['sql', matchSql, 'player-coach'], { cwd: base });
     assert.equal(result.status, 1);
     assert.match(result.stderr, /punctuation in `player-coach`/);
   });
@@ -562,7 +495,7 @@ describe('search error coverage beyond ad-hoc search', () => {
     const base = tmpTree();
     writeFileSync(join(base, 'sense.config.json'), JSON.stringify({ version: 2, scan: { include: ['**/*.md'] }, queries: {} }));
     writeNote(base, 'a.md', { body: 'text' });
-    const result = runCli(['query', 'SELECT nosuchcol FROM frontmatter'], { cwd: base });
+    const result = runCli(['sql', 'SELECT nosuchcol FROM frontmatter'], { cwd: base });
     assert.equal(result.status, 1);
     assert.match(result.stderr, /no such column: nosuchcol/);
     assert.doesNotMatch(result.stderr, /punctuation|double-quoting/);
@@ -658,6 +591,9 @@ describe('mapTree many fields', () => {
   });
 });
 
+// peek's `nearby` (a 2-hop ring) was removed: peek's contract is token cost, and it was
+// 21% of the output for a question `search`'s ranked link expansion and the documented
+// WITH RECURSIVE recipe already answer.
 describe('peek stays bounded (sections)', () => {
   function headingsTree(n: number): string {
     const baseDir = tmpTree();
@@ -697,10 +633,18 @@ describe('peek stays bounded (sections)', () => {
   });
 });
 
-describe('find is now search', () => {
-  it('sense find exits 2 with a pointer, not "unknown query"', () => {
+describe('renamed verbs keep one release of a pointer', () => {
+  it('sense query exits 2 pointing at sql, not the unknown-entry error', () => {
+    const base = makeTree();
+    writeFileSync(join(base, 'sense.config.json'), JSON.stringify({ version: 4, presets: { default: { include: ['**/*.md'] } }, queries: {} }));
+    const result = runCli(['query', 'SELECT 1'], { cwd: base });
+    assert.equal(result.status, 2);
+    assert.match(result.stderr, /query is now sql/);
+  });
+
+  it('sense find exits 2 with a pointer, not the unknown-entry error', () => {
     const base = tmpTree();
-    writeFileSync(join(base, 'sense.config.json'), JSON.stringify({ version: 3, presets: { default: { include: ['**/*.md'], semantic: false } }, queries: {} }));
+    writeFileSync(join(base, 'sense.config.json'), JSON.stringify({ version: 4, presets: { default: { include: ['**/*.md'] } }, queries: {} }));
     writeNote(base, 'a.md', { body: 'alpha' });
     const result = runCli(['find', 'alpha'], { cwd: base });
     assert.equal(result.status, 2);
@@ -710,7 +654,7 @@ describe('find is now search', () => {
 });
 
 describe('--preset scope', () => {
-  const twoPresets = { default: { include: ['**/*.md'], semantic: false }, wiki: { include: ['wiki/**/*.md'], semantic: false }, raw: { include: ['raw/**/*.md'], semantic: false } };
+  const twoPresets = { default: { include: ['**/*.md'] }, wiki: { include: ['wiki/**/*.md'] }, raw: { include: ['raw/**/*.md'] } };
 
   function twoPresetTree(): string {
     const baseDir = tmpTree();
@@ -769,7 +713,7 @@ describe('--preset scope', () => {
 
   it('include and exclude override independently: an ad hoc --include no longer drops the preset exclude', async () => {
     const baseDir = twoPresetTree();
-    const presetWithExclude = { default: { include: ['**/*.md'], exclude: ['raw/**'], semantic: false } };
+    const presetWithExclude = { default: { include: ['**/*.md'], exclude: ['raw/**'] } };
     const { db, cfg } = openTree(baseDir, undefined, presetWithExclude);
     const rows = await search(db, cfg, 'alpha', { include: ['**/*.md'] });
     assert.deepEqual(
@@ -781,7 +725,7 @@ describe('--preset scope', () => {
 
   it('--preset at the CLI filters the table', () => {
     const base = twoPresetTree();
-    writeFileSync(join(base, 'sense.config.json'), JSON.stringify({ version: 3, presets: twoPresets, queries: {} }));
+    writeFileSync(join(base, 'sense.config.json'), JSON.stringify({ version: 4, presets: twoPresets, queries: {} }));
     const result = runCli(['search', 'alpha', '--preset', 'raw', '--format', 'json'], { cwd: base });
     assert.equal(result.status, 0, result.stderr);
     const rows = JSON.parse(result.stdout) as Array<{ path: string }>;
@@ -793,7 +737,7 @@ describe('--preset scope', () => {
 
   it('--include at the CLI is repeatable', () => {
     const base = twoPresetTree();
-    writeFileSync(join(base, 'sense.config.json'), JSON.stringify({ version: 3, presets: twoPresets, queries: {} }));
+    writeFileSync(join(base, 'sense.config.json'), JSON.stringify({ version: 4, presets: twoPresets, queries: {} }));
     const result = runCli(['search', 'alpha', '--include', 'wiki/**/*.md', '--include', 'raw/**/*.md', '--format', 'json'], { cwd: base });
     assert.equal(result.status, 0, result.stderr);
     const rows = JSON.parse(result.stdout) as Array<{ path: string }>;
@@ -802,7 +746,7 @@ describe('--preset scope', () => {
 
   it('--exclude at the CLI narrows an --include scope', () => {
     const base = twoPresetTree();
-    writeFileSync(join(base, 'sense.config.json'), JSON.stringify({ version: 3, presets: twoPresets, queries: {} }));
+    writeFileSync(join(base, 'sense.config.json'), JSON.stringify({ version: 4, presets: twoPresets, queries: {} }));
     const result = runCli(['search', 'alpha', '--include', '**/*.md', '--exclude', 'raw/**', '--format', 'json'], { cwd: base });
     assert.equal(result.status, 0, result.stderr);
     const rows = JSON.parse(result.stdout) as Array<{ path: string }>;
@@ -814,7 +758,7 @@ describe('--preset scope', () => {
 
   it('an unknown --preset at the CLI exits 1 naming the declared presets', () => {
     const base = twoPresetTree();
-    writeFileSync(join(base, 'sense.config.json'), JSON.stringify({ version: 3, presets: twoPresets, queries: {} }));
+    writeFileSync(join(base, 'sense.config.json'), JSON.stringify({ version: 4, presets: twoPresets, queries: {} }));
     const result = runCli(['search', 'alpha', '--preset', 'nope'], { cwd: base });
     assert.equal(result.status, 1);
     assert.match(result.stderr, /unknown preset "nope"/);
@@ -829,7 +773,7 @@ describe('scopedPaths', () => {
     write(baseDir, 'wiki/page.md', 'alpha subject in the wiki', { status: 'active' });
     write(baseDir, 'wiki/old.md', 'alpha subject too', { status: 'archived' });
     write(baseDir, 'raw/source.md', 'alpha subject in raw', { status: 'active' });
-    const { db, cfg } = openTree(baseDir, undefined, { default: { include: ['**/*.md'], semantic: false } });
+    const { db, cfg } = openTree(baseDir, undefined, { default: { include: ['**/*.md'] } });
 
     assert.deepEqual([...scopedPaths(db, cfg, {})].sort(), ['raw/source.md', 'wiki/old.md', 'wiki/page.md']);
     assert.deepEqual([...scopedPaths(db, cfg, { include: ['wiki/**/*.md'] })].sort(), ['wiki/old.md', 'wiki/page.md']);
@@ -846,17 +790,17 @@ describe('search resolution precedence', () => {
     for (let i = 0; i < 15; i++) write(baseDir, `n${String(i).padStart(2, '0')}.md`, 'alpha content shared by every note');
 
     // built-in: no preset defines k, no saved field, no flag -> 10
-    const builtinDb = openTree(baseDir, undefined, { default: { include: ['**/*.md'], semantic: false } });
+    const builtinDb = openTree(baseDir, undefined, { default: { include: ['**/*.md'] } });
     assert.equal((await search(builtinDb.db, builtinDb.cfg, 'alpha')).length, 10);
     builtinDb.db.close();
 
     // default preset's own k wins over the built-in
-    const presetDb = openTree(baseDir, undefined, { default: { include: ['**/*.md'], semantic: false, k: 3 } });
+    const presetDb = openTree(baseDir, undefined, { default: { include: ['**/*.md'], k: 3 } });
     assert.equal((await search(presetDb.db, presetDb.cfg, 'alpha')).length, 3);
     presetDb.db.close();
 
     // a named preset's k wins over the default preset's
-    const namedDb = openTree(baseDir, undefined, { default: { include: ['**/*.md'], semantic: false, k: 3 }, big: { include: ['**/*.md'], semantic: false, k: 7 } });
+    const namedDb = openTree(baseDir, undefined, { default: { include: ['**/*.md'], k: 3 }, big: { include: ['**/*.md'], k: 7 } });
     assert.equal((await search(namedDb.db, namedDb.cfg, 'alpha', { preset: 'big' })).length, 7);
     // a caller override (standing in for a saved field, or a CLI flag) wins outright
     assert.equal((await search(namedDb.db, namedDb.cfg, 'alpha', { preset: 'big', k: 2 })).length, 2);
@@ -866,7 +810,7 @@ describe('search resolution precedence', () => {
   it('saved search k overrides its preset, and --k overrides the saved search', () => {
     const baseDir = tmpTree();
     for (let i = 0; i < 15; i++) write(baseDir, `n${String(i).padStart(2, '0')}.md`, 'alpha content shared by every note');
-    writeFileSync(join(baseDir, 'sense.config.json'), JSON.stringify({ version: 3, presets: { default: { include: ['**/*.md'], semantic: false, k: 3 } }, queries: { hot: { search: 'alpha', k: 6 } } }));
+    writeFileSync(join(baseDir, 'sense.config.json'), JSON.stringify({ version: 4, presets: { default: { include: ['**/*.md'], k: 3 } }, queries: { hot: { search: 'alpha', k: 6 } } }));
 
     const saved = runCli(['hot', '--format', 'json'], { cwd: baseDir });
     assert.equal(saved.status, 0, saved.stderr);
@@ -878,23 +822,15 @@ describe('search resolution precedence', () => {
   });
 });
 
-describe('--lexical', () => {
-  it('is a no-op on a tree with semantic off (nothing to opt out of)', async () => {
-    const { db, cfg } = openTree(makeTree());
-    const bare = await search(db, cfg, 'price');
-    const lexical = await search(db, cfg, 'price', { semantic: false });
-    assert.deepEqual(bare, lexical);
-    db.close();
-  });
-
-  it('--lexical at the CLI is accepted and does not error on a semantic-off tree', () => {
+// --lexical was removed with the per-preset `semantic` switch: search is search, and a tree
+// without an `embed` block simply has fewer signals.
+describe('removed flags', () => {
+  it('--lexical is no longer a flag: it exits 2 with the usage line rather than being ignored', () => {
     const base = makeTree();
-    writeFileSync(join(base, 'sense.config.json'), JSON.stringify({ version: 3, presets: { default: { include: ['**/*.md'], semantic: false } }, queries: {} }));
-    const bare = runCli(['search', 'price', '--format', 'json'], { cwd: base });
-    const lexical = runCli(['search', 'price', '--lexical', '--format', 'json'], { cwd: base });
-    assert.equal(bare.status, 0, bare.stderr);
-    assert.equal(lexical.status, 0, lexical.stderr);
-    assert.equal(bare.stdout, lexical.stdout);
+    writeFileSync(join(base, 'sense.config.json'), JSON.stringify({ version: 4, presets: { default: { include: ['**/*.md'] } }, queries: {} }));
+    const result = runCli(['search', 'price', '--lexical', '--format', 'json'], { cwd: base });
+    assert.equal(result.status, 2, result.stderr);
+    assert.match(result.stderr, /usage: /);
   });
 });
 
@@ -908,7 +844,7 @@ describe('per-command flag parsing', () => {
 
   it('a foreign flag exits 2: status does not accept --force', () => {
     const base = makeTree();
-    writeFileSync(join(base, 'sense.config.json'), JSON.stringify({ version: 3, presets: { default: { include: ['**/*.md'], semantic: false } }, queries: {} }));
+    writeFileSync(join(base, 'sense.config.json'), JSON.stringify({ version: 4, presets: { default: { include: ['**/*.md'] } }, queries: {} }));
     const result = runCli(['status', '--force'], { cwd: base });
     assert.equal(result.status, 2);
     assert.match(result.stderr, /usage: sense status/);
@@ -916,7 +852,7 @@ describe('per-command flag parsing', () => {
 
   it('sense map --list rejects --list and exits 2 (map runs its own parser, not the top-level one)', () => {
     const base = makeTree();
-    writeFileSync(join(base, 'sense.config.json'), JSON.stringify({ version: 3, presets: { default: { include: ['**/*.md'], semantic: false } }, queries: {} }));
+    writeFileSync(join(base, 'sense.config.json'), JSON.stringify({ version: 4, presets: { default: { include: ['**/*.md'] } }, queries: {} }));
     const result = runCli(['map', '--list'], { cwd: base });
     assert.equal(result.status, 2);
     assert.match(result.stderr, /usage: sense map/);
@@ -924,7 +860,7 @@ describe('per-command flag parsing', () => {
 
   it('--version and --list are top-level only: sense status --version errors', () => {
     const base = makeTree();
-    writeFileSync(join(base, 'sense.config.json'), JSON.stringify({ version: 3, presets: { default: { include: ['**/*.md'], semantic: false } }, queries: {} }));
+    writeFileSync(join(base, 'sense.config.json'), JSON.stringify({ version: 4, presets: { default: { include: ['**/*.md'] } }, queries: {} }));
     const result = runCli(['status', '--version'], { cwd: base });
     assert.equal(result.status, 2);
   });
@@ -937,14 +873,14 @@ describe('per-command flag parsing', () => {
 
   it('flags before the command word no longer parse', () => {
     const base = makeTree();
-    writeFileSync(join(base, 'sense.config.json'), JSON.stringify({ version: 3, presets: { default: { include: ['**/*.md'], semantic: false } }, queries: {} }));
+    writeFileSync(join(base, 'sense.config.json'), JSON.stringify({ version: 4, presets: { default: { include: ['**/*.md'] } }, queries: {} }));
     const result = runCli(['--format', 'json', 'status'], { cwd: base });
     assert.equal(result.status, 2);
   });
 
   it('top-level --list still works', () => {
     const base = makeTree();
-    writeFileSync(join(base, 'sense.config.json'), JSON.stringify({ version: 3, presets: { default: { include: ['**/*.md'], semantic: false } }, queries: { hot: { search: 'price' } } }));
+    writeFileSync(join(base, 'sense.config.json'), JSON.stringify({ version: 4, presets: { default: { include: ['**/*.md'] } }, queries: { hot: { search: 'price' } } }));
     const result = runCli(['--list'], { cwd: base });
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stdout, /hot\s+\(search\)/);
@@ -963,7 +899,7 @@ describe('per-command flag parsing', () => {
 describe('flag value shapes', () => {
   it('an omitted --k is absent, not an empty string that reads as 0', () => {
     const base = makeTree();
-    writeFileSync(join(base, 'sense.config.json'), JSON.stringify({ version: 3, presets: { default: { include: ['**/*.md'], semantic: false } }, queries: {} }));
+    writeFileSync(join(base, 'sense.config.json'), JSON.stringify({ version: 4, presets: { default: { include: ['**/*.md'] } }, queries: {} }));
     const result = runCli(['search', 'price', '--format', 'json'], { cwd: base });
     assert.equal(result.status, 0, result.stderr);
     assert.ok((JSON.parse(result.stdout) as Row[]).length > 0);
@@ -971,7 +907,7 @@ describe('flag value shapes', () => {
 
   it("an omitted --where leaves a saved search's own where in force", () => {
     const base = makeTree();
-    writeFileSync(join(base, 'sense.config.json'), JSON.stringify({ version: 3, presets: { default: { include: ['**/*.md'], semantic: false } }, queries: { hot: { search: 'price', where: "status = 'active'" } } }));
+    writeFileSync(join(base, 'sense.config.json'), JSON.stringify({ version: 4, presets: { default: { include: ['**/*.md'] } }, queries: { hot: { search: 'price', where: "status = 'active'" } } }));
     const result = runCli(['hot', '--format', 'json'], { cwd: base });
     assert.equal(result.status, 0, result.stderr);
     const paths = (JSON.parse(result.stdout) as Row[]).map((r) => r.path);
@@ -980,7 +916,7 @@ describe('flag value shapes', () => {
 
   it('a single --include still filters as a list', () => {
     const base = makeTree();
-    writeFileSync(join(base, 'sense.config.json'), JSON.stringify({ version: 3, presets: { default: { include: ['**/*.md'], semantic: false } }, queries: {} }));
+    writeFileSync(join(base, 'sense.config.json'), JSON.stringify({ version: 4, presets: { default: { include: ['**/*.md'] } }, queries: {} }));
     const result = runCli(['search', 'price', '--include', 'floor.md', '--format', 'json'], { cwd: base });
     assert.equal(result.status, 0, result.stderr);
     const paths = (JSON.parse(result.stdout) as Row[]).map((r) => r.path);
@@ -989,7 +925,7 @@ describe('flag value shapes', () => {
 
   it('--k=-1 is a usage error, and --k -1 is rejected rather than silently defaulted', () => {
     const base = makeTree();
-    writeFileSync(join(base, 'sense.config.json'), JSON.stringify({ version: 3, presets: { default: { include: ['**/*.md'], semantic: false } }, queries: {} }));
+    writeFileSync(join(base, 'sense.config.json'), JSON.stringify({ version: 4, presets: { default: { include: ['**/*.md'] } }, queries: {} }));
     const joined = runCli(['search', 'price', '--k=-1'], { cwd: base });
     assert.equal(joined.status, 2);
     assert.match(joined.stderr, /--k expects a positive integer/);
@@ -1005,10 +941,73 @@ describe('flag value shapes', () => {
 describe('--help never runs the command', () => {
   it('rebuild --help prints usage and builds no cache', () => {
     const base = makeTree();
-    writeFileSync(join(base, 'sense.config.json'), JSON.stringify({ version: 3, presets: { default: { include: ['**/*.md'], semantic: false } }, queries: {} }));
+    writeFileSync(join(base, 'sense.config.json'), JSON.stringify({ version: 4, presets: { default: { include: ['**/*.md'] } }, queries: {} }));
     const result = runCli(['rebuild', '--help'], { cwd: base });
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stdout, /usage: sense rebuild/);
     assert.equal(existsSync(join(base, '.sense', 'cache.db')), false, 'rebuild --help built a cache');
+  });
+});
+
+// check exists to prove a config parses, so it must not be the command that embeds a whole
+// tree (or bills an api endpoint) as a side effect.
+describe('check never runs the vector half', () => {
+  it('a saved search probes without touching the model, even when one is configured', () => {
+    const base = tmpTree();
+    writeNote(base, 'a.md', { body: 'alpha pricing' });
+    writeFileSync(
+      join(base, 'sense.config.json'),
+      JSON.stringify({
+        version: 4,
+        presets: { default: { include: ['**/*.md'] } },
+        // An api endpoint nothing is listening on: reaching it would fail the probe loudly.
+        embed: { model: 'unreachable/model', type: 'api', url: 'http://127.0.0.1:1/v1' },
+        queries: { hot: { search: 'pricing' } },
+      })
+    );
+    const result = runCli(['check'], { cwd: base });
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    assert.doesNotMatch(result.stdout, /FAILED/);
+  });
+});
+
+// --include and --exclude override their own side only, so --no-exclude is the only flag that
+// widens. It widens the query scope, not the index -- hence the `all` preset here.
+describe('--no-exclude', () => {
+  const scopedTree = () => {
+    const base = tmpTree();
+    writeNote(base, 'notes/keep.md', { body: 'alpha' });
+    writeNote(base, 'archive/old.md', { body: 'alpha' });
+    writeFileSync(join(base, 'sense.config.json'), JSON.stringify({ version: 4, presets: { default: { include: ['**/*.md'], exclude: ['archive/**'] }, all: { include: ['**/*.md'] } }, queries: {} }));
+    return base;
+  };
+
+  it('the preset excludes archive by default', () => {
+    const rows = JSON.parse(runCli(['search', 'alpha', '--format', 'json'], { cwd: scopedTree() }).stdout) as Array<{ path: string }>;
+    assert.deepEqual(
+      rows.map((r) => r.path),
+      ['notes/keep.md']
+    );
+  });
+
+  it('--include alone still respects it, so widening needs its own flag', () => {
+    const rows = JSON.parse(runCli(['search', 'alpha', '--include', '**/*.md', '--format', 'json'], { cwd: scopedTree() }).stdout) as Array<{ path: string }>;
+    assert.deepEqual(
+      rows.map((r) => r.path),
+      ['notes/keep.md']
+    );
+  });
+
+  it('--no-exclude drops it for one command', () => {
+    const rows = JSON.parse(runCli(['search', 'alpha', '--no-exclude', '--format', 'json'], { cwd: scopedTree() }).stdout) as Array<{ path: string }>;
+    assert.deepEqual(rows.map((r) => r.path).sort(), ['archive/old.md', 'notes/keep.md']);
+  });
+
+  it('an explicit --exclude alongside --no-exclude is the scope: it says what to leave out', () => {
+    const rows = JSON.parse(runCli(['search', 'alpha', '--no-exclude', '--exclude', 'notes/**', '--format', 'json'], { cwd: scopedTree() }).stdout) as Array<{ path: string }>;
+    assert.deepEqual(
+      rows.map((r) => r.path),
+      ['archive/old.md']
+    );
   });
 });

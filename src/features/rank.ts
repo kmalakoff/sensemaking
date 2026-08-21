@@ -12,12 +12,8 @@ export const rank: Feature = {
     if (!columns.some((c) => c.name === '_rank')) db.exec('ALTER TABLE frontmatter ADD COLUMN "_rank" REAL');
   },
   afterReconcile(db, delta) {
-    // links.afterReconcile runs first (registry order) and sets delta.linksChanged;
-    // `undefined` (links off, or no opinion) recomputes, same as always -- only an
-    // explicit `false` allows a skip. Rank also depends on the node set (every note is a
-    // PageRank node, edges or not), so any add or vanish recomputes even with edges
-    // untouched -- otherwise a new linkless note keeps _rank NULL and every other rank
-    // stays normalized over the old count.
+    // Only an explicit linksChanged:false skips. Rank also depends on the node set, so any
+    // add or vanish recomputes -- otherwise a new linkless note keeps _rank NULL.
     if (delta.linksChanged === false && delta.added.length === 0 && delta.vanished.length === 0) return;
     const nodes = (db.prepare('SELECT "path" FROM frontmatter').all() as Array<{ path: string }>).map((r) => r.path);
     const ranks = pagerank(nodes, linkEdges(db));
