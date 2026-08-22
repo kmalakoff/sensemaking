@@ -100,13 +100,28 @@ export interface ParsedDoc {
   extracted: Record<string, unknown>;
 }
 
+// SQLite's datetime() rejects a colonless offset (`-0800`) and a space separator, which ISO 8601
+// allows and producers emit. A rejected date is invisible, not excluded: every comparison is NULL.
+const ISO_DATETIME = /^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?)(Z|[+-]\d{2}:?\d{2})?$/;
+
+// Punctuation only, never a timezone conversion: the offset survives, so substr(d,1,10) is still
+// the local date. A shape that is not a real instant is left as written, and stays auditable.
+export function normalizeDate(value: string): string {
+  const m = ISO_DATETIME.exec(value);
+  if (m === null) return value;
+  const [, date, time, zone] = m;
+  const offset = zone !== undefined && zone !== 'Z' && !zone.includes(':') ? `${zone.slice(0, 3)}:${zone.slice(3)}` : (zone ?? '');
+  const normalized = `${date}T${time}${offset}`;
+  return Number.isNaN(Date.parse(normalized)) ? value : normalized;
+}
+
 // Storage class follows the YAML scalar. Booleans store as 1/0, so `WHERE flag = 1` matches
 // and `WHERE flag = 'true'` cannot; `map` prints observed types so the mismatch is visible.
 function mapValue(value: unknown): string | number | bigint | null {
   if (value === null || value === undefined) return null;
   if (typeof value === 'boolean') return BigInt(value ? 1 : 0);
   if (typeof value === 'number') return Number.isSafeInteger(value) ? BigInt(value) : value;
-  if (typeof value === 'string') return value;
+  if (typeof value === 'string') return normalizeDate(value);
   return JSON.stringify(value);
 }
 

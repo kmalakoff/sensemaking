@@ -22,7 +22,7 @@ const CORE_FRONTMATTER_COLUMNS = new Set(['path', '_mtime', '_size', '_parse_err
 export const DB_FILENAME = 'cache.db';
 // Cache shape version, independent of the config's own `version`. Bumping it rebuilds
 // existing trees on first query.
-export const SCHEMA_VERSION = '9';
+export const SCHEMA_VERSION = '10';
 
 // SQLite's compile-time SQLITE_MAX_COLUMN, default 2000 (https://www.sqlite.org/limits.html).
 const MAX_FRONTMATTER_COLUMNS = 2000;
