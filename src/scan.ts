@@ -102,7 +102,15 @@ export interface ParsedDoc {
 
 // SQLite's datetime() rejects a colonless offset (`-0800`) and a space separator, which ISO 8601
 // allows and producers emit. A rejected date is invisible, not excluded: every comparison is NULL.
-const ISO_DATETIME = /^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?)(Z|[+-]\d{2}:?\d{2})?$/;
+const ISO_DATETIME = /^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?)(Z|[+-]\d{2}(?::?\d{2})?)?$/;
+
+// A value opening `YYYY-MM-DDT` was meant to be a datetime; prose never is. Reported when it
+// cannot be normalized, so a typo surfaces on the next crawl instead of at some later audit.
+const MEANT_AS_DATETIME = /^\d{4}-\d{2}-\d{2}[T ]\d/;
+
+export function looksLikeDatetime(value: string): boolean {
+  return MEANT_AS_DATETIME.test(value);
+}
 
 // Punctuation only, never a timezone conversion: the offset survives, so substr(d,1,10) is still
 // the local date. A shape that is not a real instant is left as written, and stays auditable.
@@ -110,7 +118,8 @@ export function normalizeDate(value: string): string {
   const m = ISO_DATETIME.exec(value);
   if (m === null) return value;
   const [, date, time, zone] = m;
-  const offset = zone !== undefined && zone !== 'Z' && !zone.includes(':') ? `${zone.slice(0, 3)}:${zone.slice(3)}` : (zone ?? '');
+  const digits = zone === undefined || zone === 'Z' ? '' : zone.replace(':', '');
+  const offset = digits === '' ? (zone ?? '') : digits.length === 3 ? `${digits}:00` : `${digits.slice(0, 3)}:${digits.slice(3)}`;
   const normalized = `${date}T${time}${offset}`;
   return Number.isNaN(Date.parse(normalized)) ? value : normalized;
 }
@@ -212,7 +221,11 @@ export function parseFile(file: FileStat, extractors: Feature[] = []): { doc: Pa
       warnings.push(`warning: ${file.relPath} has a frontmatter key named "${key}", which is reserved; ignoring it`);
       continue;
     }
-    mapped[key] = mapValue(data[key]);
+    const value = mapValue(data[key]);
+    if (typeof value === 'string' && looksLikeDatetime(value) && Number.isNaN(Date.parse(value))) {
+      warnings.push(`warning: ${file.relPath}: ${key} is not a valid date (${value}), so it is invisible to every date comparison`);
+    }
+    mapped[key] = value;
   }
 
   // title/summary are plain YAML strings -- whitespace-collapse only;

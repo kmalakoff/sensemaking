@@ -31,6 +31,12 @@ const NORMALIZED: Array<{ name: string; written: string; instant: string; localD
     localDate: '2026-01-28',
   },
   {
+    name: 'hour-only offset',
+    written: '2026-01-28T10:11:49.617-08',
+    instant: '2026-01-28 18:11:49',
+    localDate: '2026-01-28',
+  },
+  {
     name: 'space instead of T, no offset',
     written: '2026-01-28 10:11:49',
     instant: '2026-01-28 10:11:49',
@@ -42,7 +48,9 @@ const NORMALIZED: Array<{ name: string; written: string; instant: string; localD
 const UNTOUCHED = ['2026-01-28T10:11:49.617-08:00', '2026-01-28T10:11:49.617Z', '2026-01-28T10:11:49.617', '2026-01-28', 'not a date at all', 'v1.2-0800'];
 
 // Not a real instant: nothing to normalize to, so they stay as written and stay auditable.
-const LEFT_ALONE = ['2026-07-03T06:30:5.512-07:00', '2026-07-18T08:4:00.287-07:00', '2026-13-01T10:11:49-0800', '2026-01-28T25:00:00-0800'];
+// The last three are ISO-legal but nothing writing markdown frontmatter emits them, so they are
+// deliberately out of scope rather than overlooked.
+const LEFT_ALONE = ['2026-07-03T06:30:5.512-07:00', '2026-07-18T08:4:00.287-07:00', '2026-13-01T10:11:49-0800', '2026-01-28T25:00:00-0800', '2026-01-28t10:11:49.617-08:00', '2026-01-28T10:11:49,617-0800', '20260128T101149Z'];
 
 function storedValue(baseDir: string, path: string): string {
   const { db } = openTree(baseDir);
@@ -101,6 +109,25 @@ describe('date normalization: leaves everything else as written', () => {
       assert.equal(datetimeOf(baseDir, 'a.md'), null, 'still unparseable, so the audit query still finds it');
     });
   }
+
+  it('warns with the path and the field when a value starts like a date but is not one', () => {
+    const baseDir = tmpTree();
+    writeNote(baseDir, 'a.md', { frontmatter: 'dateModified: "2026-07-03T06:30:5.512-07:00"' });
+    const { db, warnings } = openTree(baseDir);
+    db.close();
+    assert.ok(
+      warnings.some((w) => w.includes('a.md') && w.includes('dateModified') && w.includes('2026-07-03T06:30:5.512-07:00')),
+      `expected a warning naming the file, the field and the value, got ${JSON.stringify(warnings)}`
+    );
+  });
+
+  it('does not warn about prose, or about a date it could normalize', () => {
+    const baseDir = tmpTree();
+    writeNote(baseDir, 'a.md', { frontmatter: 'summary: "a note about 2026 budgets"\nd: 2026-01-28T10:11:49.617-0800\ntitle: "not a date at all"' });
+    const { db, warnings } = openTree(baseDir);
+    db.close();
+    assert.deepEqual(warnings, []);
+  });
 
   it('the audit query finds exactly what could not be normalized', () => {
     const baseDir = tmpTree();
