@@ -46,7 +46,8 @@ What the shape buys: bare search never ranks raw noise above compiled pages; the
   "queries": {
     "project":    { "sql": "SELECT path, kind, created, title FROM frontmatter WHERE project = ? ORDER BY created DESC" },
     "steers":     { "sql": "SELECT path, created, title FROM frontmatter WHERE kind = 'steer' AND project = ? ORDER BY created" },
-    "retirement": { "sql": "SELECT path, project, created FROM frontmatter WHERE datetime(created) < datetime('now','localtime','-90 day') AND path NOT IN (SELECT dst FROM links WHERE dst IS NOT NULL)" },
+    "retirement": { "sql": "SELECT path, project, created FROM frontmatter WHERE datetime(created) < datetime('now','-90 day') AND path NOT IN (SELECT dst FROM links WHERE dst IS NOT NULL)" },
+    "today":      { "sql": "SELECT path, title FROM frontmatter WHERE date(created) = date('now','localtime') ORDER BY created" },
     "unfiled":    { "sql": "SELECT path FROM frontmatter WHERE project IS NULL" }
   }
 }
@@ -54,6 +55,8 @@ What the shape buys: bare search never ranks raw noise above compiled pages; the
 
 ```
 sense project acme-app                          # one project's notes, newest first
+sense today                                     # `now` is UTC: a query whose boundary is a day needs 'localtime'
+                                                # `retirement` above is a 90-day window, so it does not
 sense search "prefers terse commit messages" --k 5
   → memory/acme-app/2026-08-02-commits.md   via: match
   → memory/acme-app/2026-06-11-style.md     via: vector  similarity: 0.71   # near-duplicate → merge candidate
