@@ -71,6 +71,9 @@ export interface Config {
   features?: { links?: boolean; sections?: boolean; rank?: boolean };
   // Names the embedding model. Present means every indexed file gets vectors; absent means none do.
   embed?: EmbedConfig;
+  // Settings for the `content` FTS5 table. `tokenize` decides which languages the tree can be
+  // word-searched in at all; changing it rebuilds the index.
+  content?: { tokenize?: string };
   queries: Record<string, SavedQuery>;
 }
 
@@ -134,6 +137,14 @@ export function embedConfig(cfg: Config): { model: string; type: 'static' | 'api
   return { model: e.model as string, type: e.type ?? 'static', url: e.url, key: e.key };
 }
 
+// The configured FTS5 tokenizer, or undefined for the built-in default. Undefined rather than
+// the default string so featureSignature can leave the segment off entirely for trees that
+// never set it, which is what keeps existing indexes from rebuilding on upgrade.
+export function contentTokenize(cfg: Config): string | undefined {
+  const tokenize = cfg.content?.tokenize;
+  return tokenize === undefined || tokenize.trim() === '' ? undefined : tokenize.trim();
+}
+
 // Cache key over everything indexing derives from, so any change to those inputs rebuilds.
 export function featureSignature(cfg: Config): string {
   const globalPart = enabledFeatures(cfg)
@@ -151,7 +162,11 @@ export function featureSignature(cfg: Config): string {
       return `preset:${name}:${include}:${exclude}:${p.semantic === false ? 'off' : 'on'}`;
     })
     .join('|');
-  return [`features:${globalPart}`, embedPart, presetsPart].join('|');
+  const tokenize = contentTokenize(cfg);
+  const parts = [`features:${globalPart}`, embedPart];
+  if (tokenize !== undefined) parts.push(`tokenize:${tokenize}`);
+  parts.push(presetsPart);
+  return parts.join('|');
 }
 
 // Looks up a declared preset by name, defaulting to `default`. Throws naming every declared
@@ -338,10 +353,11 @@ export function findConfigPath(startDir: string): string | null {
 
 // Shape check for hand-edited files, so a typo names itself instead of surfacing as a
 // TypeError. Unknown top-level keys warn (forward compat); unknown keys inside a block error.
-const KNOWN_KEYS = new Set(['$schema', 'version', 'presets', 'features', 'embed', 'queries']);
+const KNOWN_KEYS = new Set(['$schema', 'version', 'presets', 'features', 'embed', 'content', 'queries']);
 const KNOWN_PRESET_KEYS = new Set(['include', 'exclude', 'k', 'semantic', 'where']);
 const KNOWN_FEATURE_KEYS = new Set(['links', 'sections', 'rank']);
 const KNOWN_EMBED_KEYS = new Set(['model', 'type', 'url', 'key']);
+const KNOWN_CONTENT_KEYS = new Set(['tokenize']);
 const SAVED_SEARCH_KEYS = new Set(['search', 'preset', 'include', 'exclude', 'where', 'k']);
 
 function unknownConfigKeys(cfg: Record<string, unknown>): string[] {
@@ -359,6 +375,22 @@ function validateLegacyScan(parsed: unknown, configPath: string): void {
   const scan = cfg?.scan as { include?: unknown } | undefined;
   if (!cfg || !scan || !isNonEmptyStringArray(scan.include)) {
     throw new SenseError('CONFIG_INVALID', `${configPath}: scan.include must be a non-empty array of glob strings`);
+  }
+}
+
+// Only the shape is checked here. Whether the linked SQLite accepts the tokenizer is settled
+// by probing it in db.ts, so this never has to carry a table of which version added what.
+function validateContentBlock(value: unknown, configPath: string): void {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new SenseError('CONFIG_INVALID', `${configPath}: content must be an object of { tokenize?: string }`);
+  }
+  const block = value as Record<string, unknown>;
+  const unknown = Object.keys(block).filter((k) => !KNOWN_CONTENT_KEYS.has(k));
+  if (unknown.length > 0) {
+    throw new SenseError('CONFIG_INVALID', `${configPath}: content has unknown key(s) ${unknown.join(', ')}; content takes tokenize`);
+  }
+  if (block.tokenize !== undefined && (typeof block.tokenize !== 'string' || block.tokenize.trim() === '')) {
+    throw new SenseError('CONFIG_INVALID', `${configPath}: content.tokenize must be a non-empty string, e.g. "trigram" or "unicode61 tokenchars '-_'"`);
   }
 }
 
@@ -518,6 +550,9 @@ function validateConfig(parsed: unknown, configPath: string): Config {
   }
   if (cfg.embed !== undefined) {
     validateEmbedBlock(cfg.embed, configPath);
+  }
+  if (cfg.content !== undefined) {
+    validateContentBlock(cfg.content, configPath);
   }
 
   return cfg as unknown as Config;

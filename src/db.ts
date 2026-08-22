@@ -2,15 +2,16 @@
 // both FTS5 and row-returning INSERT ... RETURNING. Raise it only for a load-bearing capability.
 import { mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { DatabaseSync } from 'node:sqlite';
+import { DatabaseSync, type StatementSync } from 'node:sqlite';
 import type { Config, ResolvedConfig } from './config.ts';
-import { featureSignature, STATE_DIR } from './config.ts';
+import { contentTokenize, featureSignature, STATE_DIR } from './config.ts';
 import { SenseError } from './errors.ts';
 import { activeFeatures } from './features/index.ts';
 import type { ReconcileDelta } from './features/types.ts';
 import { progress } from './progress.ts';
 import type { ParsedDoc } from './scan.ts';
 import { listFiles, parseFile, RESERVED_COLUMNS } from './scan.ts';
+import { segmentField, segmentMatch } from './segment.ts';
 
 // Feature-owned columns (`_rank`) must stay out of the upsert: a reparse would null the last
 // computed value on every touch, not just the reconciles that recompute it.
@@ -22,7 +23,7 @@ const CORE_FRONTMATTER_COLUMNS = new Set(['path', '_mtime', '_size', '_parse_err
 export const DB_FILENAME = 'cache.db';
 // Cache shape version, independent of the config's own `version`. Bumping it rebuilds
 // existing trees on first query.
-export const SCHEMA_VERSION = '10';
+export const SCHEMA_VERSION = '12';
 
 // SQLite's compile-time SQLITE_MAX_COLUMN, default 2000 (https://www.sqlite.org/limits.html).
 const MAX_FRONTMATTER_COLUMNS = 2000;
@@ -60,6 +61,17 @@ function registerFunctions(db: DatabaseSync): void {
 
     return String(field).includes(needle) ? 1 : 0;
   });
+
+  // Raw `content MATCH '<unspaced text>'` cannot be rewritten behind the author's back, and
+  // matches nothing, so the same transform is available to hand-written SQL by name. Whether
+  // sidecars exist is read from meta, not config, lazily and cached: registerFunctions runs
+  // before meta exists on a fresh db, so the read cannot happen here at registration time.
+  let segmented: boolean | undefined;
+  db.function('segment', { deterministic: true, varargs: false }, (terms: unknown): string => {
+    const text = terms === null || terms === undefined ? '' : String(terms);
+    if (segmented === undefined) segmented = getMeta(db, 'segmented') === '1';
+    return segmented ? segmentMatch(text) : text;
+  });
 }
 
 function getColumns(db: DatabaseSync): Set<string> {
@@ -67,11 +79,51 @@ function getColumns(db: DatabaseSync): Set<string> {
   return new Set(rows.map((r) => r.name));
 }
 
+// Stemming is English-only, but the segmentation underneath it is what decides coverage:
+// unicode61 splits on spaces, so a language written without them (Chinese, Japanese, Thai)
+// indexes a whole run as one token and word search finds nothing. `content.tokenize` is how
+// such a tree picks trigram instead.
+const DEFAULT_TOKENIZE = 'porter unicode61';
+
+// FTS5 takes its tokenizer as a string literal inside DDL, where nothing can bind, so a
+// configured value has to be concatenated. Probing a throwaway table is what makes that safe
+// and is also the whole validation: anything the linked SQLite accepts passes, anything else
+// fails here with SQLite's own message rather than against the real table. It means no table
+// of which version added which tokenizer has to be maintained.
+function resolveTokenize(db: DatabaseSync, cfg: Config): string {
+  const configured = contentTokenize(cfg);
+  if (configured === undefined) return DEFAULT_TOKENIZE;
+  const literal = configured.replace(/'/g, "''");
+  try {
+    db.exec('DROP TABLE IF EXISTS temp.sense_tokenize_probe');
+    db.exec(`CREATE VIRTUAL TABLE temp.sense_tokenize_probe USING fts5(x, tokenize = '${literal}')`);
+    db.exec('DROP TABLE IF EXISTS temp.sense_tokenize_probe');
+  } catch (err) {
+    throw new SenseError('CONFIG_INVALID', `content.tokenize "${configured}" is not a tokenizer this SQLite accepts (${(err as Error).message}); the built-in choices are unicode61, ascii, porter, and trigram, each with their own options`);
+  }
+  return literal;
+}
+
+// The tokenizer the content table was actually built with, from its own DDL -- the one
+// record that cannot desynchronize from the table. NULL when the table does not exist yet.
+function storedTokenize(db: DatabaseSync): string | null {
+  const row = db.prepare(`SELECT sql FROM sqlite_master WHERE name = 'content'`).get() as { sql: string } | undefined;
+  if (!row) return null;
+  const m = row.sql.match(/tokenize = '((?:[^']|'')*)'/);
+  return m ? m[1] : null;
+}
+
 // Content is a separate table (not a column on frontmatter) so `SELECT * FROM frontmatter`
 // can't dump file text into context. Features add their own tables after the core ones.
-function ensureSchema(db: DatabaseSync, cfg: Config): void {
+function ensureSchema(db: DatabaseSync, cfg: Config, tokenize: string): void {
   db.exec(`CREATE TABLE IF NOT EXISTS frontmatter ("path" TEXT PRIMARY KEY, "_mtime" REAL, "_size" INTEGER, "_parse_error" TEXT)`);
-  db.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS content USING fts5(title, summary, text, path UNINDEXED, tokenize = 'porter unicode61')`);
+  // IF NOT EXISTS is safe against a tokenizer change: open() compares the table's own DDL
+  // against the resolved tokenizer before this runs, so a stale table is already gone by now.
+  // The three `_seg` sidecars are appended after path, never inserted: bm25(content, ...) and
+  // snippet(content, 2, ...) are documented against the first three columns and keep working
+  // (FTS5 defaults the weights it was not given). Each carries its field's exploded unspaced
+  // runs for text that needs it, and an empty string for text that does not.
+  db.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS content USING fts5(title, summary, text, path UNINDEXED, title_seg, summary_seg, text_seg, tokenize = '${tokenize}')`);
   // Coverage, not ownership: a path can appear under several presets. path leads the PK so the
   // per-doc delete is an index hit -- keyed the other way, cold builds went quadratic.
   db.exec(`CREATE TABLE IF NOT EXISTS preset_files ("path" TEXT, preset TEXT, PRIMARY KEY ("path", preset))`);
@@ -79,6 +131,10 @@ function ensureSchema(db: DatabaseSync, cfg: Config): void {
   for (const feature of activeFeatures(cfg)) feature.schema(db);
   if (getMeta(db, 'schema_version') === null) setMeta(db, 'schema_version', SCHEMA_VERSION);
   if (getMeta(db, 'features') === null) setMeta(db, 'features', featureSignature(cfg));
+  // The one source of truth the query side reads (segment() in registerFunctions, and search()
+  // in commands.ts): never gated on config directly, so index and query can't desync. Written
+  // unconditionally so a tokenize-only rebuild (see open()) leaves it correct too.
+  setMeta(db, 'segmented', contentTokenize(cfg) === undefined ? '1' : '0');
 }
 
 export function getMeta(db: DatabaseSync, key: string): string | null {
@@ -92,6 +148,12 @@ export function setMeta(db: DatabaseSync, key: string, value: string | null): vo
     return;
   }
   db.prepare('INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(key, value);
+}
+
+// Shared by reconcile() and the tokenize-only rebuild in open(), so content population is
+// defined once. Assumes the frontmatter row for doc.relPath already exists (rowid lookup).
+function insertContentRow(insertBody: StatementSync, doc: ParsedDoc, segmenting: boolean): void {
+  insertBody.run(doc.relPath, doc.search.title, doc.search.summary, doc.search.text, doc.relPath, segmenting ? segmentField(doc.search.title) : '', segmenting ? segmentField(doc.search.summary) : '', segmenting ? segmentField(doc.search.text) : '');
 }
 
 export function docCount(db: DatabaseSync): number {
@@ -190,7 +252,10 @@ export function reconcile(db: DatabaseSync, cfg: Config, baseDir: string): { par
     }
     if (parsedDocs.length > 0) {
       const insert = db.prepare(insertSql);
-      const insertBody = db.prepare(`INSERT INTO content (rowid, title, summary, text, "path") VALUES ((SELECT rowid FROM frontmatter WHERE "path" = ?), ?, ?, ?, ?)`);
+      const insertBody = db.prepare(`INSERT INTO content (rowid, title, summary, text, "path", title_seg, summary_seg, text_seg) VALUES ((SELECT rowid FROM frontmatter WHERE "path" = ?), ?, ?, ?, ?, ?, ?, ?)`);
+      // A non-default tokenizer means the tree has chosen its own scheme; a phrase query over
+      // grapheme runs would be nonsense against trigram, so the sidecars stay empty.
+      const segmenting = contentTokenize(cfg) === undefined;
       for (const doc of parsedDocs) {
         const values = writableColumns.map((col) => {
           if (col === 'path') return doc.relPath;
@@ -207,7 +272,7 @@ export function reconcile(db: DatabaseSync, cfg: Config, baseDir: string): { par
           delBody.run(doc.relPath);
           for (const feature of features) feature.remove?.(db, doc.relPath, delta);
         }
-        insertBody.run(doc.relPath, doc.search.title, doc.search.summary, doc.search.text, doc.relPath);
+        insertContentRow(insertBody, doc, segmenting);
         // A preset edit forces a full rebuild, so an unchanged doc's coverage is already
         // correct; new docs have nothing to clear, which keeps cold builds linear.
         if (existing.has(doc.relPath)) delPresetFiles.run(doc.relPath);
@@ -234,10 +299,9 @@ export function reconcile(db: DatabaseSync, cfg: Config, baseDir: string): { par
   return { parsed: parsedDocs.length, warnings };
 }
 
-// Names what moved between two feature signatures (see config.featureSignature's format:
-// global features, embed provider, then one segment per preset) for the rebuild notice.
-function signatureDiff(before: string, after: string): string {
-  // Segment keys: `features`, `embed`, `preset:<name>` (config.featureSignature's format).
+// Segment keys that moved between two feature signatures (see config.featureSignature's
+// format: global features, embed provider, tokenize, then one segment per preset).
+function changedSignatureKeys(before: string, after: string): Set<string> {
   const keyOf = (part: string) => (part.startsWith('preset:') ? part.split(':').slice(0, 2).join(':') : part.split(':')[0]);
   const parse = (sig: string) => new Map(sig.split('|').map((part) => [keyOf(part), part]));
   const a = parse(before);
@@ -245,8 +309,36 @@ function signatureDiff(before: string, after: string): string {
   const changed = new Set<string>();
   for (const [key, val] of b) if (a.get(key) !== val) changed.add(key);
   for (const key of a.keys()) if (!b.has(key)) changed.add(key);
-  const label = (key: string) => (key === 'embed' ? 'embed settings' : key.startsWith('preset:') ? `preset "${key.slice(7)}"` : 'features');
+  return changed;
+}
+
+// Names what moved, for the rebuild notice.
+function signatureDiff(before: string, after: string): string {
+  const changed = changedSignatureKeys(before, after);
+  const label = (key: string) => (key === 'embed' ? 'embed settings' : key === 'tokenize' ? 'content tokenizer' : key.startsWith('preset:') ? `preset "${key.slice(7)}"` : 'features');
   return changed.size === 0 ? 'features' : [...changed].map(label).join(', ');
+}
+
+// The tokenize-only rebuild in open(): content is dropped and repopulated from files already
+// listed in frontmatter, which itself is untouched. Frontmatter, links, sections, and
+// embeddings are file-derived and tokenizer-independent, so they survive. No feature extractors
+// run here -- doc.search (title/summary/text) is all content population needs.
+function rebuildContentTable(db: DatabaseSync, cfg: Config, baseDir: string): void {
+  const known = new Set((db.prepare('SELECT "path" FROM frontmatter').all() as Array<{ path: string }>).map((r) => r.path));
+  const files = listFiles(cfg, baseDir).filter((f) => known.has(f.relPath));
+  const segmenting = contentTokenize(cfg) === undefined;
+  const insertBody = db.prepare(`INSERT INTO content (rowid, title, summary, text, "path", title_seg, summary_seg, text_seg) VALUES ((SELECT rowid FROM frontmatter WHERE "path" = ?), ?, ?, ?, ?, ?, ?, ?)`);
+  db.exec('BEGIN');
+  try {
+    for (const file of files) {
+      const { doc } = parseFile(file);
+      insertContentRow(insertBody, doc, segmenting);
+    }
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
 }
 
 export function open(cfg: ResolvedConfig): OpenResult {
@@ -263,6 +355,10 @@ export function open(cfg: ResolvedConfig): OpenResult {
 
   db.exec('CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)');
 
+  // Before the rebuild branch below, never after: that branch deletes the cache, so a typo'd
+  // tokenizer validated later would cost a full re-index (and re-embed) to reach its own error.
+  const tokenize = resolveTokenize(db, cfg);
+
   // Schema-version or feature-set mismatch: reconcile only reparses changed files, so an
   // old cache can't be patched incrementally -- rebuild instead (cheap: nothing expensive lives here).
   const version = getMeta(db, 'schema_version');
@@ -273,16 +369,40 @@ export function open(cfg: ResolvedConfig): OpenResult {
     // name what changed -- silent rebuilds make derived indexing look like a hang or a bug.
     if (version !== null && version !== SCHEMA_VERSION) {
       console.error('sense: cache format changed (new sensemaking version); rebuilding the index');
+      db.close();
+      clearCache(cfg);
+      return open(cfg);
+    }
+    const changedKeys = changedSignatureKeys(features ?? '', wantFeatures);
+    // Only the tokenizer moved: frontmatter, links, sections, and embeddings are file-derived
+    // and tokenizer-independent, so they don't need re-deriving. Everything else -- a preset
+    // edit, an embed model change -- still takes the full clear/reopen below.
+    if (changedKeys.size === 1 && changedKeys.has('tokenize')) {
+      console.error('sense: config change (content tokenizer) rebuilds the text index; vectors, links, and sections are kept');
+      db.exec('DROP TABLE content');
+      ensureSchema(db, cfg, tokenize);
+      rebuildContentTable(db, cfg, cfg.baseDir);
+      setMeta(db, 'features', wantFeatures);
     } else {
       const changed = signatureDiff(features ?? '', wantFeatures);
       console.error(`sense: config change (${changed}) rebuilds the index`);
+      db.close();
+      clearCache(cfg);
+      return open(cfg);
     }
+  }
+
+  // Meta can lie after a crash between table creation and the signature write; the table's
+  // own DDL cannot. A mismatch here rebuilds no matter what meta says.
+  const stored = storedTokenize(db);
+  if (stored !== null && stored !== tokenize) {
+    console.error('sense: cache was built with a different content tokenizer; rebuilding the index');
     db.close();
     clearCache(cfg);
     return open(cfg);
   }
 
-  ensureSchema(db, cfg);
+  ensureSchema(db, cfg, tokenize);
 
   // 3x the largest reconcile this cache has recorded, floored at 30s and capped at 10min.
   // Installed before reconcile() -- that call is the one that races a watcher's transaction.

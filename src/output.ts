@@ -1,6 +1,11 @@
-// rows -> table (default) | json
+// rows -> table (default) | json | csv
 
 export type Row = Record<string, unknown>;
+
+// map/peek/status/path render structures rather than a row set, so csv has nothing to mean
+// there; the commands that emit rows take RowFormat.
+export type Format = 'table' | 'json';
+export type RowFormat = Format | 'csv';
 
 // Warned about on stderr (keeps --format json stdout machine-readable), never truncated.
 const OVERSIZE_BYTES = 50_000;
@@ -10,12 +15,117 @@ function cell(value: unknown): string {
   return String(value ?? '').replace(/\s*\n\s*/g, ' ');
 }
 
-export function printRows(rows: Row[], format: 'table' | 'json'): void {
+// RFC 4180, and deliberately not cell(): csv is the format for redirecting a result to a
+// file, so it keeps every character, embedded newlines included. What it cannot carry is
+// NULL vs empty string, or a value's type -- that is what json is for.
+function csvField(value: unknown): string {
+  const text = value === null || value === undefined ? '' : String(value);
+  return /["\r\n,]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+function csvLine(values: unknown[]): string {
+  return values.map(csvField).join(',');
+}
+
+function warnOversize(bytes: number, rowCount: number): void {
+  if (bytes <= OVERSIZE_BYTES) return;
+  console.warn(`warning: result is ${Math.round(bytes / 1000)} KB across ${rowCount} row(s); consider a LIMIT, fewer columns, snippet() instead of whole values, or --format csv redirected to a file`);
+}
+
+// Header names come from a row wherever there is one: a statement's column list keeps
+// duplicates that the row object has already collapsed, so `SELECT a AS x, b AS x` would print
+// b's value under both headers. `columns` is the fallback that labels a 0-row result, and with
+// no rows and no statement (a bounded command that found nothing) csv writes nothing at all --
+// a bare newline would read to a csv parser as one empty record.
+export function printRows(rows: Row[], format: RowFormat, columns?: string[]): void {
+  if (format === 'csv') {
+    // Collapsed the same way a row object collapses them, so a statement naming a column
+    // twice describes itself identically whether it matched anything or not.
+    const names = rows.length > 0 ? Object.keys(rows[0]) : [...new Set(columns ?? [])];
+    if (names.length === 0) return;
+    const rendered = [csvLine(names), ...rows.map((row) => csvLine(names.map((name) => row[name])))].join('\n');
+    console.log(rendered);
+    // Bytes, not code units -- CJK is 3 bytes per character.
+    warnOversize(Buffer.byteLength(rendered), rows.length);
+    return;
+  }
   const rendered = renderRows(rows, format);
   console.log(rendered);
-  if (rendered.length > OVERSIZE_BYTES) {
-    console.warn(`warning: result is ${Math.round(rendered.length / 1000)} KB across ${rows.length} row(s); consider a LIMIT, fewer columns, or snippet() instead of whole values`);
+  warnOversize(Buffer.byteLength(rendered), rows.length);
+}
+
+// Streaming counterpart for the one unbounded caller, `sense sql`: rows arrive from an
+// iterator, so a large result is never held here as rows and again as a rendered string.
+// Table buffers by necessity (a column is as wide as its widest cell, which the last row can
+// change); json and csv write row by row. The writes are synchronous, so when stdout is a pipe
+// Node buffers what the reader has not taken yet -- the saving is this module's copies, not
+// the operating system's.
+export function printRowStream(rows: Iterable<Row>, format: RowFormat, columns: string[]): void {
+  const iterator = rows[Symbol.iterator]();
+  // One step before any write. FTS5 parses a MATCH expression at step time rather than at
+  // prepare time, so a bad search string throws here, with stdout still clean for the error.
+  const first = iterator.next();
+  const rest: Iterable<Row> = { [Symbol.iterator]: () => iterator };
+
+  if (format === 'table') {
+    printRows(first.done ? [] : [first.value, ...rest], format, columns);
+    return;
   }
+
+  let bytes = 0;
+  let rowCount = 0;
+  const write = (text: string): void => {
+    // Bytes, not code units -- CJK is 3 bytes per character.
+    bytes += Buffer.byteLength(text);
+    process.stdout.write(text);
+  };
+
+  if (format === 'json') {
+    // Byte-identical to JSON.stringify(rows, null, 2) + newline: each row re-indented one
+    // level, comma-joined, inside the array brackets written here.
+    // JSON.stringify throws on BigInt, so a row with an int64 past 2^53 (setReadBigInts) is
+    // converted first: a value that fits a safe integer stays a number, a larger one becomes
+    // its decimal string, since a JSON number cannot carry it losslessly.
+    const MAX_SAFE = BigInt(Number.MAX_SAFE_INTEGER);
+    const jsonSafe = (row: Row): Row => {
+      const out: Row = {};
+      for (const [key, value] of Object.entries(row)) {
+        out[key] = typeof value === 'bigint' ? (value >= -MAX_SAFE && value <= MAX_SAFE ? Number(value) : value.toString()) : value;
+      }
+      return out;
+    };
+    const indent = (row: Row) =>
+      JSON.stringify(jsonSafe(row), null, 2)
+        .split('\n')
+        .map((line) => `  ${line}`)
+        .join('\n');
+    if (first.done) {
+      write('[]\n');
+    } else {
+      write('[\n');
+      write(indent(first.value));
+      rowCount = 1;
+      for (const row of rest) {
+        write(',\n');
+        write(indent(row));
+        rowCount++;
+      }
+      write('\n]\n');
+    }
+  } else if (first.done) {
+    const names = [...new Set(columns)];
+    if (names.length > 0) write(`${csvLine(names)}\n`);
+  } else {
+    const names = Object.keys(first.value);
+    write(`${csvLine(names)}\n`);
+    write(`${csvLine(names.map((name) => first.value[name]))}\n`);
+    rowCount = 1;
+    for (const row of rest) {
+      write(`${csvLine(names.map((name) => row[name]))}\n`);
+      rowCount++;
+    }
+  }
+  warnOversize(bytes, rowCount);
 }
 
 // Tables are for reading, and a row wider than the terminal wraps unreadably: widest columns
@@ -35,7 +145,7 @@ function fitWidths(widths: number[], limit: number): number[] {
   }
 }
 
-function renderRows(rows: Row[], format: 'table' | 'json', width = process.stdout.columns): string {
+function renderRows(rows: Row[], format: Format, width = process.stdout.columns): string {
   if (format === 'json') return JSON.stringify(rows, null, 2);
   if (rows.length === 0) return '(0 rows)';
 

@@ -4,8 +4,8 @@ import type { ResolvedConfig, SearchOverrides } from '../config.ts';
 import { resolvePreset } from '../config.ts';
 import type { OpenResult } from '../db.ts';
 import { open } from '../db.ts';
-import type { Row } from '../output.ts';
-import { printRows } from '../output.ts';
+import type { Row, RowFormat } from '../output.ts';
+import { printRowStream } from '../output.ts';
 import { searchError } from '../search-error.ts';
 import type { Ctx } from './types.ts';
 
@@ -40,8 +40,23 @@ export function scopeOf(values: Values): SearchOverrides {
   };
 }
 
+// An unrecognised value used to fall through to `table`, so a typo looked like it worked.
+// parseArgs is strict about flag names; this is the same strictness for the value.
+function pickFormat<T extends string>(values: Values, allowed: readonly T[]): T {
+  const format = String(values.format);
+  if ((allowed as readonly string[]).includes(format)) return format as T;
+  console.error(`unknown --format "${format}"; expected ${allowed.join(', ')}`);
+  process.exit(2);
+}
+
 export function formatOf(values: Values): 'table' | 'json' {
-  return values.format === 'json' ? 'json' : 'table';
+  return pickFormat(values, ['table', 'json'] as const);
+}
+
+// csv is a row set rendered as rows; map, peek, status, and path render structures instead,
+// and take formatOf.
+export function rowFormatOf(values: Values): RowFormat {
+  return pickFormat(values, ['table', 'json', 'csv'] as const);
 }
 
 // Per-command parseArgs: strict (a foreign flag exits 2), and every table gets --help for free.
@@ -107,7 +122,7 @@ function bindScope(db: OpenResult['db'], cfg: ResolvedConfig, preset: string): v
 }
 
 // An unbound `?` silently binds NULL, so mismatched param counts fail loudly instead.
-export function runSql(cfg: ResolvedConfig, sql: string, params: string[], format: 'table' | 'json', label: string, preset?: string): void {
+export function runSql(cfg: ResolvedConfig, sql: string, params: string[], format: RowFormat, label: string, preset?: string): void {
   const placeholderCount = (sql.match(/\?/g) ?? []).length;
   if (params.length !== placeholderCount) {
     console.error(`${label} expects ${placeholderCount} parameter(s), got ${params.length}`);
@@ -123,9 +138,17 @@ export function runSql(cfg: ResolvedConfig, sql: string, params: string[], forma
   const { db, warnings } = open(cfg);
   printWarnings(warnings);
   if (preset !== undefined) bindScope(db, cfg, preset);
-  let rows: Row[];
+  // Streamed rather than collected: `sql` is the one caller whose result size is the
+  // statement's business, not this package's, so the rows are never held here in bulk.
+  // columns() reads the statement's own metadata, so a 0-row csv still has its header.
+  // A mid-stream SQLite error (e.g. SQLITE_BUSY outlasting busy_timeout) can still leave
+  // partial output; the nonzero exit code is the caller's signal, output completeness is not
+  // guaranteed on failure.
   try {
-    rows = db.prepare(sql).all(...params) as Row[];
+    const statement = db.prepare(sql);
+    statement.setReadBigInts(true); // int64 past 2^53 arrives as BigInt instead of throwing at step time
+    const columns = statement.columns().map((c) => c.name);
+    printRowStream(statement.iterate(...params) as Iterable<Row>, format, columns);
   } catch (err) {
     db.close();
     // A saved query or ad-hoc SQL can carry `content MATCH ?` too, so the same FTS5
@@ -134,6 +157,5 @@ export function runSql(cfg: ResolvedConfig, sql: string, params: string[], forma
     if (/\bMATCH\b/i.test(sql)) throw searchError(err as Error, params.join(' '));
     throw err;
   }
-  printRows(rows, format);
   db.close();
 }

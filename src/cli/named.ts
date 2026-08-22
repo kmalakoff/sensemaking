@@ -1,14 +1,14 @@
 import { search } from '../commands.ts';
 import { printRows } from '../output.ts';
-import { CONFIG, FORMAT, formatOf, parse, parseK, runSql, SEARCH_FLAGS, withDb } from './shared.ts';
+import { CONFIG, FORMAT, parse, parseK, rowFormatOf, runSql, SEARCH_FLAGS, withDb } from './shared.ts';
 import type { Ctx } from './types.ts';
 
 // Fallback when the first positional is not a command: a saved query, { sql } or { search }.
 // SEARCH_FLAGS override a saved search's fields the same way they override a preset's.
 export default async function named(ctx: Ctx, queryName: string): Promise<void> {
-  const usage = `usage: ${ctx.name} ${queryName} [params...] [--format table|json] [--config path] [--where "<sql>"] [--k n] [--preset name] [--include glob ...] [--exclude glob ...] [--no-exclude]`;
+  const usage = `usage: ${ctx.name} ${queryName} [params...] [--format table|json|csv] [--config path] [--where "<sql>"] [--k n] [--preset name] [--include glob ...] [--exclude glob ...] [--no-exclude]`;
   const { values, positionals: params } = parse(ctx.argv, usage, { ...SEARCH_FLAGS, ...FORMAT, ...CONFIG });
-  const format = formatOf(values);
+  const format = rowFormatOf(values);
   const configPath = values.config as string | undefined;
 
   const cfg = ctx.resolveConfig(configPath);

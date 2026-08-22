@@ -4,17 +4,21 @@ import posix from 'node:path/posix';
 import type { DatabaseSync } from 'node:sqlite';
 import type { FeatureName, ResolvedConfig, SearchOverrides } from './config.ts';
 import { anyPresetEmbeds, embedEnabled, featureEnabled, featureStates, presetNames, presetSemanticEnabled, resolveSearch } from './config.ts';
+import { getMeta } from './db.ts';
 import { SenseError } from './errors.ts';
 import { embedPending, hasEmbedding, modelPresent, semanticCandidates, similarNotes } from './features/embed.ts';
 import { linkEdges } from './features/index.ts';
 import { personalizedRank } from './graph.ts';
 import type { Row } from './output.ts';
 import { searchError } from './search-error.ts';
+import { segmentMatch } from './segment.ts';
 
 // The three commands: mapTree (orient), search (locate), peek (structure).
 // Each returns data; cli.ts renders. All of them degrade when a feature is off.
 
-const WEIGHTED_BM25 = 'bm25(content, 10.0, 5.0, 1.0)';
+// Mirrors the main columns onto the sidecars, so a title match found through title_seg ranks
+// like a title match found through title, not like a body match.
+const WEIGHTED_BM25 = 'bm25(content, 10.0, 5.0, 1.0, 0, 10.0, 5.0, 1.0)';
 const RRF_K = 60;
 
 // snippet() re-tokenizes each candidate doc, superlinearly: ~10s for one 1MB doc
@@ -164,7 +168,14 @@ export async function search(db: DatabaseSync, cfg: ResolvedConfig, terms: strin
   }
   const semanticEnabled = wantsVectors && scopeHasEmbeddings(db, cfg, scopedPaths);
 
-  // Terms pass verbatim to MATCH; invalid syntax errors rather than being rewritten. --where
+  // Terms pass to MATCH as written, with one transform: a run of text whose language marks no
+  // word boundaries becomes a quoted grapheme phrase (and a title:/summary:/text: qualifier
+  // ahead of it retargets its _seg column), matching how it was indexed. Text that already
+  // carries boundaries comes through untouched, so this is a no-op for the languages that
+  // never needed it. Gated on meta, not config, so index and query can't disagree (see
+  // ensureSchema's 'segmented' write in db.ts). Invalid syntax still errors rather than being
+  // rewritten.
+  // --where
   // applies inside the candidate query (a post-filter would drop matches ranked past the pool)
   // and again on the final select, for link-derived rows.
   const scope = effective.where;
@@ -172,10 +183,14 @@ export async function search(db: DatabaseSync, cfg: ResolvedConfig, terms: strin
   const whereCond = scope ? `AND (${scope})` : '';
   // Docs past SNIPPET_BOUND skip snippet() entirely -- SQLite
   // short-circuits the untaken CASE branch, so it's never invoked on them.
-  const matchSql = `SELECT content.path AS path, CASE WHEN length(content.text) <= ${SNIPPET_BOUND} THEN snippet(content, -1, '«', '»', '…', 10) ELSE NULL END AS hit FROM content ${whereJoin} WHERE content MATCH ? ${whereCond} ORDER BY ${WEIGHTED_BM25} LIMIT ${fetch}`;
+  // Column 2 (text), not -1 (best column): -1 could surface a _seg sidecar as the excerpt,
+  // which is machine-spaced and not what the author wrote. A row that matches only in a
+  // sidecar gets an unhighlighted text excerpt below instead -- a stated cost.
+  const matchSql = `SELECT content.path AS path, CASE WHEN length(content.text) <= ${SNIPPET_BOUND} THEN snippet(content, 2, '«', '»', '…', 10) ELSE NULL END AS hit FROM content ${whereJoin} WHERE content MATCH ? ${whereCond} ORDER BY ${WEIGHTED_BM25} LIMIT ${fetch}`;
+  const query = getMeta(db, 'segmented') === '1' ? segmentMatch(terms) : terms;
   let matchRows: Array<{ path: string; hit: string | null }>;
   try {
-    matchRows = db.prepare(matchSql).all(terms) as Array<{ path: string; hit: string | null }>;
+    matchRows = db.prepare(matchSql).all(query) as Array<{ path: string; hit: string | null }>;
   } catch (err) {
     throw searchError(err as Error, terms, scope);
   }

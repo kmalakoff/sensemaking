@@ -21,7 +21,7 @@ function packageVersion(): string {
 
 function usage(name: string): string {
   const lines = Object.values(USAGE).map((u) => `       ${name} ${u}`);
-  return [`usage: ${name} <name> [params...] [--format table|json] [--config path]`, ...lines, `       ${name} --list`, `       ${name} --version`].join('\n');
+  return [`usage: ${name} <name> [params...] [--format table|json|csv] [--config path]`, ...lines, `       ${name} --list`, `       ${name} --version`].join('\n');
 }
 
 function resolveConfigFor(name: string, configPath: string | undefined) {
@@ -37,6 +37,20 @@ function resolveConfigFor(name: string, configPath: string | undefined) {
 
 // Thrown errors -> exit 1 with the message verbatim; usage errors exit 2 directly.
 export default async function cli(argv: string[], name: string): Promise<void> {
+  // stdout is a pipe whenever the caller pipes or redirects, and a reader that goes away
+  // (`| head`) makes every later write fail. The failure arrives asynchronously, after the
+  // write loop has already returned: console.log absorbs it, process.stdout.write (what the
+  // streaming formats use) does not, so with no listener the process dies on an unhandled
+  // 'error' event having already done its work. Neither throwing nor exiting is safe from
+  // here. The event is async, so a throw is an uncaught exception rather than something
+  // bin/cli.js can catch, and process.exit() would skip the cleanup `sense watch` runs on the
+  // way out, leaving a heartbeat behind that makes a dead watcher look alive.
+  process.stdout.on('error', (err: NodeJS.ErrnoException) => {
+    if (err.code === 'EPIPE') return;
+    console.error(`sense: ${err.message}`);
+    process.exitCode = 1;
+  });
+
   const first = argv[0];
 
   // No command word, or the first token looks like a flag: the only flags this level knows.
