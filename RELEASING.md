@@ -40,6 +40,8 @@ The mechanical facts are tested in `test/unit/docs.test.ts`; the rest is a read.
 
 8. Maintainer picks the version, then: `npm version <chosen>` → `npm publish` → `git push --follow-tags`. Confirm the tag reached the remote (`git ls-remote --tags origin`): a skipped push leaves a version on npm with no commit or tag behind it, and nothing downstream notices.
 
+`npm version` leaves HEAD on the release commit, which reads like any other commit in `git log`. Never `--amend` from there, and check `git log -1` before amending at all: rewriting it diverges from the tag and from what npm already shipped. A follow-up fix is a new commit, and the next `npm version` carries it.
+
 9. Tell consumers what changed: dependent trees get their note, and the git tag's release notes carry the consumer-visible changes (new config keys, changed output shapes, bug fixes), the same list the maintainer used to pick the version. Consumers are on the previous version until they upgrade, so guidance written for unreleased behaviour is guidance that fails.
 
 **Docs-only patches take the short path.** When the diff touches nothing but published prose (*.md files, skill text, schema descriptions), steps 2–4 and 6 (benchmarks, their reading, the pack/compare verification) are skipped: text cannot move a number. What remains: `npm test` (the docs tests guard the mechanical facts), the step-5 read of the surfaces the diff touched, then version → publish → push with the tag check. Anything that touches src/, benchmark logic, or dependencies is not a docs-only patch, whatever the diff size.
