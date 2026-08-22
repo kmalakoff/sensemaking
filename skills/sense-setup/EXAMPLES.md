@@ -46,7 +46,7 @@ What the shape buys: bare search never ranks raw noise above compiled pages; the
   "queries": {
     "project":    { "sql": "SELECT path, kind, created, title FROM frontmatter WHERE project = ? ORDER BY created DESC" },
     "steers":     { "sql": "SELECT path, created, title FROM frontmatter WHERE kind = 'steer' AND project = ? ORDER BY created" },
-    "retirement": { "sql": "SELECT path, project, created FROM frontmatter WHERE datetime(created) < datetime('now','-90 day') AND path NOT IN (SELECT dst FROM links WHERE dst IS NOT NULL)" },
+    "retirement": { "sql": "SELECT path, project, created FROM frontmatter WHERE datetime(created) < datetime('now','localtime','-90 day') AND path NOT IN (SELECT dst FROM links WHERE dst IS NOT NULL)" },
     "unfiled":    { "sql": "SELECT path FROM frontmatter WHERE project IS NULL" }
   }
 }
