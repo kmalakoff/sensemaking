@@ -17,7 +17,7 @@ export const RESERVED_COLUMNS = new Set(['path', '_mtime', '_size', '_rank', '_p
 // scalar for future use, so they can never be valid and the text can only be what was typed
 // (`aliases: [@handle]` -> ["@handle"]). Every other code has a second reading -- an unquoted
 // `:` swallows the keys after it, an unquoted `[..](..)` drops the URL, a duplicate key picks
-// one value in silence -- so it writes values nobody wrote. See plans/frontmatter-parse-policy.md.
+// one value in silence -- so it writes values nobody wrote.
 const ACCEPTED_YAML_CODES = new Set(['BAD_SCALAR_START']);
 
 function normalizeText(value: unknown): string {

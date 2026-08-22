@@ -1,7 +1,8 @@
 import assert from 'node:assert';
+import { execFileSync } from 'node:child_process';
 import { readdirSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { join, relative } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { SUPPORTED_CONFIG_VERSION } from 'sensemaking';
 import { parse } from 'yaml';
 import { packageRoot } from '../lib/cli.ts';
@@ -70,5 +71,18 @@ describe('shipped skills', () => {
   it('every skill named in package.json files is actually packed', () => {
     const pkg = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8')) as { files: string[] };
     assert.ok(pkg.files.includes('skills'), 'skills/ is not in package.json files');
+  });
+});
+
+// plans/ is gitignored working material: it is not in the repo a consumer clones and not in
+// the package, so a comment pointing at one sends the reader to a file that does not exist.
+// A reason worth keeping belongs inline, in the code it explains.
+describe('no references to local planning files', () => {
+  it('no tracked file points at plans/', () => {
+    // This file names the directory it forbids, so it is the one exemption.
+    const self = relative(packageRoot, fileURLToPath(import.meta.url));
+    const tracked = execFileSync('git', ['ls-files', '-z'], { cwd: packageRoot, encoding: 'utf8' }).split('\0').filter(Boolean);
+    const offenders = tracked.filter((file) => /\.(ts|js|mjs|cjs|md|json)$/.test(file) && file !== self && !file.startsWith('plans/') && readFileSync(join(packageRoot, file), 'utf8').includes('plans/'));
+    assert.deepEqual(offenders, [], `these reference gitignored plans/: ${offenders.join(', ')}`);
   });
 });

@@ -6,7 +6,7 @@ import { runCli } from '../lib/cli.ts';
 import { openTree, tmpTree, writeNote } from '../lib/tree.ts';
 
 // Frontmatter that does not parse is quarantined, not recovered: no columns at all, and
-// `_parse_error` carries the reason. One exception, below. See plans/frontmatter-parse-policy.md.
+// `_parse_error` carries the reason. One exception, below.
 //
 // These tables are the policy documentation. Nothing here asserts on yaml's internals -- every
 // case runs through a real index build and checks our own output -- so a yaml upgrade that

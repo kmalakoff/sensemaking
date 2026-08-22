@@ -40,38 +40,38 @@ Two kinds of metric per version:
 
 Apple Silicon, Node 26.7.0. 2026-08-22. `local` is the working tree about to be released; the baseline column is whatever `package.json` names, so a bare `compare.mjs` always reads "last release vs what ships next".
 
-| metric | 0.11.5 | local |
+| metric | 0.12.0 | local |
 |---|---|---|
-| cold crawl | 1193 ms | 1192 ms |
-| warm query (`COUNT(*)`) | 97 ms | 96 ms |
-| BM25 search (canonical join) | 111 ms | 103 ms |
-| lexical `search` (BM25 + link fusion) | 158 ms | 153 ms |
-| `search` row size (json) | ~70 tokens | ~71 tokens |
-| `map` (orient) | 121 ms / ~458 tokens | 123 ms / ~458 tokens |
-| `peek` largest note (~77274 t) | 103 ms / ~581 tokens (0.8%) | 103 ms / ~581 tokens (0.8%) |
-| bulk change (500 files): first query | 253 ms | 255 ms |
-| bulk change (500 files): with warm watcher | 128 ms | 125 ms |
-| in-process: cold index build | 1025 ms | 1058 ms |
-| in-process: freshness check, no change | 38.1 ms | 37.3 ms |
-| in-process: update, 1 file touched | 39.3 ms | 38.6 ms |
-| in-process: update, 10 files modified | 39.3 ms | 40.1 ms |
+| cold crawl | 1202 ms | 1189 ms |
+| warm query (`COUNT(*)`) | 100 ms | 96 ms |
+| BM25 search (canonical join) | 109 ms | 104 ms |
+| lexical `search` (BM25 + link fusion) | 156 ms | 150 ms |
+| `search` row size (json) | ~71 tokens | ~71 tokens |
+| `map` (orient) | 125 ms / ~458 tokens | 123 ms / ~486 tokens |
+| `peek` largest note (~77274 t) | 108 ms / ~581 tokens (0.8%) | 104 ms / ~581 tokens (0.8%) |
+| bulk change (500 files): first query | 258 ms | 282 ms |
+| bulk change (500 files): with warm watcher | 132 ms | 143 ms |
+| in-process: cold index build | 1023 ms | 1039 ms |
+| in-process: freshness check, no change | 37.9 ms | 37.3 ms |
+| in-process: update, 1 file touched | 39.2 ms | 39.4 ms |
+| in-process: update, 10 files modified | 40.2 ms | 39.9 ms |
 
-Every timing row is flat: nothing moves beyond ~7%, and the movements disagree in direction
-between correlated metrics (wall vs in-process), which is this harness's noise signature. This
-release adds three segmented sidecar columns to `content`; on an English corpus they hold
-empty strings, which is why the parse-heavy rows do not move.
+Every row is flat or faster except the bulk-change pair, up 6-9% while their in-process
+update counterparts (which do the same reconcile work, minus the process spawn) stay flat --
+this doc's own definition of noise, so no fix is owed.
 
-**A harness caveat found last release, still load-bearing.** The first version `compare.mjs`
-benchmarks pays a large one-time machine warmup (the baseline's `npm install` is itself the
-warmup); a reversed-column-order run is the confirmation that a delta is real. This release
-added the wall-clock sibling of the same effect, documented under Scale below: cold-crawl
-wall numbers move with file-cache state, and only the version A/B on the same tree in the
-same sitting is comparable.
+**`map` grew ~458 -> ~486 tokens, not a regression.** This release adds `recentCaveat`: a
+line above the `recent:` table when one modified-second holds a majority of the scoped docs,
+because a fresh clone or copy stamps files with checkout time, not edit history, and that
+would otherwise read as recent activity. The hub corpus is one checkout, so every file shares
+close to the same second, the check fires, and the line prints -- exactly +28 tokens. See
+Scale below for what this means for the "flat with tree size" claim.
 
-**`search` row: ~70 -> ~71 tokens.** `search` excerpts now come from an explicit `text`
-column instead of snippet's best-column mode (which the machine-written sidecars would
-otherwise win), so a title-matching row excerpts prose instead of the shorter title. One
-token of drift on the row estimate, same fields, verified by diffing actual rows.
+**A harness caveat found two releases back, still load-bearing.** The first version
+`compare.mjs` benchmarks pays a large one-time machine warmup (the baseline's `npm install`
+is itself the warmup); a reversed-column-order run is the confirmation that a delta is real.
+Cold-crawl wall numbers move with file-cache state, documented under Scale below: only the
+version A/B on the same tree in the same sitting is comparable.
 
 ## Scale
 
@@ -83,30 +83,32 @@ lexical and semantic rows come from two presets over the same glob, differing on
 
 | metric | 6.5k (hub) | 13k (x2) | 26k (x4) |
 |---|---|---|---|
-| cold crawl (wall) | 1.19 s | 2.62 s | 5.07 s |
-| warm query | 96 ms | 171 ms | 278 ms |
-| lexical `search` | 153 ms | 284 ms | 475 ms |
-| semantic `search` (steady state) | — | 436 ms | 906 ms |
-| `map` | 123 ms / ~458 t | 223 ms / ~531 t | 417 ms / ~531 t |
-| `peek` | 103 ms / ~581 t | 183 ms / ~692 t | 305 ms / ~843 t |
-| `related` | — | 362 ms | 616 ms |
-| bulk change (500 files): first query | 255 ms | 331 ms | 491 ms |
-| in-process: freshness check, no change | 37 ms | 80 ms | 159 ms |
-| in-process: update, 1 file touched | 39 ms | 77 ms | 164 ms |
+| cold crawl (wall) | 1.19 s | 3.64 s | 7.27 s |
+| warm query | 96 ms | 154 ms | 273 ms |
+| lexical `search` | 150 ms | 263 ms | 450 ms |
+| semantic `search` (steady state) | — | 402 ms | 754 ms |
+| `map` | 123 ms / ~486 t | 213 ms / ~531 t | 392 ms / ~531 t |
+| `peek` | 104 ms / ~581 t | 167 ms / ~692 t | 288 ms / ~843 t |
+| `related` | — | 346 ms / ~182 t | 596 ms / ~162 t |
+| bulk change (500 files): first query | 282 ms | 351 ms | 519 ms |
+| in-process: freshness check, no change | 37.3 ms | 73.5 ms | 153.2 ms |
+| in-process: update, 1 file touched | 39.4 ms | 73.2 ms | 156.7 ms |
 
 Every row is linear or better in note count across a 4x range. The freshness check (the cost
-every single invocation pays) is 159 ms at 26k notes, and updates track it. `map` token
-counts stay flat with tree size. Semantic `search` is linear in chunks (2.09x from 13k to
-26k), which corrects the previous sitting's oddly sublinear 26k number.
+every single invocation pays) is 153 ms at 26k notes, and updates track it. `map` token
+counts stay flat with tree size at 13k and 26k (~531 t both); the hub column moved for an
+unrelated reason -- it is a checkout-shaped tree and trips the new recency caveat (see Results
+above) -- not because output grew with size, so the claim still holds as "flat with size,"
+just no longer "flat across every tree regardless of shape." Semantic `search` is linear in
+chunks (1.88x from 13k to 26k).
 
-**Cold-crawl wall numbers move with file-cache state, found and pinned this sitting.** The
-first 26k pass of the day read 7.3 s against 5.1 s in the previous sitting; the in-process
-build was flat and per-note linear, the released 0.11.5 run on the same tree in the same
-sitting read the same as local (A/B parity, plus direct spawn timing parity at 2.33 s vs
-2.34 s on the 13k tree), and a warm re-run settled back to 5.07 s. The previous sitting
-built the corpora immediately before measuring, which warms the cache invisibly. The cold
-crawl row above is the warm-confirmed number; only same-sitting same-cache comparisons are
-meaningful for this row, and the in-process build is the controlled version of it.
+**Cold-crawl wall numbers move with file-cache state, reproduced this sitting.** The 13k and
+26k rows above (3.64 s, 7.27 s) read well above the last warm-confirmed figures (2.62 s,
+5.07 s) -- the same effect pinned two sittings back: the first pass of the day reads high,
+and only same-sitting same-cache comparisons are meaningful for this row. The in-process cold
+build stayed linear and per-note proportionate (2004 ms at 13k, 4078 ms at 26k, a 2.03x step
+for a 2x note count), confirming the wall-clock jump is cache state, not an engine
+regression.
 
 What the scale rows watch, in order of what actually breaks: the per-query freshness check (stats every file, linear, the cost every call pays), cold crawl (linear; a quadratic here was found and fixed at 13k/26k: FTS5 DELETE by column scans the whole table, and delete-before-insert ran per doc on cold builds where the table was empty), reconcile after updates (linear; dominated by whole-table link re-resolution plus a full PageRank pass), and the watcher race (a query during the watcher's bulk write transaction waits on `busy_timeout`, sized at 30s to cover ~3x the largest measured reconcile).
 
@@ -118,15 +120,21 @@ Measured 2026-08-22:
 
 | metric | stress (2k notes, worst shapes) | guards |
 |---|---|---|
-| lexical `search` | 307 ms | bounded excerpt: snippet() never runs on docs past 16 KB; a JS best-window excerpt (with a `lines` section pointer) covers them |
-| semantic `search` | 969 ms | brute-force scan over 402,000 chunks (201 per note); linear in chunks, not notes |
-| cold crawl | 3.7 s (wall; see the file-cache note under Scale) | linear; heading-dense notes produce many chunks, all placeholder-only until the first semantic search |
-| `peek` largest note (~255k t) | 65 ms / ~476 tokens | every peek list caps at 20 with true totals |
-| `related` | 1.51 s | seed chunks sampled to 16: cost is `target_chunks x stored_chunks`, and 201 headings would otherwise multiply a full-corpus scan (12.7 s before the cap) |
-| `map` (300 fields) | 92 ms / ~367 tokens | all per-column aggregates in one scan |
-| in-process: update, 1 file touched | 14 ms | incremental link resolution; PageRank only when the edge set changed |
-| bulk change (500 files): first query | 1.10 s | FTS delete by rowid; link rows diffed, not wiped |
-| BM25 search (canonical join, raw SQL) | 9.1 s | **unguarded by design**: the canonical query calls snippet() directly, and raw SQL gets exactly what it asks for; `search` is the bounded path, and the skill documents the bound for hand-written SQL |
+| lexical `search` | 309 ms | bounded excerpt: snippet() never runs on docs past 16 KB; a JS best-window excerpt (with a `lines` section pointer) covers them |
+| semantic `search` | 971 ms | brute-force scan over 402,000 chunks (201 per note); linear in chunks, not notes |
+| cold crawl | 3.6 s (wall; see the file-cache note under Scale) | linear; heading-dense notes produce many chunks, all placeholder-only until the first semantic search |
+| `peek` largest note (~255k t) | 62 ms / ~476 tokens | every peek list caps at 20 with true totals |
+| `related` | 1.53 s / ~59 t | seed chunks sampled to 16: cost is `target_chunks x stored_chunks`, and 201 headings would otherwise multiply a full-corpus scan (12.7 s before the cap) |
+| `map` (300 fields) | 89 ms / ~395 tokens | all per-column aggregates in one scan |
+| in-process: update, 1 file touched | 15 ms | incremental link resolution; PageRank only when the edge set changed |
+| bulk change (500 files): first query | 1.16 s | FTS delete by rowid; link rows diffed, not wiped |
+| BM25 search (canonical join, raw SQL) | 9.0 s | **unguarded by design**: the canonical query calls snippet() directly, and raw SQL gets exactly what it asks for; `search` is the bounded path, and the skill documents the bound for hand-written SQL |
+
+`map`'s token count moved 367 -> 395 (+28), the same recency-caveat line seen on the hub
+corpus in Results above: stress is generated in one burst, so every file lands within one
+majority second and the check fires here too. Bulk change (+5.5%) and the in-process
+1-file update (14 -> 15 ms) move within this doc's noise band; nothing here crossed a
+guarded cliff.
 
 The sweep itself (`sweep.mjs`) re-runs when the engine changes, not per release; the probes it keeps (SQLite's 2,000-column limit fenced with a named error, adversarial markdown at ~8 s / 5 pathological notes with no timeout) are recorded in the findings file.
 
@@ -225,7 +233,7 @@ Read:
 
 ## Capabilities
 
-| | 0.2.1 | 0.3.0 | 0.6.0 | 0.7.2 | 0.8.0 | 0.9.5 | 0.10.0 | local |
+| | 0.2.1 | 0.3.0 | 0.6.0 | 0.7.2 | 0.8.0 | 0.9.5 | 0.10.0 | 0.12.1 |
 |---|---|---|---|---|---|---|---|---|
 | frontmatter filter + FTS5 search | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | links table, backlinks, dead links | — | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |

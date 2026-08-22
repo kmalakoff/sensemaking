@@ -451,6 +451,24 @@ describe('table output', () => {
 });
 
 describe('search error attribution', () => {
+  // A natural sentence typed at search: two field runs tripped on the comma, which errored
+  // with no remedy while the hyphen beside it explained itself.
+  it('every punctuation character that errors teaches the same remedy', async () => {
+    const base = tmpTree();
+    writeNote(base, 'a.md', { body: 'body about delivery' });
+    const { db, cfg } = openTree(base);
+    for (const term of ['plugin, superseded', 'end-to-end', "founder's", 'either/or', 'a;b', 'a!b', 'a&b', 'a@b']) {
+      await assert.rejects(
+        () => search(db, cfg, term),
+        (err: Error) => {
+          assert.match(err.message, /double-quot/i, `${term} errored without stating the remedy`);
+          return true;
+        }
+      );
+    }
+    db.close();
+  });
+
   it('a --where column typo is not blamed on term punctuation', async () => {
     const base = tmpTree();
     writeNote(base, 'a.md', { body: 'body about end-to-end delivery' });
