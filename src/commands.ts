@@ -146,18 +146,21 @@ function scopeHasEmbeddings(db: DatabaseSync, cfg: ResolvedConfig, scopedPaths: 
 // `opts` arrives already resolved (config.ts:resolveSearch).
 export async function search(db: DatabaseSync, cfg: ResolvedConfig, terms: string, opts: SearchOptions = {}): Promise<Row[]> {
   const effective = resolveSearch(cfg, opts);
-  const { k, include, exclude } = effective;
+  const { k } = effective;
 
   const allPaths = (db.prepare('SELECT "path" FROM frontmatter').all() as Array<{ path: string }>).map((r) => r.path);
-  // A preset scope reads the coverage reconcile indexed; re-matching globs here could disagree
-  // with it. Only ad-hoc scope flags, which have no persisted coverage, pay the JS match.
-  const adHocScope = opts.include !== undefined || opts.exclude !== undefined || opts.noExclude === true;
-  const scopedPaths = adHocScope ? new Set(allPaths.filter((p) => inScope(p, include, exclude))) : new Set((db.prepare('SELECT "path" FROM preset_files WHERE preset = ?').all(effective.presetName) as Array<{ path: string }>).map((r) => r.path));
-  // A scope narrower than the whole index needs a bigger candidate pool before filtering, or
-  // filtering can starve k even though enough in-scope matches exist further down the ranked
-  // list that a plain over-fetch wouldn't have reached.
-  const scopeActive = scopedPaths.size < allPaths.length;
-  const fetch = scopeActive ? Math.max(k * 5, 50) : Math.max(k * 3, 30);
+  const scopePaths = rawScope(db, cfg, opts, allPaths);
+  const scopeActive = scopePaths.size < allPaths.length;
+  // The set every candidate pool must be filtered to before truncation: scope narrowed by
+  // --where, the same composition scopedPaths() gives the other commands. Runs the same where
+  // fragment matchSql does, so a bad column gets the same attributed error either way.
+  let allowedPaths: Set<string>;
+  try {
+    allowedPaths = narrowByWhere(db, scopePaths, effective.where);
+  } catch (err) {
+    throw searchError(err as Error, terms, effective.where);
+  }
+  const fetch = Math.max(k * 3, 30);
 
   // Asking for vectors without a model is a misconfiguration, not a mode: degrading would make
   // the same search answer differently before and after a download. semantic:false never asks.
@@ -165,7 +168,7 @@ export async function search(db: DatabaseSync, cfg: ResolvedConfig, terms: strin
   if (wantsVectors && !modelPresent(cfg)) {
     throw new SenseError('EMBED_MODEL_MISSING', `preset "${effective.presetName}" searches with vectors, but the embedding model is not available; run \`sense download\`, or set "semantic": false on that preset to search on words and links`);
   }
-  const semanticEnabled = wantsVectors && scopeHasEmbeddings(db, cfg, scopedPaths);
+  const semanticEnabled = wantsVectors && scopeHasEmbeddings(db, cfg, allowedPaths);
 
   // Terms pass to MATCH as written, with one transform: a run of text whose language marks no
   // word boundaries becomes a quoted grapheme phrase (and a title:/summary:/text: qualifier
@@ -180,12 +183,18 @@ export async function search(db: DatabaseSync, cfg: ResolvedConfig, terms: strin
   const scope = effective.where;
   const whereJoin = scope ? `JOIN frontmatter f ON f."path" = content.path` : '';
   const whereCond = scope ? `AND (${scope})` : '';
+  // A scope narrower than the whole index must filter the candidate pool before LIMIT, not
+  // after -- otherwise scoped notes ranking below the global top-`fetch` never reach the
+  // filter. A join against a temp table, not a bound parameter list: real scopes run to
+  // thousands of paths, past SQLITE_MAX_VARIABLE_NUMBER on older builds.
+  if (scopeActive) materializeScope(db, '_search_scope', scopePaths);
+  const scopeCond = scopeActive ? `AND content.path IN (SELECT "path" FROM _search_scope)` : '';
   // Docs past SNIPPET_BOUND skip snippet() entirely -- SQLite
   // short-circuits the untaken CASE branch, so it's never invoked on them.
   // Column 2 (text), not -1 (best column): -1 could surface a _seg sidecar as the excerpt,
   // which is machine-spaced and not what the author wrote. A row that matches only in a
   // sidecar gets an unhighlighted text excerpt below instead -- a stated cost.
-  const matchSql = `SELECT content.path AS path, CASE WHEN length(content.text) <= ${SNIPPET_BOUND} THEN snippet(content, 2, '«', '»', '…', 10) ELSE NULL END AS hit FROM content ${whereJoin} WHERE content MATCH ? ${whereCond} ORDER BY ${WEIGHTED_BM25} LIMIT ${fetch}`;
+  const matchSql = `SELECT content.path AS path, CASE WHEN length(content.text) <= ${SNIPPET_BOUND} THEN snippet(content, 2, '«', '»', '…', 10) ELSE NULL END AS hit FROM content ${whereJoin} WHERE content MATCH ? ${whereCond} ${scopeCond} ORDER BY ${WEIGHTED_BM25} LIMIT ${fetch}`;
   const query = contentTokenize(cfg) === undefined ? segmentMatch(terms) : terms;
   let matchRows: Array<{ path: string; hit: string | null }>;
   try {
@@ -193,10 +202,6 @@ export async function search(db: DatabaseSync, cfg: ResolvedConfig, terms: strin
   } catch (err) {
     throw searchError(err as Error, terms, scope);
   }
-  // Scope filtering happens in JS, on each candidate list, rather than in SQL: FTS5 match,
-  // link expansion, and vector search all run unscoped above (cheap to over-fetch), then get
-  // filtered here against the effective include/exclude before ranking is finalized.
-  matchRows = matchRows.filter((r) => scopedPaths.has(r.path));
 
   const hits = new Map(matchRows.map((r) => [r.path, r.hit]));
   // hit === null here means the bound suppressed snippet(), not "no match" -- distinguish
@@ -214,7 +219,7 @@ export async function search(db: DatabaseSync, cfg: ResolvedConfig, terms: strin
     const linked = new Set(edges.flat());
     const seeds = new Map(matchRows.map((r, i) => [r.path, 1 / (i + 1)]));
     const ranked = [...personalizedRank(allPaths, edges, seeds)]
-      .filter(([path, score]) => score > 1e-9 && scopedPaths.has(path))
+      .filter(([path, score]) => score > 1e-9 && allowedPaths.has(path))
       .sort((a, b) => b[1] - a[1])
       .slice(0, fetch);
     ranked.forEach(([path], i) => {
@@ -233,7 +238,7 @@ export async function search(db: DatabaseSync, cfg: ResolvedConfig, terms: strin
   const chunkLines = new Map<string, string>();
   const chunkSimilarity = new Map<string, number>();
   if (semanticEnabled) {
-    const vec = (await semanticCandidates(db, cfg, terms, fetch)).filter((v) => scopedPaths.has(v.path));
+    const vec = await semanticCandidates(db, cfg, terms, fetch, allowedPaths);
     vec.forEach(({ path, lines, similarity }, i) => {
       chunkLines.set(path, lines);
       chunkSimilarity.set(path, similarity);
@@ -252,8 +257,9 @@ export async function search(db: DatabaseSync, cfg: ResolvedConfig, terms: strin
   const insert = db.prepare('INSERT INTO _search ("path", score, via, hit, lines, similarity) VALUES (?, ?, ?, ?, ?, ?)');
   for (const [path, c] of candidates) insert.run(path, c.score, c.via, hits.get(path) ?? null, chunkLines.get(path) ?? null, chunkSimilarity.get(path) ?? null);
 
-  // Already scope-filtered above; the final select reapplies --where only for link-derived
-  // rows, which never passed through whereCond.
+  // All three candidate paths (match, link, vector) already filtered to scope+where before
+  // reaching _search; this reapplies --where anyway since the join to frontmatter is already
+  // needed for the path column.
   const where = scope ? `WHERE (${scope})` : '';
   // lines is always present now: semantic rows carry their chunk's range, oversized-doc
   // lexical rows gain one below, everything else stays null. similarity stays semantic-only.
@@ -285,19 +291,30 @@ export async function search(db: DatabaseSync, cfg: ResolvedConfig, terms: strin
   return rows;
 }
 
-// The scope resolver for non-search commands (path, peek, map): same coverage rule search()
-// applies (preset_files for a named preset, JS glob matching for an ad hoc include/exclude),
-// then narrowed by the resolved `where`.
-export function scopedPaths(db: DatabaseSync, cfg: ResolvedConfig, overrides: SearchOverrides): Set<string> {
+// Scope only (no --where): preset_files for a named preset, JS glob matching for an ad hoc
+// include/exclude override. Shared by scopedPaths() and search(), which also needs the
+// pre-where set to size the candidate-pool filter.
+function rawScope(db: DatabaseSync, cfg: ResolvedConfig, overrides: SearchOverrides, allPaths?: string[]): Set<string> {
   const effective = resolveSearch(cfg, overrides);
-  const { include, exclude, where } = effective;
-  const allPaths = (db.prepare('SELECT "path" FROM frontmatter').all() as Array<{ path: string }>).map((r) => r.path);
+  const { include, exclude } = effective;
   const adHocScope = overrides.include !== undefined || overrides.exclude !== undefined || overrides.noExclude === true;
-  const paths = adHocScope ? new Set(allPaths.filter((p) => inScope(p, include, exclude))) : new Set((db.prepare('SELECT "path" FROM preset_files WHERE preset = ?').all(effective.presetName) as Array<{ path: string }>).map((r) => r.path));
+  if (!adHocScope) return new Set((db.prepare('SELECT "path" FROM preset_files WHERE preset = ?').all(effective.presetName) as Array<{ path: string }>).map((r) => r.path));
+  const paths = allPaths ?? (db.prepare('SELECT "path" FROM frontmatter').all() as Array<{ path: string }>).map((r) => r.path);
+  return new Set(paths.filter((p) => inScope(p, include, exclude)));
+}
+
+function narrowByWhere(db: DatabaseSync, paths: Set<string>, where: string | undefined): Set<string> {
   if (!where) return paths;
   const whereRows = db.prepare(`SELECT "path" FROM frontmatter f WHERE (${where})`).all() as Array<{ path: string }>;
   const wherePaths = new Set(whereRows.map((r) => r.path));
   return new Set([...paths].filter((p) => wherePaths.has(p)));
+}
+
+// The scope resolver for non-search commands (path, peek, map): same coverage rule search()
+// applies, then narrowed by the resolved `where`.
+export function scopedPaths(db: DatabaseSync, cfg: ResolvedConfig, overrides: SearchOverrides): Set<string> {
+  const effective = resolveSearch(cfg, overrides);
+  return narrowByWhere(db, rawScope(db, cfg, overrides), effective.where);
 }
 
 export interface PresetCoverage {
@@ -327,6 +344,7 @@ export interface TreeMap {
   presets: PresetCoverage[];
   hubs: Row[];
   recent: Row[];
+  recentCaveat: string | null;
 }
 
 const INTERNAL_COLUMNS = new Set(['path', '_mtime', '_size', '_rank', '_parse_error']);
@@ -341,12 +359,16 @@ function chunk<T>(items: T[], size: number): T[][] {
   return out;
 }
 
-// Materializes the resolved scope into a temp table (same shape as traverse.ts's
-// allowed_nodes) so every mapTree query can join/filter against it cheaply.
+// Materializes a path set into a named temp table (same shape as traverse.ts's allowed_nodes)
+// so a query can join/filter against it cheaply instead of binding a parameter per path.
+function materializeScope(db: DatabaseSync, table: string, paths: Set<string>): void {
+  db.exec(`DROP TABLE IF EXISTS ${table}`);
+  db.exec(`CREATE TEMP TABLE ${table} ("path" TEXT PRIMARY KEY)`);
+  db.prepare(`INSERT INTO ${table} SELECT DISTINCT value FROM json_each(?1)`).run(JSON.stringify([...paths]));
+}
+
 function setupMapScope(db: DatabaseSync, paths: Set<string>): void {
-  db.exec('DROP TABLE IF EXISTS _map_scope');
-  db.exec('CREATE TEMP TABLE _map_scope ("path" TEXT PRIMARY KEY)');
-  db.prepare('INSERT INTO _map_scope SELECT DISTINCT value FROM json_each(?1)').run(JSON.stringify([...paths]));
+  materializeScope(db, '_map_scope', paths);
 }
 
 // What is this scope: fixed-size output regardless of tree size. Coverage and features stay
@@ -377,7 +399,12 @@ export function mapTree(db: DatabaseSync, cfg: ResolvedConfig, overrides: Search
 
   const recent = db.prepare(`SELECT "path", datetime("_mtime" / 1000, 'unixepoch') AS modified FROM frontmatter ${scopeWhere} ORDER BY "_mtime" DESC LIMIT 5`).all() as Row[];
 
-  return { docs, fields, fieldsTotal: allFields.length, features: featureStates(cfg), presets: presetCoverage(db, cfg), hubs, recent };
+  // A fresh clone/copy stamps files with checkout time, not edit history; second granularity
+  // matches the `recent` table above and is coarse enough to catch that without an exact-ms match.
+  const topSecond = db.prepare(`SELECT COUNT(*) AS n FROM frontmatter ${scopeWhere} GROUP BY CAST("_mtime" / 1000 AS INTEGER) ORDER BY n DESC LIMIT 1`).get() as { n: number } | undefined;
+  const recentCaveat = topSecond && docs.count > 1 && topSecond.n > docs.count / 2 ? `${topSecond.n} of ${docs.count} files share one modified second, so recency likely reflects a checkout or copy, not edit history` : null;
+
+  return { docs, fields, fieldsTotal: allFields.length, features: featureStates(cfg), presets: presetCoverage(db, cfg), hubs, recent, recentCaveat };
 }
 
 // Note resolution shared by peek and path: an exact path, or a unique basename (case

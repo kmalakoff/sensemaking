@@ -321,7 +321,7 @@ function asCosine(score: number): number {
 // Best chunk per file by cosine, its line range riding along; FTS5 operators are stripped as
 // lexical syntax. Similarity comes back because the fused score cannot express match quality,
 // and nearest-neighbour search always returns a neighbour however far away.
-export async function semanticCandidates(db: DatabaseSync, cfg: Config, terms: string, fetch: number): Promise<Array<{ path: string; lines: string; similarity: number }>> {
+export async function semanticCandidates(db: DatabaseSync, cfg: Config, terms: string, fetch: number, allowed?: Set<string>): Promise<Array<{ path: string; lines: string; similarity: number }>> {
   const baseDir = (cfg as Partial<ResolvedConfig>).baseDir;
   if (!baseDir) throw new SenseError('EMBED_MODEL', 'semantic expansion needs a config with baseDir (use loadConfig/open)');
   await embedPending(db, cfg, baseDir);
@@ -341,6 +341,7 @@ export async function semanticCandidates(db: DatabaseSync, cfg: Config, terms: s
 
   const best = new Map<string, { score: number; lines: string }>();
   for (const row of rows) {
+    if (allowed && !allowed.has(row.path)) continue;
     const q = new Int8Array(row.vector.buffer, row.vector.byteOffset, Math.min(storeDims, row.vector.byteLength));
     let dot = 0;
     for (let d = 0; d < q.length; d++) dot += q[d] * qv[d];

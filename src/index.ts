@@ -9,7 +9,7 @@ export type { OpenResult } from './db.ts';
 export { clearCache, open } from './db.ts';
 export type { SenseErrorCode } from './errors.ts';
 export { SenseError } from './errors.ts';
-export type { Row } from './output.ts';
+export type { Format, Row, RowFormat } from './output.ts';
 export { printRows } from './output.ts';
 
 export type { WatchEvent, WatchOptions } from './watch.ts';

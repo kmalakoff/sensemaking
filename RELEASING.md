@@ -2,7 +2,7 @@
 
 Everything that can block a release runs **before** the version bump, and publishing is the last step of all. A regression or a stale doc found after `npm publish` is already shipped: consumers install it, and the only remedy is another release.
 
-Subagents dispatched during a release are spawned with `model: sonnet`. Reviews at high or max effort go through the `code-review-sonnet` skill, which keeps the built-in review's fork and its workers on Sonnet whatever the session model.
+Subagents dispatched during a release are spawned with `model: sonnet`. Reviews at high or max effort go through the `code-review-sonnet` skill, which keeps the built-in review's fork and its workers on Sonnet whatever the session model. When the session model is costlier than Sonnet, the multi-step steps below (the benchmark write-up, the docs reconcile, the pack-and-install verification) are dispatched to subagents rather than run inline; the session keeps the one-command gates and the reading of results.
 
 1. `npm test` and `npx tsds validate`, both clean. `npm run test:engines` when the release touches anything platform-near (SQLite pragmas, fs, watch): it runs the suite on the oldest supported Node, which is where "works on my machine" breaks.
 
@@ -37,7 +37,7 @@ The mechanical facts are tested in `test/unit/docs.test.ts`; the rest is a read.
 
 6. **Verify what actually ships, against what is already published.** The repo is not the package; every check so far ran against the repo. `npm pack --dry-run` and read the file list: everything intended (`dist`, `skills`, `schema.json`), nothing stray. Then a clean-install smoke test: `npm pack`, install the tarball into a temp dir, and on a scratch tree run `sense --version`, `sense init`, `sense map`, `sense search`, one `sense query`. This catches works-in-repo-broken-when-packed failures (a missing file, a path that only resolves in the checkout). Finally compare against the published package (`npm view sensemaking files description keywords engines version`): every difference between it and what is about to ship must be intended, not discovered by a consumer. Comparison beats memory: drift is caught by diffing against what exists, not by remembering what changed.
 
-7. Commit steps 1–6.
+7. Commit steps 1–6, as one commit, or a few when the diff separates naturally (the code change, the benchmark tables). A release is not a trail of incremental work-in-progress commits; if the work accumulated as one, squash before the bump. Messages are short and factual, no Co-Authored-By trailer.
 
 8. Maintainer picks the version, then: `npm version <chosen>` → `npm publish` → `git push --follow-tags`. Confirm the tag reached the remote (`git ls-remote --tags origin`): a skipped push leaves a version on npm with no commit or tag behind it, and nothing downstream notices.
 
