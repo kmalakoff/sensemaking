@@ -67,11 +67,13 @@ export function featuresLine(features: { on: string[]; off: string[] }): string 
   return `features: ${features.on.join(', ')}${off}`;
 }
 
-export function presetsLines(presets: Array<{ name: string; files: number; embedded: number }>): string[] {
-  return ['presets:', ...presets.map((p) => `  ${p.name}: ${p.files} file(s), ${p.embedded} embedded`)];
+export function presetsLines(presets: Array<{ name: string; files: number; embedded: number; semantic?: boolean }>): string[] {
+  // "0 embedded" is ambiguous between a scope that declined vectors and one that has not built
+  // them yet, so a semantic-off preset says which.
+  return ['presets:', ...presets.map((p) => `  ${p.name}: ${p.files} file(s), ${p.embedded} embedded${p.semantic === false ? ' (semantic: false)' : ''}`)];
 }
 
-export function renderMap(result: { docs: { count: number; bytes: number }; fields: Row[]; fieldsTotal: number; features: { on: string[]; off: string[] }; presets: Array<{ name: string; files: number; embedded: number }>; hubs: Row[]; recent: Row[] }): string {
+export function renderMap(result: { docs: { count: number; bytes: number }; fields: Row[]; fieldsTotal: number; features: { on: string[]; off: string[] }; presets: Array<{ name: string; files: number; embedded: number; semantic?: boolean }>; hubs: Row[]; recent: Row[] }): string {
   const parts = [`docs: ${result.docs.count} (${Math.round(result.docs.bytes / 1024)} KB)`, featuresLine(result.features), '', ...presetsLines(result.presets), '', renderRows(result.fields, 'table')];
   if (result.fieldsTotal > result.fields.length) parts.push(`(+${result.fieldsTotal - result.fields.length} more fields)`);
   if (result.hubs.length > 0) parts.push('\nhubs (by link rank):', renderRows(result.hubs, 'table'));
@@ -80,8 +82,11 @@ export function renderMap(result: { docs: { count: number; bytes: number }; fiel
   return parts.join('\n');
 }
 
-export function renderPeek(result: { path: string; tokens: number; frontmatter: Row; sections: Row[]; outbound: string[]; backlinks: string[]; unresolved: string[]; sectionsTotal: number; outboundTotal: number; backlinksTotal: number; unresolvedTotal: number; off: string[] }): string {
+export function renderPeek(result: { path: string; tokens: number; frontmatter: Row; parseError?: string | null; sections: Row[]; outbound: string[]; backlinks: string[]; unresolved: string[]; sectionsTotal: number; outboundTotal: number; backlinksTotal: number; unresolvedTotal: number; off: string[] }): string {
   const lines = [`${result.path}  (~${result.tokens} tokens)`];
+  // Otherwise a refused parse is indistinguishable from a note that has no frontmatter, which
+  // is the confusion the whole quarantine design exists to remove.
+  if (result.parseError) lines.push(`  frontmatter: did not parse, so none of it is indexed (${result.parseError})`);
   for (const [key, value] of Object.entries(result.frontmatter)) lines.push(`  ${key}: ${value}`);
   if (result.sections.length > 0) {
     lines.push('', 'sections:');

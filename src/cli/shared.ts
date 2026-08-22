@@ -1,6 +1,7 @@
 import type { ParseArgsOptionsConfig } from 'node:util';
 import { parseArgs } from 'node:util';
 import type { ResolvedConfig, SearchOverrides } from '../config.ts';
+import { resolvePreset } from '../config.ts';
 import type { OpenResult } from '../db.ts';
 import { open } from '../db.ts';
 import type { Row } from '../output.ts';
@@ -93,15 +94,35 @@ export async function withDb(ctx: Ctx, configPath: string | undefined, fn: (db: 
   }
 }
 
+// `--preset` on SQL binds the scope rather than applying it: the statement joins `scope`
+// itself. Filtering behind the query's back is not available -- the obvious version, temp views
+// shadowing the base tables, cannot cover `content`, because FTS5 `MATCH` uses the table name
+// as a hidden column and a view has none. A flag that silently scoped three tables of four
+// would look scoped and not be. See plans/vault-field-report-fixes.md item F.
+function bindScope(db: OpenResult['db'], cfg: ResolvedConfig, preset: string): void {
+  const { name } = resolvePreset(cfg, preset); // unknown names throw, listing what is declared
+  db.exec('DROP TABLE IF EXISTS temp.scope');
+  db.exec('CREATE TEMP TABLE scope ("path" TEXT PRIMARY KEY)');
+  db.prepare('INSERT INTO temp.scope ("path") SELECT "path" FROM preset_files WHERE preset = ?').run(name);
+}
+
 // An unbound `?` silently binds NULL, so mismatched param counts fail loudly instead.
-export function runSql(cfg: ResolvedConfig, sql: string, params: string[], format: 'table' | 'json', label: string): void {
+export function runSql(cfg: ResolvedConfig, sql: string, params: string[], format: 'table' | 'json', label: string, preset?: string): void {
   const placeholderCount = (sql.match(/\?/g) ?? []).length;
   if (params.length !== placeholderCount) {
     console.error(`${label} expects ${placeholderCount} parameter(s), got ${params.length}`);
     process.exit(2);
   }
+  // Naming a preset and never joining it would return the whole index while reading as scoped,
+  // which is the one hazard of binding rather than applying. Refuse instead.
+  if (preset !== undefined && !/\bscope\b/i.test(sql)) {
+    console.error(`--preset binds a temporary "scope" table of the preset's paths, and ${label} never joins it, so the preset would have no effect`);
+    console.error(`add: JOIN scope ON scope."path" = <table>."path"`);
+    process.exit(2);
+  }
   const { db, warnings } = open(cfg);
   printWarnings(warnings);
+  if (preset !== undefined) bindScope(db, cfg, preset);
   let rows: Row[];
   try {
     rows = db.prepare(sql).all(...params) as Row[];

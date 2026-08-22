@@ -200,6 +200,46 @@ describe('semantic absence signal', () => {
   });
 });
 
+describe('chunking covers the body, not the raw file', () => {
+  it('the first chunk starts at the first body line, so no chunk is the frontmatter block', () => {
+    const baseDir = tmpTree();
+    writeNote(baseDir, 'a.md', { frontmatter: { title: 'A', status: 'open' }, body: '# Heading\n\nprose about orchards' });
+    const { db } = openSemantic(baseDir, { model: writeModel(), type: 'static' });
+    const chunks = db.prepare('SELECT chunk, start_line, end_line FROM embeddings WHERE "path" = ? ORDER BY chunk').all('a.md') as Array<{ chunk: number; start_line: number; end_line: number }>;
+    // sections is 1-indexed over the raw file, so agreeing with it is the whole invariant:
+    // both must point at the same heading line for a range to be a direct Read range.
+    const heading = db.prepare('SELECT start_line FROM sections WHERE "path" = ? AND idx = 0').get('a.md') as { start_line: number };
+    db.close();
+    assert.equal(chunks.length, 1, `frontmatter must not become a chunk of its own: ${JSON.stringify(chunks)}`);
+    assert.equal(chunks[0].start_line, heading.start_line, 'the chunk starts where sections says the heading is, not at line 1');
+  });
+
+  it('a frontmatter-only note has no chunks at all', () => {
+    const baseDir = tmpTree();
+    writeNote(baseDir, 'stub.md', { frontmatter: { title: 'Stub', type: 'project' }, body: '' });
+    const { db } = openSemantic(baseDir, { model: writeModel(), type: 'static' });
+    const n = (db.prepare('SELECT COUNT(*) AS n FROM embeddings WHERE "path" = ?').get('stub.md') as { n: number }).n;
+    db.close();
+    assert.equal(n, 0, 'an empty body embeds to nothing, rather than to a vector of its own YAML');
+  });
+});
+
+describe('similarity is a cosine, so it is bounded', () => {
+  it('two notes with identical text score exactly 1, not 1.001', async () => {
+    const baseDir = tmpTree();
+    const body = '# Orchard\n\napple orchard prose that both notes share exactly';
+    writeNote(baseDir, 'one.md', { frontmatter: { title: 'One' }, body });
+    writeNote(baseDir, 'two.md', { frontmatter: { title: 'One' }, body });
+    const { db, cfg } = openSemantic(baseDir, { model: writeModel(), type: 'static' });
+    const rows = await relatedNotes(db, cfg, 'one.md', {}, 5);
+    db.close();
+    // int8 storage dequantises a little either side of the true cosine; clamping keeps the
+    // column a number a reader can reason about.
+    assert.equal(rows[0].path, 'two.md');
+    assert.equal(rows[0].similarity, 1, `identical text must not exceed 1, got ${rows[0].similarity}`);
+  });
+});
+
 describe('similarity provenance', () => {
   it('a multi-chunk note reports the best chunk: its similarity and its line range agree', async () => {
     const base = tmpTree();
@@ -261,7 +301,7 @@ describe('vector coverage', () => {
     // Vectors are lazy: rows exist with vector NULL until the first semantic search. Coverage
     // saying "1 embedded" here contradicted status's own "0 embedded, 1 pending" line.
     const before = presetCoverage(db, cfg);
-    assert.deepEqual(before, [{ name: 'default', files: 1, embedded: 0 }]);
+    assert.deepEqual(before, [{ name: 'default', files: 1, embedded: 0, semantic: true }]);
     db.close();
   });
 });
@@ -308,11 +348,35 @@ describe('related command', () => {
     assert.deepEqual(result, [], `every apple-similar note here is a backlink, so related must be empty: ${JSON.stringify(result)}`);
   });
 
-  it('is [] when embeddings are off, not an error (embeddings table absent)', async () => {
+  // Vectors are related's only signal, so every way of not having them names itself. An empty
+  // table is then unambiguous: nothing near in meaning that this note does not already link to.
+  it('errors when the tree names no embedding model, rather than answering []', async () => {
     const { db, cfg } = openConfig({ presets: { default: { include: ['**/*.md'] } }, queries: {}, baseDir: relatedTree(), configPath: null });
-    const result = await relatedNotes(db, cfg, 'target.md', {}, 5);
+    await assert.rejects(() => relatedNotes(db, cfg, 'target.md', {}, 5), /no embedding model/);
     db.close();
-    assert.deepEqual(result, []);
+  });
+
+  it("errors on a semantic:false preset instead of borrowing another preset's vectors", async () => {
+    const baseDir = relatedTree();
+    const { db, cfg } = openConfig({
+      presets: { default: { include: ['**/*.md'] }, lex: { include: ['**/*.md'], semantic: false } },
+      queries: {},
+      embed: { model: writeModel(), type: 'static' },
+      baseDir,
+      configPath: null,
+    });
+    // The files are embedded, via the overlapping semantic-on preset. Reading the flag is what
+    // stops those vectors answering for a scope that declined them.
+    await assert.rejects(() => relatedNotes(db, cfg, 'target.md', { preset: 'lex' }, 5), /"semantic": false/);
+    db.close();
+  });
+
+  it('errors when the seed note has no indexed text, rather than answering []', async () => {
+    const baseDir = relatedTree();
+    writeNote(baseDir, 'stub.md', { frontmatter: { title: 'Stub' }, body: '' });
+    const { db, cfg } = openSemantic(baseDir, { model: writeModel(), type: 'static' });
+    await assert.rejects(() => relatedNotes(db, cfg, 'stub.md', {}, 5), /no indexed text/);
+    db.close();
   });
 
   it('computes the lazy vectors itself, so a fresh index answers without a prior semantic search', async () => {

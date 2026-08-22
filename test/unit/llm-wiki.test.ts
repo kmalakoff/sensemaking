@@ -126,11 +126,22 @@ describe('llm-wiki example config (skills/sense-setup/EXAMPLES.md)', () => {
     assert.ok(rows.some((r) => r.path === 'raw/paper1.md'));
   });
 
-  it('sense check: every saved query/search in the example config probes clean', () => {
+  // Running an entry is what validates it, so the example config is proved by running every
+  // entry it declares rather than by a separate verb.
+  it('every saved query and search in the example config runs clean', () => {
     const dir = llmWikiTree();
-    const result = runCli(['check'], { cwd: dir });
-    assert.equal(result.status, 0, result.stdout + result.stderr);
-    assert.doesNotMatch(result.stdout, /FAILED/);
+    const listed = runCli(['--list'], { cwd: dir });
+    assert.equal(listed.status, 0, listed.stderr);
+    const names = listed.stdout
+      .trim()
+      .split('\n')
+      .map((line) => line.split(/\s+/)[0])
+      .filter(Boolean);
+    assert.ok(names.length > 0, 'the example config declares saved entries');
+    for (const name of names) {
+      const result = runCli([name], { cwd: dir });
+      assert.equal(result.status, 0, `${name}: ${result.stdout}${result.stderr}`);
+    }
   });
 
   it('sense status and sense map report per-preset coverage for both wiki and raw', () => {

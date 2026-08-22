@@ -141,14 +141,13 @@ describe('saved searches', () => {
     }
   });
 
-  it('check fails on a saved search naming an unknown preset', () => {
+  it('running a saved search that names an unknown preset fails, naming the declared ones', () => {
     const dir = makeTree();
     writeConfig(dir, { presets: DEFAULT_LEXICAL, queries: { hot: { search: 'price', preset: 'nope' } } });
 
-    const result = runCli(['check'], { cwd: dir });
+    const result = runCli(['hot'], { cwd: dir });
     assert.equal(result.status, 1);
-    assert.match(result.stdout, /hot.*FAILED/);
-    assert.match(result.stdout, /unknown preset "nope"/);
+    assert.match(result.stderr, /unknown preset "nope"/);
   });
 
   it('--list labels both kinds, so the verb an entry runs is visible without opening the config', () => {
@@ -179,14 +178,25 @@ describe('saved searches', () => {
     }
   });
 
-  it('check probes a saved search lexically: a typo in where fails check, not the eventual caller', () => {
+  // Running an entry is how it is validated: a typo errors with the offending column named,
+  // and exits nonzero, which is the whole of what `sense check` used to add.
+  it('running a saved search with a typo in where fails, naming the column', () => {
     const dir = makeTree();
     writeConfig(dir, { presets: DEFAULT_LEXICAL, queries: { hot: { search: 'price', where: "f.stauts = 'active'" } } });
 
-    const result = runCli(['check'], { cwd: dir });
-    assert.equal(result.status, 1, `expected check to fail: ${result.stdout}`);
-    assert.match(result.stdout, /hot.*FAILED/);
-    assert.match(result.stdout, /stauts/);
+    const result = runCli(['hot'], { cwd: dir });
+    assert.equal(result.status, 1, `expected the run to fail: ${result.stdout}`);
+    assert.match(result.stderr, /stauts/);
+  });
+
+  it('a parameterised saved query validates with any argument, since preparing precedes binding', () => {
+    const dir = makeTree();
+    writeConfig(dir, { presets: DEFAULT_LEXICAL, queries: { broken: { sql: 'SELECT path FROM frontmatter WHERE has(stauts, ?)' }, fine: { sql: 'SELECT path FROM frontmatter WHERE has(status, ?)' } } });
+
+    const bad = runCli(['broken', 'zzz'], { cwd: dir });
+    assert.equal(bad.status, 1);
+    assert.match(bad.stderr, /no such column: stauts/);
+    assert.equal(runCli(['fine', 'zzz'], { cwd: dir }).status, 0);
   });
 
   it('a { sql } entry lists as sql', () => {

@@ -3,9 +3,9 @@ import { join, matchesGlob } from 'node:path';
 import posix from 'node:path/posix';
 import type { DatabaseSync } from 'node:sqlite';
 import type { FeatureName, ResolvedConfig, SearchOverrides } from './config.ts';
-import { anyPresetEmbeds, featureEnabled, featureStates, presetNames, resolveSearch } from './config.ts';
+import { anyPresetEmbeds, embedEnabled, featureEnabled, featureStates, presetNames, presetSemanticEnabled, resolveSearch } from './config.ts';
 import { SenseError } from './errors.ts';
-import { embedPending, modelPresent, semanticCandidates, similarNotes } from './features/embed.ts';
+import { embedPending, hasEmbedding, modelPresent, semanticCandidates, similarNotes } from './features/embed.ts';
 import { linkEdges } from './features/index.ts';
 import { personalizedRank } from './graph.ts';
 import type { Row } from './output.ts';
@@ -122,9 +122,6 @@ export interface SearchOptions {
   include?: string[]; // ad hoc scope override (repeatable --include); independent of exclude
   exclude?: string[]; // ad hoc scope override (repeatable --exclude); independent of include
   noExclude?: boolean; // --no-exclude: drop the preset's exclude for this command
-  // Validation probe, no CLI flag: everything `check` validates lives in the lexical half, and
-  // a vector pass would embed the tree (or bill an api) to prove a saved search parses.
-  probe?: boolean;
 }
 
 // node:path's matchesGlob is experimental (stable behind an unstable-API flag) as of the
@@ -161,7 +158,7 @@ export async function search(db: DatabaseSync, cfg: ResolvedConfig, terms: strin
 
   // Asking for vectors without a model is a misconfiguration, not a mode: degrading would make
   // the same search answer differently before and after a download. semantic:false never asks.
-  const wantsVectors = !opts.probe && effective.semantic && anyPresetEmbeds(cfg);
+  const wantsVectors = effective.semantic && anyPresetEmbeds(cfg);
   if (wantsVectors && !modelPresent(cfg)) {
     throw new SenseError('EMBED_MODEL_MISSING', `preset "${effective.presetName}" searches with vectors, but the embedding model is not available; run \`sense download\`, or set "semantic": false on that preset to search on words and links`);
   }
@@ -293,6 +290,8 @@ export interface PresetCoverage {
   name: string;
   files: number;
   embedded: number;
+  // Reported so 0 embedded reads as "this scope declined vectors" rather than "not yet built".
+  semantic: boolean;
 }
 
 // Indexing derives from presets, so the derivation stays visible. Read from preset_files, not
@@ -302,7 +301,7 @@ export function presetCoverage(db: DatabaseSync, cfg: ResolvedConfig): PresetCov
   return presetNames(cfg).map((name) => {
     const files = (db.prepare('SELECT COUNT(*) AS n FROM preset_files WHERE preset = ?').get(name) as { n: number }).n;
     const embedded = embedActive ? (db.prepare('SELECT COUNT(*) AS n FROM preset_files pf WHERE pf.preset = ? AND EXISTS (SELECT 1 FROM embeddings e WHERE e."path" = pf."path" AND e.vector IS NOT NULL)').get(name) as { n: number }).n : 0;
-    return { name, files, embedded };
+    return { name, files, embedded, semantic: presetSemanticEnabled(cfg, name) };
   });
 }
 
@@ -316,7 +315,7 @@ export interface TreeMap {
   recent: Row[];
 }
 
-const INTERNAL_COLUMNS = new Set(['path', '_mtime', '_size', '_rank']);
+const INTERNAL_COLUMNS = new Set(['path', '_mtime', '_size', '_rank', '_parse_error']);
 
 // A result row is capped at SQLITE_MAX_COLUMN (2000, default); two aggregate expressions
 // per field keeps a chunk's row safely under that regardless of how many fields the tree has.
@@ -383,6 +382,9 @@ export interface Peek {
   path: string;
   tokens: number;
   frontmatter: Row;
+  // Set when the note's frontmatter was refused, so an empty frontmatter block reads as "did
+  // not parse" rather than "has none". Same reason `_parse_error` sits in the row.
+  parseError: string | null;
   sections: Row[];
   outbound: string[];
   backlinks: string[];
@@ -408,6 +410,7 @@ export function peek(db: DatabaseSync, cfg: ResolvedConfig, pathArg: string, ove
   const path = resolveNote(paths, pathArg);
 
   const row = db.prepare('SELECT * FROM frontmatter WHERE "path" = ?').get(path) as Row;
+  const parseError = (row._parse_error as string | null) ?? null;
   const frontmatter: Row = {};
   for (const [key, value] of Object.entries(row)) {
     if (!INTERNAL_COLUMNS.has(key) && value !== null) frontmatter[key] = value;
@@ -433,6 +436,7 @@ export function peek(db: DatabaseSync, cfg: ResolvedConfig, pathArg: string, ove
     path,
     tokens: Math.ceil(((row._size as number) ?? 0) / 4),
     frontmatter,
+    parseError,
     sections,
     outbound: outbound.slice(0, PEEK_LIST_LIMIT),
     backlinks,
@@ -455,13 +459,29 @@ export async function relatedNotes(db: DatabaseSync, cfg: ResolvedConfig, pathAr
   const backlinks = (db.prepare('SELECT DISTINCT src FROM links WHERE dst = ?').all(path) as Array<{ src: string }>).map((r) => r.src);
   const exclude = new Set([path, ...outbound, ...backlinks]);
 
-  const allowed = scopedPaths(db, cfg, overrides);
-  if (!scopeHasEmbeddings(db, cfg, allowed)) return [];
-  // Vectors are the only signal, so [] would read as "nothing is related" rather than "no
-  // model". Top up pending rows too, or a fresh index answers 0 until some search runs.
+  // Vectors are the only signal `related` has, so every way of not having them is an error
+  // naming the cause. An empty table then means one thing: nothing near in meaning that this
+  // note does not already link to, which is a real answer.
+  const effective = resolveSearch(cfg, overrides);
+  if (!embedEnabled(cfg)) {
+    throw new SenseError('EMBED_DISABLED', 'related ranks notes by meaning, and this tree has no embedding model; add an "embed" block naming one to sense.config.json, then run `sense download` (search works without it, on words and links)');
+  }
+  // search gates on the same flag (see wantsVectors above); reading it here too keeps
+  // `semantic: false` meaning one thing. Without this, an overlapping semantic-on preset's
+  // vectors would answer for a scope that declined them.
+  if (!effective.semantic) {
+    throw new SenseError('PRESET_NOT_SEMANTIC', `preset "${effective.presetName}" sets "semantic": false, so this scope has no vectors and related has no other signal; search it instead (words and links), or set semantic back on for that preset`);
+  }
   if (!modelPresent(cfg)) {
     throw new SenseError('EMBED_MODEL_MISSING', 'related ranks notes by meaning, so it needs the embedding model, which is not downloaded; run `sense download` (search still works without it, on words and links)');
   }
+  const allowed = scopedPaths(db, cfg, overrides);
+  // Top up pending rows before the seed check, or a fresh index reports every note as
+  // having no indexed text until some search has run.
   await embedPending(db, cfg, cfg.baseDir);
+  if (!hasEmbedding(db, path)) {
+    throw new SenseError('NOTE_NOT_EMBEDDED', `${path} has no indexed text to compare -- a note that is frontmatter only, or empty, has nothing to rank by meaning`);
+  }
+  if (!scopeHasEmbeddings(db, cfg, allowed)) return [];
   return similarNotes(db, cfg, path, { exclude, allowed, k });
 }

@@ -32,9 +32,15 @@ interface Chunk {
 }
 
 // Deterministic, so embed time can re-derive text from stored line ranges. Heading-delimited,
-// preamble kept, whole file when no headings; the title/summary prefix mirrors bm25 weighting.
-function chunksOf(raw: string, search?: { title: string; summary: string }): Chunk[] {
-  const lines = raw.split('\n');
+// preamble kept, whole body when no headings; the title/summary prefix mirrors bm25 weighting.
+//
+// Chunks the body, not the raw file, with `offset` shifting line numbers back onto the raw
+// file so a range stays a direct Read range (sections is 1-indexed over raw too). Chunking raw
+// put the frontmatter block in its own leading chunk on every note with a heading, which made
+// `lines` point at YAML and made frontmatter-only notes near-identical to each other. It also
+// disagreed with FTS, which indexes the body alone.
+function chunksOf(body: string, search?: { title: string; summary: string }, offset = 0): Chunk[] {
+  const lines = body.split('\n');
   const starts: number[] = [];
   let inFence = false;
   for (let i = 0; i < lines.length; i++) {
@@ -53,7 +59,9 @@ function chunksOf(raw: string, search?: { title: string; summary: string }): Chu
       .slice(start - 1, end)
       .join('\n')
       .trim();
-    if (text.length > 0) chunks.push({ startLine: start, endLine: end, text: prefix ? `${prefix}\n${text}` : text });
+    // A body with nothing in it yields no chunks at all, so a frontmatter-only note has no
+    // vectors rather than a vector of its own YAML.
+    if (text.length > 0) chunks.push({ startLine: start + offset, endLine: end + offset, text: prefix ? `${prefix}\n${text}` : text });
   });
   return chunks;
 }
@@ -63,8 +71,9 @@ export const embed: Feature = {
   schema(db) {
     db.exec(`CREATE TABLE IF NOT EXISTS embeddings ("path" TEXT, chunk INTEGER, start_line INTEGER, end_line INTEGER, scale REAL, vector BLOB, PRIMARY KEY ("path", chunk))`);
   },
-  extract(raw, _body, search) {
-    return chunksOf(raw, search);
+  extract(raw, body, search) {
+    // Lines the frontmatter occupies, so body line 1 maps back to its raw line number.
+    return chunksOf(body, search, raw.split('\n').length - body.split('\n').length);
   },
   remove(db, path) {
     db.prepare('DELETE FROM embeddings WHERE "path" = ?').run(path);
@@ -303,6 +312,12 @@ export async function embedPending(db: DatabaseSync, cfg: Config, baseDir: strin
   report.finish();
 }
 
+// Dequantised int8 dot products land a little either side of a true cosine, so an identical
+// pair prints 1.001 and undermines a column whose whole job is being a bounded number.
+function asCosine(score: number): number {
+  return Math.round(Math.min(1, Math.max(-1, score)) * 1000) / 1000;
+}
+
 // Best chunk per file by cosine, its line range riding along; FTS5 operators are stripped as
 // lexical syntax. Similarity comes back because the fused score cannot express match quality,
 // and nearest-neighbour search always returns a neighbour however far away.
@@ -336,7 +351,14 @@ export async function semanticCandidates(db: DatabaseSync, cfg: Config, terms: s
   return [...best.entries()]
     .sort((a, b) => b[1].score - a[1].score)
     .slice(0, fetch)
-    .map(([path, b]) => ({ path, lines: b.lines, similarity: Math.round(b.score * 1000) / 1000 }));
+    .map(([path, b]) => ({ path, lines: b.lines, similarity: asCosine(b.score) }));
+}
+
+// Whether a note has any chunk with a vector. Distinguishes "nothing is near this note" from
+// "this note has no text", which look the same in an empty result.
+export function hasEmbedding(db: DatabaseSync, path: string): boolean {
+  const row = db.prepare('SELECT 1 AS ok FROM embeddings WHERE "path" = ? AND vector IS NOT NULL LIMIT 1').get(path) as { ok: number } | undefined;
+  return row !== undefined;
 }
 
 // Note-to-note similarity is the max cosine over (target chunk, other chunk) pairs, one linear
@@ -367,5 +389,5 @@ export function similarNotes(db: DatabaseSync, _cfg: Config, path: string, opts:
   return [...best.entries()]
     .sort((a, b) => b[1] - a[1])
     .slice(0, opts.k)
-    .map(([p, score]) => ({ path: p, similarity: Math.round(score * 1000) / 1000 }));
+    .map(([p, score]) => ({ path: p, similarity: asCosine(score) }));
 }

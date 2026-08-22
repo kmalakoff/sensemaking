@@ -1,8 +1,9 @@
 import assert from 'node:assert';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { SUPPORTED_CONFIG_VERSION } from 'sensemaking';
+import { parse } from 'yaml';
 import { packageRoot } from '../lib/cli.ts';
 
 // Published surfaces drift silently: nothing fails when the README stops describing what
@@ -41,5 +42,33 @@ describe('published docs', () => {
       .replace(/\s+/g, ' ')
       .replace(/\.$/, '');
     assert.equal(pkg.description, opening);
+  });
+});
+
+// Every shipped SKILL.md is installed by tooling that parses its frontmatter as YAML, and an
+// unquoted `description:` containing ": " reads as a nested mapping and is skipped entirely.
+// Copying the files and diffing them proves nothing about this; parsing them does.
+describe('shipped skills', () => {
+  const skillDirs = () =>
+    readdirSync(join(packageRoot, 'skills'), { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .map((d) => d.name);
+
+  it('every SKILL.md has frontmatter that parses, with a name and description', () => {
+    const names = skillDirs();
+    assert.ok(names.length > 0, 'no skills found to check');
+    for (const name of names) {
+      const file = join(packageRoot, 'skills', name, 'SKILL.md');
+      const fm = /^---\n([\s\S]*?)\n---\n/.exec(readFileSync(file, 'utf8'));
+      assert.ok(fm, `${name}/SKILL.md has no frontmatter block`);
+      const parsed = parse(fm[1]) as { name?: string; description?: string };
+      assert.equal(parsed.name, name, `${name}/SKILL.md declares a name that is not its directory`);
+      assert.ok(parsed.description && parsed.description.length > 0, `${name}/SKILL.md has no description`);
+    }
+  });
+
+  it('every skill named in package.json files is actually packed', () => {
+    const pkg = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8')) as { files: string[] };
+    assert.ok(pkg.files.includes('skills'), 'skills/ is not in package.json files');
   });
 });

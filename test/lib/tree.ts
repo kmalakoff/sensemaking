@@ -11,14 +11,22 @@ export function tmpTree(): string {
 }
 
 export interface NoteSpec {
-  frontmatter?: Record<string, unknown>;
+  // An object is JSON-serialized per key, which is the convenient form for tests that only
+  // need well-formed frontmatter. A string is written verbatim, which is the only way to
+  // express the malformed YAML the parse-policy tests are about.
+  frontmatter?: Record<string, unknown> | string;
   body?: string;
 }
 
 export function writeNote(baseDir: string, relPath: string, { frontmatter = {}, body = 'body' }: NoteSpec = {}): void {
-  const lines = Object.entries(frontmatter).map(([k, v]) => `${k}: ${JSON.stringify(v)}`);
+  const fm =
+    typeof frontmatter === 'string'
+      ? frontmatter
+      : Object.entries(frontmatter)
+          .map(([k, v]) => `${k}: ${JSON.stringify(v)}`)
+          .join('\n');
   mkdirSync(dirname(join(baseDir, relPath)), { recursive: true });
-  writeFileSync(join(baseDir, relPath), `---\n${lines.join('\n')}\n---\n\n${body}\n`);
+  writeFileSync(join(baseDir, relPath), `---\n${fm}\n---\n\n${body}\n`);
 }
 
 // v4 makes the `embed` block the whole vector switch, so a tree without one has no vectors

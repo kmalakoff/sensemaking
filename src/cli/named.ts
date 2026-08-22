@@ -20,7 +20,9 @@ export default async function named(ctx: Ctx, queryName: string): Promise<void> 
   }
 
   if ('sql' in entry) {
-    runSql(cfg, entry.sql, params, format, `query "${queryName}"`);
+    // A saved statement written against `scope` is preset-agnostic, so the same entry can be
+    // re-pointed at another layer from the command line instead of being copied per preset.
+    runSql(cfg, entry.sql, params, format, `query "${queryName}"`, values.preset as string | undefined);
     return;
   }
 

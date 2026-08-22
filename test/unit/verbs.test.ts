@@ -937,37 +937,15 @@ describe('flag value shapes', () => {
 });
 
 // parse() exits rather than returning, so --help cannot fall through into the command body.
-// rebuild is the cheapest command where falling through would be visible.
+// status is the cheapest command where falling through would be visible.
 describe('--help never runs the command', () => {
-  it('rebuild --help prints usage and builds no cache', () => {
+  it('status --help prints usage and builds no cache', () => {
     const base = makeTree();
     writeFileSync(join(base, 'sense.config.json'), JSON.stringify({ version: 4, presets: { default: { include: ['**/*.md'] } }, queries: {} }));
-    const result = runCli(['rebuild', '--help'], { cwd: base });
+    const result = runCli(['status', '--help'], { cwd: base });
     assert.equal(result.status, 0, result.stderr);
-    assert.match(result.stdout, /usage: sense rebuild/);
-    assert.equal(existsSync(join(base, '.sense', 'cache.db')), false, 'rebuild --help built a cache');
-  });
-});
-
-// check exists to prove a config parses, so it must not be the command that embeds a whole
-// tree (or bills an api endpoint) as a side effect.
-describe('check never runs the vector half', () => {
-  it('a saved search probes without touching the model, even when one is configured', () => {
-    const base = tmpTree();
-    writeNote(base, 'a.md', { body: 'alpha pricing' });
-    writeFileSync(
-      join(base, 'sense.config.json'),
-      JSON.stringify({
-        version: 4,
-        presets: { default: { include: ['**/*.md'] } },
-        // An api endpoint nothing is listening on: reaching it would fail the probe loudly.
-        embed: { model: 'unreachable/model', type: 'api', url: 'http://127.0.0.1:1/v1' },
-        queries: { hot: { search: 'pricing' } },
-      })
-    );
-    const result = runCli(['check'], { cwd: base });
-    assert.equal(result.status, 0, result.stdout + result.stderr);
-    assert.doesNotMatch(result.stdout, /FAILED/);
+    assert.match(result.stdout, /usage: sense status/);
+    assert.equal(existsSync(join(base, '.sense', 'cache.db')), false, 'status --help built a cache');
   });
 });
 

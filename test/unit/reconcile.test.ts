@@ -2,7 +2,7 @@ import assert from 'node:assert';
 import { mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { open, rebuild, SenseError } from 'sensemaking';
+import { clearCache, open, SenseError } from 'sensemaking';
 
 function tmpTree(): string {
   return mkdtempSync(join(tmpdir(), 'sense-reconcile-'));
@@ -123,7 +123,7 @@ describe('reconcile', () => {
     second.db.close();
   });
 
-  it('rebuild: deletes .sense/ and fully re-crawls, dropping lingering columns', () => {
+  it('clearCache: deletes .sense/, so the next open fully re-crawls and drops lingering columns', () => {
     const baseDir = tmpTree();
     write(baseDir, 'a.md', { title: 'A' });
     write(baseDir, 'gone.md', { title: 'Gone', ephemeral: 'value' });
@@ -143,9 +143,11 @@ describe('reconcile', () => {
     );
     second.db.close();
 
-    const rebuilt = rebuild({ presets: { default: { include: ['*.md'] } }, queries: {}, baseDir, configPath: null });
+    const cfg = { presets: { default: { include: ['*.md'] } }, queries: {}, baseDir, configPath: null };
+    clearCache(cfg);
+    const rebuilt = open(cfg);
     columns = rebuilt.db.prepare('PRAGMA table_info(frontmatter)').all() as Array<{ name: string }>;
-    assert.ok(!columns.some((c) => c.name === 'ephemeral'), "rebuild's fresh crawl drops the lingering column");
+    assert.ok(!columns.some((c) => c.name === 'ephemeral'), 'a cleared cache re-crawls fresh, dropping the lingering column');
     const count = (rebuilt.db.prepare('SELECT COUNT(*) AS n FROM frontmatter').get() as { n: number }).n;
     assert.equal(count, 1);
     rebuilt.db.close();

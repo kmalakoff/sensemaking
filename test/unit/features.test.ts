@@ -1,7 +1,7 @@
 import assert from 'node:assert';
 import { mkdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { rebuild } from 'sensemaking';
+import { clearCache, open } from 'sensemaking';
 import { openTree, tmpTree, writeNote } from '../lib/tree.ts';
 
 const write = (baseDir: string, relPath: string, body: string, frontmatter: Record<string, unknown> = {}) => writeNote(baseDir, relPath, { body, frontmatter });
@@ -131,7 +131,9 @@ describe('links feature', () => {
     const incrementalRows = incremental.db.prepare('SELECT src, target, dst FROM links ORDER BY src, target').all();
     incremental.db.close();
 
-    const rebuilt = rebuild({ presets: { default: { include: ['**/*.md'] } }, queries: {}, baseDir, configPath: null });
+    const cfg = { presets: { default: { include: ['**/*.md'] } }, queries: {}, baseDir, configPath: null };
+    clearCache(cfg);
+    const rebuilt = open(cfg);
     const rebuiltRows = rebuilt.db.prepare('SELECT src, target, dst FROM links ORDER BY src, target').all();
     rebuilt.db.close();
 
@@ -293,17 +295,22 @@ describe('rank feature', () => {
 });
 
 describe('lenient frontmatter', () => {
-  it('a syntax error is a warning; the values still parse (Obsidian-style @ alias)', () => {
+  // An `@` scalar is accepted, not merely tolerated: YAML reserves the character, so the text
+  // can only be what was typed. No warning, no `_parse_error`. Every other fault quarantines --
+  // see frontmatter-policy.test.ts for the full table.
+  it('an Obsidian-style @ alias parses, with no warning and no parse error', () => {
     const baseDir = tmpTree();
     writeFileSync(join(baseDir, 'handle.md'), '---\naliases:\n- @someone\ntags:\n- \npublish: true\n---\n\nsearchable prose with [[good]]\n');
     write(baseDir, 'good.md', 'fine');
 
     const result = openTree(baseDir);
-    assert.ok(
-      result.warnings.some((w) => w.includes('handle.md') && w.includes('parsed leniently')),
-      `expected warning: ${result.warnings}`
+    assert.deepEqual(
+      result.warnings.filter((w) => w.includes('handle.md')),
+      [],
+      'a reserved-character scalar is not a fault'
     );
-    const row = result.db.prepare('SELECT aliases, publish FROM frontmatter WHERE path = ?').get('handle.md') as Record<string, unknown>;
+    const row = result.db.prepare('SELECT aliases, publish, "_parse_error" FROM frontmatter WHERE path = ?').get('handle.md') as Record<string, unknown>;
+    assert.equal(row._parse_error, null);
     assert.equal(row.aliases, '["@someone"]', 'the @ value survives');
     assert.equal(row.publish, 1);
     assert.equal((result.db.prepare('SELECT COUNT(*) AS n FROM content WHERE content MATCH ?').get('searchable') as { n: number }).n, 1);

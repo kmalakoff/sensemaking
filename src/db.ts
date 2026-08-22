@@ -14,7 +14,7 @@ import { listFiles, parseFile, RESERVED_COLUMNS } from './scan.ts';
 
 // Feature-owned columns (`_rank`) must stay out of the upsert: a reparse would null the last
 // computed value on every touch, not just the reconciles that recompute it.
-const CORE_FRONTMATTER_COLUMNS = new Set(['path', '_mtime', '_size']);
+const CORE_FRONTMATTER_COLUMNS = new Set(['path', '_mtime', '_size', '_parse_error']);
 
 // Rows -> SQLite: core schema, reconcile loop, has(). Parsing lives in scan.ts;
 // everything beyond frontmatter + content lives in src/features/.
@@ -22,7 +22,7 @@ const CORE_FRONTMATTER_COLUMNS = new Set(['path', '_mtime', '_size']);
 export const DB_FILENAME = 'cache.db';
 // Cache shape version, independent of the config's own `version`. Bumping it rebuilds
 // existing trees on first query.
-export const SCHEMA_VERSION = '8';
+export const SCHEMA_VERSION = '9';
 
 // SQLite's compile-time SQLITE_MAX_COLUMN, default 2000 (https://www.sqlite.org/limits.html).
 const MAX_FRONTMATTER_COLUMNS = 2000;
@@ -70,7 +70,7 @@ function getColumns(db: DatabaseSync): Set<string> {
 // Content is a separate table (not a column on frontmatter) so `SELECT * FROM frontmatter`
 // can't dump file text into context. Features add their own tables after the core ones.
 function ensureSchema(db: DatabaseSync, cfg: Config): void {
-  db.exec(`CREATE TABLE IF NOT EXISTS frontmatter ("path" TEXT PRIMARY KEY, "_mtime" REAL, "_size" INTEGER)`);
+  db.exec(`CREATE TABLE IF NOT EXISTS frontmatter ("path" TEXT PRIMARY KEY, "_mtime" REAL, "_size" INTEGER, "_parse_error" TEXT)`);
   db.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS content USING fts5(title, summary, text, path UNINDEXED, tokenize = 'porter unicode61')`);
   // Coverage, not ownership: a path can appear under several presets. path leads the PK so the
   // per-doc delete is an index hit -- keyed the other way, cold builds went quadratic.
@@ -196,6 +196,8 @@ export function reconcile(db: DatabaseSync, cfg: Config, baseDir: string): { par
           if (col === 'path') return doc.relPath;
           if (col === '_mtime') return doc.mtimeMs;
           if (col === '_size') return doc.size;
+          // Written per parse, unlike _rank, which a feature pass owns and the upsert skips.
+          if (col === '_parse_error') return doc.parseError;
           return doc.data[col] ?? null;
         });
         // Frontmatter upsert first: content's rowid lookup below depends on this row existing.
@@ -276,7 +278,7 @@ export function open(cfg: ResolvedConfig): OpenResult {
       console.error(`sense: config change (${changed}) rebuilds the index`);
     }
     db.close();
-    rmSync(stateDir, { recursive: true, force: true });
+    clearCache(cfg);
     return open(cfg);
   }
 
@@ -292,8 +294,10 @@ export function open(cfg: ResolvedConfig): OpenResult {
   return { db, cfg, dbPath, parsed, warnings };
 }
 
-// Manual reset for a doubted cache.
-export function rebuild(cfg: ResolvedConfig): OpenResult {
+// Deletes the cache directory, and only that. The rebuild is not this function's job: the next
+// open() reconciles, which is what running any command already does, so a verb that bundled the
+// two described the half that was not its own. Manual reset for a doubted cache; the schema and
+// config-signature mismatches below reset themselves.
+export function clearCache(cfg: ResolvedConfig): void {
   rmSync(join(cfg.baseDir, STATE_DIR), { recursive: true, force: true });
-  return open(cfg);
 }

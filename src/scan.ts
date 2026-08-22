@@ -1,7 +1,7 @@
 import { globSync, readFileSync, statSync } from 'node:fs';
 import { join, sep } from 'node:path';
 import removeMarkdown from 'remove-markdown';
-import { parseDocument } from 'yaml';
+import { isCollection, parseDocument, visit } from 'yaml';
 import type { Config } from './config.ts';
 import { embedEnabled, presetNames, presetSemanticEnabled } from './config.ts';
 import type { Feature } from './features/types.ts';
@@ -10,7 +10,15 @@ import type { Feature } from './features/types.ts';
 
 // Frontmatter keys that would collide with table columns. Exported so db.ts's upsert can tell
 // a feature-owned column (`_rank`) from a parsed one and leave it alone on reparse.
-export const RESERVED_COLUMNS = new Set(['path', '_mtime', '_size', '_rank', 'content', 'links', 'sections']);
+export const RESERVED_COLUMNS = new Set(['path', '_mtime', '_size', '_rank', '_parse_error', 'content', 'links', 'sections']);
+
+// YAML error codes whose recovery is unambiguous, so the parse is accepted rather than
+// quarantined. Only one qualifies: YAML 1.2 reserves `@` and `` ` `` at the start of a plain
+// scalar for future use, so they can never be valid and the text can only be what was typed
+// (`aliases: [@handle]` -> ["@handle"]). Every other code has a second reading -- an unquoted
+// `:` swallows the keys after it, an unquoted `[..](..)` drops the URL, a duplicate key picks
+// one value in silence -- so it writes values nobody wrote. See plans/frontmatter-parse-policy.md.
+const ACCEPTED_YAML_CODES = new Set(['BAD_SCALAR_START']);
 
 function normalizeText(value: unknown): string {
   if (value === null || value === undefined) return '';
@@ -83,6 +91,9 @@ export interface ParsedDoc {
   size: number;
   presets: string[];
   data: Record<string, string | number | bigint | null>;
+  // NULL when the frontmatter parsed, the first YAML message otherwise. In the row rather than
+  // a side table so `SELECT *` and any `IS NULL` investigation trip over it without being asked.
+  parseError: string | null;
   // title/summary are duplicated from frontmatter so bm25() can weight them above the body text.
   search: { title: string; summary: string; text: string };
   // Per-feature extraction results, keyed by feature name; features store them at reconcile.
@@ -109,26 +120,68 @@ function splitFrontmatter(raw: string): { fm: string | null; body: string } {
   return { fm: rest.slice(0, close.index), body: rest.slice(close.index + close[0].length) };
 }
 
-// Lenient by design: parseDocument collects syntax errors as data and still yields values,
-// so Obsidian-style frontmatter (e.g. an alias starting with @) survives with a warning.
-function parseFrontmatter(relPath: string, fm: string, warnings: string[]): Record<string, unknown> {
-  const doc = parseDocument(fm);
-  if (doc.errors.length > 0) {
-    warnings.push(`warning: ${relPath} frontmatter has ${doc.errors.length} syntax error(s) (${doc.errors[0].message.split('\n')[0]}); parsed leniently`);
+// A well-formed document can still hold a value nobody meant: `created: {{date}}` is valid
+// YAML for a flow map used as a mapping key, so it raises no error and stores
+// {"{ date }": null}. No error code can catch that, but yaml notices the stringified key, so
+// this reports it with the path instead (yaml's own warning has none, fires once per document,
+// and is what trains readers to discard stderr).
+function warnStringifiedKeys(relPath: string, doc: ReturnType<typeof parseDocument>, warnings: string[]): void {
+  let found = false;
+  // Nested, not top level: `created: {{date}}` puts the collection key one level down, inside
+  // the flow map that `{{...}}` parses as.
+  visit(doc, {
+    Pair(_key, pair) {
+      if (!isCollection(pair.key)) return undefined;
+      found = true;
+      return visit.BREAK;
+    },
+  });
+  // One per file: a template repeats the same mistake on every field it stamps.
+  if (found) warnings.push(`warning: ${relPath} frontmatter has a key that is itself a list or mapping, stored as text; this is usually an unrendered template placeholder like {{date}}`);
+}
+
+// Accept a clean parse, and one whose every error is unambiguous (ACCEPTED_YAML_CODES).
+// Anything else is quarantined: no frontmatter columns at all, and `_parse_error` carries the
+// reason. Recovering it would write values nobody wrote, which is worse than absence because
+// no query can see it. The file is still indexed -- content, links and sections never touch
+// frontmatter -- so a broken note stays searchable while it is being hunted for.
+// yaml's message continues onto a source excerpt, so the first line is the sentence -- minus
+// the colon that introduced the part being dropped.
+function firstLine(message: string): string {
+  return message.split('\n')[0].replace(/:\s*$/, '');
+}
+
+function parseFrontmatter(relPath: string, fm: string, warnings: string[]): { data: Record<string, unknown>; parseError: string | null } {
+  // logLevel silences yaml's own pathless warnings; warnStringifiedKeys re-reports the one
+  // that carries information, with the file it came from.
+  const doc = parseDocument(fm, { logLevel: 'silent' });
+  const refused = doc.errors.filter((err) => !ACCEPTED_YAML_CODES.has(err.code));
+  if (refused.length > 0) {
+    const detail = refused.length > 1 ? ` (and ${refused.length - 1} more)` : '';
+    const parseError = `${firstLine(refused[0].message)}${detail}`;
+    warnings.push(`warning: ${relPath} frontmatter did not parse, so none of it is indexed: ${parseError}`);
+    return { data: {}, parseError };
   }
+
   let data: unknown;
   try {
     data = doc.toJS();
   } catch (err) {
-    warnings.push(`warning: ${relPath} has unparseable frontmatter (${(err as Error).message.split('\n')[0]}); indexing without it`);
-    return {};
+    // Reaches here with doc.errors empty: `title: **Bold**` parses, then opens an alias on
+    // materialisation. An empty error list is not a successful parse.
+    const parseError = firstLine((err as Error).message);
+    warnings.push(`warning: ${relPath} frontmatter did not parse, so none of it is indexed: ${parseError}`);
+    return { data: {}, parseError };
   }
-  if (data === null || data === undefined) return {};
+
+  if (data === null || data === undefined) return { data: {}, parseError: null };
   if (typeof data !== 'object' || Array.isArray(data)) {
-    warnings.push(`warning: ${relPath} frontmatter is not a key-value mapping; ignoring it`);
-    return {};
+    const parseError = 'frontmatter is not a key-value mapping';
+    warnings.push(`warning: ${relPath} ${parseError}; none of it is indexed`);
+    return { data: {}, parseError };
   }
-  return data as Record<string, unknown>;
+  warnStringifiedKeys(relPath, doc, warnings);
+  return { data: data as Record<string, unknown>, parseError: null };
 }
 
 export function parseFile(file: FileStat, extractors: Feature[] = []): { doc: ParsedDoc; warnings: string[] } {
@@ -136,7 +189,7 @@ export function parseFile(file: FileStat, extractors: Feature[] = []): { doc: Pa
   const warnings: string[] = [];
 
   const { fm, body: content } = splitFrontmatter(raw);
-  const data = fm === null ? {} : parseFrontmatter(file.relPath, fm, warnings);
+  const { data, parseError } = fm === null ? { data: {} as Record<string, unknown>, parseError: null } : parseFrontmatter(file.relPath, fm, warnings);
   const mapped: Record<string, string | number | bigint | null> = {};
 
   for (const key of Object.keys(data)) {
@@ -158,6 +211,7 @@ export function parseFile(file: FileStat, extractors: Feature[] = []): { doc: Pa
       size: file.size,
       presets: file.presets,
       data: mapped,
+      parseError,
       search,
       extracted: Object.fromEntries(extractors.filter((f) => f.extract).map((f) => [f.name, f.extract?.(raw, content, search)])),
     },
