@@ -73,6 +73,10 @@ const CASES: Array<{ name: string; frontmatter?: Record<string, unknown> | strin
   { name: 'a blockquoted HTML block swallows its content', body: '> <div>\n> quoted #in-quote-div\n> </div>', expect: [] },
   { name: 'any type-1 closer ends a script block', body: '<script>\ncode\n</pre>\n#tag1\n</script>\n#tag2', expect: ['tag1', 'tag2'] },
   { name: 'blockquoted prose keeps its tag', body: '> quoted #in-quote-prose', expect: ['in-quote-prose'] },
+  { name: 'a tag inside a single-line HTML comment is not extracted', body: 'before <!-- #hidden --> #visible', expect: ['visible'] },
+  { name: 'a tag inside a multi-line HTML comment is not extracted', body: 'before\n<!-- #hidden\nstill hidden -->\nafter #real', expect: ['real'] },
+  { name: 'an unclosed HTML comment masks to end of body', body: 'before #real\n<!-- #never\nclosing #also-never', expect: ['real'] },
+  { name: 'a fence-looking line inside a comment does not stick the fence tracker', body: '<!-- note:\n```\nend -->\n#realtag', expect: ['realtag'] },
 ];
 
 describe('tags extraction policy', () => {

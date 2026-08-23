@@ -61,6 +61,16 @@ Apple Silicon, Node 26.7.0. 2026-08-23. `local` is the working tree about to be 
 tree; `_ctime` and the embed grain are the rest). It is paid once per tree and buys the
 `tags` table. Warm paths -- freshness, updates, queries, token contracts -- are flat.
 
+**0.16.0 (link parity): flat-to-faster, quality unmoved.** Region masking (fences, HTML
+comments, inline code) in link extraction, frontmatter wikilinks, markdown linkpath
+semantics, and the self/shortest-path tiebreaks left every row within noise vs 0.15.0
+(in-process cold build 1497 -> 1376 ms; freshness flat; peek flat), and FEVER hit@10 is
+digit-identical (0.9969/0.9971/0.9967) despite the hub's resolved graph shrinking from
+37,928 to 21,830 edges -- the removed 16k were commented-out template scaffolding, and their
+absence changes no eval answer. Correctness gate: zero diff vs Obsidian's metadataCache on
+tags, resolved links, and unresolved links across both corpora (6,566 + 1,305 files),
+via `benchmark/oracle.mjs`.
+
 **0.15.0 (fence semantics + oracle validation): flat.** The shared run-length fence tracker,
 HTML-block state, and link-destination masking left every row within noise (in-process cold
 build 1341 -> 1345 ms vs 0.14.0; warm paths identical; nfcorpus digit-identical). Correctness

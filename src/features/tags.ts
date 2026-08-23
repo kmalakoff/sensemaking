@@ -1,4 +1,4 @@
-import { fenceTracker } from '../fences.ts';
+import { commentTracker, fenceTracker, maskCodeSpans } from '../fences.ts';
 import type { Feature } from './types.ts';
 
 // tags(path, tag): Obsidian's file.tags grain -- frontmatter list/string tags plus inline
@@ -109,54 +109,12 @@ function frontmatterTags(data?: Record<string, unknown>): string[] {
   return found;
 }
 
-// A code span opens on a run of N backticks and closes at the next run of exactly N -- a
-// shorter or longer run in between is literal text, not a delimiter (CommonMark code spans).
-// Masked with spaces so column positions and tag-boundary whitespace are unaffected.
-function maskCodeSpans(line: string): string {
-  let out = '';
-  let i = 0;
-  while (i < line.length) {
-    if (line[i] !== '`') {
-      out += line[i];
-      i++;
-      continue;
-    }
-    let j = i;
-    while (line[j] === '`') j++;
-    const n = j - i;
-    let k = j;
-    let closeStart = -1;
-    let closeEnd = -1;
-    while (k < line.length) {
-      if (line[k] !== '`') {
-        k++;
-        continue;
-      }
-      let m = k;
-      while (line[m] === '`') m++;
-      if (m - k === n) {
-        closeStart = k;
-        closeEnd = m;
-        break;
-      }
-      k = m;
-    }
-    if (closeStart >= 0) {
-      out += ' '.repeat(closeEnd - i);
-      i = closeEnd;
-    } else {
-      out += line.slice(i, j);
-      i = j;
-    }
-  }
-  return out;
-}
-
 // #tag tokens outside fenced code blocks, inline code spans, wikilinks, HTML tags, HTML blocks,
-// and link destinations.
+// <!-- --> comments, and link destinations.
 function inlineTags(body: string): string[] {
   const found: string[] = [];
   const fence = fenceTracker();
+  const comment = commentTracker();
   let inHtmlBlock = false;
   let htmlBlockClose: RegExp | null = null; // set while inside a type-1 (script/pre/style/textarea) block
   for (const line of body.split('\n')) {
@@ -172,11 +130,17 @@ function inlineTags(body: string): string[] {
       }
       continue;
     }
-    if (fence.feed(line)) continue;
-    if (fence.inFence) continue;
+    if (!comment.inComment) {
+      if (fence.feed(line)) continue;
+      if (fence.inFence) continue;
+    }
+    // Obsidian parses nothing inside a <!-- --> comment; mask its span (which may open, close,
+    // or run the whole line) before any other check sees this line's text. Skipped when there
+    // is no comment marker anywhere near this line -- most lines, so worth the branch.
+    const masked = comment.inComment || line.includes('<!--') ? comment.mask(line) : line;
     // Indented or blockquoted HTML blocks still swallow their content in Obsidian, so the
     // opener test runs after stripping leading whitespace and > markers.
-    const stripped = line.replace(/^[ \t>]*/, '');
+    const stripped = masked.replace(/^[ \t>]*/, '');
     if (stripped[0] === '<') {
       const openMatch = HTML_BLOCK_OPEN_RE.exec(stripped);
       if (openMatch) {
@@ -194,8 +158,8 @@ function inlineTags(body: string): string[] {
         }
       }
     }
-    if (!line.includes('#')) continue; // most lines; skip the regex work
-    let cleaned = line.includes('`') ? maskCodeSpans(line) : line;
+    if (!masked.includes('#')) continue; // most lines; skip the regex work
+    let cleaned = masked.includes('`') ? maskCodeSpans(masked) : masked;
     if (cleaned.includes('[[')) cleaned = cleaned.replace(WIKILINK_RE, (m) => ' '.repeat(m.length));
     if (cleaned.includes('](')) cleaned = cleaned.replace(LINK_DEST_RE, (m) => ' '.repeat(m.length));
     if (cleaned.includes('<')) cleaned = cleaned.replace(HTML_TAG_RE, (m) => ' '.repeat(m.length));

@@ -1,5 +1,6 @@
 import posix from 'node:path/posix';
 import type { DatabaseSync } from 'node:sqlite';
+import { maskRegions } from '../fences.ts';
 import type { FileStat } from '../scan.ts';
 import type { Feature, ReconcileDelta } from './types.ts';
 
@@ -8,8 +9,11 @@ import type { Feature, ReconcileDelta } from './types.ts';
 // queryable dead link), embed whether it's `![[x]]`/`![](x.md)` rather than `[[x]]`/`[](x.md)`
 // -- Obsidian's grain: a target both linked and embedded in the same note is two rows.
 
-// Wikilinks ([[target]], [[target#anchor|alias]], embeds) plus relative markdown links to .md files.
-function extract(_raw: string, body: string): Array<{ target: string; embed: boolean }> {
+// Wikilinks ([[target]], [[target#anchor|alias]], embeds), internal markdown links, and
+// frontmatter values that are exactly a wikilink ("[[X]]"; mid-string and ![[...]] forms are
+// not links there -- Obsidian's rule, probe-verified).
+function extract(_raw: string, rawBody: string, _search?: { title: string; summary: string }, data?: Record<string, unknown>): Array<{ target: string; embed: boolean }> {
+  const body = /\[\[|\]\(/.test(rawBody) ? maskRegions(rawBody) : rawBody;
   const seen = new Set<string>();
   const results: Array<{ target: string; embed: boolean }> = [];
   const add = (target: string, embed: boolean) => {
@@ -21,12 +25,40 @@ function extract(_raw: string, body: string): Array<{ target: string; embed: boo
   // To the first ]], as Obsidian parses it, so a heading or alias holding a lone ] still
   // matches; anchor and alias split off in code, since a class-based regex stops at the ].
   for (const m of body.matchAll(/\[\[(.*?)\]\]/g)) {
-    const target = m[1].split('|')[0].split('#')[0].trim();
-    if (target) add(target, body[(m.index ?? 0) - 1] === '!');
+    const embed = body[(m.index ?? 0) - 1] === '!';
+    // [[#Heading]]: a same-note anchor link, which Obsidian resolves to a self-edge. Keep the
+    // target as written (leading #) so resolveTarget can special-case it.
+    const beforeAlias = m[1].split('|')[0].trim();
+    if (beforeAlias.startsWith('#')) {
+      if (beforeAlias.length > 1) add(beforeAlias, embed);
+      continue;
+    }
+    const target = beforeAlias.split('#')[0].trim();
+    if (target) add(target, embed);
   }
-  for (const m of body.matchAll(/(!)?\[[^\]]*\]\(([^)]+\.md)(?:#[^)]*)?\)/g)) {
-    const target = m[2].trim();
-    if (target && !/^[a-z]+:\/\//i.test(target)) add(target, m[1] === '!');
+  // Any internal destination, not only .md-suffixed: Obsidian gives markdown links full
+  // linkpath resolution, so \](Zektor) resolves like [[Zektor]] and \](#anchor) is a
+  // self-edge. External URLs (a scheme anywhere survives the malformed double-paren case)
+  // and titled links (dest stops at whitespace) are skipped.
+  // A space in the destination is only valid ahead of a quoted title; a domain-shaped first
+  // segment (www.example.com/...) is external even without a scheme.
+  for (const m of body.matchAll(/(!)?\[[^\]]*\]\(((?:[^()\s]|\([^()\s]*\))+)(?:\s+(?:"[^)]*"|'[^)]*'))?\)/g)) {
+    const dest = m[2].trim();
+    if (!dest || dest.includes('://')) continue;
+    if (/^www\./i.test(dest)) continue;
+    const target = dest.startsWith('#') ? dest : dest.split('#')[0];
+    if (target) add(target, m[1] === '!');
+  }
+  for (const value of Object.values(data ?? {})) {
+    for (const item of Array.isArray(value) ? value : [value]) {
+      if (typeof item !== 'string') continue;
+      const m = /^\[\[(.*)\]\]$/.exec(item.trim());
+      if (!m) continue;
+      const inner = m[1].split('|')[0].trim();
+      const target = inner.split('#')[0].trim();
+      if (target) add(target, false);
+      else if (inner.startsWith('#') && inner.length > 1) add(inner, false);
+    }
   }
   return results;
 }
@@ -40,19 +72,29 @@ function baseKey(path: string): string {
 }
 
 // Obsidian-style: exact relative path (with/without .md), path relative to the linking
-// note's directory, then basename match (lexicographically first on ties).
+// note's directory, then basename match (shortest path wins on ties -- verified against a
+// cold-loaded Obsidian vault on 6+ real collision pairs; byBase's lists are pre-sorted that way).
 function resolveTarget(src: string, target: string, pathSet: Set<string>, byBase: Map<string, string[]>): string | null {
+  // [[#Heading]]: a same-note anchor, always the note itself -- never depends on other files.
+  if (target.startsWith('#')) return src;
   const clean = cleanTarget(target);
   const fromSrc = posix.normalize(posix.join(posix.dirname(src), clean));
   for (const candidate of [clean, `${clean}.md`, fromSrc, `${fromSrc}.md`]) {
     if (pathSet.has(candidate)) return candidate;
   }
-  return byBase.get(baseKey(clean))?.[0] ?? null;
+  const candidates = byBase.get(baseKey(clean));
+  if (!candidates) return null;
+  // The linking note itself wins a basename collision (Obsidian resolves to self before the
+  // shortest-path rule -- cold-load verified on the hub corpus).
+  return candidates.includes(src) ? src : candidates[0];
 }
 
+// Shortest path wins a basename collision; equal lengths fall back to lexicographic, our own
+// deterministic tiebreak for a case Obsidian itself leaves registration-order-dependent.
 function buildByBase(files: FileStat[]): Map<string, string[]> {
   const byBase = new Map<string, string[]>();
-  for (const path of files.map((f) => f.relPath).sort()) {
+  const paths = files.map((f) => f.relPath).sort((a, b) => a.length - b.length || (a < b ? -1 : a > b ? 1 : 0));
+  for (const path of paths) {
     const key = baseKey(path);
     const list = byBase.get(key);
     if (list) list.push(path);
@@ -133,9 +175,12 @@ export function linkEdges(db: DatabaseSync): [string, string][] {
   // embed whose exact (src, target) also exists as a link: that second row is new with the
   // embed grain and would double an edge that used to be one row. The NOT EXISTS probes the
   // primary key and fires only for embed rows; both branches still scan the table.
-  const sql = `SELECT src, dst FROM links WHERE dst IS NOT NULL AND embed = 0
+  // Self-edges (same-note anchors) are excluded here so PageRank mass is not self-recycled --
+  // Obsidian's own graph view hides self-loops too. The rows themselves stay in the table for
+  // backlinks/peek.
+  const sql = `SELECT src, dst FROM links WHERE dst IS NOT NULL AND embed = 0 AND src != dst
     UNION ALL
-    SELECT src, dst FROM links l WHERE dst IS NOT NULL AND embed = 1
+    SELECT src, dst FROM links l WHERE dst IS NOT NULL AND embed = 1 AND src != dst
       AND NOT EXISTS (SELECT 1 FROM links l0 WHERE l0.src = l.src AND l0.target = l.target AND l0.embed = 0)`;
   return (db.prepare(sql).all() as Array<{ src: string; dst: string }>).map((r) => [r.src, r.dst]);
 }
@@ -196,7 +241,10 @@ export const links: Feature = {
     // Upsert preserves dst on surviving rows, so an unchanged link resolves to the same
     // value and reports no change; only genuinely new rows start at NULL.
     const insert = db.prepare('INSERT INTO links (src, target, target_base, dst, embed) VALUES (?, ?, ?, NULL, ?) ON CONFLICT(src, target, embed) DO UPDATE SET target_base = excluded.target_base');
-    for (const { target, embed } of targets) insert.run(path, target, baseKey(cleanTarget(target)), embed ? 1 : 0);
+    // A same-note anchor's dst is always its own src, never another file's basename, so it
+    // gets no target_base -- SQL's `IN` never matches NULL, keeping it out of
+    // resolveIncremental's cross-file collectIn('target_base', ...) entirely.
+    for (const { target, embed } of targets) insert.run(path, target, target.startsWith('#') ? null : baseKey(cleanTarget(target)), embed ? 1 : 0);
   },
   afterReconcile(db, delta) {
     // Any deleted rows that carried edges mean the edge set shrank -- whether the file

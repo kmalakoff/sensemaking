@@ -65,11 +65,11 @@ export function peek(db: DatabaseSync, cfg: ResolvedConfig, pathArg: string, ove
   let backlinksTotal = 0;
   const _allowed = scopedPaths(db, cfg, overrides);
   if (featureEnabled(cfg, 'links')) {
-    const out = db.prepare('SELECT target, dst FROM links WHERE src = ? ORDER BY target').all(path) as Array<{ target: string; dst: string | null }>;
+    const out = db.prepare('SELECT target, dst FROM links WHERE src = ? AND (dst IS NULL OR dst != src) ORDER BY target').all(path) as Array<{ target: string; dst: string | null }>;
     outbound = [...new Set(out.filter((l) => l.dst !== null).map((l) => l.dst as string))];
     unresolved = out.filter((l) => l.dst === null).map((l) => l.target);
-    backlinksTotal = (db.prepare('SELECT COUNT(DISTINCT src) AS n FROM links WHERE dst = ?').get(path) as { n: number }).n;
-    backlinks = (db.prepare('SELECT DISTINCT src FROM links WHERE dst = ? ORDER BY src LIMIT ?').all(path, PEEK_LIST_LIMIT) as Array<{ src: string }>).map((r) => r.src);
+    backlinksTotal = (db.prepare('SELECT COUNT(DISTINCT src) AS n FROM links WHERE dst = ? AND src != dst').get(path) as { n: number }).n;
+    backlinks = (db.prepare('SELECT DISTINCT src FROM links WHERE dst = ? AND src != dst ORDER BY src LIMIT ?').all(path, PEEK_LIST_LIMIT) as Array<{ src: string }>).map((r) => r.src);
   }
 
   return {

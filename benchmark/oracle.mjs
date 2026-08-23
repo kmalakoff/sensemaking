@@ -1,6 +1,9 @@
 #!/usr/bin/env node
-// Tag-parity gate against Obsidian's own metadata cache: the reference implementation, so a
-// parsing release cannot drift from it silently. Requires Obsidian running with the vault
+// Parity gate against Obsidian's own metadata cache -- the reference implementation, so a
+// parsing release cannot drift from it silently. Compares tags (per-file sets) and the
+// resolved link graph (deduplicated src -> dst edges over .md targets; attachments are out of
+// sense's scope by design), plus unresolved links over md-intent targets (basename has no
+// extension, or .md). Requires Obsidian running with the vault
 // open, and the `obsidian` CLI on PATH. Nothing is stored: the cache dump and the sense index
 // both live in a temp directory and are removed on exit. Pass = zero differing files; any
 // diff line is printed with both sides for adjudication.
@@ -29,7 +32,7 @@ try {
   // 1. Obsidian's parse, straight from its cache. Inline tags carry '#'; frontmatter comes
   // raw so normalization differences show up in the diff instead of being absorbed here.
   const dumpPath = join(work, 'oracle.json');
-  const code = `const fs=require('fs'); const out=app.vault.getMarkdownFiles().map(f=>{const c=app.metadataCache.getFileCache(f)||{}; return {p:f.path, inline:(c.tags||[]).map(t=>t.tag), fm:c.frontmatter ? (c.frontmatter.tags ?? c.frontmatter.tag ?? null) : null}}); fs.writeFileSync(${JSON.stringify(dumpPath)}, JSON.stringify(out)); 'wrote ' + out.length`;
+  const code = `const fs=require('fs'); const out=app.vault.getMarkdownFiles().map(f=>{const c=app.metadataCache.getFileCache(f)||{}; return {p:f.path, inline:(c.tags||[]).map(t=>t.tag), fm:c.frontmatter ? (c.frontmatter.tags ?? c.frontmatter.tag ?? null) : null, resolved:Object.keys(app.metadataCache.resolvedLinks[f.path]||{}), unresolved:Object.keys(app.metadataCache.unresolvedLinks[f.path]||{})}}); fs.writeFileSync(${JSON.stringify(dumpPath)}, JSON.stringify(out)); 'wrote ' + out.length`;
   execFileSync('obsidian', [`vault=${vaultName}`, 'eval', `code=${code}`], { stdio: ['ignore', 'inherit', 'inherit'] });
   const oracle = JSON.parse(readFileSync(dumpPath, 'utf8'));
 
@@ -49,16 +52,35 @@ try {
   walk('.');
   const cli = join(repoRoot, 'bin', 'cli.js');
   writeFileSync(join(tree, 'sense.config.json'), JSON.stringify({ version: 4, presets: { default: { include: ['**/*.md'] } }, queries: {} }));
-  const dump = spawnSync(process.execPath, [cli, 'sql', 'SELECT "path", tag FROM tags ORDER BY "path", tag', '--format', 'json'], { cwd: tree, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 });
-  if (dump.status !== 0) {
-    console.error(dump.stderr);
-    process.exit(1);
-  }
+  const query = (sql) => {
+    const dump = spawnSync(process.execPath, [cli, 'sql', sql, '--format', 'json'], { cwd: tree, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 });
+    if (dump.status !== 0) {
+      console.error(dump.stderr);
+      process.exit(1);
+    }
+    return JSON.parse(dump.stdout);
+  };
   const ours = new Map();
-  for (const row of JSON.parse(dump.stdout)) {
+  for (const row of query('SELECT "path", tag FROM tags ORDER BY "path", tag')) {
     const p = row.path.replace(/\\/g, '/');
     if (!ours.has(p)) ours.set(p, new Set());
     ours.get(p).add(row.tag);
+  }
+  const ourEdges = new Map(); // src -> Set(dst), resolved only
+  const ourDead = new Map(); // src -> Set(target as written), md-intent only
+  const mdIntent = (t) => {
+    const base = t.split('/').pop().split('#')[0];
+    return !base.includes('.') || base.toLowerCase().endsWith('.md');
+  };
+  for (const row of query('SELECT src, target, dst FROM links ORDER BY src')) {
+    const src = row.src.replace(/\\/g, '/');
+    if (row.dst !== null) {
+      if (!ourEdges.has(src)) ourEdges.set(src, new Set());
+      ourEdges.get(src).add(row.dst.replace(/\\/g, '/'));
+    } else if (mdIntent(row.target)) {
+      if (!ourDead.has(src)) ourDead.set(src, new Set());
+      ourDead.get(src).add(row.target);
+    }
   }
 
   // 3. Diff. Obsidian's grain: inline (# stripped) unioned with frontmatter entries.
@@ -69,22 +91,37 @@ try {
     for (const v of fm) if (typeof v === 'string' && v.trim()) t.add(v.trim().replace(/^#/, ''));
     theirs.set(x.p, t);
   }
-  const paths = new Set([...ours.keys(), ...theirs.keys()]);
-  let differing = 0;
-  for (const p of [...paths].sort()) {
-    const o = ours.get(p) ?? new Set();
-    const t = theirs.get(p) ?? new Set();
-    const oursOnly = [...o].filter((x) => !t.has(x)).sort();
-    const theirsOnly = [...t].filter((x) => !o.has(x)).sort();
-    if (oursOnly.length || theirsOnly.length) {
-      differing++;
-      console.log(p);
-      if (oursOnly.length) console.log(`  sense only:    ${oursOnly.join(', ')}`);
-      if (theirsOnly.length) console.log(`  obsidian only: ${theirsOnly.join(', ')}`);
-    }
+  const theirEdges = new Map();
+  const theirDead = new Map();
+  for (const x of oracle) {
+    theirEdges.set(x.p, new Set((x.resolved ?? []).filter((d) => d.toLowerCase().endsWith('.md'))));
+    theirDead.set(x.p, new Set((x.unresolved ?? []).filter(mdIntent)));
   }
-  console.log(`${differing} differing / ${paths.size} files${differing === 0 ? ' -- parity with Obsidian' : ''}`);
-  process.exit(differing === 0 ? 0 : 1);
+
+  // macOS hands out NFD paths while Obsidian reports NFC and collapses non-breaking
+  // spaces in paths; compare on Obsidian's form.
+  const canon = (s) => s.normalize('NFC').replace(/\u00a0/g, ' ');
+  const nfc = (m) => new Map([...m].map(([k, v]) => [canon(k), new Set([...v].map(canon))]));
+  const diffSection = (label, oursMap, theirsMap) => {
+    const paths = new Set([...oursMap.keys(), ...theirsMap.keys()]);
+    let differing = 0;
+    for (const p of [...paths].sort()) {
+      const o = oursMap.get(p) ?? new Set();
+      const t = theirsMap.get(p) ?? new Set();
+      const oursOnly = [...o].filter((x) => !t.has(x)).sort();
+      const theirsOnly = [...t].filter((x) => !o.has(x)).sort();
+      if (oursOnly.length || theirsOnly.length) {
+        differing++;
+        console.log(`${label} ${p}`);
+        if (oursOnly.length) console.log(`  sense only:    ${oursOnly.join(', ')}`);
+        if (theirsOnly.length) console.log(`  obsidian only: ${theirsOnly.join(', ')}`);
+      }
+    }
+    console.log(`${label}: ${differing} differing / ${paths.size} files${differing === 0 ? ' -- parity' : ''}`);
+    return differing;
+  };
+  const total = diffSection('tags', nfc(ours), nfc(theirs)) + diffSection('links', nfc(ourEdges), nfc(theirEdges)) + diffSection('dead-links', nfc(ourDead), nfc(theirDead));
+  process.exit(total === 0 ? 0 : 1);
 } finally {
   rmSync(work, { recursive: true, force: true });
 }

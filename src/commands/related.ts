@@ -12,8 +12,8 @@ export async function relatedNotes(db: DatabaseSync, cfg: ResolvedConfig, pathAr
   const paths = (db.prepare('SELECT "path" FROM frontmatter').all() as Array<{ path: string }>).map((r) => r.path);
   const path = resolveNote(paths, pathArg);
 
-  const outbound = (db.prepare('SELECT DISTINCT dst FROM links WHERE src = ? AND dst IS NOT NULL').all(path) as Array<{ dst: string }>).map((r) => r.dst);
-  const backlinks = (db.prepare('SELECT DISTINCT src FROM links WHERE dst = ?').all(path) as Array<{ src: string }>).map((r) => r.src);
+  const outbound = (db.prepare('SELECT DISTINCT dst FROM links WHERE src = ? AND dst IS NOT NULL AND dst != src').all(path) as Array<{ dst: string }>).map((r) => r.dst);
+  const backlinks = (db.prepare('SELECT DISTINCT src FROM links WHERE dst = ? AND src != dst').all(path) as Array<{ src: string }>).map((r) => r.src);
   const exclude = new Set([path, ...outbound, ...backlinks]);
 
   // Vectors are the only signal `related` has, so every way of not having them is an error

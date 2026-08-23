@@ -48,3 +48,112 @@ export function fenceTracker(): FenceTracker {
     },
   };
 }
+
+// Masks <!-- ... --> spans that may cross line boundaries, one line at a time so callers can
+// interleave it with their own per-line state. An unclosed <!-- masks to end of input, matching
+// CommonMark type-2 HTML comments' practical effect (everything after is swallowed).
+export interface CommentTracker {
+  mask(line: string): string;
+  readonly inComment: boolean;
+}
+
+export function commentTracker(): CommentTracker {
+  let inComment = false;
+  return {
+    mask(line: string): string {
+      let out = '';
+      let i = 0;
+      while (i < line.length) {
+        if (inComment) {
+          const end = line.indexOf('-->', i);
+          if (end === -1) {
+            out += ' '.repeat(line.length - i);
+            i = line.length;
+          } else {
+            out += ' '.repeat(end + 3 - i);
+            i = end + 3;
+            inComment = false;
+          }
+          continue;
+        }
+        const start = line.indexOf('<!--', i);
+        if (start === -1) {
+          out += line.slice(i);
+          i = line.length;
+        } else {
+          out += `${line.slice(i, start)}    `;
+          i = start + 4;
+          inComment = true;
+        }
+      }
+      return out;
+    },
+    get inComment() {
+      return inComment;
+    },
+  };
+}
+
+// Body with fenced-code regions (delimiter and content lines) and <!-- --> comment spans
+// replaced by spaces, newlines preserved so line numbers and offsets survive. Bodies without a
+// backtick/tilde/`<!--` fast-path out untouched.
+export function maskRegions(body: string): string {
+  if (!/[`~]/.test(body) && !body.includes('<!--')) return body;
+  const fence = fenceTracker();
+  const comment = commentTracker();
+  return body
+    .split('\n')
+    .map((line) => {
+      if (!comment.inComment) {
+        const isDelim = fence.feed(line);
+        if (isDelim || fence.inFence) return ' '.repeat(line.length);
+      }
+      const uncommented = comment.mask(line);
+      // Inline code spans hide their content too: `[[x]]` in prose is not a link.
+      return uncommented.includes('`') ? maskCodeSpans(uncommented) : uncommented;
+    })
+    .join('\n');
+}
+
+// A code span opens on a run of N backticks and closes at the next run of exactly N -- a
+// shorter or longer run in between is literal text, not a delimiter (CommonMark code spans).
+// Masked with spaces so column positions and tag-boundary whitespace are unaffected.
+export function maskCodeSpans(line: string): string {
+  let out = '';
+  let i = 0;
+  while (i < line.length) {
+    if (line[i] !== '`') {
+      out += line[i];
+      i++;
+      continue;
+    }
+    let j = i;
+    while (line[j] === '`') j++;
+    const n = j - i;
+    let k = j;
+    let closeStart = -1;
+    let closeEnd = -1;
+    while (k < line.length) {
+      if (line[k] !== '`') {
+        k++;
+        continue;
+      }
+      let m = k;
+      while (line[m] === '`') m++;
+      if (m - k === n) {
+        closeStart = k;
+        closeEnd = m;
+        break;
+      }
+      k = m;
+    }
+    if (closeStart >= 0) {
+      out += ' '.repeat(closeEnd - i);
+      i = closeEnd;
+    } else {
+      out += line.slice(i, j);
+      i = j;
+    }
+  }
+  return out;
+}
