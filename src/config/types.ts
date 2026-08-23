@@ -5,9 +5,9 @@ export const STATE_DIR = '.sense';
 export const SUPPORTED_CONFIG_VERSION = 4;
 
 // Each feature owns its tables, parse-time extraction, and reconcile step; commands degrade when one is off.
-// links/sections/rank are opt-out toggles in the top-level `features` block; embed is not a
+// links/sections/tags/rank are opt-out toggles in the top-level `features` block; embed is not a
 // member of that block -- it is on exactly when an `embed` block names a model.
-export const FEATURE_NAMES = ['links', 'sections', 'rank', 'embed'] as const;
+export const FEATURE_NAMES = ['links', 'sections', 'tags', 'rank', 'embed'] as const;
 export type FeatureName = (typeof FEATURE_NAMES)[number];
 
 // `embed` names the model and gives the tree vectors at all; a preset's `semantic` says
@@ -59,7 +59,7 @@ export interface Config {
   presets: Record<string, Preset>;
   // Global feature defaults; absent block or key means enabled. embed is not a member here --
   // see the `embed` block.
-  features?: { links?: boolean; sections?: boolean; rank?: boolean };
+  features?: { links?: boolean; sections?: boolean; tags?: boolean; rank?: boolean };
   // Names the embedding model. Present means every indexed file gets vectors; absent means none do.
   embed?: EmbedConfig;
   // Settings for the `content` FTS5 table. `tokenize` decides which languages the tree can be

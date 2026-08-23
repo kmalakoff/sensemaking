@@ -19,8 +19,8 @@ export interface Feature {
   name: FeatureName;
   schema(db: DatabaseSync): void;
   // Pure, per file: raw is the full file, body the prose after frontmatter,
-  // search the normalized title/summary strings.
-  extract?(raw: string, body: string, search?: { title: string; summary: string }): unknown;
+  // search the normalized title/summary strings, data the parsed frontmatter.
+  extract?(raw: string, body: string, search?: { title: string; summary: string }, data?: Record<string, unknown>): unknown;
   remove?(db: DatabaseSync, path: string, delta: ReconcileDelta): void;
   store?(db: DatabaseSync, path: string, extracted: unknown, delta: ReconcileDelta): void;
   // After all rows are current, inside the reconcile transaction (resolution, rank).

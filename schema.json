@@ -65,6 +65,10 @@
           "type": "boolean",
           "description": "Extract headings into the `sections` table (path, idx, level, heading, start_line, end_line, tokens estimate). Powers `peek`'s outline so agents can read line ranges instead of whole files."
         },
+        "tags": {
+          "type": "boolean",
+          "description": "Extract frontmatter and inline #tags into the `tags` table (path, tag), deduplicated and not distinguishing source -- Obsidian's `file.tags` grain. Nested tags store full (book/scifi); match a parent too with `tag = 'book' OR tag LIKE 'book/%'`."
+        },
         "rank": {
           "type": "boolean",
           "description": "PageRank over resolved links into `frontmatter._rank` at reconcile -- a static importance prior. Powers `map`'s hub list; usable in any ORDER BY. Requires `links`."

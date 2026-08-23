@@ -3,7 +3,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import type { ResolvedConfig, SearchOverrides } from '../config/index.ts';
 import { anyPresetEmbeds, resolveSearch } from '../config/index.ts';
 
-export const INTERNAL_COLUMNS = new Set(['path', '_mtime', '_size', '_rank', '_parse_error']);
+export const INTERNAL_COLUMNS = new Set(['path', '_mtime', '_ctime', '_size', '_rank', '_parse_error']);
 
 // node:path's matchesGlob is experimental (stable behind an unstable-API flag) as of the
 // engines floor (Node >=22.20); scope filtering only ever needs single-pattern matching, so

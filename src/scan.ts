@@ -10,7 +10,7 @@ import type { Feature } from './features/types.ts';
 
 // Frontmatter keys that would collide with table columns. Exported so db.ts's upsert can tell
 // a feature-owned column (`_rank`) from a parsed one and leave it alone on reparse.
-export const RESERVED_COLUMNS = new Set(['path', '_mtime', '_size', '_rank', '_parse_error', 'content', 'links', 'sections']);
+export const RESERVED_COLUMNS = new Set(['path', '_mtime', '_ctime', '_size', '_rank', '_parse_error', 'content', 'links', 'sections']);
 
 // YAML error codes whose recovery is unambiguous, so the parse is accepted rather than
 // quarantined. Only one qualifies: YAML 1.2 reserves `@` and `` ` `` at the start of a plain
@@ -38,6 +38,7 @@ export interface FileStat {
   relPath: string;
   absPath: string;
   mtimeMs: number;
+  ctimeMs: number; // filesystem birthtime; a clone or copy resets it, like _mtime
   size: number;
   presets: string[]; // every declared preset covering this file (>= 1; union, overlap allowed)
   embed: boolean; // true iff a model is named and some covering preset has semantic on
@@ -80,7 +81,7 @@ export function listFiles(cfg: Config, baseDir: string): FileStat[] {
     if (!st?.isFile()) continue;
     const presets = [...(coverage.get(relPath) as Set<string>)].sort();
     const embed = semanticPresets !== null && presets.some((name) => semanticPresets.has(name));
-    files.push({ relPath, absPath, mtimeMs: st.mtimeMs, size: st.size, presets, embed });
+    files.push({ relPath, absPath, mtimeMs: st.mtimeMs, ctimeMs: st.birthtimeMs, size: st.size, presets, embed });
   }
   return files;
 }
@@ -88,6 +89,7 @@ export function listFiles(cfg: Config, baseDir: string): FileStat[] {
 export interface ParsedDoc {
   relPath: string;
   mtimeMs: number;
+  ctimeMs: number;
   size: number;
   presets: string[];
   data: Record<string, string | number | bigint | null>;
@@ -236,12 +238,13 @@ export function parseFile(file: FileStat, extractors: Feature[] = []): { doc: Pa
     doc: {
       relPath: file.relPath,
       mtimeMs: file.mtimeMs,
+      ctimeMs: file.ctimeMs,
       size: file.size,
       presets: file.presets,
       data: mapped,
       parseError,
       search,
-      extracted: Object.fromEntries(extractors.filter((f) => f.extract).map((f) => [f.name, f.extract?.(raw, content, search)])),
+      extracted: Object.fromEntries(extractors.filter((f) => f.extract).map((f) => [f.name, f.extract?.(raw, content, search, data)])),
     },
     warnings,
   };

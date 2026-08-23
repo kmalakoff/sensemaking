@@ -14,7 +14,7 @@ import { getMeta, setMeta } from './shared.ts';
 export const DB_FILENAME = 'cache.db';
 // Cache shape version, independent of the config's own `version`. Bumping it rebuilds
 // existing trees on first query.
-export const SCHEMA_VERSION = '12';
+export const SCHEMA_VERSION = '13';
 
 export interface OpenResult {
   db: DatabaseSync;
@@ -61,7 +61,7 @@ function storedTokenize(db: DatabaseSync): string | null {
 // Content is a separate table (not a column on frontmatter) so `SELECT * FROM frontmatter`
 // can't dump file text into context. Features add their own tables after the core ones.
 function ensureSchema(db: DatabaseSync, cfg: Config, tokenize: string): void {
-  db.exec(`CREATE TABLE IF NOT EXISTS frontmatter ("path" TEXT PRIMARY KEY, "_mtime" REAL, "_size" INTEGER, "_parse_error" TEXT)`);
+  db.exec(`CREATE TABLE IF NOT EXISTS frontmatter ("path" TEXT PRIMARY KEY, "_mtime" REAL, "_ctime" REAL, "_size" INTEGER, "_parse_error" TEXT)`);
   // IF NOT EXISTS is safe against a tokenizer change: open() compares the table's own DDL
   // against the resolved tokenizer before this runs, so a stale table is already gone by now.
   // The three `_seg` sidecars are appended after path, never inserted: bm25(content, ...) and

@@ -280,7 +280,7 @@ export async function embedPending(db: DatabaseSync, cfg: Config, baseDir: strin
     try {
       // presets/embed are irrelevant here -- re-deriving chunk text for a doc that already
       // has embeddings rows means the tree had an embedding model at reconcile time.
-      chunks = parseFile({ relPath: path, absPath: join(baseDir, path), mtimeMs: 0, size: 0, presets: [], embed: true }, [embed]).doc.extracted.embed as Chunk[];
+      chunks = parseFile({ relPath: path, absPath: join(baseDir, path), mtimeMs: 0, ctimeMs: 0, size: 0, presets: [], embed: true }, [embed]).doc.extracted.embed as Chunk[];
     } catch {
       continue; // vanished since reconcile; the next reconcile removes its rows
     }

@@ -3,22 +3,30 @@ import type { DatabaseSync } from 'node:sqlite';
 import type { FileStat } from '../scan.ts';
 import type { Feature, ReconcileDelta } from './types.ts';
 
-// links(src, target, target_base, dst): target as written, target_base its baseKey
+// links(src, target, target_base, dst, embed): target as written, target_base its baseKey
 // (indexed, for the incremental resolve below), dst the resolved path or NULL (a
-// queryable dead link).
+// queryable dead link), embed whether it's `![[x]]`/`![](x.md)` rather than `[[x]]`/`[](x.md)`
+// -- Obsidian's grain: a target both linked and embedded in the same note is two rows.
 
 // Wikilinks ([[target]], [[target#anchor|alias]], embeds) plus relative markdown links to .md files.
-function extract(_raw: string, body: string): string[] {
-  const targets = new Set<string>();
+function extract(_raw: string, body: string): Array<{ target: string; embed: boolean }> {
+  const seen = new Set<string>();
+  const results: Array<{ target: string; embed: boolean }> = [];
+  const add = (target: string, embed: boolean) => {
+    const key = `${target}\0${embed ? '1' : '0'}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    results.push({ target, embed });
+  };
   for (const m of body.matchAll(/\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|[^\]]*)?\]\]/g)) {
     const target = m[1].trim();
-    if (target) targets.add(target);
+    if (target) add(target, body[(m.index ?? 0) - 1] === '!');
   }
-  for (const m of body.matchAll(/\]\(([^)]+\.md)(?:#[^)]*)?\)/g)) {
-    const target = m[1].trim();
-    if (target && !/^[a-z]+:\/\//i.test(target)) targets.add(target);
+  for (const m of body.matchAll(/(!)?\[[^\]]*\]\(([^)]+\.md)(?:#[^)]*)?\)/g)) {
+    const target = m[2].trim();
+    if (target && !/^[a-z]+:\/\//i.test(target)) add(target, m[1] === '!');
   }
-  return [...targets];
+  return results;
 }
 
 function cleanTarget(target: string): string {
@@ -55,9 +63,12 @@ interface LinkRow {
   src: string;
   target: string;
   dst: string | null;
+  embed: number;
 }
 
-// Applies resolveTarget to `rows`, writing only rows whose dst actually changes.
+// Applies resolveTarget to `rows`, writing only rows whose dst actually changes. The UPDATE
+// keys on (src, target): a link/embed sibling pair shares one resolution, so either row's
+// mismatch rewrites both.
 function resolveRows(db: DatabaseSync, rows: LinkRow[], pathSet: Set<string>, byBase: Map<string, string[]>): boolean {
   const update = db.prepare('UPDATE links SET dst = ? WHERE src = ? AND target = ?');
   let changed = false;
@@ -76,7 +87,7 @@ function resolveRows(db: DatabaseSync, rows: LinkRow[], pathSet: Set<string>, by
 function resolveAll(db: DatabaseSync, files: FileStat[]): boolean {
   const pathSet = new Set(files.map((f) => f.relPath));
   const byBase = buildByBase(files);
-  const rows = db.prepare('SELECT src, target, dst FROM links').all() as unknown as LinkRow[];
+  const rows = db.prepare('SELECT src, target, dst, embed FROM links').all() as unknown as LinkRow[];
   return resolveRows(db, rows, pathSet, byBase);
 }
 
@@ -94,7 +105,7 @@ function resolveIncremental(db: DatabaseSync, delta: ReconcileDelta): boolean {
   // \0 can't appear in a path or target, so the key never collides; a space can.
   const candidates = new Map<string, LinkRow>();
   const collect = (rows: LinkRow[]) => {
-    for (const row of rows) candidates.set(`${row.src}\0${row.target}`, row);
+    for (const row of rows) candidates.set(`${row.src}\0${row.target}\0${row.embed}`, row);
   };
   // Chunked so a large-but-under-threshold delta never exceeds SQLite's bound-variable
   // limit (SQLITE_MAX_VARIABLE_NUMBER, 32766).
@@ -102,7 +113,7 @@ function resolveIncremental(db: DatabaseSync, delta: ReconcileDelta): boolean {
     for (let i = 0; i < keys.length; i += 500) {
       const chunk = keys.slice(i, i + 500);
       const placeholders = chunk.map(() => '?').join(', ');
-      collect(db.prepare(`SELECT src, target, dst FROM links WHERE ${column} IN (${placeholders})`).all(...chunk) as unknown as LinkRow[]);
+      collect(db.prepare(`SELECT src, target, dst, embed FROM links WHERE ${column} IN (${placeholders})`).all(...chunk) as unknown as LinkRow[]);
     }
   };
 
@@ -113,9 +124,10 @@ function resolveIncremental(db: DatabaseSync, delta: ReconcileDelta): boolean {
   return resolveRows(db, [...candidates.values()], pathSet, byBase);
 }
 
-// Resolved edges, for rank and for search's graph expansion.
+// Resolved edges, for rank and for search's graph expansion. DISTINCT: a target both linked
+// and embedded is two rows sharing one edge, which must not double its weight.
 export function linkEdges(db: DatabaseSync): [string, string][] {
-  return (db.prepare('SELECT src, dst FROM links WHERE dst IS NOT NULL').all() as Array<{ src: string; dst: string }>).map((r) => [r.src, r.dst]);
+  return (db.prepare('SELECT DISTINCT src, dst FROM links WHERE dst IS NOT NULL').all() as Array<{ src: string; dst: string }>).map((r) => [r.src, r.dst]);
 }
 
 // remove() has already deleted the rows by the time afterReconcile runs, so it records here
@@ -145,7 +157,7 @@ function vanishedSet(delta: ReconcileDelta): Set<string> {
 export const links: Feature = {
   name: 'links',
   schema(db) {
-    db.exec('CREATE TABLE IF NOT EXISTS links (src TEXT, target TEXT, target_base TEXT, dst TEXT, PRIMARY KEY (src, target))');
+    db.exec('CREATE TABLE IF NOT EXISTS links (src TEXT, target TEXT, target_base TEXT, dst TEXT, embed INTEGER, PRIMARY KEY (src, target, embed))');
     db.exec('CREATE INDEX IF NOT EXISTS links_dst ON links(dst)');
     db.exec('CREATE INDEX IF NOT EXISTS links_target_base ON links(target_base)');
   },
@@ -159,20 +171,22 @@ export const links: Feature = {
     if (Number(result.changes) > 0) recordRemoved(delta, path);
   },
   store(db, path, extracted, delta) {
-    const targets = extracted as string[];
-    // Stale rows (targets the new parse no longer contains) are real edge removals.
+    const targets = extracted as Array<{ target: string; embed: boolean }>;
+    // Stale rows (target/embed pairs the new parse no longer contains) are real edge removals.
+    // \0 can't appear in a target, so the composite key never collides.
     let stale: ReturnType<ReturnType<DatabaseSync['prepare']>['run']>;
     if (targets.length === 0) {
       stale = db.prepare('DELETE FROM links WHERE src = ?').run(path);
     } else {
       const placeholders = targets.map(() => '?').join(', ');
-      stale = db.prepare(`DELETE FROM links WHERE src = ? AND target NOT IN (${placeholders})`).run(path, ...targets);
+      const keys = targets.map((t) => `${t.target}\0${t.embed ? '1' : '0'}`);
+      stale = db.prepare(`DELETE FROM links WHERE src = ? AND (target || char(0) || embed) NOT IN (${placeholders})`).run(path, ...keys);
     }
     if (Number(stale.changes) > 0) recordRemoved(delta, path);
     // Upsert preserves dst on surviving rows, so an unchanged link resolves to the same
     // value and reports no change; only genuinely new rows start at NULL.
-    const insert = db.prepare('INSERT INTO links (src, target, target_base, dst) VALUES (?, ?, ?, NULL) ON CONFLICT(src, target) DO UPDATE SET target_base = excluded.target_base');
-    for (const target of targets) insert.run(path, target, baseKey(cleanTarget(target)));
+    const insert = db.prepare('INSERT INTO links (src, target, target_base, dst, embed) VALUES (?, ?, ?, NULL, ?) ON CONFLICT(src, target, embed) DO UPDATE SET target_base = excluded.target_base');
+    for (const { target, embed } of targets) insert.run(path, target, baseKey(cleanTarget(target)), embed ? 1 : 0);
   },
   afterReconcile(db, delta) {
     // Any deleted rows that carried edges mean the edge set shrank -- whether the file

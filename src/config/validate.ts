@@ -5,7 +5,7 @@ import type { Config } from './types.ts';
 // TypeError. Unknown top-level keys warn (forward compat); unknown keys inside a block error.
 const KNOWN_KEYS = new Set(['$schema', 'version', 'presets', 'features', 'embed', 'content', 'queries']);
 const KNOWN_PRESET_KEYS = new Set(['include', 'exclude', 'k', 'semantic', 'where']);
-const KNOWN_FEATURE_KEYS = new Set(['links', 'sections', 'rank']);
+const KNOWN_FEATURE_KEYS = new Set(['links', 'sections', 'tags', 'rank']);
 const KNOWN_EMBED_KEYS = new Set(['model', 'type', 'url', 'key']);
 const KNOWN_CONTENT_KEYS = new Set(['tokenize']);
 const SAVED_SEARCH_KEYS = new Set(['search', 'preset', 'include', 'exclude', 'where', 'k']);

@@ -346,7 +346,7 @@ describe('feature visibility', () => {
     writeNote(base, 'a.md', { body: 'alpha' });
     const { db, cfg } = openTree(base, { rank: false });
     const result = mapTree(db, cfg);
-    assert.deepEqual(result.features.on, ['links', 'sections']);
+    assert.deepEqual(result.features.on, ['links', 'sections', 'tags']);
     // embed is not one of the features-block toggles, so it is absent from both lists here;
     // `status` reports it on its own line, with the reason when it is off.
     assert.deepEqual(result.features.off, ['rank']);

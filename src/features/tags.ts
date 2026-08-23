@@ -1,0 +1,81 @@
+import type { Feature } from './types.ts';
+
+// tags(path, tag): Obsidian's file.tags grain -- frontmatter list/string tags plus inline
+// #tags from the prose, deduplicated, source not distinguished. Nested tags store full
+// (book/scifi); `tag = 'book' OR tag LIKE 'book/%'` is how a caller matches the parent too.
+
+const FENCE_RE = /^(```|~~~)/;
+const INLINE_CODE_RE = /`[^`]*`/g;
+// Anchors on start-of-line or a preceding whitespace/(/[ so `a#b` and URL fragments don't count.
+const INLINE_TAG_RE = /(?:^|[\s([])#([\p{L}\p{N}_/-]+)/gu;
+
+// Strips a leading # (frontmatter entries may carry one) and a trailing /; rejects an
+// all-digit result -- a tag needs at least one non-digit character.
+function normalizeTag(raw: string): string | null {
+  const stripped = raw.replace(/^#/, '').replace(/\/+$/, '');
+  if (!stripped || /^\d+$/.test(stripped)) return null;
+  return stripped;
+}
+
+// data.tags: a YAML list (Obsidian also accepts a bare string). Null members and non-string
+// members are skipped rather than throwing -- `tags:\n  -` parses to [null].
+function frontmatterTags(data?: Record<string, unknown>): string[] {
+  const raw = data?.tags;
+  const list = Array.isArray(raw) ? raw : typeof raw === 'string' ? [raw] : [];
+  const found: string[] = [];
+  for (const item of list) {
+    if (typeof item !== 'string') continue;
+    const tag = normalizeTag(item);
+    if (tag) found.push(tag);
+  }
+  return found;
+}
+
+// #tag tokens outside fenced code blocks and inline code spans.
+function inlineTags(body: string): string[] {
+  const found: string[] = [];
+  let inFence = false;
+  for (const line of body.split('\n')) {
+    if (FENCE_RE.test(line)) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) continue;
+    const cleaned = line.replace(INLINE_CODE_RE, (m) => ' '.repeat(m.length));
+    for (const m of cleaned.matchAll(INLINE_TAG_RE)) {
+      const tag = normalizeTag(m[1]);
+      if (tag) found.push(tag);
+    }
+  }
+  return found;
+}
+
+function extract(_raw: string, body: string, _search?: { title: string; summary: string }, data?: Record<string, unknown>): string[] {
+  return [...new Set([...frontmatterTags(data), ...inlineTags(body)])].sort();
+}
+
+export const tags: Feature = {
+  name: 'tags',
+  schema(db) {
+    db.exec('CREATE TABLE IF NOT EXISTS tags ("path" TEXT, tag TEXT, PRIMARY KEY ("path", tag))');
+    db.exec('CREATE INDEX IF NOT EXISTS tags_tag ON tags(tag)');
+  },
+  extract,
+  // Per-file rows with nothing else to resolve, so only a vanished file needs a delete here;
+  // store() below handles a reparse's stale rows itself.
+  remove(db, path, delta) {
+    if (!delta.vanished.includes(path)) return;
+    db.prepare('DELETE FROM tags WHERE "path" = ?').run(path);
+  },
+  store(db, path, extracted) {
+    const found = extracted as string[];
+    if (found.length === 0) {
+      db.prepare('DELETE FROM tags WHERE "path" = ?').run(path);
+    } else {
+      const placeholders = found.map(() => '?').join(', ');
+      db.prepare(`DELETE FROM tags WHERE "path" = ? AND tag NOT IN (${placeholders})`).run(path, ...found);
+    }
+    const insert = db.prepare('INSERT OR IGNORE INTO tags ("path", tag) VALUES (?, ?)');
+    for (const tag of found) insert.run(path, tag);
+  },
+};

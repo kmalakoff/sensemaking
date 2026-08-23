@@ -12,7 +12,7 @@ import { getColumns, getMeta, quoteIdent, setMeta } from './shared.ts';
 
 // Feature-owned columns (`_rank`) must stay out of the upsert: a reparse would null the last
 // computed value on every touch, not just the reconciles that recompute it.
-const CORE_FRONTMATTER_COLUMNS = new Set(['path', '_mtime', '_size', '_parse_error']);
+const CORE_FRONTMATTER_COLUMNS = new Set(['path', '_mtime', '_ctime', '_size', '_parse_error']);
 
 // SQLite's compile-time SQLITE_MAX_COLUMN, default 2000 (https://www.sqlite.org/limits.html).
 const MAX_FRONTMATTER_COLUMNS = 2000;
@@ -126,6 +126,7 @@ export function reconcile(db: DatabaseSync, cfg: Config, baseDir: string): { par
         const values = writableColumns.map((col) => {
           if (col === 'path') return doc.relPath;
           if (col === '_mtime') return doc.mtimeMs;
+          if (col === '_ctime') return doc.ctimeMs;
           if (col === '_size') return doc.size;
           // Written per parse, unlike _rank, which a feature pass owns and the upsert skips.
           if (col === '_parse_error') return doc.parseError;

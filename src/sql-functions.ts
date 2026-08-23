@@ -1,3 +1,4 @@
+import posix from 'node:path/posix';
 import type { DatabaseSync } from 'node:sqlite';
 import { segmentMatch } from './segment.ts';
 
@@ -21,6 +22,16 @@ export function registerFunctions(db: DatabaseSync, segmenting: boolean): void {
     }
 
     return String(field).includes(needle) ? 1 : 0;
+  });
+
+  // Unix basename(path, suffix?): the filename, minus suffix when it ends with one. SQLite
+  // itself has no filename function, and the LIKE tricks that fake one also match folder names.
+  db.function('basename', { deterministic: true, varargs: true }, (path: unknown, suffix?: unknown): string | null => {
+    if (path === null || path === undefined) return null;
+    const name = posix.basename(String(path));
+    const tail = suffix === null || suffix === undefined ? '' : String(suffix);
+    // POSIX: a suffix identical to the whole name is not removed (node's own basename strips it).
+    return tail !== '' && tail !== name && name.endsWith(tail) ? name.slice(0, -tail.length) : name;
   });
 
   // Raw `content MATCH '<unspaced text>'` cannot be rewritten behind the author's back, and
