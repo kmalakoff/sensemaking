@@ -18,18 +18,20 @@ describe('sense-bases worked examples', () => {
     writeNote(baseDir, 'Ronin.md', { frontmatter: { categories: ['[[Movies]]'], year: 1998, scoreImdb: 7.2 } });
     writeNote(baseDir, 'Seen.md', { frontmatter: { categories: ['[[Movies]]'], year: 2001, scoreImdb: 9, rating: 8, last: '2024-01-01' } });
     writeNote(baseDir, 'Movie Template.md', { frontmatter: { categories: ['[[Movies]]'] } });
+    // rating written as an explicit empty list: stored '[]', isEmpty() true.
+    writeNote(baseDir, 'Alien.md', { frontmatter: { categories: ['[[Movies]]'], year: 1979, scoreImdb: 8.5, rating: [] } });
     writeNote(baseDir, 'Book.md', { frontmatter: { categories: ['[[Books]]'] } });
     writeConfig(baseDir);
     const sql = `SELECT basename(f.path, '.md') AS name, f.year FROM frontmatter f
       WHERE EXISTS (SELECT 1 FROM json_each(f.categories) WHERE value = '[[Movies]]')
         AND instr(basename(f.path), 'Template') = 0
-        AND (f.last IS NULL OR f.last = '[null]') AND (f.rating IS NULL OR f.rating = '[null]')
+        AND (f.last IS NULL OR f.last IN ('', '[]', '[null]')) AND (f.rating IS NULL OR f.rating IN ('', '[]', '[null]'))
       ORDER BY f.scoreImdb DESC, name ASC`;
     const result = runCli(['sql', sql, '--format', 'json'], { cwd: baseDir });
     assert.equal(result.status, 0, result.stderr);
     assert.deepEqual(
       (JSON.parse(result.stdout) as Array<{ name: string }>).map((r) => r.name),
-      ['Heat', 'Ronin'],
+      ['Alien', 'Heat', 'Ronin'],
       'template and rated notes excluded, sorted by score'
     );
   });

@@ -35,8 +35,8 @@ SELECT basename(f.path, '.md') AS name, f.year, f.scoreImdb, f.runtime, f.direct
 FROM frontmatter f
 WHERE EXISTS (SELECT 1 FROM json_each(f.categories) WHERE value = '[[Movies]]')
   AND instr(basename(f.path), 'Template') = 0
-  AND (f.last IS NULL OR f.last = '[null]')
-  AND (f.rating IS NULL OR f.rating = '[null]')
+  AND (f.last IS NULL OR f.last IN ('', '[]', '[null]'))
+  AND (f.rating IS NULL OR f.rating IN ('', '[]', '[null]'))
 ORDER BY f.scoreImdb DESC, name ASC
 ```
 

@@ -47,22 +47,27 @@ times have this shape; creation times share it.
 | `==` `!=` `>` `<` `>=` `<=` | same |
 | `&&` `\|\|` `!` | `AND` `OR` `NOT` |
 | `and:` / `or:` / `not:` filter blocks | parenthesized `AND` / `OR` / `NOT` |
-| `field.isEmpty()` | `(f.field IS NULL OR f.field = '[null]')` |
+| `field.isEmpty()` | `(f.field IS NULL OR f.field IN ('', '[]', '[null]'))` |
 | `file.hasTag("book")` | `EXISTS (SELECT 1 FROM tags WHERE tags.path = f.path AND (tag = 'book' OR tag LIKE 'book/%'))` |
 | `file.hasLink("Note")` | `EXISTS (SELECT 1 FROM links WHERE src = f.path AND dst = 'Note.md')` |
 | `list.contains(x)` | `EXISTS (SELECT 1 FROM json_each(f.list) WHERE value = x)` |
 | `string.contains(x)` | `instr(f.string, x) > 0` |
 | `list.containsAny(...)` | the `json_each` EXISTS with `value IN (...)` |
 | `/regex/.matches(x)` | no SQLite regex; `LIKE`/`GLOB` cover anchored and wildcard shapes |
+| `value.isType("object")` | `json_each`'s own `type` column: `... FROM json_each(f.field) j WHERE j.type = 'object'` |
 
 A field no note in the tree declares has no column at all, so a filter naming it errors with
 `no such column` instead of treating every row as empty. Obsidian's evaluator returns empty
 for unknown properties; SQL does not. Dropping the clause states the same thing the error
 did, and `SELECT name FROM pragma_table_info('frontmatter')` lists what exists.
 
-`isEmpty()`'s second arm exists because a list key written with no items (`tags:` above a bare
-`-`) stores as the JSON text `[null]`: present, not NULL, holding nothing. Obsidian's
-`isEmpty()` is true for it; `IS NULL` alone is not.
+`isEmpty()` has four true cases because empty is stored three ways: NULL (key absent), `''`
+(empty string value), `'[]'` (a list written `[]`), and `'[null]'` (a list key above a bare
+`-`). Obsidian's `isEmpty()` is true for all of them; `IS NULL` alone finds only the first.
+The IN list is the whole test -- `json_array_length()` is not: it reads `'[null]'` as length
+1 and throws on plain strings. The same trap inside a list: `json_each` hands a string member
+to `value` as plain text, so `json_type(value)` throws `malformed JSON` on it; the scan's own
+`type` column is the discriminator.
 
 `contains(link("Movies"))` compares against a link value. In frontmatter, a list of links
 holds the written text, so the `json_each` comparison value is the literal `[[Movies]]`.
@@ -93,6 +98,12 @@ Formulas are SELECT expressions. The Bases functions map onto SQLite's:
 
 Bases durations are typed; SQL date arithmetic is julianday day-fractions. A formula chaining
 duration fields (`.days.round()`) flattens to arithmetic on the julianday difference.
+
+A formula referencing another formula becomes a CTE layer: SQL cannot read a SELECT alias in
+the same SELECT list, so each dependency level computes its formulas as columns and the next
+level reads them (`WITH t AS (SELECT ..., <level-1 formulas> FROM frontmatter) SELECT ...,
+<level-2 formulas> FROM t`). A five-formula chain is however many *levels* it has, not five
+CTEs -- formulas that only read base columns share one layer.
 
 ## Views
 
