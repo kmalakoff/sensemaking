@@ -75,9 +75,19 @@ const CASES: Array<{ name: string; frontmatter?: Record<string, unknown> | strin
   { name: 'blockquoted prose keeps its tag', body: '> quoted #in-quote-prose', expect: ['in-quote-prose'] },
   { name: 'a tag inside a single-line HTML comment is not extracted', body: 'before <!-- #hidden --> #visible', expect: ['visible'] },
   { name: 'a tag inside a multi-line HTML comment is not extracted', body: 'before\n<!-- #hidden\nstill hidden -->\nafter #real', expect: ['real'] },
-  { name: 'an unclosed HTML comment masks to end of body', body: 'before #real\n<!-- #never\nclosing #also-never', expect: ['real'] },
+  {
+    name: 'an unclosed HTML comment dies at the next blank line, not end of body',
+    body: 'before #real\n<!-- #never\nclosing #also-never\n\n#after',
+    expect: ['after', 'real'],
+  },
+  {
+    name: 'an unclosed comment inside a <div> block does not swallow a tag after the block',
+    body: '<div>\n<!-- unclosed\n</div>\n\n#afterTag\n[[AfterLink]]',
+    expect: ['afterTag'],
+  },
   { name: 'a fence-looking line inside a comment does not stick the fence tracker', body: '<!-- note:\n```\nend -->\n#realtag', expect: ['realtag'] },
   { name: 'an unclosed comment inside an HTML block dies with the block (Obsidian-verified)', body: '<div>\n<!-- start\n</div>\n\n#tag1 after\n-->\n#tag3 after arrow', expect: ['tag1', 'tag3'] },
+  { name: 'a one-line script block does not swallow what follows (Obsidian-verified)', body: '<script>var x=1;</script>\n#real after', expect: ['real'] },
 ];
 
 describe('tags extraction policy', () => {

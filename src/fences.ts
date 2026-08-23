@@ -50,10 +50,13 @@ export function fenceTracker(): FenceTracker {
 }
 
 // Masks <!-- ... --> spans that may cross line boundaries, one line at a time so callers can
-// interleave it with their own per-line state. An unclosed <!-- masks to end of input, matching
-// CommonMark type-2 HTML comments' practical effect (everything after is swallowed).
+// interleave it with their own per-line state. In isolation an unclosed <!-- stays open forever
+// (mask() has no notion of a line boundary that should kill it); maskRegions() below is what
+// calls close() at the point an unclosed comment actually dies -- a blank line at paragraph
+// level, or its enclosing HTML block's end.
 export interface CommentTracker {
   mask(line: string): string;
+  close(): void; // force-ends an unclosed comment (paragraph blank line, or its HTML block ending)
   readonly inComment: boolean;
 }
 
@@ -88,27 +91,151 @@ export function commentTracker(): CommentTracker {
       }
       return out;
     },
+    close() {
+      inComment = false;
+    },
     get inComment() {
       return inComment;
     },
   };
 }
 
-// Body with fenced-code regions (delimiter and content lines) and <!-- --> comment spans
-// replaced by spaces, newlines preserved so line numbers and offsets survive. Bodies without a
-// backtick/tilde/`<!--` fast-path out untouched.
+// CommonMark's HTML-block type-6 list (fixed by the spec, not a drifting enumeration): a line
+// starting with an open or close tag of one of these, at column 0 (leading whitespace/`>`
+// blockquote markers tolerated), opens a block that swallows following lines -- tags, links,
+// and comments alike -- until a blank line closes it.
+const HTML_BLOCK_TAGS = new Set([
+  'address',
+  'article',
+  'aside',
+  'base',
+  'basefont',
+  'blockquote',
+  'body',
+  'caption',
+  'center',
+  'col',
+  'colgroup',
+  'dd',
+  'details',
+  'dialog',
+  'dir',
+  'div',
+  'dl',
+  'dt',
+  'fieldset',
+  'figcaption',
+  'figure',
+  'footer',
+  'form',
+  'frame',
+  'frameset',
+  'h1',
+  'h2',
+  'h3',
+  'h4',
+  'h5',
+  'h6',
+  'head',
+  'header',
+  'hr',
+  'html',
+  'iframe',
+  'legend',
+  'li',
+  'link',
+  'main',
+  'menu',
+  'menuitem',
+  'nav',
+  'noframes',
+  'ol',
+  'optgroup',
+  'option',
+  'p',
+  'param',
+  'search',
+  'section',
+  'summary',
+  'table',
+  'tbody',
+  'td',
+  'tfoot',
+  'th',
+  'thead',
+  'title',
+  'tr',
+  'track',
+  'ul',
+]);
+// Type-1 blocks (script/pre/style/textarea): closes on the line holding the matching end tag,
+// not on a blank line, and that line is the last one swallowed.
+const HTML_PRE_TAGS = new Set(['script', 'pre', 'style', 'textarea']);
+const HTML_PRE_CLOSE_RE = /<\/(?:script|pre|style|textarea)>/i; // any of the four closers ends the block, not only the tag that opened it
+// An opening or closing tag at column 0, tag name captured for the lookups above.
+const HTML_BLOCK_OPEN_RE = /^<\/?([a-zA-Z][a-zA-Z0-9]*)(?:[ \t]|\/?>|$)/;
+const BLANK_LINE_RE = /^[ \t>]*$/; // whitespace/blockquote-markers only -- a paragraph break, and what ends a type-6 block
+
+// Body with fenced-code, HTML-block, and <!-- --> comment regions replaced by spaces (newlines
+// preserved, so line numbers and offsets survive) plus inline code spans masked. The single
+// region masker for tags/links: fence and HTML-block delimiter+content lines are opaque, an
+// unclosed comment dies at its containing block's end (or the next blank line at paragraph
+// level -- never silently to end of file), and a closed comment masks exactly its span.
+// Bodies without a backtick/tilde/`<` fast-path out untouched.
 export function maskRegions(body: string): string {
-  if (!/[`~]/.test(body) && !body.includes('<!--')) return body;
+  if (!/[`~<]/.test(body)) return body;
   const fence = fenceTracker();
   const comment = commentTracker();
+  let inHtmlBlock = false;
+  let htmlBlockClose: RegExp | null = null; // set while inside a type-1 (script/pre/style/textarea) block
   return body
     .split('\n')
     .map((line) => {
+      if (inHtmlBlock) {
+        if (htmlBlockClose) {
+          if (htmlBlockClose.test(line)) {
+            inHtmlBlock = false;
+            htmlBlockClose = null;
+          }
+          return ' '.repeat(line.length);
+        }
+        if (BLANK_LINE_RE.test(line)) {
+          // Block content never feeds the comment tracker, so an inner <!-- was only ever
+          // masked text; nothing to close here.
+          inHtmlBlock = false;
+          return line;
+        }
+        return ' '.repeat(line.length);
+      }
       if (!comment.inComment) {
         const isDelim = fence.feed(line);
         if (isDelim || fence.inFence) return ' '.repeat(line.length);
       }
-      const uncommented = comment.mask(line);
+      const uncommented = comment.inComment || line.includes('<!--') ? comment.mask(line) : line;
+      if (comment.inComment && BLANK_LINE_RE.test(line)) comment.close(); // paragraph-level: dies at the next blank line
+      // Indented or blockquoted HTML blocks still swallow their content in Obsidian, so the
+      // opener test runs after stripping leading whitespace and > markers.
+      const stripped = uncommented.replace(/^[ \t>]*/, '');
+      if (stripped[0] === '<') {
+        const openMatch = HTML_BLOCK_OPEN_RE.exec(stripped);
+        if (openMatch) {
+          const tagName = openMatch[1].toLowerCase();
+          const isClosingTag = stripped[1] === '/';
+          if (!isClosingTag && HTML_PRE_TAGS.has(tagName)) {
+            // The end condition can be met on the opening line itself: <script>x</script>
+            // is a one-line block and the next line parses (Obsidian-verified).
+            if (!HTML_PRE_CLOSE_RE.test(stripped.slice(openMatch[0].length))) {
+              inHtmlBlock = true;
+              htmlBlockClose = HTML_PRE_CLOSE_RE;
+            }
+            return ' '.repeat(line.length);
+          }
+          if (HTML_BLOCK_TAGS.has(tagName)) {
+            inHtmlBlock = true;
+            return ' '.repeat(line.length);
+          }
+        }
+      }
       // Inline code spans hide their content too: `[[x]]` in prose is not a link.
       return uncommented.includes('`') ? maskCodeSpans(uncommented) : uncommented;
     })

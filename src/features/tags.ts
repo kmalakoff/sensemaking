@@ -1,4 +1,4 @@
-import { commentTracker, fenceTracker, maskCodeSpans } from '../fences.ts';
+import { maskRegions } from '../fences.ts';
 import type { Feature } from './types.ts';
 
 // tags(path, tag): Obsidian's file.tags grain -- frontmatter list/string tags plus inline
@@ -13,79 +13,6 @@ const HTML_TAG_RE = /<\/?[a-zA-Z][^>]*>/g; // tag-shaped only: a comparison's `<
 const INLINE_TAG_RE = /(?:^|[\s([])#([\p{L}\p{N}_/-]+)/gu;
 // A markdown link destination `](...)` -- `[text](#anchor)` is a same-page link, not a tag.
 const LINK_DEST_RE = /\]\((?:[^()]|\([^()]*\))*\)/g; // one paren-nesting level, as CommonMark destinations allow: (https://x/a_(b)#frag)
-
-// CommonMark's HTML-block type-6 list (fixed by the spec, not a drifting enumeration): a line
-// starting with an open or close tag of one of these, at column 0, opens a block that swallows
-// following lines -- including any #tag in them -- until a blank line closes it.
-const HTML_BLOCK_TAGS = new Set([
-  'address',
-  'article',
-  'aside',
-  'base',
-  'basefont',
-  'blockquote',
-  'body',
-  'caption',
-  'center',
-  'col',
-  'colgroup',
-  'dd',
-  'details',
-  'dialog',
-  'dir',
-  'div',
-  'dl',
-  'dt',
-  'fieldset',
-  'figcaption',
-  'figure',
-  'footer',
-  'form',
-  'frame',
-  'frameset',
-  'h1',
-  'h2',
-  'h3',
-  'h4',
-  'h5',
-  'h6',
-  'head',
-  'header',
-  'hr',
-  'html',
-  'iframe',
-  'legend',
-  'li',
-  'link',
-  'main',
-  'menu',
-  'menuitem',
-  'nav',
-  'noframes',
-  'ol',
-  'optgroup',
-  'option',
-  'p',
-  'param',
-  'search',
-  'section',
-  'summary',
-  'table',
-  'tbody',
-  'td',
-  'tfoot',
-  'th',
-  'thead',
-  'title',
-  'tr',
-  'track',
-  'ul',
-]);
-// Type-1 blocks (script/pre/style/textarea): closes on the line holding the matching end tag,
-// not on a blank line, and that line is the last one skipped.
-const HTML_PRE_TAGS = new Set(['script', 'pre', 'style', 'textarea']);
-// An opening or closing tag at column 0, tag name captured for the lookups above.
-const HTML_BLOCK_OPEN_RE = /^<\/?([a-zA-Z][a-zA-Z0-9]*)(?:[ \t]|\/?>|$)/;
 
 // Strips a leading # (frontmatter entries may carry one) and a trailing /; rejects an
 // all-digit result -- a tag needs at least one non-digit character.
@@ -110,56 +37,13 @@ function frontmatterTags(data?: Record<string, unknown>): string[] {
 }
 
 // #tag tokens outside fenced code blocks, inline code spans, wikilinks, HTML tags, HTML blocks,
-// <!-- --> comments, and link destinations.
+// <!-- --> comments, and link destinations. maskRegions() handles all of those region-level
+// concerns (and code spans, masked once there); this loop only does per-line tag extraction.
 function inlineTags(body: string): string[] {
   const found: string[] = [];
-  const fence = fenceTracker();
-  const comment = commentTracker();
-  let inHtmlBlock = false;
-  let htmlBlockClose: RegExp | null = null; // set while inside a type-1 (script/pre/style/textarea) block
-  for (const line of body.split('\n')) {
-    if (inHtmlBlock) {
-      // A fence-like line here is still HTML-block content -- the block wins until it closes.
-      if (htmlBlockClose) {
-        if (htmlBlockClose.test(line)) {
-          inHtmlBlock = false;
-          htmlBlockClose = null;
-        }
-      } else if (/^[ \t>]*$/.test(line)) {
-        inHtmlBlock = false;
-      }
-      continue;
-    }
-    if (!comment.inComment) {
-      if (fence.feed(line)) continue;
-      if (fence.inFence) continue;
-    }
-    // Obsidian parses nothing inside a <!-- --> comment; mask its span (which may open, close,
-    // or run the whole line) before any other check sees this line's text. Skipped when there
-    // is no comment marker anywhere near this line -- most lines, so worth the branch.
-    const masked = comment.inComment || line.includes('<!--') ? comment.mask(line) : line;
-    // Indented or blockquoted HTML blocks still swallow their content in Obsidian, so the
-    // opener test runs after stripping leading whitespace and > markers.
-    const stripped = masked.replace(/^[ \t>]*/, '');
-    if (stripped[0] === '<') {
-      const openMatch = HTML_BLOCK_OPEN_RE.exec(stripped);
-      if (openMatch) {
-        const tagName = openMatch[1].toLowerCase();
-        const isClosingTag = stripped[1] === '/';
-        if (!isClosingTag && HTML_PRE_TAGS.has(tagName)) {
-          inHtmlBlock = true;
-          // Any of the four type-1 closers ends the block, not only the tag that opened it.
-          htmlBlockClose = /<\/(?:script|pre|style|textarea)>/i;
-          continue;
-        }
-        if (HTML_BLOCK_TAGS.has(tagName)) {
-          inHtmlBlock = true;
-          continue;
-        }
-      }
-    }
-    if (!masked.includes('#')) continue; // most lines; skip the regex work
-    let cleaned = masked.includes('`') ? maskCodeSpans(masked) : masked;
+  for (const line of maskRegions(body).split('\n')) {
+    if (!line.includes('#')) continue; // most lines; skip the regex work
+    let cleaned = line;
     if (cleaned.includes('[[')) cleaned = cleaned.replace(WIKILINK_RE, (m) => ' '.repeat(m.length));
     if (cleaned.includes('](')) cleaned = cleaned.replace(LINK_DEST_RE, (m) => ' '.repeat(m.length));
     if (cleaned.includes('<')) cleaned = cleaned.replace(HTML_TAG_RE, (m) => ' '.repeat(m.length));

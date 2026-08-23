@@ -279,6 +279,46 @@ describe('links: embed vs link grain', () => {
     db.close();
   });
 
+  it('a wikilink inside a <div> HTML block produces no row', () => {
+    const baseDir = tmpTree();
+    writeNote(baseDir, 'a.md', { body: '<div>\n[[Link]]\n</div>' });
+    writeNote(baseDir, 'Link.md', { body: 'target' });
+    const { db } = openTree(baseDir);
+    const rows = db.prepare('SELECT target FROM links WHERE src = ?').all('a.md');
+    assert.deepEqual(rows, []);
+    db.close();
+  });
+
+  it('an unclosed comment inside a <div> block does not swallow a link after the block', () => {
+    const baseDir = tmpTree();
+    writeNote(baseDir, 'a.md', { body: '<div>\n<!-- unclosed\n</div>\n\n#afterTag\n[[AfterLink]]' });
+    writeNote(baseDir, 'AfterLink.md', { body: 'target' });
+    const { db } = openTree(baseDir);
+    const rows = db.prepare('SELECT target, dst FROM links WHERE src = ?').all('a.md') as Array<{ target: string; dst: string | null }>;
+    assert.deepEqual(rows, [{ target: 'AfterLink', dst: 'AfterLink.md' }]);
+    db.close();
+  });
+
+  it('a paragraph-level unclosed comment dies at the blank line, so a link after it still resolves', () => {
+    const baseDir = tmpTree();
+    writeNote(baseDir, 'a.md', { body: 'before\n<!-- unclosed\nstill hidden\n\n[[AfterLink]]' });
+    writeNote(baseDir, 'AfterLink.md', { body: 'target' });
+    const { db } = openTree(baseDir);
+    const rows = db.prepare('SELECT target, dst FROM links WHERE src = ?').all('a.md') as Array<{ target: string; dst: string | null }>;
+    assert.deepEqual(rows, [{ target: 'AfterLink', dst: 'AfterLink.md' }]);
+    db.close();
+  });
+
+  it('a closed comment inside a <div> block leaves a link after the block intact', () => {
+    const baseDir = tmpTree();
+    writeNote(baseDir, 'a.md', { body: '<div>\n<!-- hidden -->\n</div>\n\n[[AfterLink]]' });
+    writeNote(baseDir, 'AfterLink.md', { body: 'target' });
+    const { db } = openTree(baseDir);
+    const rows = db.prepare('SELECT target, dst FROM links WHERE src = ?').all('a.md') as Array<{ target: string; dst: string | null }>;
+    assert.deepEqual(rows, [{ target: 'AfterLink', dst: 'AfterLink.md' }]);
+    db.close();
+  });
+
   it('adding a link beside an already-resolved embed resolves the new row incrementally', () => {
     const baseDir = tmpTree();
     writeNote(baseDir, 'a.md', { body: '![[b]]' });
