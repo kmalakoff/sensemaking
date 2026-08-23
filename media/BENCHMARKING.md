@@ -61,6 +61,13 @@ Apple Silicon, Node 26.7.0. 2026-08-23. `local` is the working tree about to be 
 tree; `_ctime` and the embed grain are the rest). It is paid once per tree and buys the
 `tags` table. Warm paths -- freshness, updates, queries, token contracts -- are flat.
 
+**0.15.0 (fence semantics + oracle validation): flat.** The shared run-length fence tracker,
+HTML-block state, and link-destination masking left every row within noise (in-process cold
+build 1341 -> 1345 ms vs 0.14.0; warm paths identical; nfcorpus digit-identical). Correctness
+gate for that release was external: zero tag-table diff vs Obsidian's own metadataCache on
+6,567 hub + 1,302 vault files, and 22/29 CommonMark fence spec examples (7 divergences
+asserted in test/unit/fences.test.ts).
+
 **What this table caught before 0.13.2 shipped.** The first post-0.13.0 run showed lexical
 `search` at +25-65 ms per query: the `DISTINCT` added to linkEdges() during review sorted the
 whole links table on every search, and worse, silently changed edge semantics -- two written
