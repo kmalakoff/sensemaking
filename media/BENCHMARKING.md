@@ -38,34 +38,36 @@ Two kinds of metric per version:
 
 ## Results: obsidian-hub @ b11036f9 (6,566 notes, 14 MB)
 
-Apple Silicon, Node 26.7.0. 2026-08-22. `local` is the working tree about to be released; the baseline column is whatever `package.json` names, so a bare `compare.mjs` always reads "last release vs what ships next".
+Apple Silicon, Node 26.7.0. 2026-08-23. `local` is the working tree about to be released; the baseline column is whatever `package.json` names, so a bare `compare.mjs` always reads "last release vs what ships next". This table was measured against 0.12.3 (the release before the tags/embed/_ctime schema change) to price the feature set; the intervening 0.13.0/0.13.1 shipped unbenchmarked.
 
-| metric | 0.12.0 | local |
+| metric | 0.12.3 | local |
 |---|---|---|
-| cold crawl | 1202 ms | 1189 ms |
-| warm query (`COUNT(*)`) | 100 ms | 96 ms |
-| BM25 search (canonical join) | 109 ms | 104 ms |
-| lexical `search` (BM25 + link fusion) | 156 ms | 150 ms |
+| cold crawl | 1171 ms | 1506 ms |
+| warm query (`COUNT(*)`) | 95 ms | 96 ms |
+| BM25 search (canonical join) | 102 ms | 104 ms |
+| lexical `search` (BM25 + link fusion) | 145 ms | 154 ms |
 | `search` row size (json) | ~71 tokens | ~71 tokens |
-| `map` (orient) | 125 ms / ~458 tokens | 123 ms / ~486 tokens |
-| `peek` largest note (~77274 t) | 108 ms / ~581 tokens (0.8%) | 104 ms / ~581 tokens (0.8%) |
-| bulk change (500 files): first query | 258 ms | 282 ms |
-| bulk change (500 files): with warm watcher | 132 ms | 143 ms |
-| in-process: cold index build | 1023 ms | 1039 ms |
-| in-process: freshness check, no change | 37.9 ms | 37.3 ms |
-| in-process: update, 1 file touched | 39.2 ms | 39.4 ms |
-| in-process: update, 10 files modified | 40.2 ms | 39.9 ms |
+| `map` (orient) | 120 ms / ~486 tokens | 121 ms / ~487 tokens |
+| `peek` largest note (~77274 t) | 100 ms / ~581 tokens (0.8%) | 101 ms / ~581 tokens (0.8%) |
+| bulk change (500 files): first query | 254 ms | 281 ms |
+| bulk change (500 files): with warm watcher | 115 ms | 128 ms |
+| in-process: cold index build | 1022 ms | 1292 ms |
+| in-process: freshness check, no change | 35.6 ms | 39.1 ms |
+| in-process: update, 1 file touched | 36.7 ms | 37.7 ms |
+| in-process: update, 10 files modified | 37.8 ms | 38.5 ms |
 
-Every row is flat or faster except the bulk-change pair, up 6-9% while their in-process
-update counterparts (which do the same reconcile work, minus the process spawn) stay flat --
-this doc's own definition of noise, so no fix is owed.
+**Cold build +26%, priced and accepted.** The tags feature scans every body line for inline
+`#tags` at parse time (isolated by toggling the feature: ~295 ms of the ~330 ms delta on this
+tree; `_ctime` and the embed grain are the rest). It is paid once per tree and buys the
+`tags` table. Warm paths -- freshness, updates, queries, token contracts -- are flat.
 
-**`map` grew ~458 -> ~486 tokens, not a regression.** This release adds `recentCaveat`: a
-line above the `recent:` table when one modified-second holds a majority of the scoped docs,
-because a fresh clone or copy stamps files with checkout time, not edit history, and that
-would otherwise read as recent activity. The hub corpus is one checkout, so every file shares
-close to the same second, the check fires, and the line prints -- exactly +28 tokens. See
-Scale below for what this means for the "flat with tree size" claim.
+**What this table caught before 0.13.2 shipped.** The first post-0.13.0 run showed lexical
+`search` at +25-65 ms per query: the `DISTINCT` added to linkEdges() during review sorted the
+whole links table on every search, and worse, silently changed edge semantics -- two written
+targets resolving to one dst had always been two edges, a weight the FEVER gate was measured
+on. Rewritten as UNION ALL with a NOT EXISTS probe that excludes only an embed's exact link
+twin: search back to 145 -> 154 ms, and both eval tables reproduce their documented figures
+(nfcorpus digit-for-digit; fever hit@10 0.9969/0.9971/0.9967).
 
 **A harness caveat found two releases back, still load-bearing.** The first version
 `compare.mjs` benchmarks pays a large one-time machine warmup (the baseline's `npm install`
