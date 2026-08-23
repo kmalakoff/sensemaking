@@ -1,3 +1,4 @@
+import { fenceTracker } from '../fences.ts';
 import type { Feature } from './types.ts';
 
 // sections(path, idx, level, heading, start_line, end_line, tokens): the heading outline,
@@ -15,13 +16,10 @@ export interface Section {
 function extract(raw: string): Section[] {
   const lines = raw.split('\n');
   const found: Section[] = [];
-  let inFence = false;
+  const fence = fenceTracker();
   for (let i = 0; i < lines.length; i++) {
-    if (/^(```|~~~)/.test(lines[i])) {
-      inFence = !inFence;
-      continue;
-    }
-    if (inFence) continue;
+    if (fence.feed(lines[i])) continue;
+    if (fence.inFence) continue;
     const m = lines[i].match(/^(#{1,6}) +(.*)/);
     if (m) found.push({ level: m[1].length, heading: m[2].trim(), startLine: i + 1, endLine: lines.length, tokens: 0 });
   }

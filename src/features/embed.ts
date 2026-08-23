@@ -5,6 +5,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import type { Config, ResolvedConfig } from '../config/index.ts';
 import { embedConfig } from '../config/index.ts';
 import { SenseError } from '../errors.ts';
+import { fenceTracker } from '../fences.ts';
 import { progress } from '../progress.ts';
 import { parseFile } from '../scan.ts';
 import type { Feature } from './types.ts';
@@ -42,13 +43,10 @@ interface Chunk {
 function chunksOf(body: string, search?: { title: string; summary: string }, offset = 0): Chunk[] {
   const lines = body.split('\n');
   const starts: number[] = [];
-  let inFence = false;
+  const fence = fenceTracker();
   for (let i = 0; i < lines.length; i++) {
-    if (/^(```|~~~)/.test(lines[i])) {
-      inFence = !inFence;
-      continue;
-    }
-    if (!inFence && /^#{1,6} +/.test(lines[i])) starts.push(i + 1);
+    if (fence.feed(lines[i])) continue;
+    if (!fence.inFence && /^#{1,6} +/.test(lines[i])) starts.push(i + 1);
   }
   const bounds = starts.length === 0 ? [1] : starts[0] > 1 ? [1, ...starts] : starts;
   const prefix = [search?.title, search?.summary].filter(Boolean).join('\n');

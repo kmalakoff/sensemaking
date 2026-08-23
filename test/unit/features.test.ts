@@ -167,6 +167,18 @@ describe('sections feature', () => {
       ['Real']
     );
   });
+
+  it('a heading between a nested fence inner and outer closer is not a section; one after the outer closer is', () => {
+    const baseDir = tmpTree();
+    write(baseDir, 'a.md', '````\n```\n# not a section (still inside the outer fence)\n```\n````\n\n# after the outer closer\n');
+
+    const { db } = openTree(baseDir);
+    const rows = db.prepare('SELECT heading FROM sections WHERE "path" = ?').all('a.md') as Array<{ heading: string }>;
+    assert.deepEqual(
+      rows.map((r) => r.heading),
+      ['after the outer closer']
+    );
+  });
 });
 
 describe('rank feature', () => {
