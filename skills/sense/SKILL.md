@@ -61,6 +61,7 @@ The commands are shorthands over those tables; anything they don't express, SQL 
 
 ```
 sense sql "SELECT name FROM pragma_table_info('frontmatter')"          # what fields exist
+sense sql 'SELECT path FROM frontmatter WHERE "plugin-id" IS NOT NULL'    # punctuated keys need double quotes: unquoted, plugin-id reads as subtraction
 sense sql "SELECT DISTINCT status FROM frontmatter"                    # what values a field takes
 sense sql "SELECT src FROM links WHERE dst = ?" notes/pricing-model.md  # backlinks
 sense sql "SELECT f.path FROM frontmatter f JOIN scope ON scope.path = f.path" --preset default   # scope SQL to a preset
@@ -111,7 +112,7 @@ Worked traces: [EXAMPLES.md](EXAMPLES.md).
 - `map` and `status` report each preset's coverage (files matched, embedded count). Indexing derives from presets, so the coverage numbers are how you see what a config actually indexes and embeds. A scope with fewer signals just uses fewer (a semantic-off preset searches lexically); a saved search naming an unknown preset errors when run, listing the declared ones.
 - Save a query into `sense.config.json` only when it will be reused; run ad-hoc otherwise.
 - A one-line `summary:` per note is optional and pays twice: it appears in result rows and is a weighted search field. Date comparisons work for dates written as ISO 8601 (`2026-08-12`, or with time and offset); other formats do not compare. Field names in examples (`status`, `tags`, `created`) are illustrative; your tree defines its own.
-- Reserved frontmatter keys (dropped with a warning): `path`, `_mtime`, `_ctime`, `_size`, `_rank`, `_parse_error`, `content`, `links`, `sections`. The `tags` frontmatter column and the `tags` table coexist: the column holds the raw YAML list, the table the merged frontmatter+inline set.
+- Reserved frontmatter keys (dropped with a warning): `path`, `_mtime`, `_ctime`, `_size`, `_rank`, `_parse_error`, `content`, `links`, `sections`. The `tags` frontmatter column and the `tags` table coexist, mirroring Obsidian's own split: the column is the raw YAML list one note's frontmatter declares (Obsidian's `tags` property), the table is the merged, deduplicated frontmatter+inline set per note (what Obsidian's tag pane and Bases' `file.tags` read). "What is tagged X" is a table query; the column answers only what a note's frontmatter literally says. Inline tags inside `%%...%%` comments are indexed -- some trees run their whole maintenance-tag system in comments.
 - A note whose frontmatter does not parse is indexed with **no** frontmatter columns and `_parse_error` set to the YAML message, which carries the line. Nothing is half-recovered: a non-NULL value is a value the author wrote. So a NULL column means the key was absent *or* the note did not parse, and `_parse_error` is how you tell: `WHERE status IS NULL AND _parse_error IS NULL` is "genuinely missing status". List what needs fixing with `sense sql "SELECT path, _parse_error FROM frontmatter WHERE _parse_error IS NOT NULL"`; fixing a file clears it on the next command. `sense status` reports the count.
 - Exit codes: `0` ok, `1` error (SQLite message verbatim), `2` usage (unknown query, wrong param count).
 - Doubted cache: delete the directory `sense status` prints on its `cache:` line. Rarely needed; every query reconciles first.

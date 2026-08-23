@@ -1,5 +1,6 @@
 import type { ParseArgsOptionsConfig } from 'node:util';
 import { parseArgs } from 'node:util';
+import { columnHint } from '../column-hint.ts';
 import type { ResolvedConfig, SearchOverrides } from '../config/index.ts';
 import { resolvePreset } from '../config/index.ts';
 import type { OpenResult } from '../db/index.ts';
@@ -150,12 +151,13 @@ export function runSql(cfg: ResolvedConfig, sql: string, params: string[], forma
     const columns = statement.columns().map((c) => c.name);
     printRowStream(statement.iterate(...params) as Iterable<Row>, format, columns);
   } catch (err) {
+    const hinted = columnHint(db, err as Error); // pragma needs the db still open
     db.close();
     // A saved query or ad-hoc SQL can carry `content MATCH ?` too, so the same FTS5
     // punctuation trap applies -- the bound parameters are the search terms there. SQL
     // without MATCH gets its error verbatim; search advice on a plain typo would mislead.
-    if (/\bMATCH\b/i.test(sql)) throw searchError(err as Error, params.join(' '));
-    throw err;
+    if (/\bMATCH\b/i.test(sql)) throw searchError(hinted, params.join(' '));
+    throw hinted;
   }
   db.close();
 }

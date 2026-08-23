@@ -1,5 +1,6 @@
 import { matchesGlob } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
+import { columnHint } from '../column-hint.ts';
 import type { ResolvedConfig, SearchOverrides } from '../config/index.ts';
 import { anyPresetEmbeds, resolveSearch } from '../config/index.ts';
 
@@ -34,7 +35,12 @@ export function rawScope(db: DatabaseSync, cfg: ResolvedConfig, overrides: Searc
 
 export function narrowByWhere(db: DatabaseSync, paths: Set<string>, where: string | undefined): Set<string> {
   if (!where) return paths;
-  const whereRows = db.prepare(`SELECT "path" FROM frontmatter f WHERE (${where})`).all() as Array<{ path: string }>;
+  let whereRows: Array<{ path: string }>;
+  try {
+    whereRows = db.prepare(`SELECT "path" FROM frontmatter f WHERE (${where})`).all() as Array<{ path: string }>;
+  } catch (err) {
+    throw columnHint(db, err as Error);
+  }
   const wherePaths = new Set(whereRows.map((r) => r.path));
   return new Set([...paths].filter((p) => wherePaths.has(p)));
 }

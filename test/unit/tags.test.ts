@@ -26,6 +26,15 @@ const CASES: Array<{ name: string; frontmatter?: Record<string, unknown> | strin
   { name: 'mid-word # and a URL fragment are not tags', body: 'a#b and see https://x.com/page#frag', expect: [] },
   { name: 'a unicode tag is extracted', body: 'topic #日本語 today', expect: ['日本語'] },
   { name: '`tags:` over a bare `-` (a null list entry) produces no rows and does not throw', frontmatter: 'tags:\n  -', expect: [] },
+  { name: 'a same-note heading link is not a tag', body: 'see [[#Heading One]] for more', expect: [] },
+  { name: 'a piped heading link is not a tag', body: 'see [[#Divide up things|see below]]', expect: [] },
+  { name: 'a cross-note heading link is not a tag', body: 'see [[Other Note#Some Section]]', expect: [] },
+  { name: 'a hex color in an HTML style attribute is not a tag', body: '<span style="color: #ccc">x</span>', expect: [] },
+  { name: 'a hex color in an HTML table cell is not a tag', body: '<td style="background: #f0f0f0">', expect: [] },
+  { name: 'masking a wikilink or HTML span does not eat a real tag later on the line', body: 'see [[#Anchor]] about #real-tag', expect: ['real-tag'] },
+  { name: 'a tag inside a %% comment %% is still indexed', body: '%% #placeholder/author %%', expect: ['placeholder/author'] },
+  { name: 'comparison text is not an HTML span, so its tag survives', body: 'score: 3 < 5 #important because x > 2', expect: ['important'] },
+  { name: 'a heading link holding a lone ] still masks whole', body: 'see [[#Steps [WIP] more]] here', expect: [] },
 ];
 
 describe('tags extraction policy', () => {

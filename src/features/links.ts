@@ -18,8 +18,10 @@ function extract(_raw: string, body: string): Array<{ target: string; embed: boo
     seen.add(key);
     results.push({ target, embed });
   };
-  for (const m of body.matchAll(/\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|[^\]]*)?\]\]/g)) {
-    const target = m[1].trim();
+  // To the first ]], as Obsidian parses it, so a heading or alias holding a lone ] still
+  // matches; anchor and alias split off in code, since a class-based regex stops at the ].
+  for (const m of body.matchAll(/\[\[(.*?)\]\]/g)) {
+    const target = m[1].split('|')[0].split('#')[0].trim();
     if (target) add(target, body[(m.index ?? 0) - 1] === '!');
   }
   for (const m of body.matchAll(/(!)?\[[^\]]*\]\(([^)]+\.md)(?:#[^)]*)?\)/g)) {

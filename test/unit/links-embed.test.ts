@@ -91,6 +91,20 @@ describe('links: embed vs link grain', () => {
     db.close();
   });
 
+  it('a heading or alias holding a lone ] still parses to the first ]]', () => {
+    const baseDir = tmpTree();
+    writeNote(baseDir, 'a.md', { body: 'see [[Other#Steps [WIP] more]] and [[Other|see [1]]]' });
+    writeNote(baseDir, 'Other.md', { body: 'leaf' });
+    const { db } = openTree(baseDir);
+    const rows = db.prepare(`SELECT dst FROM links WHERE src = 'a.md'`).all() as Array<{ dst: string | null }>;
+    assert.deepEqual(
+      rows.map((r) => r.dst),
+      ['Other.md'],
+      'one distinct target, resolved, not silently dropped'
+    );
+    db.close();
+  });
+
   it('adding a link beside an already-resolved embed resolves the new row incrementally', () => {
     const baseDir = tmpTree();
     writeNote(baseDir, 'a.md', { body: '![[b]]' });

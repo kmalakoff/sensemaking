@@ -6,6 +6,10 @@ import type { Feature } from './types.ts';
 
 const FENCE_RE = /^(```|~~~)/;
 const INLINE_CODE_RE = /`[^`]*`/g;
+// Obsidian treats [[#Heading]] as a same-note link, not a tag.
+const WIKILINK_RE = /\[\[.*?\]\]/g; // to the first ]], so a heading holding a lone ] still masks
+// Obsidian doesn't read tags inside HTML markup.
+const HTML_TAG_RE = /<\/?[a-zA-Z][^>]*>/g; // tag-shaped only: a comparison's `< 5` must not open a span
 // Anchors on start-of-line or a preceding whitespace/(/[ so `a#b` and URL fragments don't count.
 const INLINE_TAG_RE = /(?:^|[\s([])#([\p{L}\p{N}_/-]+)/gu;
 
@@ -31,7 +35,7 @@ function frontmatterTags(data?: Record<string, unknown>): string[] {
   return found;
 }
 
-// #tag tokens outside fenced code blocks and inline code spans.
+// #tag tokens outside fenced code blocks, inline code spans, wikilinks, and HTML tags.
 function inlineTags(body: string): string[] {
   const found: string[] = [];
   let inFence = false;
@@ -42,7 +46,9 @@ function inlineTags(body: string): string[] {
     }
     if (inFence) continue;
     if (!line.includes('#')) continue; // most lines; skip the regex work
-    const cleaned = line.includes('`') ? line.replace(INLINE_CODE_RE, (m) => ' '.repeat(m.length)) : line;
+    let cleaned = line.includes('`') ? line.replace(INLINE_CODE_RE, (m) => ' '.repeat(m.length)) : line;
+    if (cleaned.includes('[[')) cleaned = cleaned.replace(WIKILINK_RE, (m) => ' '.repeat(m.length));
+    if (cleaned.includes('<')) cleaned = cleaned.replace(HTML_TAG_RE, (m) => ' '.repeat(m.length));
     for (const m of cleaned.matchAll(INLINE_TAG_RE)) {
       const tag = normalizeTag(m[1]);
       if (tag) found.push(tag);
