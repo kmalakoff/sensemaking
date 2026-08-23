@@ -1,5 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
-import type { Config, FeatureName } from '../config.ts';
+import type { Config, FeatureName } from '../config/index.ts';
 import type { FileStat } from '../scan.ts';
 
 // What changed this reconcile, so hooks act on the delta rather than re-reading the tree.

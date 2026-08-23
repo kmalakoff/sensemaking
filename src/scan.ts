@@ -2,8 +2,8 @@ import { globSync, readFileSync, statSync } from 'node:fs';
 import { join, sep } from 'node:path';
 import removeMarkdown from 'remove-markdown';
 import { isCollection, parseDocument, visit } from 'yaml';
-import type { Config } from './config.ts';
-import { embedEnabled, presetNames, presetSemanticEnabled } from './config.ts';
+import type { Config } from './config/index.ts';
+import { embedEnabled, presetNames, presetSemanticEnabled } from './config/index.ts';
 import type { Feature } from './features/types.ts';
 
 // Filesystem -> rows. Pure data in, data + warnings out; db.ts does the SQL.

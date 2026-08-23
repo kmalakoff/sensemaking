@@ -2,7 +2,7 @@ import { createRequire } from 'node:module';
 import { parseArgs } from 'node:util';
 import { COMMANDS, USAGE } from './cli/index.ts';
 import type { Ctx } from './cli/types.ts';
-import { loadConfig, SUPPORTED_CONFIG_VERSION } from './config.ts';
+import { loadConfig, SUPPORTED_CONFIG_VERSION } from './config/index.ts';
 
 // Parsing and dispatch only; commands lazy-load from src/cli/, so nothing heavy is imported
 // here. Flags parse per command -- this file handles only --version/--help/--list/--config.

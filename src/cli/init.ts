@@ -1,4 +1,4 @@
-import { initConfig } from '../config.ts';
+import { initConfig } from '../config/index.ts';
 import { USAGE } from './index.ts';
 import { parse } from './shared.ts';
 import type { Command } from './types.ts';

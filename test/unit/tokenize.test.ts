@@ -3,8 +3,8 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import type { Config } from '../../src/config.ts';
-import { featureSignature } from '../../src/config.ts';
+import type { Config } from '../../src/config/index.ts';
+import { featureSignature } from '../../src/config/index.ts';
 import { runCli as spawnCli } from '../lib/cli.ts';
 
 // Every temp dir this file creates, cleaned up once after all its tests have run.

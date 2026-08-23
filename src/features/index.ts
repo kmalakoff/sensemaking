@@ -1,5 +1,5 @@
-import type { Config } from '../config.ts';
-import { featureEnabled } from '../config.ts';
+import type { Config } from '../config/index.ts';
+import { featureEnabled } from '../config/index.ts';
 import { embed } from './embed.ts';
 import { links } from './links.ts';
 import { rank } from './rank.ts';

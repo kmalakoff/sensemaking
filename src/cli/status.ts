@@ -1,7 +1,7 @@
 import { dirname } from 'node:path';
-import { presetCoverage } from '../commands.ts';
-import { embedConfig, featureStates, SUPPORTED_CONFIG_VERSION } from '../config.ts';
-import { docCount, getMeta, open, SCHEMA_VERSION } from '../db.ts';
+import { presetCoverage } from '../commands/index.ts';
+import { embedConfig, featureStates, SUPPORTED_CONFIG_VERSION } from '../config/index.ts';
+import { docCount, getMeta, open, SCHEMA_VERSION } from '../db/index.ts';
 import { isDownloadable, MODEL_FILENAMES, modelDir, modelPresent } from '../features/embed.ts';
 import { featuresLine, presetsLines } from '../output.ts';
 import { USAGE } from './index.ts';

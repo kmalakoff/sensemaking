@@ -1,4 +1,4 @@
-import { embedConfig } from '../config.ts';
+import { embedConfig } from '../config/index.ts';
 import { SenseError } from '../errors.ts';
 import { downloadModel, modelDir, modelPresent } from '../features/embed.ts';
 import { USAGE } from './index.ts';

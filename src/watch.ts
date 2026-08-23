@@ -1,7 +1,7 @@
 import { watch as fsWatch } from 'node:fs';
-import type { ResolvedConfig } from './config.ts';
-import { STATE_DIR } from './config.ts';
-import { docCount, getMeta, open, reconcile, setMeta } from './db.ts';
+import type { ResolvedConfig } from './config/index.ts';
+import { STATE_DIR } from './config/index.ts';
+import { docCount, getMeta, open, reconcile, setMeta } from './db/index.ts';
 import { SenseError } from './errors.ts';
 
 // Watch is a cache pre-warmer, not a correctness mechanism: open() always reconciles anyway, so any fs event just triggers a debounced full reconcile.

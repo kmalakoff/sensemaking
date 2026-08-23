@@ -1,9 +1,9 @@
 import type { ParseArgsOptionsConfig } from 'node:util';
 import { parseArgs } from 'node:util';
-import type { ResolvedConfig, SearchOverrides } from '../config.ts';
-import { resolvePreset } from '../config.ts';
-import type { OpenResult } from '../db.ts';
-import { open } from '../db.ts';
+import type { ResolvedConfig, SearchOverrides } from '../config/index.ts';
+import { resolvePreset } from '../config/index.ts';
+import type { OpenResult } from '../db/index.ts';
+import { open } from '../db/index.ts';
 import type { Row, RowFormat } from '../output.ts';
 import { printRowStream } from '../output.ts';
 import { searchError } from '../search-error.ts';

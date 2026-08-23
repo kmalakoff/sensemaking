@@ -2,7 +2,7 @@ import assert from 'node:assert';
 import { openTree, tmpTree, writeNote } from '../lib/tree.ts';
 
 // Fix F: busy_timeout derives from what reconcile has observed itself take, not a
-// constant. See src/db.ts (reconcile's meta.reconcile_max_ms bookkeeping, open()'s derivation).
+// constant. See src/db/reconcile.ts (meta.reconcile_max_ms bookkeeping) and src/db/open.ts (derivation).
 
 describe('derived busy_timeout', () => {
   it('a reconcile that does work records its duration in meta.reconcile_max_ms', () => {

@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadConfig, SUPPORTED_CONFIG_VERSION } from 'sensemaking';
-import { DEFAULT_EMBED_MODEL } from '../../src/config.ts';
+import { DEFAULT_EMBED_MODEL } from '../../src/config/index.ts';
 import { runCli as spawnCli } from '../lib/cli.ts';
 
 const runCli = (configPath: string) => spawnCli(['--list', '--config', configPath]);

@@ -1,4 +1,4 @@
-import { mapTree } from '../commands.ts';
+import { mapTree } from '../commands/index.ts';
 import { renderMap } from '../output.ts';
 import { USAGE } from './index.ts';
 import { CONFIG, FORMAT, formatOf, parse, SCOPE, scopeOf, withDb } from './shared.ts';

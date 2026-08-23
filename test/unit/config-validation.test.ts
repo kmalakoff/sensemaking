@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { featureSignature } from '../../src/config.ts';
+import { featureSignature } from '../../src/config/index.ts';
 import { packageRoot, runCli } from '../lib/cli.ts';
 
 function runWith(config: string, args: string[] = ['--list']) {

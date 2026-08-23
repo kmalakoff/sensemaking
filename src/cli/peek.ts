@@ -1,4 +1,4 @@
-import { peek } from '../commands.ts';
+import { peek } from '../commands/index.ts';
 import { renderPeek } from '../output.ts';
 import { USAGE } from './index.ts';
 import { CONFIG, FORMAT, formatOf, parse, SCOPE, scopeOf, withDb } from './shared.ts';

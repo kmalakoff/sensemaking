@@ -4,7 +4,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Row } from 'sensemaking';
 import { mapTree, peek, search } from 'sensemaking';
-import { resolveNote, scopedPaths } from '../../src/commands.ts';
+import { resolveNote, scopedPaths } from '../../src/commands/index.ts';
 import { renderPeek } from '../../src/output.ts';
 import { packageRoot, runCli } from '../lib/cli.ts';
 import { openConfig, openTree, tmpTree, writeNote } from '../lib/tree.ts';

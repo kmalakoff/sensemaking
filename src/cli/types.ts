@@ -1,4 +1,4 @@
-import type { ResolvedConfig } from '../config.ts';
+import type { ResolvedConfig } from '../config/index.ts';
 
 // Handed to every command; each command parses its own argv via shared.ts's `parse`.
 export interface Ctx {

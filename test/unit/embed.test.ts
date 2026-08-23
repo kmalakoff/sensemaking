@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { createServer, type Server } from 'http';
 import type { Config } from 'sensemaking';
 import { peek, presetCoverage, search } from 'sensemaking';
-import { relatedNotes } from '../../src/commands.ts';
+import { relatedNotes } from '../../src/commands/index.ts';
 import { downloadModel, isDownloadable, modelDir, similarNotes } from '../../src/features/embed.ts';
 import { runCli } from '../lib/cli.ts';
 import { writeModel } from '../lib/model.ts';

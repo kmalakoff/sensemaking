@@ -2,8 +2,8 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from '
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
-import type { Config, ResolvedConfig } from '../config.ts';
-import { embedConfig } from '../config.ts';
+import type { Config, ResolvedConfig } from '../config/index.ts';
+import { embedConfig } from '../config/index.ts';
 import { SenseError } from '../errors.ts';
 import { progress } from '../progress.ts';
 import { parseFile } from '../scan.ts';
