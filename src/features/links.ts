@@ -124,10 +124,18 @@ function resolveIncremental(db: DatabaseSync, delta: ReconcileDelta): boolean {
   return resolveRows(db, [...candidates.values()], pathSet, byBase);
 }
 
-// Resolved edges, for rank and for search's graph expansion. DISTINCT: a target both linked
-// and embedded is two rows sharing one edge, which must not double its weight.
+// Resolved edges, for rank and for search's graph expansion.
 export function linkEdges(db: DatabaseSync): [string, string][] {
-  return (db.prepare('SELECT DISTINCT src, dst FROM links WHERE dst IS NOT NULL').all() as Array<{ src: string; dst: string }>).map((r) => [r.src, r.dst]);
+  // One edge per row, as 0.12's grain always had it -- two written targets resolving to one
+  // dst stay two edges (a weight the fusion evals were gated on). The only exclusion is an
+  // embed whose exact (src, target) also exists as a link: that second row is new with the
+  // embed grain and would double an edge that used to be one row. The NOT EXISTS probes the
+  // primary key and fires only for embed rows; both branches still scan the table.
+  const sql = `SELECT src, dst FROM links WHERE dst IS NOT NULL AND embed = 0
+    UNION ALL
+    SELECT src, dst FROM links l WHERE dst IS NOT NULL AND embed = 1
+      AND NOT EXISTS (SELECT 1 FROM links l0 WHERE l0.src = l.src AND l0.target = l.target AND l0.embed = 0)`;
+  return (db.prepare(sql).all() as Array<{ src: string; dst: string }>).map((r) => [r.src, r.dst]);
 }
 
 // remove() has already deleted the rows by the time afterReconcile runs, so it records here

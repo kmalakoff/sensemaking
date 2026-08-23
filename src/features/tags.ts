@@ -41,7 +41,8 @@ function inlineTags(body: string): string[] {
       continue;
     }
     if (inFence) continue;
-    const cleaned = line.replace(INLINE_CODE_RE, (m) => ' '.repeat(m.length));
+    if (!line.includes('#')) continue; // most lines; skip the regex work
+    const cleaned = line.includes('`') ? line.replace(INLINE_CODE_RE, (m) => ' '.repeat(m.length)) : line;
     for (const m of cleaned.matchAll(INLINE_TAG_RE)) {
       const tag = normalizeTag(m[1]);
       if (tag) found.push(tag);

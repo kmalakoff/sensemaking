@@ -75,6 +75,22 @@ describe('links: embed vs link grain', () => {
     second.db.close();
   });
 
+  it('two written targets resolving to one dst stay two edges', () => {
+    const baseDir = tmpTree();
+    writeNote(baseDir, 'a.md', { body: '[[Foo]] and [[notes/Foo]]' });
+    writeNote(baseDir, 'notes/Foo.md', { body: 'leaf' });
+    const { db } = openTree(baseDir);
+    // The doubled weight is deliberate and the fusion evals are gated on it; a dedup here is
+    // the regression this asserts against.
+    assert.deepEqual(
+      linkEdges(db)
+        .filter(([src]) => src === 'a.md')
+        .map(([, dst]) => dst),
+      ['notes/Foo.md', 'notes/Foo.md']
+    );
+    db.close();
+  });
+
   it('adding a link beside an already-resolved embed resolves the new row incrementally', () => {
     const baseDir = tmpTree();
     writeNote(baseDir, 'a.md', { body: '![[b]]' });
