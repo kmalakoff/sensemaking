@@ -12,6 +12,16 @@ import type { Feature, ReconcileDelta } from './types.ts';
 // Wikilinks ([[target]], [[target#anchor|alias]], embeds), internal markdown links, and
 // frontmatter values that are exactly a wikilink ("[[X]]"; mid-string and ![[...]] forms are
 // not links there -- Obsidian's rule, probe-verified).
+// One rule for [[inner]] text wherever it appears: alias stripped after |, a leading #
+// keeps the anchor as the target (a same-note self-link needs a heading name), otherwise
+// the anchor splits off. Null = not a link.
+function parseWikilinkInner(inner: string): string | null {
+  const beforeAlias = inner.split('|')[0].trim();
+  if (beforeAlias.startsWith('#')) return beforeAlias.length > 1 ? beforeAlias : null;
+  const target = beforeAlias.split('#')[0].trim();
+  return target || null;
+}
+
 function extract(_raw: string, rawBody: string, _search?: { title: string; summary: string }, data?: Record<string, unknown>): Array<{ target: string; embed: boolean }> {
   const body = /\[\[|\]\(/.test(rawBody) ? maskRegions(rawBody) : rawBody;
   const seen = new Set<string>();
@@ -23,18 +33,10 @@ function extract(_raw: string, rawBody: string, _search?: { title: string; summa
     results.push({ target, embed });
   };
   // To the first ]], as Obsidian parses it, so a heading or alias holding a lone ] still
-  // matches; anchor and alias split off in code, since a class-based regex stops at the ].
+  // matches; anchor and alias split off in parseWikilinkInner.
   for (const m of body.matchAll(/\[\[(.*?)\]\]/g)) {
-    const embed = body[(m.index ?? 0) - 1] === '!';
-    // [[#Heading]]: a same-note anchor link, which Obsidian resolves to a self-edge. Keep the
-    // target as written (leading #) so resolveTarget can special-case it.
-    const beforeAlias = m[1].split('|')[0].trim();
-    if (beforeAlias.startsWith('#')) {
-      if (beforeAlias.length > 1) add(beforeAlias, embed);
-      continue;
-    }
-    const target = beforeAlias.split('#')[0].trim();
-    if (target) add(target, embed);
+    const target = parseWikilinkInner(m[1]);
+    if (target) add(target, body[(m.index ?? 0) - 1] === '!');
   }
   // Any internal destination, not only .md-suffixed: Obsidian gives markdown links full
   // linkpath resolution, so \](Zektor) resolves like [[Zektor]] and \](#anchor) is a
@@ -44,8 +46,10 @@ function extract(_raw: string, rawBody: string, _search?: { title: string; summa
   // segment (www.example.com/...) is external even without a scheme.
   for (const m of body.matchAll(/(!)?\[[^\]]*\]\(((?:[^()\s]|\([^()\s]*\))+)(?:\s+(?:"[^)]*"|'[^)]*'))?\)/g)) {
     const dest = m[2].trim();
+    // External: a URI scheme prefix (mailto:, tel:, data:, https:...), protocol-relative
+    // //host, a www. shorthand, or a scheme anywhere (the malformed double-paren case).
     if (!dest || dest.includes('://')) continue;
-    if (/^www\./i.test(dest)) continue;
+    if (/^([a-z][a-z0-9+.-]*:|\/\/|www\.)/i.test(dest)) continue;
     const target = dest.startsWith('#') ? dest : dest.split('#')[0];
     if (target) add(target, m[1] === '!');
   }
@@ -54,10 +58,8 @@ function extract(_raw: string, rawBody: string, _search?: { title: string; summa
       if (typeof item !== 'string') continue;
       const m = /^\[\[(.*)\]\]$/.exec(item.trim());
       if (!m) continue;
-      const inner = m[1].split('|')[0].trim();
-      const target = inner.split('#')[0].trim();
+      const target = parseWikilinkInner(m[1]);
       if (target) add(target, false);
-      else if (inner.startsWith('#') && inner.length > 1) add(inner, false);
     }
   }
   return results;

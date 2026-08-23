@@ -258,7 +258,7 @@ describe('links: embed vs link grain', () => {
 
   it('a dotted folder resolves; www. and schemes are external', () => {
     const baseDir = tmpTree();
-    writeNote(baseDir, 'a.md', { body: '[in](dir.v2/Note) [w](www.site.com/x) [nest](note_(1).md)' });
+    writeNote(baseDir, 'a.md', { body: '[in](dir.v2/Note) [w](www.site.com/x) [nest](note_(1).md) [m](mailto:a@b.com) [t](tel:+1555) [p](//host/x) [d](data:text/plain,x)' });
     writeNote(baseDir, 'dir.v2/Note.md', { body: 'leaf' });
     writeNote(baseDir, 'note_(1).md', { body: 'leaf' });
     const { db } = openTree(baseDir);
