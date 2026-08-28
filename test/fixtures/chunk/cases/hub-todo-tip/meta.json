@@ -1,0 +1,4 @@
+{
+  "reason": "a code fence whose contents look exactly like a task list (`- [ ] [[Page]]`) -- proves fence atomicity keeps it literal code, not a parsed list, contrasted with a real nested list later in the same file.",
+  "source": "obsidian-hub: 00 - Contribute to the Obsidian Hub/Tip for Keeping Hub TODO lists.md"
+}

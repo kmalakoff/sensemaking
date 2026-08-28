@@ -1,0 +1,924 @@
+{
+  "blocks": [
+    {
+      "endLine": 1,
+      "startLine": 1,
+      "text": "",
+      "type": "other"
+    },
+    {
+      "depth": 2,
+      "endLine": 4,
+      "startLine": 2,
+      "text": "author: SkepticMystic\naliases:",
+      "type": "heading"
+    },
+    {
+      "endLine": 5,
+      "startLine": 5,
+      "text": "tags:",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 7,
+      "startLine": 6,
+      "text": "seedling\npublish: true",
+      "type": "list"
+    },
+    {
+      "endLine": 8,
+      "startLine": 8,
+      "text": "",
+      "type": "other"
+    },
+    {
+      "depth": 1,
+      "endLine": 10,
+      "startLine": 10,
+      "text": "An Introduction to Dataview",
+      "type": "heading"
+    },
+    {
+      "endLine": 12,
+      "startLine": 12,
+      "text": "",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 14,
+      "startLine": 14,
+      "text": "This is a reformatted, web-compatible version of the very first Obsidian Community Talk, an overview of the Dataview plugin, held by SkepticMystic.",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 16,
+      "startLine": 16,
+      "text": "The original slides can be found here and are best viewed with Obsidian and the Advanced Slides plugin or converted to revealjs with Pandoc. Make sure to also take a look at the YouTube video for in-depth explanations.",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 18,
+      "startLine": 18,
+      "text": "By SkepticMystic",
+      "type": "paragraph"
+    },
+    {
+      "depth": 2,
+      "endLine": 20,
+      "startLine": 20,
+      "text": "Overview",
+      "type": "heading"
+    },
+    {
+      "endLine": 31,
+      "startLine": 21,
+      "text": "Broad Intro to Dataview\nMetadata\nDataview Queries\nList\nFrom\nWhere\nTask\nTable\nSort\nFlatten\nGroup by",
+      "type": "list"
+    },
+    {
+      "depth": 2,
+      "endLine": 33,
+      "startLine": 33,
+      "text": "Introduction",
+      "type": "heading"
+    },
+    {
+      "endLine": 34,
+      "startLine": 34,
+      "text": "Dataview is a plugin which lets you query data from your vault. The official documentation which you can use for reference is available here:",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 36,
+      "startLine": 36,
+      "text": "",
+      "type": "paragraph"
+    },
+    {
+      "depth": 2,
+      "endLine": 38,
+      "startLine": 38,
+      "text": "Metadata",
+      "type": "heading"
+    },
+    {
+      "depth": 3,
+      "endLine": 40,
+      "startLine": 40,
+      "text": "What is it?",
+      "type": "heading"
+    },
+    {
+      "endLine": 43,
+      "startLine": 42,
+      "text": "Metadata provides information about your data.\nIt is extra info that is either already inherent in your data, or info that you manually add.",
+      "type": "paragraph"
+    },
+    {
+      "depth": 3,
+      "endLine": 45,
+      "startLine": 45,
+      "text": "Examples of Metadata 💡",
+      "type": "heading"
+    },
+    {
+      "depth": 4,
+      "endLine": 47,
+      "startLine": 47,
+      "text": "Photographs",
+      "type": "heading"
+    },
+    {
+      "endLine": 50,
+      "startLine": 48,
+      "text": "Date & time ⏰\nLocation 🌍\nPeople 🧑‍🤝‍🧑",
+      "type": "list"
+    },
+    {
+      "endLine": 52,
+      "startLine": 52,
+      "text": "My display picture has the following inherent metadata:",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 54,
+      "startLine": 54,
+      "text": "SkepticMystic Mandala dp|400",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 56,
+      "startLine": 56,
+      "text": "Image metadata|400",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 58,
+      "startLine": 58,
+      "text": "But it could also be given other properties:",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 60,
+      "startLine": 60,
+      "text": "Edit image metadata|400",
+      "type": "paragraph"
+    },
+    {
+      "depth": 4,
+      "endLine": 62,
+      "startLine": 62,
+      "text": "Markdown Notes",
+      "type": "heading"
+    },
+    {
+      "endLine": 64,
+      "startLine": 64,
+      "text": "We can also add metadata to Markdown notes using a language called YAML.",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 66,
+      "startLine": 66,
+      "text": "YAML is a structured way of adding arbitrary metadata to a file.",
+      "type": "list"
+    },
+    {
+      "depth": 3,
+      "endLine": 68,
+      "startLine": 68,
+      "text": "Adding YAML Metadata",
+      "type": "heading"
+    },
+    {
+      "endLine": 72,
+      "startLine": 70,
+      "text": "At the top of your note, add 3 dashes ---\nUnderneath that, you can start adding key-value pairs in the form key: value\nTo finish the metadata block, close it off with 3 dashes again ---.",
+      "type": "list"
+    },
+    {
+      "endLine": 74,
+      "startLine": 74,
+      "text": "In the photo example, this would look as follows:",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 83,
+      "startLine": 76,
+      "text": "---\ndimensions: 1200x1200\nbit depth: 24\ntitle: \"Mandala Display Picture\"\nrating: 5\n---",
+      "type": "code"
+    },
+    {
+      "depth": 4,
+      "endLine": 85,
+      "startLine": 85,
+      "text": "YAML Lists",
+      "type": "heading"
+    },
+    {
+      "endLine": 87,
+      "startLine": 87,
+      "text": "You can add more than one value to each key using lists.",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 89,
+      "startLine": 89,
+      "text": "There are two notations you can use:",
+      "type": "paragraph"
+    },
+    {
+      "depth": 5,
+      "endLine": 91,
+      "startLine": 91,
+      "text": "1. Inline",
+      "type": "heading"
+    },
+    {
+      "endLine": 95,
+      "startLine": 93,
+      "text": "foods: [apples, pears, oranges]",
+      "type": "code"
+    },
+    {
+      "depth": 5,
+      "endLine": 97,
+      "startLine": 97,
+      "text": "2. Indented",
+      "type": "heading"
+    },
+    {
+      "endLine": 104,
+      "startLine": 99,
+      "text": "foods:\n  - apples\n  - pears\n  - oranges",
+      "type": "code"
+    },
+    {
+      "endLine": 106,
+      "startLine": 106,
+      "text": "Note the spacing!",
+      "type": "paragraph"
+    },
+    {
+      "depth": 3,
+      "endLine": 108,
+      "startLine": 108,
+      "text": "Types of Metadata",
+      "type": "heading"
+    },
+    {
+      "endLine": 110,
+      "startLine": 110,
+      "text": "You can find this information on the Dataview reference page.",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 127,
+      "startLine": 112,
+      "text": "number: 3.6\nstring: \"Foo all the bars\"\nlist:\n  - 1\n  - -2\n  - 3.5\n  - 1.61803\n\ndate:\n  - 2021-04\n  - \"2021-04-09\"\n  - 2021-04-09T12:12:54\n\nlink: [[2021-04-09 Daily Note]]",
+      "type": "code"
+    },
+    {
+      "depth": 3,
+      "endLine": 129,
+      "startLine": 129,
+      "text": "Implicit Metadata in all notes",
+      "type": "heading"
+    },
+    {
+      "endLine": 140,
+      "startLine": 131,
+      "text": "Property Value Type\nfile.name File title string\nfile.path Full file path string\nfile.link Link to the file link\nfile.size Size (in bytes) of the file number\nfile.ctime Date that the file was created date\nfile.mtime Date that the file was last modified date\nfile.day The date contained in the note title date\nfile.tags An array of all tags in the note. array",
+      "type": "table"
+    },
+    {
+      "endLine": 142,
+      "startLine": 142,
+      "text": "Subtags are broken down by each level, so #Tag/1/A will be stored in the array as [#Tag, #Tag/1, #Tag/1/A]",
+      "type": "paragraph"
+    },
+    {
+      "depth": 2,
+      "endLine": 144,
+      "startLine": 144,
+      "text": "Dataview Queries",
+      "type": "heading"
+    },
+    {
+      "depth": 3,
+      "endLine": 145,
+      "startLine": 145,
+      "text": "List",
+      "type": "heading"
+    },
+    {
+      "endLine": 146,
+      "startLine": 146,
+      "text": "Creates a list of the specified notes",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 150,
+      "startLine": 148,
+      "text": "list",
+      "type": "code"
+    },
+    {
+      "depth": 3,
+      "endLine": 152,
+      "startLine": 152,
+      "text": "From",
+      "type": "heading"
+    },
+    {
+      "endLine": 154,
+      "startLine": 154,
+      "text": "Determines where to get notes from.",
+      "type": "paragraph"
+    },
+    {
+      "depth": 4,
+      "endLine": 156,
+      "startLine": 156,
+      "text": "From #Tag",
+      "type": "heading"
+    },
+    {
+      "endLine": 158,
+      "startLine": 158,
+      "text": "You can get all notes from a specified tag:",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 163,
+      "startLine": 160,
+      "text": "list\nfrom #MOC",
+      "type": "code"
+    },
+    {
+      "depth": 4,
+      "endLine": 165,
+      "startLine": 165,
+      "text": "From \"Folder\"",
+      "type": "heading"
+    },
+    {
+      "endLine": 167,
+      "startLine": 167,
+      "text": "All notes from a folder:",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 172,
+      "startLine": 169,
+      "text": "list\nfrom \"1. Projects\"",
+      "type": "code"
+    },
+    {
+      "depth": 4,
+      "endLine": 174,
+      "startLine": 174,
+      "text": "From Links",
+      "type": "heading"
+    },
+    {
+      "endLine": 176,
+      "startLine": 176,
+      "text": "And even all notes with links coming into a note:",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 181,
+      "startLine": 178,
+      "text": "list\nfrom [[Yoga MOC]]",
+      "type": "code"
+    },
+    {
+      "endLine": 183,
+      "startLine": 183,
+      "text": "Or going out of a note:",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 188,
+      "startLine": 185,
+      "text": "list\nfrom outgoing([[yoga MOC]])",
+      "type": "code"
+    },
+    {
+      "endLine": 190,
+      "startLine": 190,
+      "text": "This syntax may change in an upcoming release.",
+      "type": "list"
+    },
+    {
+      "depth": 4,
+      "endLine": 192,
+      "startLine": 192,
+      "text": "Combining Sources",
+      "type": "heading"
+    },
+    {
+      "endLine": 194,
+      "startLine": 194,
+      "text": "You can use the 3 basic logical operators to create more complex from queries:",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 199,
+      "startLine": 196,
+      "text": "list from #A and #B\nlist from \"University\" or \"Work\"\nlist from -#Personal\nlist from [[CSS]] and -#HTML",
+      "type": "list"
+    },
+    {
+      "depth": 4,
+      "endLine": 201,
+      "startLine": 201,
+      "text": "String Concatenation",
+      "type": "heading"
+    },
+    {
+      "endLine": 203,
+      "startLine": 203,
+      "text": "In the results of a list, you can include metadata fields joined with strings",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 208,
+      "startLine": 205,
+      "text": "list \"File Path: \" + file.path + \" :)\"\nfrom #SN",
+      "type": "code"
+    },
+    {
+      "depth": 4,
+      "endLine": 210,
+      "startLine": 210,
+      "text": "Lists of lists",
+      "type": "heading"
+    },
+    {
+      "endLine": 212,
+      "startLine": 212,
+      "text": "A list can also display indented sublists of metadata:",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 217,
+      "startLine": 214,
+      "text": "list authors\nfrom #SN/Blog",
+      "type": "code"
+    },
+    {
+      "depth": 3,
+      "endLine": 219,
+      "startLine": 219,
+      "text": "Task",
+      "type": "heading"
+    },
+    {
+      "endLine": 221,
+      "startLine": 221,
+      "text": "Task searches for all checkboxes - [ ]  in your vault.",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 223,
+      "startLine": 223,
+      "text": "It returns a list of all tasks, grouped by their parent note",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 227,
+      "startLine": 225,
+      "text": "task from #MOC",
+      "type": "code"
+    },
+    {
+      "depth": 3,
+      "endLine": 229,
+      "startLine": 229,
+      "text": "Where",
+      "type": "heading"
+    },
+    {
+      "endLine": 232,
+      "startLine": 231,
+      "text": "After choosing which notes to use, you can narrow down the list further using a where block.\nThis lets you use the various comparison operators on the metadata fields in your notes.",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 234,
+      "startLine": 234,
+      "text": ">, >=, <, <=, =, !=",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 236,
+      "startLine": 236,
+      "text": "where {condition}",
+      "type": "paragraph"
+    },
+    {
+      "depth": 4,
+      "endLine": 238,
+      "startLine": 238,
+      "text": "Examples",
+      "type": "heading"
+    },
+    {
+      "endLine": 246,
+      "startLine": 240,
+      "text": "where file.size > 1000\nwhere file.name != \"2021-04-09 Daily Note\"\nwhere file.mtime >= date(today) - dur(1 day)\nwhere !complete",
+      "type": "list"
+    },
+    {
+      "depth": 3,
+      "endLine": 248,
+      "startLine": 248,
+      "text": "Table",
+      "type": "heading"
+    },
+    {
+      "endLine": 250,
+      "startLine": 250,
+      "text": "Table can show you a table of various metadata fields linked to each note.",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 252,
+      "startLine": 252,
+      "text": "Table {field 1}, {field 2}, ...",
+      "type": "paragraph"
+    },
+    {
+      "depth": 4,
+      "endLine": 254,
+      "startLine": 254,
+      "text": "Examples",
+      "type": "heading"
+    },
+    {
+      "endLine": 259,
+      "startLine": 256,
+      "text": "table intensity\nfrom #Uni/2021/Asg",
+      "type": "code"
+    },
+    {
+      "endLine": 261,
+      "startLine": 261,
+      "text": "Dataview table",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 266,
+      "startLine": 263,
+      "text": "table title, type\nfrom #SN",
+      "type": "code"
+    },
+    {
+      "endLine": 271,
+      "startLine": 268,
+      "text": "table file.tags\nfrom Kw/Yoga",
+      "type": "code"
+    },
+    {
+      "depth": 3,
+      "endLine": 273,
+      "startLine": 273,
+      "text": "Sort",
+      "type": "heading"
+    },
+    {
+      "endLine": 275,
+      "startLine": 275,
+      "text": "You can use sort to define which order to list the results in, and which field to sort by:",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 277,
+      "startLine": 277,
+      "text": "sort field asc/desc",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 279,
+      "startLine": 279,
+      "text": "Give multiple fields to decide ties",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 281,
+      "startLine": 281,
+      "text": "sort field1 asc/desc, field2 asc/desc, ...",
+      "type": "paragraph"
+    },
+    {
+      "depth": 3,
+      "endLine": 283,
+      "startLine": 283,
+      "text": "Flatten",
+      "type": "heading"
+    },
+    {
+      "endLine": 285,
+      "startLine": 285,
+      "text": "Use flatten to \"unroll\" lists into their own rows.",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 289,
+      "startLine": 287,
+      "text": "table authors from #SN",
+      "type": "code"
+    },
+    {
+      "endLine": 291,
+      "startLine": 291,
+      "text": "versus",
+      "type": "other"
+    },
+    {
+      "endLine": 296,
+      "startLine": 293,
+      "text": "table authors from #SN\nflatten authors",
+      "type": "code"
+    },
+    {
+      "depth": 3,
+      "endLine": 298,
+      "startLine": 298,
+      "text": "Group by",
+      "type": "heading"
+    },
+    {
+      "endLine": 300,
+      "startLine": 300,
+      "text": "Group by lets do gather together results based on the value of a field.",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 302,
+      "startLine": 302,
+      "text": "You may group:",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 305,
+      "startLine": 303,
+      "text": "tasks by completed\ngames by rating\nassignments by intensity",
+      "type": "list"
+    },
+    {
+      "endLine": 307,
+      "startLine": 307,
+      "text": "First, gather all the assignments:",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 309,
+      "startLine": 309,
+      "text": "from #Uni/2021/Asg",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 311,
+      "startLine": 311,
+      "text": "Then, group by intensity:",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 313,
+      "startLine": 313,
+      "text": "group by intensity",
+      "type": "paragraph"
+    },
+    {
+      "depth": 4,
+      "endLine": 315,
+      "startLine": 315,
+      "text": "rows Object",
+      "type": "heading"
+    },
+    {
+      "endLine": 317,
+      "startLine": 317,
+      "text": "By grouping the notes, we've created a new object.",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 320,
+      "startLine": 319,
+      "text": "This is a nested list of all the assignments grouped by intensity.\nSomething like:",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 328,
+      "startLine": 322,
+      "text": "[\n\t[A1, A2, A6], // Green\n\t[A3, A4], // Yellow\n\t[A5, A7], // Red\n];",
+      "type": "code"
+    },
+    {
+      "endLine": 330,
+      "startLine": 330,
+      "text": "To access this new list, we use the rows object.",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 333,
+      "startLine": 332,
+      "text": "Get the file name of every note in the array: rows.file.name\nGet the due date of every note: rows.dueDate",
+      "type": "list"
+    },
+    {
+      "endLine": 339,
+      "startLine": 335,
+      "text": "table intensity, rows.title\nfrom #Uni/2021/Asg\ngroup by intensity",
+      "type": "code"
+    },
+    {
+      "depth": 4,
+      "endLine": 341,
+      "startLine": 341,
+      "text": "Group by tags",
+      "type": "heading"
+    },
+    {
+      "endLine": 347,
+      "startLine": 343,
+      "text": "table rows.file.tags, rows.file.link\nfrom #Fi/Yoga\ngroup by file.tags",
+      "type": "code"
+    },
+    {
+      "depth": 5,
+      "endLine": 349,
+      "startLine": 349,
+      "text": "Limitations",
+      "type": "heading"
+    },
+    {
+      "endLine": 351,
+      "startLine": 351,
+      "text": "It will only consider two notes to be in the same group if they have exactly the same tags.",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 353,
+      "startLine": 353,
+      "text": "So even if two notes have #Note/Author, if the one has a tag that the other doesn't, they won't be grouped together.",
+      "type": "list"
+    },
+    {
+      "depth": 2,
+      "endLine": 355,
+      "startLine": 355,
+      "text": "Functions",
+      "type": "heading"
+    },
+    {
+      "depth": 3,
+      "endLine": 357,
+      "startLine": 357,
+      "text": "Contains()",
+      "type": "heading"
+    },
+    {
+      "endLine": 359,
+      "startLine": 359,
+      "text": "Used to see if:",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 362,
+      "startLine": 361,
+      "text": "a string contains a substring\na list contains a value",
+      "type": "list"
+    },
+    {
+      "endLine": 365,
+      "startLine": 364,
+      "text": "where contains(file.name, \"Daily Note\")\nwhere contains(authors, \"Robert Lamb\")",
+      "type": "paragraph"
+    },
+    {
+      "depth": 3,
+      "endLine": 367,
+      "startLine": 367,
+      "text": "Length()",
+      "type": "heading"
+    },
+    {
+      "endLine": 369,
+      "startLine": 369,
+      "text": "Returns the length of a string or list",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 371,
+      "startLine": 371,
+      "text": "where length(file.name) > 10",
+      "type": "paragraph"
+    },
+    {
+      "depth": 3,
+      "endLine": 373,
+      "startLine": 373,
+      "text": "Sum()",
+      "type": "heading"
+    },
+    {
+      "endLine": 375,
+      "startLine": 375,
+      "text": "Returns the sum of the numbers in a list",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 377,
+      "startLine": 377,
+      "text": "where sum(minutesStudied) < 60",
+      "type": "paragraph"
+    },
+    {
+      "depth": 3,
+      "endLine": 379,
+      "startLine": 379,
+      "text": "Many other Functions",
+      "type": "heading"
+    },
+    {
+      "endLine": 380,
+      "startLine": 380,
+      "text": "For further info on implemented functions, head over to the official documentation.",
+      "type": "paragraph"
+    },
+    {
+      "depth": 2,
+      "endLine": 382,
+      "startLine": 382,
+      "text": "Neat Examples",
+      "type": "heading"
+    },
+    {
+      "endLine": 383,
+      "startLine": 383,
+      "text": "People have come up with a lot of interesting ways of leveraging Dataview. Many have been shared in the central Dataview Snippet Showcase on the Obsidian Forum.",
+      "type": "paragraph"
+    },
+    {
+      "depth": 3,
+      "endLine": 385,
+      "startLine": 385,
+      "text": "Untagged Notes",
+      "type": "heading"
+    },
+    {
+      "endLine": 386,
+      "startLine": 386,
+      "text": "For example, finding all untagged notes in your vault is as simple as:",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 388,
+      "startLine": 388,
+      "text": "list where length(file.tags) = 0",
+      "type": "paragraph"
+    },
+    {
+      "depth": 3,
+      "endLine": 390,
+      "startLine": 390,
+      "text": "Birthdays",
+      "type": "heading"
+    },
+    {
+      "endLine": 391,
+      "startLine": 391,
+      "text": "If you track #People in separate notes and add their Birthday as a dataview property, you could compile a list of everyone whose birthday is today like this:",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 396,
+      "startLine": 393,
+      "text": "list from #People\nwhere Dates.Birthday = \"<% tp.date.now(format = \"YYYY-MM-DD\") %>\"",
+      "type": "code"
+    },
+    {
+      "endLine": 398,
+      "startLine": 398,
+      "text": "",
+      "type": "paragraph"
+    },
+    {
+      "depth": 1,
+      "endLine": 400,
+      "startLine": 400,
+      "text": "This note in GitHub",
+      "type": "heading"
+    },
+    {
+      "endLine": 402,
+      "startLine": 402,
+      "text": "Edit In GitHub | Copy this note | Download this vault ",
+      "type": "paragraph"
+    }
+  ]
+}

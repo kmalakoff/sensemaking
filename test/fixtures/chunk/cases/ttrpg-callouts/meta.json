@@ -1,0 +1,4 @@
+{
+  "reason": "four distinct real callout types in one file, including a foldable callout (`[!info]-`) that exercises the marker regex's optional +/- suffix.",
+  "source": "obsidian-hub: 04 - Guides, Workflows, & Courses/for TTRPG.md"
+}

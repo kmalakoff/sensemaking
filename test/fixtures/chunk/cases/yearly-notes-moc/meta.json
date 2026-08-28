@@ -1,0 +1,4 @@
+{
+  "reason": "short file with a real inline tag (#placeholder/description), a real note+heading embed (![[...#...]]), and two real %% comments -- compact positive control for tags/embeds.",
+  "source": "obsidian-hub: 03 - Showcases & Templates/Templates/Yearly notes/🗂️ Yearly notes.md"
+}

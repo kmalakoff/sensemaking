@@ -1,0 +1,17 @@
+{
+  "blocks": [
+    {
+      "depth": 1,
+      "endLine": 1,
+      "startLine": 1,
+      "text": "Format strings",
+      "type": "heading"
+    },
+    {
+      "endLine": 3,
+      "startLine": 3,
+      "text": "In C's printf, %% prints a literal percent sign, unlike a single %d or %s conversion.",
+      "type": "paragraph"
+    }
+  ]
+}

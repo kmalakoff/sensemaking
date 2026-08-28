@@ -1,0 +1,92 @@
+{
+  "blocks": [
+    {
+      "endLine": 1,
+      "startLine": 1,
+      "text": "",
+      "type": "other"
+    },
+    {
+      "endLine": 2,
+      "startLine": 2,
+      "text": "aliases:",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 5,
+      "startLine": 3,
+      "text": "Yearly note templates\ntags:\nMOC",
+      "type": "list"
+    },
+    {
+      "endLine": 6,
+      "startLine": 6,
+      "text": "",
+      "type": "other"
+    },
+    {
+      "depth": 1,
+      "endLine": 8,
+      "startLine": 8,
+      "text": "Yearly notes",
+      "type": "heading"
+    },
+    {
+      "endLine": 10,
+      "startLine": 10,
+      "text": "#placeholder/description",
+      "type": "paragraph"
+    },
+    {
+      "depth": 2,
+      "endLine": 12,
+      "startLine": 12,
+      "text": "MOC",
+      "type": "heading"
+    },
+    {
+      "endLine": 14,
+      "startLine": 14,
+      "text": "",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 16,
+      "startLine": 16,
+      "text": "",
+      "type": "paragraph"
+    },
+    {
+      "depth": 2,
+      "endLine": 18,
+      "startLine": 18,
+      "text": "Contributing",
+      "type": "heading"
+    },
+    {
+      "endLine": 20,
+      "startLine": 20,
+      "text": "Contributing templates to the community vault Contributing templates to the community vault",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 22,
+      "startLine": 22,
+      "text": "",
+      "type": "paragraph"
+    },
+    {
+      "depth": 1,
+      "endLine": 24,
+      "startLine": 24,
+      "text": "This note in GitHub",
+      "type": "heading"
+    },
+    {
+      "endLine": 26,
+      "startLine": 26,
+      "text": "Edit In GitHub | Copy this note | Download this vault ",
+      "type": "paragraph"
+    }
+  ]
+}

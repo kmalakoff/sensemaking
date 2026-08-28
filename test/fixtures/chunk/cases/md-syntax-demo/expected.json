@@ -1,0 +1,168 @@
+{
+  "blocks": [
+    {
+      "endLine": 1,
+      "startLine": 1,
+      "text": "",
+      "type": "other"
+    },
+    {
+      "depth": 2,
+      "endLine": 3,
+      "startLine": 2,
+      "text": "aliases:",
+      "type": "heading"
+    },
+    {
+      "endLine": 4,
+      "startLine": 4,
+      "text": "tags:",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 6,
+      "startLine": 5,
+      "text": "seedling\npublish: true",
+      "type": "list"
+    },
+    {
+      "endLine": 7,
+      "startLine": 7,
+      "text": "",
+      "type": "other"
+    },
+    {
+      "depth": 1,
+      "endLine": 9,
+      "startLine": 9,
+      "text": "Markdown Syntax",
+      "type": "heading"
+    },
+    {
+      "depth": 2,
+      "endLine": 11,
+      "startLine": 11,
+      "text": "Introductory Readings",
+      "type": "heading"
+    },
+    {
+      "endLine": 17,
+      "startLine": 12,
+      "text": "Introduction to Basic Markdown Syntax\nThere are many markdown variations. Obsidian's syntax is based on commonmark. Here are two good places to start:\nMarkdown Reference\nMarkdown Tutorial - Introduction\nJohn Gruber's Original Documentation\nThe full syntax used by Obsidian (including its custom syntax) is described here: Format your notes - Obsidian Help",
+      "type": "list"
+    },
+    {
+      "depth": 3,
+      "endLine": 19,
+      "startLine": 19,
+      "text": "Obsidian's Custom markdown syntax",
+      "type": "heading"
+    },
+    {
+      "endLine": 32,
+      "startLine": 21,
+      "text": "Links use the [[wikilink]] format, but you can switch to markdown links in the settings if you want.\n[[wikilink#]] to link to headers\n[[wikilink#^]] to link to individual \"blocks\"\nYou can use a | to modify the text being displayed, e.g. [[wikilink|display text]].\nAdding ! before a link, e.g. ![[wikilink]] will embed the file, but you can also embed headers (anything starting with #) or blocks (using ^).\n![[wikilink]] for the full note\n![[wikilink#Header]] for headers\n![[wikilink#^blockid]] for individual \"blocks\"\nIt recognizes tags, e.g. #tutorial and clicking on them will open a search\nYou can add highlights by surrounding text with ==, e.g. ==highlight==, and strikethrough with ~~, e.g.~~strikethrough~~\nIt supports MathJax to write formulas/equations: $x^2 + y^2 = z^2$ looks like $x^2 + y^2 = z^2$\nText enclosed in %% are considered comments and won't be rendered %% Comments %%",
+      "type": "list"
+    },
+    {
+      "depth": 4,
+      "endLine": 34,
+      "startLine": 34,
+      "text": "Callouts",
+      "type": "heading"
+    },
+    {
+      "endLine": 36,
+      "startLine": 36,
+      "text": "Callouts were recently added to highlight information, e.g.",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 41,
+      "startLine": 38,
+      "text": "> [!info] Callout title\n> Content of callout",
+      "type": "code"
+    },
+    {
+      "endLine": 43,
+      "startLine": 43,
+      "text": "results in:",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 46,
+      "startLine": 45,
+      "text": "Callout title\nContent of the callout",
+      "type": "blockquote"
+    },
+    {
+      "depth": 4,
+      "endLine": 48,
+      "startLine": 48,
+      "text": "Mermaid diagrams",
+      "type": "heading"
+    },
+    {
+      "endLine": 50,
+      "startLine": 50,
+      "text": "Supports rendering mermaid diagrams, e.g.",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 60,
+      "startLine": 52,
+      "text": "```mermaid\nflowchart TB  \n\tA --> C  \n\tA --> D  \n\tB --> C  \n\tB --> D\n```",
+      "type": "code"
+    },
+    {
+      "endLine": 62,
+      "startLine": 62,
+      "text": "results in:",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 69,
+      "startLine": 63,
+      "text": "flowchart TB  \n\tA --> C  \n\tA --> D  \n\tB --> C  \n\tB --> D",
+      "type": "code"
+    },
+    {
+      "depth": 2,
+      "endLine": 71,
+      "startLine": 71,
+      "text": "Lesser known Markdown Syntax",
+      "type": "heading"
+    },
+    {
+      "endLine": 79,
+      "startLine": 72,
+      "text": "Indenting text with a preceding blank lines is rendered as ==code block== (which is why it changes color, which gets asked quite often).\nA dash (-) or equal sign (=) below some text turns it into a heading, due to the older (but still supported) setext-syntax for Markdown headings. Continuing to write some non-dash-non-equal-sign-character fixes this already.\nWhen using the Strict Line Breaks setting, a single line break can be created by placing two spaces at the end of a line (\"Two Space Rule\")\nSince Strict Line Breaks makes Obsidian ignore single line breaks, they can be used for  Semantic Line Breaks\nTo write special characters like * or $ without them triggering some markup like italics or Mathjax, they need to be escaped by putting a backlash in front of it: \\* or \\$.\nLists that have single blank lines in between the list items are considered ==\"loose lists\"== and which get extra spacing between each list item. To remove that spacing, simply remove the blank lines between list items. (Note that some themes already disable loose lists by default.)\nTo get a line break in a Markdown table, use <br>.\nTo get a code block in a code block, you can use four backticks. (To have a code block in a code block in a code block, you would use five, etc.)",
+      "type": "list"
+    },
+    {
+      "endLine": 87,
+      "startLine": 81,
+      "text": "````md\n\t```md\n\tfsfsfsf\n\t```\n````",
+      "type": "code"
+    },
+    {
+      "endLine": 89,
+      "startLine": 89,
+      "text": "",
+      "type": "paragraph"
+    },
+    {
+      "depth": 1,
+      "endLine": 91,
+      "startLine": 91,
+      "text": "This note in GitHub",
+      "type": "heading"
+    },
+    {
+      "endLine": 93,
+      "startLine": 93,
+      "text": "Edit In GitHub | Copy this note | Download this vault ",
+      "type": "paragraph"
+    }
+  ]
+}

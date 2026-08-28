@@ -1,0 +1,17 @@
+{
+  "blocks": [
+    {
+      "depth": 1,
+      "endLine": 1,
+      "startLine": 1,
+      "text": "Notes",
+      "type": "heading"
+    },
+    {
+      "endLine": 3,
+      "startLine": 3,
+      "text": "See the plan and Glossary for details.",
+      "type": "paragraph"
+    }
+  ]
+}

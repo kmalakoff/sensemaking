@@ -76,5 +76,5 @@ export function toIso3(code: string): string {
 // Languages this project measured for models whose cards declare none, so the fit check is
 // not silently off for the shipped default; asserted here because it was measured, not attested.
 export const MEASURED_MODEL_LANGUAGES: Record<string, string[]> = {
-  'minishlab/potion-retrieval-32M': ['en'], // BENCHMARKING.md bake-off; token-loss measurements
+  'minishlab/potion-retrieval-32M': ['en'], // benchmark/reports/2026-08-27-embedding-model-selection.md
 };

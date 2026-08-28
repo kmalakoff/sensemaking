@@ -1,0 +1,4 @@
+{
+  "reason": "D7/W1 requires line extents to hold on Windows-authored files; this pins that a real file's block boundaries are unchanged under CRLF.",
+  "source": "CRLF transform of cases/digital-garden-history/input.md (real content unchanged, every LF replaced with CRLF)"
+}

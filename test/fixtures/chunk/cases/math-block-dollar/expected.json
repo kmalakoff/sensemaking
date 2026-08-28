@@ -1,0 +1,23 @@
+{
+  "blocks": [
+    {
+      "depth": 1,
+      "endLine": 1,
+      "startLine": 1,
+      "text": "Euler's identity",
+      "type": "heading"
+    },
+    {
+      "endLine": 3,
+      "startLine": 3,
+      "text": "$$e^{i\\pi} + 1 = 0$$",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 5,
+      "startLine": 5,
+      "text": "The energy-mass relation is $E = mc^2$.",
+      "type": "paragraph"
+    }
+  ]
+}

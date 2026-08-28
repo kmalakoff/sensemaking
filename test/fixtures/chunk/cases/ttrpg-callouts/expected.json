@@ -1,0 +1,346 @@
+{
+  "blocks": [
+    {
+      "endLine": 1,
+      "startLine": 1,
+      "text": "",
+      "type": "other"
+    },
+    {
+      "depth": 2,
+      "endLine": 3,
+      "startLine": 2,
+      "text": "aliases:",
+      "type": "heading"
+    },
+    {
+      "endLine": 4,
+      "startLine": 4,
+      "text": "tags:",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 6,
+      "startLine": 5,
+      "text": "incubator\npublish: true",
+      "type": "list"
+    },
+    {
+      "endLine": 7,
+      "startLine": 7,
+      "text": "",
+      "type": "other"
+    },
+    {
+      "depth": 1,
+      "endLine": 9,
+      "startLine": 9,
+      "text": "Obsidian for Tabletop Roleplaying Games",
+      "type": "heading"
+    },
+    {
+      "endLine": 11,
+      "startLine": 11,
+      "text": "This note collects resources for those using Obsidian for Tabletop Roleplaying Games (also known as TTRPGs), such as Dungeons and Dragons and Traveller.",
+      "type": "paragraph"
+    },
+    {
+      "depth": 2,
+      "endLine": 13,
+      "startLine": 13,
+      "text": "Getting Started",
+      "type": "heading"
+    },
+    {
+      "endLine": 18,
+      "startLine": 15,
+      "text": "Javalent's Plugins - The Github Community for all of javalent's plugins, which include most of the utilised plugins for Obsidian TTRPG.\nObsidian TTRPG Community - A Github Community for TTRPG Members to convert and create more content for Obsidian. They are constantly adding new repositories and resources to their mix.\nObsidian TTRPG Share Wiki - A further collected list of resources that complement the items found on this page.\nObsidian TTRPG Facebook Users Group - A Facebook Community for Obsidian TTRPG Enthusiasts",
+      "type": "list"
+    },
+    {
+      "depth": 3,
+      "endLine": 20,
+      "startLine": 20,
+      "text": "Game Mediators",
+      "type": "heading"
+    },
+    {
+      "endLine": 26,
+      "startLine": 22,
+      "text": "What is a Game Mediator (GM)?\nAliases: Dungeon Master, Game Manager, Game Master, Referee, Story Guide, Storyteller\nThe GM takes on many roles for the purposes of the game. That of manager, referee, director, writer, etc. GM's portray the game world and all Non-Player Characters (NPCs) including adversaries, allies, and patrons. GM's also often handle management tasks such as session scheduling, note-taking, and general crowd control.\n- @DragonBard#5391",
+      "type": "blockquote"
+    },
+    {
+      "endLine": 33,
+      "startLine": 29,
+      "text": "Obsidian for TTRPG\nBlog: Running Tabletop Games with Obsidian by Michael Barrett\nBlog: Non-Lazy DMs use Obsidian for D&D by Nicole van der Hoevan\nYouTube Playlist: Obsidian for DMing by Andy Polaine\nYouTube Video: Lazy D&D Talk Show: Obsidian for DM Prep by Slyflourish",
+      "type": "list"
+    },
+    {
+      "depth": 3,
+      "endLine": 35,
+      "startLine": 35,
+      "text": "Players",
+      "type": "heading"
+    },
+    {
+      "endLine": 37,
+      "startLine": 37,
+      "text": "Blog: How I use Obsidian for D&D - Player's Edition by Nicole van der Hoevan.",
+      "type": "list"
+    },
+    {
+      "depth": 3,
+      "endLine": 39,
+      "startLine": 39,
+      "text": "Both",
+      "type": "heading"
+    },
+    {
+      "endLine": 44,
+      "startLine": 41,
+      "text": "YouTube Video: Let's Learn Obsidian  by Josh Plunkett. A long form and beginner's introduction to Obsidian for TTRPG use\nYouTube Video: Setting up a Pathfinder 2e Vault by Josh Plunkett. How to set up a system-specific vault within Obsidian.\nYouTube Playlist: Obsidian TTRPG by Josh Plunkett. A collection of videos explaining everything about TTRPG and Obsidian, including vault organisation and configuring plugins.\nYouTube Playlist: Obsidian for TTRPGs by Nicole van der Hoevan. A collection of videos from a player and game master's point of view in using Obsidian for TTRPGs.",
+      "type": "list"
+    },
+    {
+      "depth": 2,
+      "endLine": 46,
+      "startLine": 46,
+      "text": "Appearance",
+      "type": "heading"
+    },
+    {
+      "endLine": 48,
+      "startLine": 48,
+      "text": "The following Themes and CSS Snippets are popular and widely used among the Obsidian TTRPG Community.",
+      "type": "paragraph"
+    },
+    {
+      "depth": 3,
+      "endLine": 50,
+      "startLine": 50,
+      "text": "Themes",
+      "type": "heading"
+    },
+    {
+      "endLine": 54,
+      "startLine": 51,
+      "text": "AnuPpuccin\nEbullientworks\nITS Theme\nMinimal",
+      "type": "list"
+    },
+    {
+      "depth": 3,
+      "endLine": 56,
+      "startLine": 56,
+      "text": "CSS Snippets",
+      "type": "heading"
+    },
+    {
+      "endLine": 58,
+      "startLine": 58,
+      "text": "CSS Snippets are mostly compatible across themes. However, interactions can and do happen. If you experience any unexpected visual results, try disabling the snippet first.",
+      "type": "blockquote"
+    },
+    {
+      "depth": 4,
+      "endLine": 60,
+      "startLine": 60,
+      "text": "Utility",
+      "type": "heading"
+    },
+    {
+      "endLine": 65,
+      "startLine": 62,
+      "text": "Center Tables: Use this snippet to apply a cssclass to your notes to center tables within that note. This is also Built into many themes as a Style Settings option.\nITS Callouts: Adds many new callout styles, including wiki-style infoboxes. You do not need to use this if you are using ITS Theme.\nITS Image Adjustments: Expands the amount of image adjustments available to use. You do not need to use this if you are using ITS Theme.\nITS Embed Adjustments: Quality of life embed adjustments. You do not need to use this if you are using ITS Theme.",
+      "type": "list"
+    },
+    {
+      "depth": 2,
+      "endLine": 67,
+      "startLine": 67,
+      "text": "Notes",
+      "type": "heading"
+    },
+    {
+      "endLine": 69,
+      "startLine": 69,
+      "text": "Obsidian TTRPG Share: The Obsidian TTRPG Community's home for notes of all sorts.",
+      "type": "list"
+    },
+    {
+      "depth": 3,
+      "endLine": 71,
+      "startLine": 71,
+      "text": "Campaign And One Shots",
+      "type": "heading"
+    },
+    {
+      "endLine": 73,
+      "startLine": 73,
+      "text": "Spoil Alerts May Be Found in These Notes",
+      "type": "blockquote"
+    },
+    {
+      "endLine": 80,
+      "startLine": 75,
+      "text": "Campaign: Two and a Half Strahds - By Leah Ferguson. A collection of notes detailing a run through the DnD 5e Curse of Strahd campaign.\nCampaign: Hoard of the Dragon Queen - Leah Ferguson. A collection of notes detailing a run through the DnD 5e Hoard of the Dragon Queen campaign.\nCampaign: Days of Obligation - A collection of notes detailing Leah Ferguson's' and Nicole van der Hoevan's run through a Numenera campaign.\nOne-Shots: One Shots of all Kinds - Leah Ferguson. A collection of notes detailing One Shots with multiple TTRPG systems.\nBlog: TTRPG Games Index | Nicole van der Hoeven by Nicole van der Hoevan. An Index of current and past campaigns and the world-building with them.\nCampaign: Days of Obligation | Nicole van der Hoeven by Nicole van der Hoevan. A collection of notes detailing Nicole's campaign with Leah in the world of Numenera.",
+      "type": "list"
+    },
+    {
+      "depth": 3,
+      "endLine": 82,
+      "startLine": 82,
+      "text": "Tables",
+      "type": "heading"
+    },
+    {
+      "endLine": 84,
+      "startLine": 84,
+      "text": "Obsidian Dice Roller Tables Collection: Formatted tables created by WychWitch for use with the Dice Roller plugin.",
+      "type": "list"
+    },
+    {
+      "depth": 3,
+      "endLine": 86,
+      "startLine": 86,
+      "text": "Templates",
+      "type": "heading"
+    },
+    {
+      "endLine": 90,
+      "startLine": 88,
+      "text": "BagOfTips Github Repo: The home of some very popular templates used within the TTRPG community.\nObsidian Table Top Templates: mProjectsCode's' Templates and a Vault structure for TTRPG campaigns and worldbuilding.\nYouTube Channel: @BagOfTips presents a small channel on using their specialised templates with Obsidian.",
+      "type": "list"
+    },
+    {
+      "depth": 2,
+      "endLine": 92,
+      "startLine": 92,
+      "text": "Vaults",
+      "type": "heading"
+    },
+    {
+      "depth": 3,
+      "endLine": 94,
+      "startLine": 94,
+      "text": "Download and Play Vaults",
+      "type": "heading"
+    },
+    {
+      "endLine": 96,
+      "startLine": 96,
+      "text": "SRD refers to System Reference Documents which are usually a collection of paired down rules provided by publishers for third parties to play and design custom content. We are also using this term to define \"Starter\" vaults created by and for the Obsidian TTRPG Community.",
+      "type": "blockquote"
+    },
+    {
+      "depth": 4,
+      "endLine": 98,
+      "startLine": 98,
+      "text": "13th Age",
+      "type": "heading"
+    },
+    {
+      "endLine": 100,
+      "startLine": 100,
+      "text": "13th Age SRD: A starter vault for 13th Age 1 and soon to be 13th Age 2, with Fantasy Statblocks and Dice Roller support.",
+      "type": "list"
+    },
+    {
+      "depth": 4,
+      "endLine": 102,
+      "startLine": 102,
+      "text": "Dungeons and Dragons",
+      "type": "heading"
+    },
+    {
+      "endLine": 104,
+      "startLine": 104,
+      "text": "D&D 5E SRD REmastered: The SRD for 5e, available for Obsidian and other formats.",
+      "type": "list"
+    },
+    {
+      "depth": 4,
+      "endLine": 106,
+      "startLine": 106,
+      "text": "FATE",
+      "type": "heading"
+    },
+    {
+      "endLine": 108,
+      "startLine": 108,
+      "text": "Fate Condensed SRD: A basic vault for use in playing Fate Condensed.",
+      "type": "list"
+    },
+    {
+      "depth": 4,
+      "endLine": 110,
+      "startLine": 110,
+      "text": "Ironsworn RPG",
+      "type": "heading"
+    },
+    {
+      "endLine": 114,
+      "startLine": 112,
+      "text": "ObsidianSworn: A basic vault for use in playing Ironsworn.\nIronsworn SRD: A more comprehensive Ironsworn, complete with Dice Roller support.\nIronsworn Obsidian Template: An advanced Ironsworn Vault, with support for Obsidian Leaflet, Contextual Typography, and Inline Scripts.",
+      "type": "list"
+    },
+    {
+      "depth": 5,
+      "endLine": 116,
+      "startLine": 116,
+      "text": "Starforged",
+      "type": "heading"
+    },
+    {
+      "endLine": 118,
+      "startLine": 118,
+      "text": "Forged in Obsidian: An advanced Ironsworn Vault with support for Inline Scripts.",
+      "type": "list"
+    },
+    {
+      "depth": 2,
+      "endLine": 120,
+      "startLine": 120,
+      "text": "Community Plugins and Scripts",
+      "type": "heading"
+    },
+    {
+      "endLine": 122,
+      "startLine": 122,
+      "text": "Plugins for TTRPG Plugins in this category",
+      "type": "paragraph"
+    },
+    {
+      "depth": 3,
+      "endLine": 125,
+      "startLine": 125,
+      "text": "Scripts",
+      "type": "heading"
+    },
+    {
+      "endLine": 127,
+      "startLine": 127,
+      "text": "SRD Obsidian Importer - mProjectsCode's script to scrape and import the excellent d20pfsrd and 5esrd into Obsidian.",
+      "type": "list"
+    },
+    {
+      "endLine": 131,
+      "startLine": 131,
+      "text": "",
+      "type": "paragraph"
+    },
+    {
+      "depth": 1,
+      "endLine": 133,
+      "startLine": 133,
+      "text": "This note in GitHub",
+      "type": "heading"
+    },
+    {
+      "endLine": 135,
+      "startLine": 135,
+      "text": "Edit In GitHub | Copy this note | Download this vault ",
+      "type": "paragraph"
+    }
+  ]
+}

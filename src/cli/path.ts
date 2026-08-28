@@ -1,7 +1,7 @@
 import { resolveNote, scopedPaths } from '../commands/index.ts';
-import type { Row } from '../output.ts';
-import { printRows } from '../output.ts';
-import { findPath } from '../traverse.ts';
+import { findPath } from '../graph/traverse.ts';
+import type { Row } from '../output/output.ts';
+import { printRows } from '../output/output.ts';
 import { USAGE } from './index.ts';
 import { CONFIG, FORMAT, formatOf, parse, SCOPE, scopeOf, withDb } from './shared.ts';
 import type { Command } from './types.ts';

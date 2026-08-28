@@ -1,7 +1,7 @@
 import posix from 'node:path/posix';
 import type { DatabaseSync } from 'node:sqlite';
-import { maskRegions } from '../fences.ts';
-import type { FileStat } from '../scan.ts';
+import type { FileStat } from '../scan/index.ts';
+import { maskRegions } from './fences.ts';
 import type { Feature, ReconcileDelta } from './types.ts';
 
 // links(src, target, target_base, dst, embed): target as written, target_base its baseKey

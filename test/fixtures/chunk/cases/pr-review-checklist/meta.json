@@ -1,0 +1,4 @@
+{
+  "reason": "multi-level nested lists with inconsistent indent widths (3 vs 4 spaces) and a wikilink targeting a heading+block-id fragment (#^3df057).",
+  "source": "obsidian-hub: 00 - Contribute to the Obsidian Hub/03 Contributor Notes/03.01 Structure/Checklist for reviewing Pull Requests.md"
+}

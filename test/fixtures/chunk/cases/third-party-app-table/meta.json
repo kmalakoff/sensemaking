@@ -1,0 +1,4 @@
+{
+  "reason": "a 19-row real GFM table with inline code in cells, plus a backslash-escaped pipe inside a wikilink alias (`[[target\\|alias]]`), an edge case for the alias split regex.",
+  "source": "obsidian-hub: 04 - Guides, Workflows, & Courses/Guides/Controlling Obsidian via a Third-party App.md"
+}

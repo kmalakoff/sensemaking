@@ -1,0 +1,201 @@
+{
+  "blocks": [
+    {
+      "depth": 1,
+      "endLine": 1,
+      "startLine": 1,
+      "text": "Obsidian October 2021",
+      "type": "heading"
+    },
+    {
+      "endLine": 3,
+      "startLine": 3,
+      "text": "Been thinking about making a plugin or theme but never had the opportunity to do it? October is the time!",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 5,
+      "startLine": 5,
+      "text": "Obsidian October is an official event brought to you by Obsidian to help you get started with making your very own plugins and themes.",
+      "type": "paragraph"
+    },
+    {
+      "depth": 2,
+      "endLine": 7,
+      "startLine": 7,
+      "text": "How it works",
+      "type": "heading"
+    },
+    {
+      "endLine": 9,
+      "startLine": 9,
+      "text": "Starting now, we'll start accepting participants (abbreviated as OOers below). Anyone can participate! You'll get a special role to indicate you're participating too. You can get your role by reacting to this message on Discord.",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 11,
+      "startLine": 11,
+      "text": "You can sign up any time before October 31, but we encourage you to start early so you have a higher chance to finish your project.",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 13,
+      "startLine": 13,
+      "text": "There will be a special channel on Discord to ask questions and chat about your progress. On the forum, there is also a mega post for OOers to share their daily progress and learnings. Developers who help out will also receive a special mentor role!",
+      "type": "paragraph"
+    },
+    {
+      "depth": 2,
+      "endLine": 15,
+      "startLine": 15,
+      "text": "Submitting your project",
+      "type": "heading"
+    },
+    {
+      "endLine": 17,
+      "startLine": 17,
+      "text": "Any OOer who finishes their project before the end of October 31, 2021 anywhere on Earth can submit via this form (embedded below, although it will not render if you're viewing this on GitHub). We'll be publicly celebrating O_O contributions after the event wraps up, so you might be featured on the Obsidian website, via Twitter, or elsewhere!",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 19,
+      "startLine": 19,
+      "text": "",
+      "type": "other"
+    },
+    {
+      "endLine": 21,
+      "startLine": 21,
+      "text": "Also, be sure to submit your plugin and theme to our official community plugin directory or theme gallery by submitting a Pull Request to the relevant list.",
+      "type": "paragraph"
+    },
+    {
+      "depth": 2,
+      "endLine": 23,
+      "startLine": 23,
+      "text": "Prizes",
+      "type": "heading"
+    },
+    {
+      "endLine": 25,
+      "startLine": 25,
+      "text": "After October 31, 2021, the participant role will be removed and those who submitted a project will get a souvenir role for \"Completed OO 2021\".",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 27,
+      "startLine": 27,
+      "text": "The winning submissions will also be highlighted on our websites and remain accessible & visible.",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 29,
+      "startLine": 29,
+      "text": "The awards are as following:",
+      "type": "paragraph"
+    },
+    {
+      "depth": 3,
+      "endLine": 31,
+      "startLine": 31,
+      "text": "Winner",
+      "type": "heading"
+    },
+    {
+      "endLine": 33,
+      "startLine": 33,
+      "text": "Judges will select one winner among all plugins and themes, respectively. The two winners will receive a custom made trophy from us, plus $300 Obsidian credit.",
+      "type": "paragraph"
+    },
+    {
+      "depth": 3,
+      "endLine": 35,
+      "startLine": 35,
+      "text": "Runners-up",
+      "type": "heading"
+    },
+    {
+      "endLine": 37,
+      "startLine": 37,
+      "text": "Judges will select three more runner-ups for each category. They will receive $200 Obsidian credit.",
+      "type": "paragraph"
+    },
+    {
+      "depth": 3,
+      "endLine": 39,
+      "startLine": 39,
+      "text": "Lucky winners",
+      "type": "heading"
+    },
+    {
+      "endLine": 41,
+      "startLine": 41,
+      "text": "3 lucky winners will be chosen randomly via a raffle for each category. They will each get $100 Obsidian credit.",
+      "type": "paragraph"
+    },
+    {
+      "depth": 2,
+      "endLine": 43,
+      "startLine": 43,
+      "text": "Judges",
+      "type": "heading"
+    },
+    {
+      "endLine": 45,
+      "startLine": 45,
+      "text": "We're honored to have invited some veteran developers in the community to be on our judge panel!",
+      "type": "paragraph"
+    },
+    {
+      "depth": 3,
+      "endLine": 47,
+      "startLine": 47,
+      "text": "Plugin judges",
+      "type": "heading"
+    },
+    {
+      "endLine": 51,
+      "startLine": 49,
+      "text": "Liam Cain, author of the 3 plugins including the popular Calendar plugin\nMatthew Meyers, author of 8 plugins including the Kanban plugin and the California Coast theme\nArgentina Ortega, author of the Natural Language Dates and Hotkeys++ plugins",
+      "type": "list"
+    },
+    {
+      "depth": 3,
+      "endLine": 53,
+      "startLine": 53,
+      "text": "Theme judges",
+      "type": "heading"
+    },
+    {
+      "endLine": 57,
+      "startLine": 55,
+      "text": "Stephan Ango (kepano), author of the Minimal theme and 4 plugins\nChetachi Ezikeuzor (Chetachi), author of the Yin and Yang theme and cMenu plugin\nSlRvb, author of the ITS Theme",
+      "type": "list"
+    },
+    {
+      "endLine": 59,
+      "startLine": 59,
+      "text": "Obsidian credit can be used towards any Obsidian license or service. It is non-transferable.",
+      "type": "other"
+    },
+    {
+      "endLine": 61,
+      "startLine": 61,
+      "text": "",
+      "type": "paragraph"
+    },
+    {
+      "depth": 1,
+      "endLine": 63,
+      "startLine": 63,
+      "text": "This note in GitHub",
+      "type": "heading"
+    },
+    {
+      "endLine": 65,
+      "startLine": 65,
+      "text": "Edit In GitHub | Copy this note | Download this vault ",
+      "type": "paragraph"
+    }
+  ]
+}

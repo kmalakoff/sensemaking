@@ -164,7 +164,7 @@ Two skills: `sense` for querying a tree (what each command is for, FTS5 syntax, 
 - **RAG / vector stores:** similarity can't express `WHERE status = 'active'`. Here vectors are one signal inside `search`: same SQLite file, filters compose, every row labels its evidence (`via`), and a preset turns vectors off per layer of the tree. No second store, no daemon, no native builds.
 - **Document-OS apps (Anytype, Logseq, SilverBullet, Capacities):** full applications with their own UI and storage. `sense` is headless: your files stay files, there's no app to run.
 
-Dependencies: [yaml](https://github.com/eemeli/yaml), [remove-markdown](https://github.com/zuchka/remove-markdown), [@huggingface/tokenizers](https://github.com/huggingface/tokenizers.js), [franc-min](https://github.com/wooorm/franc) (all pure JS), and Node's built-in SQLite. No native builds.
+Dependencies: [yaml](https://github.com/eemeli/yaml), [@huggingface/tokenizers](https://github.com/huggingface/tokenizers.js), [franc-min](https://github.com/wooorm/franc), [mdast-util-from-markdown](https://github.com/syntax-tree/mdast-util-from-markdown), [micromark-extension-gfm](https://github.com/micromark/micromark-extension-gfm), [mdast-util-gfm](https://github.com/syntax-tree/mdast-util-gfm) (all pure JS), and Node's built-in SQLite. No native builds.
 
 ## License
 

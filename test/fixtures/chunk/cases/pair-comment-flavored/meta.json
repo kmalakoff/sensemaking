@@ -1,0 +1,4 @@
+{
+  "reason": "flavor-inertness pair (1/2): %%...%% used as an Obsidian comment that should be invisible to a reader. extract.ts has no %% handling at all, so the comment text leaks into extracted output today (see report item 4).",
+  "source": "synthetic"
+}

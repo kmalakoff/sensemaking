@@ -1,8 +1,10 @@
-import { fenceTracker } from '../fences.ts';
+import { estimateTokens } from '../chunk/index.ts';
+import { fenceTracker } from './fences.ts';
 import type { Feature } from './types.ts';
 
 // sections(path, idx, level, heading, start_line, end_line, tokens): the heading outline,
-// 1-indexed over the raw file so a row is a direct Read range; tokens is a chars/4 estimate.
+// 1-indexed over the raw file so a row is a direct Read range; tokens is estimateTokens (D5),
+// CJK-aware rather than a flat chars/4.
 
 export interface Section {
   level: number;
@@ -25,8 +27,8 @@ function extract(raw: string): Section[] {
   }
   for (let s = 0; s < found.length; s++) {
     if (s + 1 < found.length) found[s].endLine = found[s + 1].startLine - 1;
-    const chars = lines.slice(found[s].startLine - 1, found[s].endLine).join('\n').length;
-    found[s].tokens = Math.ceil(chars / 4);
+    const text = lines.slice(found[s].startLine - 1, found[s].endLine).join('\n');
+    found[s].tokens = Math.ceil(estimateTokens(text));
   }
   return found;
 }

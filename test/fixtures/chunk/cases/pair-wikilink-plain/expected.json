@@ -1,0 +1,17 @@
+{
+  "blocks": [
+    {
+      "depth": 1,
+      "endLine": 1,
+      "startLine": 1,
+      "text": "Notes",
+      "type": "heading"
+    },
+    {
+      "endLine": 3,
+      "startLine": 3,
+      "text": "Template placeholders look like VARIABLE_NAME and must stay literal here.",
+      "type": "paragraph"
+    }
+  ]
+}

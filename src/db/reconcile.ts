@@ -4,10 +4,10 @@ import { contentTokenize } from '../config/index.ts';
 import { SenseError } from '../errors.ts';
 import { activeFeatures } from '../features/index.ts';
 import type { ReconcileDelta } from '../features/types.ts';
-import { progress } from '../progress.ts';
-import type { ParsedDoc } from '../scan.ts';
-import { listFiles, parseFile, RESERVED_COLUMNS } from '../scan.ts';
-import { segmentField } from '../segment.ts';
+import { progress } from '../output/progress.ts';
+import type { ParsedDoc } from '../scan/index.ts';
+import { listFiles, parseFile, RESERVED_COLUMNS } from '../scan/index.ts';
+import { segmentField } from '../text/segment.ts';
 import { getColumns, getMeta, quoteIdent, setMeta } from './shared.ts';
 
 // Feature-owned columns (`_rank`) must stay out of the upsert: a reparse would null the last
@@ -60,7 +60,7 @@ export function reconcile(db: DatabaseSync, cfg: Config, baseDir: string): { par
     // A doc only gets extract/store from features that apply to it (currently: embed, via
     // FileStat.embed -- true iff the config names an embedding model).
     const fileFeatures = features.filter((feature) => !feature.enabledForFile || feature.enabledForFile(cfg, file));
-    const { doc, warnings: fileWarnings } = parseFile(file, fileFeatures);
+    const { doc, warnings: fileWarnings } = parseFile(file, fileFeatures, cfg);
     report.tick(++parsedCount);
     warnings.push(...fileWarnings);
     for (const key of Object.keys(doc.data)) {

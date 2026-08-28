@@ -5,14 +5,14 @@ import type { ResolvedConfig } from '../config/index.ts';
 import { contentTokenize, embedConfig, featureEnabled, resolveSearch } from '../config/index.ts';
 import { localModelMissing, MODEL_FILENAMES } from '../embed/store.ts';
 import { SenseError } from '../errors.ts';
-import type { Row } from '../output.ts';
-import { searchError } from '../search-error.ts';
-import { segmentMatch } from '../segment.ts';
+import type { Row } from '../output/output.ts';
+import { searchError } from '../output/search-error.ts';
+import { segmentMatch } from '../text/segment.ts';
 import { materializeScope, narrowByWhere, rawScope, scopeHasEmbeddings } from './scope.ts';
 import { linksCandidates, vectorsCandidates, wordsCandidates } from './signals.ts';
 
 // snippet() re-tokenizes each candidate doc, superlinearly: ~10s for one 1MB doc
-// (BENCHMARKING.md). Past this bound, rows get the linear JS excerpt instead.
+// (benchmark/reports/2026-08-23-hub-release-battery.md). Past this bound, rows get the JS excerpt.
 const EXCERPT_WINDOW = 160;
 
 // Bare terms from an FTS5 query string: strips operators/quoting so the oversized-doc excerpt

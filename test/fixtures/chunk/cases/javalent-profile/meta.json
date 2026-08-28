@@ -1,0 +1,4 @@
+{
+  "reason": "list items with trailing inline block-id anchors (^discord, ^website), a real callout containing a wikilink, HTML comment blocks (<!-- -->), and many aliased wikilinks.",
+  "source": "obsidian-hub: 01 - Community/People/javalent.md"
+}

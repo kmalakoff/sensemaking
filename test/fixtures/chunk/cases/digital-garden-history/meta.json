@@ -1,0 +1,4 @@
+{
+  "reason": "wikilink inside a heading, a plain (non-callout) blockquote, a standalone block-id anchor (^883251) on its own line, and two real %% comments -- short enough to also serve as the CRLF variant's source.",
+  "source": "obsidian-hub: 05 - Concepts/A Brief History and Ethos of the Digital Garden.md"
+}

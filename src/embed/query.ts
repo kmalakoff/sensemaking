@@ -4,13 +4,13 @@ import type { Config, ResolvedConfig } from '../config/index.ts';
 import { SenseError } from '../errors.ts';
 import type { Chunk } from '../features/embed.ts';
 import { embed } from '../features/embed.ts';
-import { progress } from '../progress.ts';
-import { parseFile } from '../scan.ts';
+import { progress } from '../output/progress.ts';
+import { parseFile } from '../scan/index.ts';
 import { checkLanguageFit } from './langfit.ts';
 import { getProvider } from './registry.ts';
 
-// Storage lever fixed by the bake-off (BENCHMARKING.md): int8 at 256 dims is
-// quality-free vs f32-512 when fused. Queries stay f32 at the same dims.
+// Storage lever fixed by the bake-off (benchmark/reports/2026-08-13-static-model-bakeoff.md):
+// int8 at 256 dims is quality-free vs f32-512 when fused. Queries stay f32 at the same dims.
 const STORE_DIMS = 256;
 // Seed chunks that participate in a `related` scan; see similarNotes for the measurement.
 const TARGET_CHUNK_CAP = 16;
@@ -50,7 +50,7 @@ export async function embedPending(db: DatabaseSync, cfg: Config, baseDir: strin
     try {
       // presets/embed are irrelevant here -- re-deriving chunk text for a doc that already
       // has embeddings rows means the tree had an embedding model at reconcile time.
-      chunks = parseFile({ relPath: path, absPath: join(baseDir, path), mtimeMs: 0, ctimeMs: 0, size: 0, presets: [], embed: true }, [embed]).doc.extracted.embed as Chunk[];
+      chunks = parseFile({ relPath: path, absPath: join(baseDir, path), mtimeMs: 0, ctimeMs: 0, size: 0, presets: [], embed: true }, [embed], cfg).doc.extracted.embed as Chunk[];
     } catch {
       continue; // vanished since reconcile; the next reconcile removes its rows
     }

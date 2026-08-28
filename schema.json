@@ -91,7 +91,14 @@
         "model": { "type": "string" },
         "provider": { "type": "string", "enum": ["static", "openai", "cohere"] },
         "url": { "type": "string" },
-        "key": { "type": "string" }
+        "key": { "type": "string" },
+        "languages": {
+          "type": "array",
+          "items": { "type": "string" },
+          "minItems": 1,
+          "description": "Languages the model supports, overriding its own card declaration for the language-fit check."
+        },
+        "chunkTokens": { "type": "integer", "minimum": 1, "description": "Chunk size ceiling in estimated tokens for small-context models; default 500." }
       }
     },
     "content": {

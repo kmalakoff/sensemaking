@@ -1,4 +1,4 @@
-import { pagerank } from '../graph.ts';
+import { pagerank } from '../graph/graph.ts';
 import { linkEdges } from './links.ts';
 import type { Feature } from './types.ts';
 

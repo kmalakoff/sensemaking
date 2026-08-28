@@ -1,0 +1,4 @@
+{
+  "reason": "flavor-inertness pair (2/2): plain-markdown twin where %% is literal (printf's escaped percent sign). Survives today only because %% is entirely unhandled, not because of a working flavor gate.",
+  "source": "synthetic"
+}

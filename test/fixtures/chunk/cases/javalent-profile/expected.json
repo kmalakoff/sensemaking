@@ -1,0 +1,178 @@
+{
+  "blocks": [
+    {
+      "endLine": 1,
+      "startLine": 1,
+      "text": "",
+      "type": "other"
+    },
+    {
+      "endLine": 2,
+      "startLine": 2,
+      "text": "aliases:",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 6,
+      "startLine": 3,
+      "text": "Jeremy Valentine\nJavalantasy\ntags:",
+      "type": "list"
+    },
+    {
+      "depth": 2,
+      "endLine": 8,
+      "startLine": 7,
+      "text": "publish: true",
+      "type": "heading"
+    },
+    {
+      "depth": 1,
+      "endLine": 10,
+      "startLine": 10,
+      "text": "Jeremy Valentine",
+      "type": "heading"
+    },
+    {
+      "endLine": 15,
+      "startLine": 12,
+      "text": "GitHub: javalent\nDiscord: @javalent#3452\nWebsite: \nPublish site: ",
+      "type": "list"
+    },
+    {
+      "endLine": 17,
+      "startLine": 17,
+      "text": "",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 19,
+      "startLine": 19,
+      "text": "This is a duplicate person entry of Jeremy Valentine.",
+      "type": "blockquote"
+    },
+    {
+      "depth": 2,
+      "endLine": 21,
+      "startLine": 21,
+      "text": "Author of",
+      "type": "heading"
+    },
+    {
+      "endLine": 23,
+      "startLine": 23,
+      "text": "",
+      "type": "paragraph"
+    },
+    {
+      "depth": 3,
+      "endLine": 24,
+      "startLine": 24,
+      "text": "Plugins",
+      "type": "heading"
+    },
+    {
+      "endLine": 33,
+      "startLine": 25,
+      "text": "Obsidian Leaflet\nDice Roller\nAdmonition\nFantasy Statblocks\nInitiative Tracker\nMarkdown Attributes\nProminent Bookmarked Files\nSecond Window\nSettings Search",
+      "type": "list"
+    },
+    {
+      "endLine": 35,
+      "startLine": 35,
+      "text": "",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 37,
+      "startLine": 37,
+      "text": "",
+      "type": "paragraph"
+    },
+    {
+      "depth": 3,
+      "endLine": 39,
+      "startLine": 39,
+      "text": "Unlisted plugins",
+      "type": "heading"
+    },
+    {
+      "endLine": 42,
+      "startLine": 41,
+      "text": "Calendarium | Javalent - The ultimate Obsidian plugin for crafting mind-bending fantasy and sci-fi calendars; a successor to Fantasy Calendar.\nObsidian Notifier | Valentine195 - Add OS-Level Notifications to Obsidian. This is a work in progress plugin.",
+      "type": "list"
+    },
+    {
+      "endLine": 46,
+      "startLine": 44,
+      "text": "",
+      "type": "other"
+    },
+    {
+      "endLine": 50,
+      "startLine": 48,
+      "text": "",
+      "type": "other"
+    },
+    {
+      "endLine": 53,
+      "startLine": 52,
+      "text": "GitHub sponsors: Sponsor @valentine195 on GitHub Sponsors\nBuy me a coffee: ",
+      "type": "list"
+    },
+    {
+      "endLine": 54,
+      "startLine": 54,
+      "text": "",
+      "type": "other"
+    },
+    {
+      "endLine": 55,
+      "startLine": 55,
+      "text": "",
+      "type": "other"
+    },
+    {
+      "endLine": 59,
+      "startLine": 57,
+      "text": "",
+      "type": "other"
+    },
+    {
+      "endLine": 61,
+      "startLine": 61,
+      "text": "",
+      "type": "other"
+    },
+    {
+      "endLine": 62,
+      "startLine": 62,
+      "text": "",
+      "type": "other"
+    },
+    {
+      "endLine": 63,
+      "startLine": 63,
+      "text": "",
+      "type": "other"
+    },
+    {
+      "endLine": 65,
+      "startLine": 65,
+      "text": "",
+      "type": "paragraph"
+    },
+    {
+      "depth": 1,
+      "endLine": 67,
+      "startLine": 67,
+      "text": "This note in GitHub",
+      "type": "heading"
+    },
+    {
+      "endLine": 69,
+      "startLine": 69,
+      "text": "Edit In GitHub | Copy this note | Download this vault ",
+      "type": "paragraph"
+    }
+  ]
+}

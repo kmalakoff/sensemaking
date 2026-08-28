@@ -1,0 +1,279 @@
+{
+  "blocks": [
+    {
+      "endLine": 1,
+      "startLine": 1,
+      "text": "",
+      "type": "other"
+    },
+    {
+      "depth": 2,
+      "endLine": 3,
+      "startLine": 2,
+      "text": "publish: true",
+      "type": "heading"
+    },
+    {
+      "depth": 1,
+      "endLine": 5,
+      "startLine": 5,
+      "text": "hub.yaml proposal for theme designers",
+      "type": "heading"
+    },
+    {
+      "endLine": 7,
+      "startLine": 7,
+      "text": "We want to propose a way for you to be able to enhance your hub note without the hassle of making PRs to the hub or having to keep things updated on two places.",
+      "type": "paragraph"
+    },
+    {
+      "depth": 2,
+      "endLine": 9,
+      "startLine": 9,
+      "text": "Current workflow",
+      "type": "heading"
+    },
+    {
+      "endLine": 11,
+      "startLine": 11,
+      "text": "As you may know, some of the hub content is populated via scripts. For themes, there are two sources of information we use:",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 23,
+      "startLine": 12,
+      "text": "What you submitted to the obsidian-releases repo, e.g.\n    {\n      \"name\": \"Shimmering Focus\",\n      \"author\": \"pseudometa\",\n      \"repo\": \"chrisgrieser/shimmering-focus\",\n      \"screenshot\": \"docs/images/Promo%20Screenshot/promo-screenshot.png\",\n      \"modes\": [\"dark\", \"light\"],\n      \"branch\": \"main\"\n  },\nYour obsidian.css file to determine if you use the Style settings plugin and to see if you've listed any compatible plugins.",
+      "type": "list"
+    },
+    {
+      "endLine": 25,
+      "startLine": 25,
+      "text": "This is covers the very basic information for most themes, but",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 31,
+      "startLine": 26,
+      "text": "is not very user-friendly when trying to find themes that have X (which themes support asides? highlights?) and users have to try out the themes to find out\nlimits you to a single screenshot\nrequires manual edits on your side if you want to add text or other features not mentioned in style settings or list sponsorship information\ncontent you add to the hub is  outside to your theme repo and will easily get out of date\nadding or updating any content you do add to the hub requires you to go through the fork and PR workflow, which adds friction and makes it less likely that you do either\nrequires manual work in the hub  repo when there are manual changes to make sure the scripts haven't removed manually added content and handling other edge cases (at least for now)",
+      "type": "list"
+    },
+    {
+      "depth": 2,
+      "endLine": 33,
+      "startLine": 33,
+      "text": "Proposal",
+      "type": "heading"
+    },
+    {
+      "endLine": 35,
+      "startLine": 35,
+      "text": "Our proposal is to add an optional hub.yaml file at the root of theme repos to add some of this information. Note that all entries are optional, so maintenance and effort can be managed by each theme designer based on their theme's complexity and requirements. We'll cover some of the basics with examples below, but you can find the full file with all the options further down in the Template section.",
+      "type": "paragraph"
+    },
+    {
+      "depth": 3,
+      "endLine": 37,
+      "startLine": 37,
+      "text": "Link to the theme's documentation",
+      "type": "heading"
+    },
+    {
+      "endLine": 39,
+      "startLine": 39,
+      "text": "The contents of the hub.yaml for a theme that only wants to add a link to the theme's documentation in its hub note would be as simple as:",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 43,
+      "startLine": 41,
+      "text": "docs: https://minimal.guide/ # Link to the theme documentation",
+      "type": "code"
+    },
+    {
+      "depth": 3,
+      "endLine": 45,
+      "startLine": 45,
+      "text": "Hub note contents",
+      "type": "heading"
+    },
+    {
+      "endLine": 47,
+      "startLine": 47,
+      "text": "Similarly, if you wanted to have some control on the contents of your theme note, you can use the hub_content key to list which markdown documents to \"import\" to the hub. Generally, to avoid having to maintain two sets of docs (one for your theme and one for the hub), you could reuse a markdown file with an overview that has links to your docs.",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 49,
+      "startLine": 49,
+      "text": "For example, with the contents of hub.yaml as show below:",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 53,
+      "startLine": 50,
+      "text": "hub_content: # List of markdown documents to be included as is to the hub relative to the root of the repo.\n    - docs/theme_overview.md",
+      "type": "code"
+    },
+    {
+      "endLine": 55,
+      "startLine": 55,
+      "text": "And the contents of theme_overview.md:",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 65,
+      "startLine": 56,
+      "text": "\n## My theme overview\n\nThis is a small description of my theme. You can find more information about the following features in the documentation:\n- [Callouts](www.mytheme.com/callouts)\n- [checkboxes](www.mytheme.com/checkboxes)\n\nReport issues by clicking [here](www.github.com/octocat/mytheme/issues).",
+      "type": "code"
+    },
+    {
+      "depth": 3,
+      "endLine": 67,
+      "startLine": 67,
+      "text": "Theme features",
+      "type": "heading"
+    },
+    {
+      "endLine": 69,
+      "startLine": 69,
+      "text": "The main goal of adding a list of features is to help compare themes based on what they offer, to save one having to try them out. Keep in mind that themes (especially large ones) have many many features, and it's not our intention to make an exhaustive list of all the things your theme can do. Instead, ==ideally the features you list are a way to pitch to (new) users what makes your theme unique==. For that, the idea is to parse the feature key to identify some of the frequently sought-after features with a controlled vocabulary and automatically add links to pre-defined categories in the hub. The controlled vocabulary is based on the feature list proposed by pseudometa and extended by argentum:",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 86,
+      "startLine": 71,
+      "text": "Key Hub note Description\ncolor_schemes [[Themes with additional color schemes]] Theme has additional color schemes\ntables [[Themes with special table support]] Dedicated cssclasses for tables\nmobile [[Themes with mobile support]] Does the theme provide mobile support (both phones and tablets)?\npublish [[Themes with Obsidian Publish support]] Does the theme have publish support?\nprint [[Themes with PDF export support]] Adds CSS to customize the appearance of the PDF exports\ngutter [[Themes with gutter features]] Does the theme add custom indicators or other features to the gutter?\nsnippets [[Themes with official snippets]] Does your theme provide additional snippets to customize parts of your theme outside of the style settings plugin?\nimages [[Themes with image handling options]] Does your theme add any image-handling features, e.g. zooming, galleries, aligning/wrapping around text, etc.\nhighlights [[Themes with custom highlights]] Additional colours or ways to achieve the core ==highlight== behaviour\nasides [[Themes with side notes]] Any features related to the <aside> tag or any of its css workarounds, sometimes also called side notes or margin notes\ncheckboxes [[Themes with custom checkboxes]] Particularly if you added custom types\ncallouts [[Themes with custom callouts]] Does the theme add special callouts?\ncssclass [[Themes with custom css classes]] Does the theme add css classes that are not covered on other features?\nmiscellaneous Only for certain keywords (see below) Any other feature you'd like to mention as a markdown formatted string. Mentioning the following two will add links to the corresponding pages:",
+      "type": "table"
+    },
+    {
+      "endLine": 88,
+      "startLine": 88,
+      "text": "Recognised words in the miscellaneous features:",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 91,
+      "startLine": 90,
+      "text": "opinionated - Will link to [[Opinionated themes]]. Whether the theme is opinionated (+ can you opt out of the theme's opinionatedness)\nminimalistic -  Will link to Minimalistic themes",
+      "type": "list"
+    },
+    {
+      "endLine": 93,
+      "startLine": 93,
+      "text": "As an example:",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 102,
+      "startLine": 95,
+      "text": "theme:\n    features:\n        miscellaneous:\n            - A minimalistic theme perfect for focusing on writing\n            - Opinionated but highly customizable\n",
+      "type": "code"
+    },
+    {
+      "endLine": 104,
+      "startLine": 104,
+      "text": "These two were not included in the features list:",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 107,
+      "startLine": 106,
+      "text": "has style settings -> we can detect this automatically with our script, so no need to mention this manually\nplugin_support - plugin compatibility list -> Moved to its own section",
+      "type": "list"
+    },
+    {
+      "endLine": 109,
+      "startLine": 109,
+      "text": "Listing features in the hub.yaml should be extremely flexible. For the hub to recognize your feature, you can use:",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 160,
+      "startLine": 111,
+      "text": "A boolean\ntheme:\n    features:\n        callouts: true\nA path to one or many screenshots on your repo\ntheme:\n  features:\n        callouts:\n          screenshots: # Path to screenshots for this feature (from the root of the repo)\n              - file: docs/all_dnd_callouts.png\n                caption: All the D&D callouts for My Theme\n              - file: docs/treasure_dnd_callout.png\n                caption: Example of the treasure D&D callout\nA path to a markdown document to be included as is in the hub\ntheme:\n    features:\n        custom_callouts:\n            docs:\n                file: docs/dnd_callouts_overview.md # from root of repo, to be included as is\nA link to your own documentation\ntheme:\n    features:\n        custom_callouts:\n            docs:\n                links: # List of strings (can be markdown-formatted)\n                    - [More information](www.mytheme.com/dnd_callouts)\nCombinations of the above options (except boolean)\ntheme:\n    features:\n        custom_callouts:\n            docs:\n                file: docs/dnd_callouts_overview.md # from root of repo, to be included as is\n                links: # List of strings (can be markdown-formatted)\n                    - [More information](www.mytheme.com/dnd_callouts)\n            screenshots: # Path to screenshots for this feature (from the root of the repo)\n                - file: docs/all_dnd_callouts.png\n                  caption: All the D&D callouts for My Theme\n                - file: docs/treasure_dnd_callout.png\n                  caption: Example of the treasure D&D callout\n                ",
+      "type": "list"
+    },
+    {
+      "endLine": 162,
+      "startLine": 162,
+      "text": "",
+      "type": "paragraph"
+    },
+    {
+      "depth": 3,
+      "endLine": 164,
+      "startLine": 164,
+      "text": "Plugin support",
+      "type": "heading"
+    },
+    {
+      "endLine": 166,
+      "startLine": 166,
+      "text": "This key (plugin_support) is essentially an alternative to parsing the compatible plugins from the obsidian.css file if you prefer to have the hub stuff outside of your theme file. If you don't specify this key, we'll still try to read your plugins from the css file.",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 171,
+      "startLine": 168,
+      "text": "theme:\n    plugin_support: [] # IDs of the plugins that have been styled by this theme (adding them here would ignore the plugin IDs on the obsidian.css file)",
+      "type": "code"
+    },
+    {
+      "depth": 3,
+      "endLine": 173,
+      "startLine": 173,
+      "text": "Screenshots",
+      "type": "heading"
+    },
+    {
+      "endLine": 175,
+      "startLine": 175,
+      "text": "If you want to add additional screenshots, or don't want to add features but prefer to just add screenshots of your theme, you can use the screenshot key:",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 182,
+      "startLine": 177,
+      "text": "theme:\n    screenshots: # Path to other screenshots from the root of the repo\n        - file: \n          caption:",
+      "type": "code"
+    },
+    {
+      "depth": 2,
+      "endLine": 184,
+      "startLine": 184,
+      "text": "Template",
+      "type": "heading"
+    },
+    {
+      "endLine": 186,
+      "startLine": 186,
+      "text": "Here is a full template with all the options being proposed:",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 303,
+      "startLine": 188,
+      "text": "docs: # Link to the theme documentation\nhub_content: [], # List of markdown documents to be included as is to the hub relative to the root of the repo.\nauthors: # More than one author is possible, start a new line with - \n    - github: # GitHub user names of the people who created the plugin or theme\n      websites: [] # Links to personal websites\n      discord:\n      twitter:\n      youtube:\n      sponsorships:\n          buymeacoffee: # Add username to kofi or buy me a coffee here\n          paypal: \n          github:\n          patreon:\n          others: [] # List of formatted markdown strings\nmaintainers: [] # GitHub user names of those maintaining the plugin (leave empty if it's the same as author)\n\ntheme:\n    features:\n        mobile:\n            docs:\n                file: # from root of repo, to be included as is\n                links: [] # markdown-formatted strings\n            screenshots: # Path to other screenshots from the root of the repo\n                - file: \n                  caption:\n        publish: true\n            docs:\n                file: # from root of repo, to be included as is\n                links: [] # markdown-formatted strings\n            screenshots: # Path to other screenshots from the root of the repo\n                - file: \n                  caption:\n        gutter:\n            docs:\n                file: # from root of repo, to be included as is\n                links: [] # markdown-formatted strings\n            screenshots: # Path to other screenshots from the root of the repo\n                - file: \n                  caption:\n        print:\n            docs:\n                file: # from root of repo, to be included as is\n                links: [] # markdown-formatted strings\n            screenshots: # Path to other screenshots from the root of the repo\n                - file: \n                  caption:\n        callouts:\n            docs:\n                file: # from root of repo, to be included as is\n                links: [] # markdown-formatted strings\n            screenshots: # Path to other screenshots from the root of the repo\n                - file: \n                  caption:\n        checkboxes:\n          docs:\n                file: # from root of repo, to be included as is\n                links: [] # markdown-formatted strings\n            screenshots: # Path to other screenshots from the root of the repo\n                - file: \n                  caption:\n        images:\n          docs:\n                file: # from root of repo, to be included as is\n                links: [] # markdown-formatted strings\n            screenshots: # Path to other screenshots from the root of the repo\n                - file: \n                  caption:\n        tables:\n            docs:\n                file: # from root of repo, to be included as is\n                links: [] # markdown-formatted strings\n            screenshots: # Path to other screenshots from the root of the repo\n                - file: \n                  caption:\n        asides:\n            docs:\n                file: # from root of repo, to be included as is\n                links: [] # markdown-formatted strings\n            screenshots: # Path to other screenshots from the root of the repo\n                - file: \n                  caption:\n        highlights:\n            docs:\n                file: # from root of repo, to be included as is\n                links: [] # markdown-formatted strings\n            screenshots: # Path to other screenshots from the root of the repo\n                - file: \n                  caption:\n        color_schemes:\n            docs:\n                file: # from root of repo, to be included as is\n                links: [] # markdown-formatted strings\n            screenshots: # Path to other screenshots from the root of the repo\n                - file: \n                  caption:\n        snippets:\n            docs:\n                file: # path to markdown file from root of repo, to be included as is\n                links: [] # markdown-formatted strings, e.g. pointing to the css files for download\n            screenshots: # Path to other screenshots from the root of the repo\n                - file: \n                  caption:\n        cssclass: []\n            docs:\n                file: # from root of repo, to be included as is\n                links: [] # markdown-formatted strings\n            screenshots: # Path to other screenshots from the root of the repo\n                - file: \n                  caption:\n        miscellaneous: [] # Other features you want to mention as markdown-formatted strings\n    plugin_support: [] # IDs of the plugins that have been styled by this theme (adding them here would ignore the plugin IDs on the obsidian.css file)\n    screenshots: # Path to other screenshots from the root of the repo\n        - file: \n          caption:",
+      "type": "code"
+    },
+    {
+      "endLine": 305,
+      "startLine": 305,
+      "text": "",
+      "type": "paragraph"
+    },
+    {
+      "depth": 1,
+      "endLine": 307,
+      "startLine": 307,
+      "text": "This note in GitHub",
+      "type": "heading"
+    },
+    {
+      "endLine": 309,
+      "startLine": 309,
+      "text": "Edit In GitHub | Copy this note | Download this vault ",
+      "type": "paragraph"
+    }
+  ]
+}

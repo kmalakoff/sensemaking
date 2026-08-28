@@ -1,0 +1,86 @@
+{
+  "blocks": [
+    {
+      "endLine": 1,
+      "startLine": 1,
+      "text": "",
+      "type": "other"
+    },
+    {
+      "depth": 2,
+      "endLine": 3,
+      "startLine": 2,
+      "text": "aliases:",
+      "type": "heading"
+    },
+    {
+      "endLine": 4,
+      "startLine": 4,
+      "text": "tags:",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 5,
+      "startLine": 5,
+      "text": "seedling",
+      "type": "list"
+    },
+    {
+      "endLine": 6,
+      "startLine": 6,
+      "text": "",
+      "type": "other"
+    },
+    {
+      "depth": 1,
+      "endLine": 8,
+      "startLine": 8,
+      "text": "Publish sites",
+      "type": "heading"
+    },
+    {
+      "endLine": 10,
+      "startLine": 10,
+      "text": "",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 12,
+      "startLine": 12,
+      "text": "#placeholder/description",
+      "type": "paragraph"
+    },
+    {
+      "depth": 2,
+      "endLine": 14,
+      "startLine": 14,
+      "text": "Contributing",
+      "type": "heading"
+    },
+    {
+      "endLine": 18,
+      "startLine": 16,
+      "text": "Create a new note under 🗂️ Publish Sites\nApply the T - Publish site template and fill out the placeholders\nSubmit your changes to GitHub",
+      "type": "list"
+    },
+    {
+      "endLine": 20,
+      "startLine": 20,
+      "text": "",
+      "type": "paragraph"
+    },
+    {
+      "depth": 1,
+      "endLine": 22,
+      "startLine": 22,
+      "text": "This note in GitHub",
+      "type": "heading"
+    },
+    {
+      "endLine": 24,
+      "startLine": 24,
+      "text": "Edit In GitHub | Copy this note | Download this vault ",
+      "type": "paragraph"
+    }
+  ]
+}

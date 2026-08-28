@@ -1,0 +1,79 @@
+{
+  "blocks": [
+    {
+      "endLine": 1,
+      "startLine": 1,
+      "text": "",
+      "type": "other"
+    },
+    {
+      "depth": 2,
+      "endLine": 3,
+      "startLine": 2,
+      "text": "aliases:",
+      "type": "heading"
+    },
+    {
+      "endLine": 4,
+      "startLine": 4,
+      "text": "tags:",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 6,
+      "startLine": 5,
+      "text": "seedling\npublish: true",
+      "type": "list"
+    },
+    {
+      "endLine": 7,
+      "startLine": 7,
+      "text": "",
+      "type": "other"
+    },
+    {
+      "depth": 1,
+      "endLine": 9,
+      "startLine": 9,
+      "text": "Controlling Obsidian via a Third-Party App",
+      "type": "heading"
+    },
+    {
+      "endLine": 10,
+      "startLine": 10,
+      "text": "Overview where/how you can find various obsidian-related data in a form accessible to third-party apps.",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 18,
+      "startLine": 12,
+      "text": "URI refers to the Obsidian URI Scheme for controlling Obsidian.\nAdv. URI refers to the Advanced URI Plugin for controlling Obsidian. You can easily get the respective URI Schemes by selecting the command Advanced URI Plugin: Copy Command URI, select Don't specify a file, and then the command whose URI you would like to have.\n⚠️ If you are developing something to share with others, remember to remove the vault-argument (vault=vaultName) from the URI or dynamically insert the proper vault name there — otherwise the URI schemes won't work\nHotkey Helper URI refers to the URI Scheme introduced by the Hotkey Helper Plugin.\nURI Schemes are generally practical, since they also work on any platform, including mobile.\nURLs must be properly encoded. The Advanced URI Plugin: Copy Command URI already applies proper URL encoding.\nIn JavaScript, the functions encodeURIComponent() and encodeURI() are used for encoding.",
+      "type": "list"
+    },
+    {
+      "endLine": 39,
+      "startLine": 20,
+      "text": "Obsidian Data How to access How to control\nVaults ~/Library/Application Support/obsidian/obsidian.json \nEnabled Core Plugins {vaultPath}/.obsidian/core-plugins.json \nCurrent Theme {vaultPath}/.obsidian/appearance.json Theme Switcher Command (via Adv. URI)\nEnabled CSS Snippets {vaultPath}/.obsidian/appearance.json Renaming a snippet located in \"{vaultPath}/.obsidian/snippets/\" basically works as a OFF-Switch, since CSS is live-reloaded by Obsidian. (renaming the file back, would be the on-switch)\nBase Font Size {vaultPath}/.obsidian/appearance.json \nWorkspaces {vaultPath}/.obsidian/workspaces.json Open Workspace (Adv. URI)\nTags Metadata-Extractor-Plugin Open / Search (URI)\nAliases Metadata-Extractor-Plugin Open (URI)\nHeadings Metadata-Extractor-Plugin Open Heading (Adv. URI)\nRecent Files (up to 10) {vaultPath}/.obsidian/workspace (last item) Open (URI)\nStarred Files {vaultPath}/.obsidian/starred.json Open (URI)\nIndex of Vault find \"{vaultPath}\" -name \"*.md\" (shell) Open (URI)\nPlugins in Community Browser https://raw.githubusercontent.com/obsidianmd/obsidian-releases/master/community-plugin.json Hotkey Helper URI\nDownloads & Versions of Plugins https://raw.githubusercontent.com/obsidianmd/obsidian-releases/master/community-plugin-stats.json Hotkey Helper URI\nThemes in Community Browser https://raw.githubusercontent.com/obsidianmd/obsidian-releases/master/community-css-themes.json \nInstalled Plugins ls -1 \"{vaultPath}/.obsidian/plugins/\" (shell) Hotkey Helper URI\nInstalled Themes ls -1 \"{vaultPath}/.obsidian/themes/\" (shell) \nInstalled CSS Snippets ls -1 \"{vaultPath}/.obsidian/snippets/\" (shell) ",
+      "type": "table"
+    },
+    {
+      "endLine": 41,
+      "startLine": 41,
+      "text": "",
+      "type": "paragraph"
+    },
+    {
+      "depth": 1,
+      "endLine": 43,
+      "startLine": 43,
+      "text": "This note in GitHub",
+      "type": "heading"
+    },
+    {
+      "endLine": 45,
+      "startLine": 45,
+      "text": "Edit In GitHub | Copy this note | Download this vault ",
+      "type": "paragraph"
+    }
+  ]
+}

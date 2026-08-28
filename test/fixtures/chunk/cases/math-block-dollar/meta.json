@@ -1,0 +1,3 @@
+{
+  "reason": "the corpus has no genuine $$...$$ block; synthesized since the plan (D7/D9) asks whether math is handled. mdast+GFM has no math extension, so both the display ($$...$$) and inline ($...$) forms fall through as plain paragraph text with dollar signs intact -- an unhandled construct, not a bug per se, but a gap worth recording (see report item 4)."
+}
