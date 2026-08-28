@@ -1,9 +1,10 @@
 import posix from 'node:path/posix';
 import type { DatabaseSync } from 'node:sqlite';
+import { estimateTokens } from '../chunk/index.ts';
 import type { FeatureName, ResolvedConfig, SearchOverrides } from '../config/index.ts';
 import { featureEnabled } from '../config/index.ts';
 import { SenseError } from '../errors.ts';
-import type { Row } from '../output.ts';
+import type { Row } from '../output/output.ts';
 import { INTERNAL_COLUMNS, scopedPaths } from './scope.ts';
 
 // Note resolution shared by peek and path: an exact path, or a unique basename (case
@@ -72,9 +73,15 @@ export function peek(db: DatabaseSync, cfg: ResolvedConfig, pathArg: string, ove
     backlinks = (db.prepare('SELECT DISTINCT src FROM links WHERE dst = ? AND src != dst ORDER BY src LIMIT ?').all(path, PEEK_LIST_LIMIT) as Array<{ src: string }>).map((r) => r.src);
   }
 
+  // content.text is the stripped body already computed at reconcile time (no extra file read),
+  // floored by the byte/4 estimate so stripped-away syntax and frontmatter can't vanish from the price.
+  const body = (db.prepare('SELECT text FROM content WHERE "path" = ?').get(path) as { text: string } | undefined)?.text;
+  const byteTokens = Math.ceil(((row._size as number) ?? 0) / 4);
+  const tokens = body !== undefined ? Math.max(Math.ceil(estimateTokens(body)), byteTokens) : byteTokens;
+
   return {
     path,
-    tokens: Math.ceil(((row._size as number) ?? 0) / 4),
+    tokens,
     frontmatter,
     parseError,
     sections,

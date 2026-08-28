@@ -1,0 +1,4 @@
+{
+  "reason": "single file demonstrating most Obsidian syntax at once (nested lists, callout, mermaid/nested fences of varying tick counts, single-dollar math, inline tag, highlight marker, wikilink/embed syntax shown as literal inline code, real %% comment) -- broadest single-file coverage in the corpus.",
+  "source": "obsidian-hub: 04 - Guides, Workflows, & Courses/Guides/Markdown Syntax.md"
+}

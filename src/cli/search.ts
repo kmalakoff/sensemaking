@@ -1,5 +1,5 @@
 import { search } from '../commands/index.ts';
-import { printRows } from '../output.ts';
+import { printRows } from '../output/output.ts';
 import { USAGE } from './index.ts';
 import { CONFIG, FORMAT, parse, parseK, rowFormatOf, SEARCH_FLAGS, scopeOf, withDb } from './shared.ts';
 import type { Command } from './types.ts';

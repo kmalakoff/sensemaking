@@ -34,7 +34,9 @@ const qids = [...qrels.keys()].sort().slice(0, MAX_QUERIES === Infinity ? undefi
 // the model (nothing implicit turns vectors on since the explicit-embed change; without the
 // block, anyPresetEmbeds is false and the semantic pass silently measures lexical) and
 // vectors build lazily on the first participating call.
-const EMBED = { model: 'minishlab/potion-retrieval-32M', type: 'static' };
+// --model/--provider/--url let a non-default corpus (e.g. an HTTP encoder over Ollama) reuse
+// this same real search()-through-chunk() path instead of bakeoff's whole-document scoring.
+const EMBED = { model: flag('model', 'minishlab/potion-retrieval-32M'), provider: flag('provider', 'static'), url: flag('url', undefined) };
 // There is no per-call semantic option: the preset decides. `semanticOff` writes a
 // vectors-free `signals` weight map into the preset, which is the one lever the
 // no-silent-change contract is about.

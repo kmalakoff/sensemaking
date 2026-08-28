@@ -1,0 +1,91 @@
+{
+  "blocks": [
+    {
+      "endLine": 1,
+      "startLine": 1,
+      "text": "",
+      "type": "other"
+    },
+    {
+      "depth": 2,
+      "endLine": 3,
+      "startLine": 2,
+      "text": "aliases:",
+      "type": "heading"
+    },
+    {
+      "endLine": 4,
+      "startLine": 4,
+      "text": "tags:",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 5,
+      "startLine": 5,
+      "text": "seedling",
+      "type": "list"
+    },
+    {
+      "endLine": 6,
+      "startLine": 6,
+      "text": "",
+      "type": "other"
+    },
+    {
+      "depth": 1,
+      "endLine": 8,
+      "startLine": 8,
+      "text": "A Brief History and Ethos of the Digital Garden",
+      "type": "heading"
+    },
+    {
+      "endLine": 11,
+      "startLine": 10,
+      "text": "Author: Maggie Appleton\r\nLink: A Brief History & Ethos of the Digital Garden",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 13,
+      "startLine": 13,
+      "text": "",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 15,
+      "startLine": 15,
+      "text": "If you have ever wanted to know what a Digital garden is, this note from Maggie's own digital garden gives a great overview. As a small sneak peak, here is her definition:",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 17,
+      "startLine": 17,
+      "text": "A garden is a collection of evolving ideas that aren't strictly organised by their publication date. They're inherently exploratory – notes are linked through contextual associations. They aren't refined or complete - notes are published as half-finished thoughts that will grow and evolve over time. They're less rigid, less performative, and less perfect than the personal websites we're used to seeing.",
+      "type": "blockquote"
+    },
+    {
+      "endLine": 19,
+      "startLine": 19,
+      "text": "^883251",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 22,
+      "startLine": 22,
+      "text": "",
+      "type": "paragraph"
+    },
+    {
+      "depth": 1,
+      "endLine": 24,
+      "startLine": 24,
+      "text": "This note in GitHub",
+      "type": "heading"
+    },
+    {
+      "endLine": 26,
+      "startLine": 26,
+      "text": "Edit In GitHub | Copy this note | Download this vault ",
+      "type": "paragraph"
+    }
+  ]
+}

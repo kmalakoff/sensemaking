@@ -1,0 +1,4 @@
+{
+  "reason": "flavor-inertness pair (2/2): plain-markdown twin where a blockquote happens to start with bracket-bang text (a historical proofreading-mark reference), not a callout. The marker strip is unconditional on blockquote position, so this is also pinned as a known non-inert gap (see report item 4).",
+  "source": "synthetic"
+}

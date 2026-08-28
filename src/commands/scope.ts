@@ -1,8 +1,8 @@
 import { matchesGlob } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
-import { columnHint } from '../column-hint.ts';
 import type { ResolvedConfig, SearchOverrides } from '../config/index.ts';
 import { anyPresetEmbeds, resolveSearch } from '../config/index.ts';
+import { columnHint } from '../output/column-hint.ts';
 
 export const INTERNAL_COLUMNS = new Set(['path', '_mtime', '_ctime', '_size', '_rank', '_parse_error']);
 

@@ -7,7 +7,9 @@ import type { Config } from './types.ts';
 const KNOWN_KEYS = new Set(['$schema', 'version', 'presets', 'features', 'embed', 'content', 'queries']);
 const KNOWN_PRESET_KEYS = new Set(['include', 'exclude', 'k', 'signals', 'where']);
 const KNOWN_FEATURE_KEYS = new Set(['links', 'sections', 'tags', 'rank']);
-const KNOWN_EMBED_KEYS = new Set(['model', 'provider', 'url', 'key', 'languages']);
+// Exported so a docs test can assert every key here has a schema.json property -- one source
+// of truth for what the embed block accepts, checked against the other for drift.
+export const KNOWN_EMBED_KEYS = new Set(['model', 'provider', 'url', 'key', 'languages', 'chunkTokens']);
 const KNOWN_CONTENT_KEYS = new Set(['tokenize']);
 const SAVED_SEARCH_KEYS = new Set(['search', 'preset', 'include', 'exclude', 'where', 'k']);
 
@@ -94,6 +96,9 @@ function validateEmbedBlock(value: unknown, configPath: string): void {
   }
   if (embed.languages !== undefined && (!Array.isArray(embed.languages) || embed.languages.length === 0 || embed.languages.some((l) => typeof l !== 'string' || l === ''))) {
     throw new SenseError('CONFIG_INVALID', `${configPath}: embed.languages must be a non-empty array of language tags (e.g. ["en", "zh"])`);
+  }
+  if (embed.chunkTokens !== undefined && (typeof embed.chunkTokens !== 'number' || !Number.isInteger(embed.chunkTokens) || embed.chunkTokens <= 0)) {
+    throw new SenseError('CONFIG_INVALID', `${configPath}: embed.chunkTokens must be a positive integer`);
   }
 }
 

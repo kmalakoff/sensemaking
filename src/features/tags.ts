@@ -1,4 +1,4 @@
-import { maskRegions } from '../fences.ts';
+import { maskRegions } from './fences.ts';
 import type { Feature } from './types.ts';
 
 // tags(path, tag): Obsidian's file.tags grain -- frontmatter list/string tags plus inline

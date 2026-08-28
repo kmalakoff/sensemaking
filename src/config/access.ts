@@ -1,4 +1,4 @@
-import { modelIdentity } from '../embed/identity.ts';
+import type { Feature } from '../features/types.ts';
 import type { SignalName, SignalWeights } from './signals.ts';
 import { type Config, type EmbedConfig, FEATURE_NAMES, type FeatureName } from './types.ts';
 
@@ -60,10 +60,10 @@ export function featureStates(cfg: Config): { on: FeatureName[]; off: FeatureNam
 // Resolved embed provider settings, or null when the config names no model. There is no
 // fallback to DEFAULT_EMBED_MODEL: that constant is a template `init` and the v4 migration
 // write into the file, never an implicit runtime default.
-export function embedConfig(cfg: Config): { model: string; provider: 'static' | 'openai' | 'cohere'; url?: string; key?: string; languages?: string[] } | null {
+export function embedConfig(cfg: Config): { model: string; provider: 'static' | 'openai' | 'cohere'; url?: string; key?: string; languages?: string[]; chunkTokens?: number } | null {
   if (!embedEnabled(cfg)) return null;
   const e = cfg.embed as EmbedConfig;
-  return { model: e.model as string, provider: e.provider ?? 'static', url: e.url, key: e.key, languages: e.languages };
+  return { model: e.model as string, provider: e.provider ?? 'static', url: e.url, key: e.key, languages: e.languages, chunkTokens: e.chunkTokens };
 }
 
 // The configured FTS5 tokenizer, or undefined for the built-in default. Undefined rather than
@@ -75,15 +75,12 @@ export function contentTokenize(cfg: Config): string | undefined {
 }
 
 // Cache key over everything indexing derives from, so any change to those inputs rebuilds.
-export function featureSignature(cfg: Config): string {
+// Segment order is fixed (features list, then `features` in registry order, then tokenize, then presets) since reordering alone would fire a spurious rebuild; tokenize/presets stay here because no Feature module owns either.
+export function featureSignature(cfg: Config, features: Feature[]): string {
   const globalPart = enabledFeatures(cfg)
     .filter((name) => name !== 'embed')
     .join(',');
-  const e = embedConfig(cfg);
-  // Weight identity from identity.ts, no network: a static model's resolved sha or local
-  // size+mtime, appended once known so changed weights re-embed.
-  const identity = e && e.provider === 'static' ? modelIdentity(e.model) : undefined;
-  const embedPart = e ? `embed:${e.provider}:${e.model}${identity !== undefined ? `@${identity}` : ''}` : 'embed:off';
+  const featureParts = features.map((feature) => feature.signature?.(cfg)).filter((part): part is string => part !== undefined);
   // One keyed segment per preset so a rebuild notice can name exactly which preset moved.
   const presetsPart = [...presetNames(cfg)]
     .sort()
@@ -95,7 +92,7 @@ export function featureSignature(cfg: Config): string {
     })
     .join('|');
   const tokenize = contentTokenize(cfg);
-  const parts = [`features:${globalPart}`, embedPart];
+  const parts = [`features:${globalPart}`, ...featureParts];
   if (tokenize !== undefined) parts.push(`tokenize:${tokenize}`);
   parts.push(presetsPart);
   return parts.join('|');

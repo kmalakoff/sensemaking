@@ -1,7 +1,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 import type { FeatureName, ResolvedConfig, SearchOverrides } from '../config/index.ts';
 import { featureEnabled, featureStates } from '../config/index.ts';
-import type { Row } from '../output.ts';
+import type { Row } from '../output/output.ts';
 import { INTERNAL_COLUMNS, scopedPaths, setupMapScope } from './scope.ts';
 import type { PresetCoverage } from './status.ts';
 import { presetCoverage } from './status.ts';

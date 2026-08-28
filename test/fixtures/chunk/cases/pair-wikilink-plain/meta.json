@@ -1,0 +1,4 @@
+{
+  "reason": "flavor-inertness pair (2/2): plain-markdown twin where [[...]] is literal template-placeholder notation, not a link. extractText has no flavor toggle and resolves it anyway -- pinned here as a known non-inert gap, reported and not fixed (see report item 4).",
+  "source": "synthetic"
+}

@@ -6,15 +6,15 @@ import { DatabaseSync } from 'node:sqlite';
 import type { Config, ResolvedConfig } from '../config/index.ts';
 import { contentTokenize, featureSignature, STATE_DIR } from '../config/index.ts';
 import { SenseError } from '../errors.ts';
-import { activeFeatures } from '../features/index.ts';
-import { registerFunctions } from '../sql-functions.ts';
+import { activeFeatures, FEATURES } from '../features/index.ts';
 import { changedSignatureKeys, embedIdentityAdopted, rebuildContentTable, reconcile, signatureDiff } from './reconcile.ts';
 import { getMeta, setMeta } from './shared.ts';
+import { registerFunctions } from './sql-functions.ts';
 
 export const DB_FILENAME = 'cache.db';
 // Cache shape version, independent of the config's own `version`. Bumping it rebuilds
 // existing trees on first query.
-export const SCHEMA_VERSION = '17';
+export const SCHEMA_VERSION = '18';
 
 export interface OpenResult {
   db: DatabaseSync;
@@ -75,7 +75,7 @@ function ensureSchema(db: DatabaseSync, cfg: Config, tokenize: string): void {
   db.exec('CREATE INDEX IF NOT EXISTS preset_files_preset ON preset_files(preset)');
   for (const feature of activeFeatures(cfg)) feature.schema(db);
   if (getMeta(db, 'schema_version') === null) setMeta(db, 'schema_version', SCHEMA_VERSION);
-  if (getMeta(db, 'features') === null) setMeta(db, 'features', featureSignature(cfg));
+  if (getMeta(db, 'features') === null) setMeta(db, 'features', featureSignature(cfg, FEATURES));
 }
 
 export function docCount(db: DatabaseSync): number {
@@ -105,7 +105,7 @@ export function open(cfg: ResolvedConfig): OpenResult {
   // old cache can't be patched incrementally -- rebuild instead (cheap: nothing expensive lives here).
   const version = getMeta(db, 'schema_version');
   const features = getMeta(db, 'features');
-  const wantFeatures = featureSignature(cfg);
+  const wantFeatures = featureSignature(cfg, FEATURES);
   let tokenizeOnlyRebuild = false;
   if ((version !== null && version !== SCHEMA_VERSION) || (features !== null && features !== wantFeatures)) {
     // Indexing derives from presets, so a config edit rebuilding the cache must say so and

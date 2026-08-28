@@ -1,6 +1,6 @@
 import { relatedNotes } from '../commands/index.ts';
-import type { Row } from '../output.ts';
-import { printRows } from '../output.ts';
+import type { Row } from '../output/output.ts';
+import { printRows } from '../output/output.ts';
 import { USAGE } from './index.ts';
 import { CONFIG, FORMAT, parse, parseK, rowFormatOf, SCOPE, scopeOf, withDb } from './shared.ts';
 import type { Command } from './types.ts';

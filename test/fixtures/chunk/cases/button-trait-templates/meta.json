@@ -1,0 +1,4 @@
+{
+  "reason": "nested code fences (4-backtick fence containing a 3-backtick fence) with a block-id line inside the outer fence -- exercises fence-extent atomicity against a tempting false boundary.",
+  "source": "obsidian-hub: 03 - Showcases & Templates/Templates/TTRPG notes/Button Action & Trait Templates.md"
+}

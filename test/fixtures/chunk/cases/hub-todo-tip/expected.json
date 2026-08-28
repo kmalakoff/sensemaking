@@ -1,0 +1,144 @@
+{
+  "blocks": [
+    {
+      "endLine": 1,
+      "startLine": 1,
+      "text": "",
+      "type": "other"
+    },
+    {
+      "depth": 2,
+      "endLine": 3,
+      "startLine": 2,
+      "text": "aliases:",
+      "type": "heading"
+    },
+    {
+      "depth": 2,
+      "endLine": 5,
+      "startLine": 4,
+      "text": "tags:",
+      "type": "heading"
+    },
+    {
+      "endLine": 6,
+      "startLine": 6,
+      "text": "",
+      "type": "other"
+    },
+    {
+      "depth": 1,
+      "endLine": 8,
+      "startLine": 8,
+      "text": "Tip for Keeping Hub TODO lists",
+      "type": "heading"
+    },
+    {
+      "depth": 2,
+      "endLine": 10,
+      "startLine": 10,
+      "text": "Target Audience",
+      "type": "heading"
+    },
+    {
+      "endLine": 12,
+      "startLine": 12,
+      "text": "This tip is really intended for anyone doing largish amounts of tidying up or handle-turning in the Hub content, which is cloned on their own machine.",
+      "type": "paragraph"
+    },
+    {
+      "depth": 2,
+      "endLine": 14,
+      "startLine": 14,
+      "text": "Scenario",
+      "type": "heading"
+    },
+    {
+      "endLine": 16,
+      "startLine": 16,
+      "text": "I am making a series of small changes in the vault (like adding 20 missing notes).",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 19,
+      "startLine": 18,
+      "text": "Maybe I want to save a screenshot or two of the things I am improving as well\nI would like to have a markdown note in the vault, so that I can keep a checklist of things to do",
+      "type": "list"
+    },
+    {
+      "endLine": 21,
+      "startLine": 21,
+      "text": "I want to make it impossible for me to accidentally add those files in a git commit.",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 23,
+      "startLine": 23,
+      "text": "An example might be:",
+      "type": "paragraph"
+    },
+    {
+      "endLine": 40,
+      "startLine": 25,
+      "text": "Pages to create:\n\n- [ ] [[Anthony Gold]]  \n- [ ] [[Francesco D'Alessio]]  - need to work out naming convention with apostrophes\n- [ ] [[Justin DiRose]]  \n- [ ] [[Note-taking for University Students]]  - waiting for news from OCT\n- [ ] [[Phnx]]  - note the lower-case equivalent below\n- [ ] [[Tane Piper]]  \n- [ ] [[apolaine]]  \n- [ ] [[obsidian-drag-and-drop-blocks]]  \n- [ ] [[phnx]]  \n- [ ] [[placeholder/link]]  - these are actually URLs to add, not pages to create\n- [ ] [[quick-monsters-5e]]  - need a system for managing plugins not yet in community list\n- [ ] [[uwi]]",
+      "type": "code"
+    },
+    {
+      "endLine": 42,
+      "startLine": 42,
+      "text": "In Obsidian, I can test my progress by previewing that note, and seeing which links are still dangling, which is very useful.",
+      "type": "paragraph"
+    },
+    {
+      "depth": 2,
+      "endLine": 44,
+      "startLine": 44,
+      "text": "Steps",
+      "type": "heading"
+    },
+    {
+      "endLine": 47,
+      "startLine": 46,
+      "text": "Create a directory at the top level called DO NOT COMMIT. The capitalisation and spaces matter.\nAny files you put in DO NOT COMMIT directory will be ignored by git, and by the script that creates MOC files.",
+      "type": "list"
+    },
+    {
+      "endLine": 49,
+      "startLine": 49,
+      "text": "You can now put your own temporary notes and images in to DO NOT COMMIT/, confident that they will never be checked in.",
+      "type": "paragraph"
+    },
+    {
+      "depth": 2,
+      "endLine": 51,
+      "startLine": 51,
+      "text": "Alternative approaches",
+      "type": "heading"
+    },
+    {
+      "endLine": 58,
+      "startLine": 53,
+      "text": "It's also possible to add - [ ] checklists in GitHub issues and pull requests, as in this example: issue #65.\nadvantages\nthe lists are public, and other people can see the progress, and may even be able to help\ndisadvantages\nit is not easy to edit those lists in Obsidian\nthey cannot contain internal Obsidian wiki links (as used",
+      "type": "list"
+    },
+    {
+      "endLine": 60,
+      "startLine": 60,
+      "text": "",
+      "type": "paragraph"
+    },
+    {
+      "depth": 1,
+      "endLine": 62,
+      "startLine": 62,
+      "text": "This note in GitHub",
+      "type": "heading"
+    },
+    {
+      "endLine": 64,
+      "startLine": 64,
+      "text": "Edit In GitHub | Copy this note | Download this vault ",
+      "type": "paragraph"
+    }
+  ]
+}

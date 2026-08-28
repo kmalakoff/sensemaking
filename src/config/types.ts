@@ -20,6 +20,7 @@ export interface EmbedConfig {
   url?: string; // openai provider: OpenAI-compatible base URL, e.g. http://localhost:11434/v1
   key?: string; // openai/cohere provider: name of the env var holding the bearer token, if any
   languages?: string[]; // owner-declared model languages; enables the language-fit check where no card exists
+  chunkTokens?: number; // chunk size ceiling in estimated tokens for small-context models; default 500
 }
 
 export const DEFAULT_EMBED_MODEL = 'minishlab/potion-retrieval-32M';

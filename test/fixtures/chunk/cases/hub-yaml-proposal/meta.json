@@ -1,0 +1,4 @@
+{
+  "reason": "the corpus's richest real GFM table (15 rows, wikilinks inside cells), plus strikethrough, a highlight marker, and a dozen yaml/json/markdown fences -- largest fixture, kept whole per verbatim-input rule.",
+  "source": "obsidian-hub: 00 - Contribute to the Obsidian Hub/03 Contributor Notes/03.02 Design Decisions/hub.yaml proposal for themes.md"
+}

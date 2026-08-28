@@ -2,7 +2,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import type { ResolvedConfig } from '../config/index.ts';
 import { semanticCandidates } from '../embed/query.ts';
 import { linkEdges } from '../features/index.ts';
-import { personalizedRank } from '../graph.ts';
+import { personalizedRank } from '../graph/graph.ts';
 
 // RRF composes whatever the preset declares; the constant lives here since it belongs to
 // the fusion these three functions share, not to search() itself.

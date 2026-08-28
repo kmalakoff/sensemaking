@@ -1,13 +1,13 @@
 import type { ParseArgsOptionsConfig } from 'node:util';
 import { parseArgs } from 'node:util';
-import { columnHint } from '../column-hint.ts';
 import type { ResolvedConfig, SearchOverrides } from '../config/index.ts';
 import { resolvePreset } from '../config/index.ts';
 import type { OpenResult } from '../db/index.ts';
 import { open } from '../db/index.ts';
-import type { Row, RowFormat } from '../output.ts';
-import { printRowStream } from '../output.ts';
-import { searchError } from '../search-error.ts';
+import { columnHint } from '../output/column-hint.ts';
+import type { Row, RowFormat } from '../output/output.ts';
+import { printRowStream } from '../output/output.ts';
+import { searchError } from '../output/search-error.ts';
 import type { Ctx } from './types.ts';
 
 // Spreadable option fragments -- one flag name keeps one meaning across every command's table.

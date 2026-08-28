@@ -1,0 +1,2 @@
+# Fixtures are byte-exact pins; git must never convert their line endings at checkout.
+test/fixtures/** -text

@@ -1,0 +1,10 @@
+{
+  "blocks": [
+    {
+      "endLine": 2,
+      "startLine": 1,
+      "text": "Be careful\nThis step cannot be undone.",
+      "type": "blockquote"
+    }
+  ]
+}
