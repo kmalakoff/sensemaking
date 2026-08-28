@@ -2,7 +2,7 @@
 // fetch-once cache. corpusPath(name) returns the markdown tree; corpusLabels(name) returns
 // the query/qrels directory for labeled datasets, or null.
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { cached } from './cache.mjs';
 
@@ -198,6 +198,15 @@ const CORPORA = {
     devUrl: 'https://fever.ai/download/fever/shared_task_dev.jsonl',
     version: 'fever-1',
   },
+  // MIRACL per-language: dev-split judged passages (the only publicly-labeled split; real
+  // test qrels are held out) plus enough sampled distractors to reach ~3-5k docs/language.
+  // Judged docs are a floor, never trimmed -- a language whose qrels already judge more than
+  // the target ships with zero distractors and a correspondingly larger corpus (ja, ru here).
+  // Both HF datasets pinned by commit sha (miracl/miracl and miracl/miracl-corpus).
+  'miracl-de': { type: 'miracl', lang: 'de', shards: 32, targetDocs: 4000, labelsSha: '5be20db9509754dadad47689368639fcec739c00', corpusSha: 'd921ec7e349ce0d28daf30b2da9da5ee698bef0d', seed: 100, version: 'miracl-de-1' },
+  'miracl-ja': { type: 'miracl', lang: 'ja', shards: 14, targetDocs: 4000, labelsSha: '5be20db9509754dadad47689368639fcec739c00', corpusSha: 'd921ec7e349ce0d28daf30b2da9da5ee698bef0d', seed: 101, version: 'miracl-ja-1' },
+  'miracl-ru': { type: 'miracl', lang: 'ru', shards: 20, targetDocs: 4000, labelsSha: '5be20db9509754dadad47689368639fcec739c00', corpusSha: 'd921ec7e349ce0d28daf30b2da9da5ee698bef0d', seed: 102, version: 'miracl-ru-1' },
+  'miracl-zh': { type: 'miracl', lang: 'zh', shards: 10, targetDocs: 4000, labelsSha: '5be20db9509754dadad47689368639fcec739c00', corpusSha: 'd921ec7e349ce0d28daf30b2da9da5ee698bef0d', seed: 103, version: 'miracl-zh-1' },
 };
 
 export const CORPUS_NAMES = Object.keys(CORPORA);
@@ -303,6 +312,92 @@ const BUILDERS = {
     writeFileSync(join(labels, 'queries.jsonl'), `${keptQueries.map((q) => JSON.stringify(q)).join('\n')}\n`);
     writeFileSync(join(labels, 'test.tsv'), `${qrels.join('\n')}\n`);
     console.error(`fever: ${kept.size} pages (${cited.size} cited), ${keptQueries.length} claims`);
+  },
+  // MIRACL: topics (queries) + qrels come from miracl/miracl (TREC 4-col qrels: qid, Q0, docid,
+  // score -- stripped to BEIR's 3-col test.tsv); passages come from miracl/miracl-corpus, shipped
+  // as gzipped jsonl shards with no docid->shard index, so every shard is scanned once. Judged
+  // docids (both relevance grades -- 0 stays a hard negative in the label file, same as BEIR) are
+  // pulled out as they're seen; everything else is a candidate distractor, reservoir-sampled
+  // (Algorithm R, seeded) down to spec.targetDocs total. A language whose qrels alone already
+  // exceed targetDocs ships with zero distractors -- judged docs are a floor, never trimmed.
+  miracl(spec, dest) {
+    const { lang, shards, targetDocs, labelsSha, corpusSha, seed } = spec;
+    const topicsPath = join(dest, 'topics.tsv');
+    const qrelsPath = join(dest, 'qrels.tsv');
+    execFileSync('curl', ['-fsSL', '-o', topicsPath, `https://huggingface.co/datasets/miracl/miracl/resolve/${labelsSha}/miracl-v1.0-${lang}/topics/topics.miracl-v1.0-${lang}-dev.tsv`]);
+    execFileSync('curl', ['-fsSL', '-o', qrelsPath, `https://huggingface.co/datasets/miracl/miracl/resolve/${labelsSha}/miracl-v1.0-${lang}/qrels/qrels.miracl-v1.0-${lang}-dev.tsv`]);
+
+    const topics = new Map();
+    for (const line of readFileSync(topicsPath, 'utf8').split('\n')) {
+      if (!line.trim()) continue;
+      const [qid, text] = line.split('\t');
+      topics.set(qid, text);
+    }
+    const qrelRows = [];
+    const judged = new Set();
+    for (const line of readFileSync(qrelsPath, 'utf8').split('\n')) {
+      if (!line.trim()) continue;
+      const [qid, , docid, score] = line.split('\t');
+      qrelRows.push({ qid, docid, score });
+      judged.add(docid);
+    }
+    const toFileId = (docid) => docid.replace('#', '__p');
+
+    const tree = join(dest, 'tree');
+    mkdirSync(tree, { recursive: true });
+    const rand = mulberry32(seed);
+    const distractorsNeeded = Math.max(0, targetDocs - judged.size);
+    const reservoir = [];
+    let candidatesSeen = 0;
+    const kept = new Set();
+    const writeDoc = (doc) => {
+      writeFileSync(join(tree, `${toFileId(doc.docid)}.md`), `---\ntitle: ${JSON.stringify(doc.title ?? '')}\n---\n\n${doc.text}\n`);
+      kept.add(doc.docid);
+    };
+
+    for (let shard = 0; shard < shards; shard++) {
+      const gz = join(dest, 'shard.jsonl.gz');
+      execFileSync('curl', ['-fsSL', '-o', gz, `https://huggingface.co/datasets/miracl/miracl-corpus/resolve/${corpusSha}/miracl-corpus-v1.0-${lang}/docs-${shard}.jsonl.gz`]);
+      const raw = execFileSync('gunzip', ['-c', gz], { maxBuffer: 2 * 1024 * 1024 * 1024, encoding: 'utf8' });
+      rmSync(gz);
+      for (const line of raw.split('\n')) {
+        if (!line.trim()) continue;
+        const doc = JSON.parse(line);
+        if (judged.has(doc.docid)) {
+          if (!kept.has(doc.docid)) writeDoc(doc);
+          continue;
+        }
+        candidatesSeen++;
+        if (reservoir.length < distractorsNeeded) {
+          reservoir.push(doc);
+        } else if (distractorsNeeded > 0) {
+          const j = Math.floor(rand() * candidatesSeen);
+          if (j < distractorsNeeded) reservoir[j] = doc;
+        }
+      }
+      console.error(`miracl-${lang}: shard ${shard + 1}/${shards}, judged kept ${kept.size}/${judged.size}, candidates seen ${candidatesSeen}`);
+    }
+    for (const doc of reservoir) writeDoc(doc);
+    writeFileSync(join(tree, 'sense.config.json'), '{"version":1,"scan":{"include":["**/*.md"]},"queries":{}}');
+
+    // Labels: BEIR 3-column test.tsv (MIRACL's dev split is the only publicly-labeled split --
+    // it stands in as this harness's "test" split), queries restricted to ones with a judged
+    // doc actually in the tree (always true here: judged is a floor, never trimmed).
+    const labels = join(dest, 'labels');
+    mkdirSync(labels, { recursive: true });
+    const keptQueries = [];
+    const seenQids = new Set();
+    const testRows = ['query-id\tcorpus-id\tscore'];
+    for (const row of qrelRows) {
+      testRows.push(`${row.qid}\t${toFileId(row.docid)}\t${row.score}`);
+      if (!seenQids.has(row.qid) && topics.has(row.qid)) {
+        seenQids.add(row.qid);
+        keptQueries.push({ _id: row.qid, text: topics.get(row.qid) });
+      }
+    }
+    writeFileSync(join(labels, 'queries.jsonl'), `${keptQueries.map((q) => JSON.stringify(q)).join('\n')}\n`);
+    writeFileSync(join(labels, 'test.tsv'), `${testRows.join('\n')}\n`);
+    console.error(`miracl-${lang}: ${kept.size} docs (${judged.size} judged + ${reservoir.length} distractor), ${keptQueries.length} queries`);
   },
 };
 

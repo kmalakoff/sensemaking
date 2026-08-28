@@ -2,24 +2,17 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import type { ResolvedConfig } from '../config/index.ts';
-import { anyPresetEmbeds, contentTokenize, featureEnabled, resolveSearch } from '../config/index.ts';
+import { contentTokenize, embedConfig, featureEnabled, resolveSearch } from '../config/index.ts';
+import { localModelMissing, MODEL_FILENAMES } from '../embed/store.ts';
 import { SenseError } from '../errors.ts';
-import { modelPresent, semanticCandidates } from '../features/embed.ts';
-import { linkEdges } from '../features/index.ts';
-import { personalizedRank } from '../graph.ts';
 import type { Row } from '../output.ts';
 import { searchError } from '../search-error.ts';
 import { segmentMatch } from '../segment.ts';
 import { materializeScope, narrowByWhere, rawScope, scopeHasEmbeddings } from './scope.ts';
-
-// Mirrors the main columns onto the sidecars, so a title match found through title_seg ranks
-// like a title match found through title, not like a body match.
-const WEIGHTED_BM25 = 'bm25(content, 10.0, 5.0, 1.0, 0, 10.0, 5.0, 1.0)';
-const RRF_K = 60;
+import { linksCandidates, vectorsCandidates, wordsCandidates } from './signals.ts';
 
 // snippet() re-tokenizes each candidate doc, superlinearly: ~10s for one 1MB doc
 // (BENCHMARKING.md). Past this bound, rows get the linear JS excerpt instead.
-const SNIPPET_BOUND = 16_384;
 const EXCERPT_WINDOW = 160;
 
 // Bare terms from an FTS5 query string: strips operators/quoting so the oversized-doc excerpt
@@ -124,11 +117,11 @@ export interface SearchOptions {
   noExclude?: boolean; // --no-exclude: drop the preset's exclude for this command
 }
 
-// BM25 + link expansion + vectors, fused by reciprocal rank; `via` names the signal per row.
+// The declared or defaulted signals compose via RRF; `via` names which ones produced each row.
 // `opts` arrives already resolved (config.ts:resolveSearch).
 export async function search(db: DatabaseSync, cfg: ResolvedConfig, terms: string, opts: SearchOptions = {}): Promise<Row[]> {
   const effective = resolveSearch(cfg, opts);
-  const { k } = effective;
+  const { k, signals } = effective;
 
   const allPaths = (db.prepare('SELECT "path" FROM frontmatter').all() as Array<{ path: string }>).map((r) => r.path);
   const scopePaths = rawScope(db, cfg, opts, allPaths);
@@ -144,11 +137,14 @@ export async function search(db: DatabaseSync, cfg: ResolvedConfig, terms: strin
   }
   const fetch = Math.max(k * 3, 30);
 
-  // Asking for vectors without a model is a misconfiguration, not a mode: degrading would make
-  // the same search answer differently before and after a download. semantic:false never asks.
-  const wantsVectors = effective.semantic && anyPresetEmbeds(cfg);
-  if (wantsVectors && !modelPresent(cfg)) {
-    throw new SenseError('EMBED_MODEL_MISSING', `preset "${effective.presetName}" searches with vectors, but the embedding model is not available; run \`sense download\`, or set "semantic": false on that preset to search on words and links`);
+  // A downloadable HF id proceeds -- getProvider fetches it lazily on consent. Only a
+  // local path with missing files errors here, since nothing will ever fetch it for itself.
+  const wantsVectors = signals.vectors !== undefined;
+  if (wantsVectors) {
+    const e = embedConfig(cfg); // validate.ts guarantees this is set whenever "vectors" is declared
+    if (localModelMissing(e)) {
+      throw new SenseError('EMBED_MODEL_MISSING', `preset "${effective.presetName}" searches with vectors, but the local model path "${e.model}" is missing ${MODEL_FILENAMES}; point embed.model at a directory containing them, or drop "vectors" from that preset's signals to search without them`);
+    }
   }
   const semanticEnabled = wantsVectors && scopeHasEmbeddings(db, cfg, allowedPaths);
 
@@ -171,67 +167,30 @@ export async function search(db: DatabaseSync, cfg: ResolvedConfig, terms: strin
   // thousands of paths, past SQLITE_MAX_VARIABLE_NUMBER on older builds.
   if (scopeActive) materializeScope(db, '_search_scope', scopePaths);
   const scopeCond = scopeActive ? `AND content.path IN (SELECT "path" FROM _search_scope)` : '';
-  // Docs past SNIPPET_BOUND skip snippet() entirely -- SQLite
-  // short-circuits the untaken CASE branch, so it's never invoked on them.
-  // Column 2 (text), not -1 (best column): -1 could surface a _seg sidecar as the excerpt,
-  // which is machine-spaced and not what the author wrote. A row that matches only in a
-  // sidecar gets an unhighlighted text excerpt below instead -- a stated cost.
-  const matchSql = `SELECT content.path AS path, CASE WHEN length(content.text) <= ${SNIPPET_BOUND} THEN snippet(content, 2, '«', '»', '…', 10) ELSE NULL END AS hit FROM content ${whereJoin} WHERE content MATCH ? ${whereCond} ${scopeCond} ORDER BY ${WEIGHTED_BM25} LIMIT ${fetch}`;
   const query = contentTokenize(cfg) === undefined ? segmentMatch(terms) : terms;
-  let matchRows: Array<{ path: string; hit: string | null }>;
-  try {
-    matchRows = db.prepare(matchSql).all(query) as Array<{ path: string; hit: string | null }>;
-  } catch (err) {
-    throw searchError(err as Error, terms, scope);
-  }
 
+  const candidates = new Map<string, { score: number; via: string }>();
+  let matchRows: Array<{ path: string; hit: string | null }> = [];
+  // A query that rewrites to nothing (e.g. only unspaced-script punctuation) has no
+  // searchable words: zero lexical rows, and the other signals still compose.
+  if (signals.words !== undefined && query.trim() !== '') {
+    try {
+      matchRows = wordsCandidates(db, candidates, query, whereJoin, whereCond, scopeCond, fetch, signals.words);
+    } catch (err) {
+      throw searchError(err as Error, terms, scope);
+    }
+  }
   const hits = new Map(matchRows.map((r) => [r.path, r.hit]));
   // hit === null here means the bound suppressed snippet(), not "no match" -- distinguish
   // from via='link' rows (never in matchRows, so absent from this set) below.
   const oversized = new Set(matchRows.filter((r) => r.hit === null).map((r) => r.path));
-  const candidates = new Map<string, { score: number; via: string }>();
-  matchRows.forEach((r, i) => {
-    candidates.set(r.path, { score: 1 / (RRF_K + i), via: 'match' });
-  });
 
-  const edges = featureEnabled(cfg, 'links') && matchRows.length > 0 ? linkEdges(db) : [];
-  if (edges.length > 0) {
-    // Gates the label only, not the score: restart mass ranks every seed without an incident
-    // edge, but dropping it from the score reweights fusion (FEVER hit@10 0.997 -> 0.907).
-    const linked = new Set(edges.flat());
-    const seeds = new Map(matchRows.map((r, i) => [r.path, 1 / (i + 1)]));
-    const ranked = [...personalizedRank(allPaths, edges, seeds)]
-      .filter(([path, score]) => score > 1e-9 && allowedPaths.has(path))
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, fetch);
-    ranked.forEach(([path], i) => {
-      const existing = candidates.get(path);
-      if (existing) {
-        existing.score += 1 / (RRF_K + i);
-        if (linked.has(path)) existing.via = 'match+link';
-      } else {
-        candidates.set(path, { score: 1 / (RRF_K + i), via: 'link' });
-      }
-    });
-  }
+  if (signals.links !== undefined) linksCandidates(db, candidates, matchRows, allPaths, allowedPaths, fetch, signals.links);
 
-  // Vector expansion, invoked only: a third RRF list at the swept flat-region constants
-  // (weight 1, pool = fetch). Each row carries its best chunk's line range.
-  const chunkLines = new Map<string, string>();
-  const chunkSimilarity = new Map<string, number>();
+  let chunkLines = new Map<string, string>();
+  let chunkSimilarity = new Map<string, number>();
   if (semanticEnabled) {
-    const vec = await semanticCandidates(db, cfg, terms, fetch, allowedPaths);
-    vec.forEach(({ path, lines, similarity }, i) => {
-      chunkLines.set(path, lines);
-      chunkSimilarity.set(path, similarity);
-      const existing = candidates.get(path);
-      if (existing) {
-        existing.score += 1 / (RRF_K + i);
-        existing.via = `${existing.via}+vector`;
-      } else {
-        candidates.set(path, { score: 1 / (RRF_K + i), via: 'vector' });
-      }
-    });
+    ({ chunkLines, chunkSimilarity } = await vectorsCandidates(db, cfg, candidates, terms, fetch, allowedPaths, signals.vectors as number));
   }
 
   db.exec('DROP TABLE IF EXISTS _search');

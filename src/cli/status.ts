@@ -2,7 +2,9 @@ import { dirname } from 'node:path';
 import { presetCoverage } from '../commands/index.ts';
 import { embedConfig, featureStates, SUPPORTED_CONFIG_VERSION } from '../config/index.ts';
 import { docCount, getMeta, open, SCHEMA_VERSION } from '../db/index.ts';
-import { isDownloadable, MODEL_FILENAMES, modelDir, modelPresent } from '../features/embed.ts';
+import { probeReachable } from '../embed/http.ts';
+import { languageDistribution } from '../embed/langfit.ts';
+import { isDownloadable, MODEL_FILENAMES, modelDir, modelPresent, readLanguages } from '../embed/store.ts';
 import { featuresLine, presetsLines } from '../output.ts';
 import { USAGE } from './index.ts';
 import { CONFIG, FORMAT, formatOf, parse, printWarnings } from './shared.ts';
@@ -44,7 +46,15 @@ export function redactUrl(url: string): string {
   }
 }
 
-const status: Command = (ctx) => {
+// A stopped Ollama/LM Studio/Cohere endpoint prints identically to a running one otherwise; any
+// HTTP response counts as reachable (probeReachable), so this only distinguishes up from down.
+async function embedReachable(e: { provider: string; url?: string }): Promise<boolean | null> {
+  if (e.provider === 'static' || (e.provider === 'openai' && !e.url)) return null;
+  const base = (e.url ?? 'https://api.cohere.com').replace(/\/+$/, '');
+  return probeReachable(e.provider === 'openai' ? `${base}/models` : base);
+}
+
+const status: Command = async (ctx) => {
   const { values } = parse(ctx.argv, `usage: ${ctx.name} ${USAGE.status}`, { ...FORMAT, ...CONFIG });
   const format = formatOf(values);
   const cfg = ctx.resolveConfig(values.config as string | undefined);
@@ -54,8 +64,12 @@ const status: Command = (ctx) => {
   const features = featureStates(cfg);
   const e = embedConfig(cfg);
   const hasModel = e ? modelPresent(cfg) : false;
+  const reachable = e ? await embedReachable(e) : null;
   const vectors = e ? vectorState(db) : null;
   const presets = presetCoverage(db, cfg);
+  const staticLanguages = e && e.provider === 'static' ? readLanguages(e.model) : undefined;
+  const declaredLanguages = staticLanguages && staticLanguages.length > 0 ? staticLanguages : null;
+  const detectedLanguages = languageDistribution(db) ?? null;
   const heartbeat = getMeta(db, 'watch_heartbeat');
   // Derived at open() (F): 3x the largest reconcile this cache has ever held its write
   // transaction for, floored at 30s -- read back from the connection rather than
@@ -76,7 +90,7 @@ const status: Command = (ctx) => {
     unparseableFrontmatter: parseErrorCount(db),
     features: features.on,
     featuresOff: features.off,
-    embed: e ? { type: e.type, model: e.model, dir: e.type === 'static' ? modelDir(e.model) : null, url: e.url ? redactUrl(e.url) : null, keyEnv, downloaded: hasModel, ...(vectors ?? {}) } : null,
+    embed: e ? { provider: e.provider, model: e.model, dir: e.provider === 'static' ? modelDir(e.model) : null, url: e.url ? redactUrl(e.url) : null, reachable, keyEnv, downloaded: hasModel, languages: declaredLanguages, detectedLanguages, ...(vectors ?? {}) } : null,
     presets,
     queries: Object.keys(cfg.queries ?? {}).length,
     watcherPid: getMeta(db, 'watch_pid'),
@@ -100,12 +114,26 @@ const status: Command = (ctx) => {
     // not as an empty corpus.
     if (!e) console.log('embed:    off (no preset asks for vectors)');
     else {
-      console.log(`embed:    ${e.type} ${e.model}`);
-      if (e.type === 'static') console.log(`          model:   ${modelDir(e.model)} (${hasModel ? 'present' : `missing, ${isDownloadable(e.model) ? `run \`${ctx.name} download\`` : `no ${MODEL_FILENAMES} in that directory`}`})`);
-      if (e.url) console.log(`          url:     ${redactUrl(e.url)}`);
+      console.log(`embed:    ${e.provider} ${e.model}`);
+      if (e.provider === 'static') console.log(`          model:   ${modelDir(e.model)} (${hasModel ? 'present' : `missing, ${isDownloadable(e.model) ? `fetches automatically at first search, or run \`${ctx.name} download\` to prefetch` : `no ${MODEL_FILENAMES} in that directory`}`})`);
+      if (declaredLanguages) console.log(`          languages: ${declaredLanguages.join(', ')} (declared by the model card)`);
+      // Cohere defaults to api.cohere.com with no url in the config; show it anyway so the
+      // reachability probe below has something to name.
+      if (e.url || reachable !== null) {
+        const shown = e.url ? redactUrl(e.url) : 'https://api.cohere.com (default)';
+        console.log(`          url:     ${shown}${reachable === null ? '' : reachable ? ' (reachable)' : ' (unreachable)'}`);
+      }
       if (keyEnv) console.log(`          key:     env ${keyEnv.name} (${keyEnv.set ? 'set' : 'NOT SET'})`);
       if (!hasModel) console.log('          vectors: off until the model is present; search runs on words and links');
       else if (vectors) console.log(`          vectors: ${vectors.embedded} embedded, ${vectors.pending} pending (embedded on the first semantic search)`);
+      if (detectedLanguages) {
+        const total = Object.values(detectedLanguages).reduce((a, b) => a + b, 0);
+        const breakdown = Object.entries(detectedLanguages)
+          .sort((a, b) => b[1] - a[1])
+          .map(([code, n]) => `${code} ${Math.round((n / total) * 100)}%`)
+          .join(', ');
+        console.log(`          detected: ${breakdown} (${total} chunks classified)`);
+      }
     }
     console.log('');
     for (const line of presetsLines(presets)) console.log(line);

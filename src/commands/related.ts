@@ -1,8 +1,9 @@
 import type { DatabaseSync } from 'node:sqlite';
 import type { ResolvedConfig, SearchOverrides } from '../config/index.ts';
-import { embedEnabled, resolveSearch } from '../config/index.ts';
+import { embedConfig, embedEnabled, resolveSearch } from '../config/index.ts';
+import { embedPending, hasEmbedding, similarNotes } from '../embed/query.ts';
+import { localModelMissing, MODEL_FILENAMES } from '../embed/store.ts';
 import { SenseError } from '../errors.ts';
-import { embedPending, hasEmbedding, modelPresent, similarNotes } from '../features/embed.ts';
 import { resolveNote } from './peek.ts';
 import { scopedPaths, scopeHasEmbeddings } from './scope.ts';
 
@@ -21,16 +22,19 @@ export async function relatedNotes(db: DatabaseSync, cfg: ResolvedConfig, pathAr
   // note does not already link to, which is a real answer.
   const effective = resolveSearch(cfg, overrides);
   if (!embedEnabled(cfg)) {
-    throw new SenseError('EMBED_DISABLED', 'related ranks notes by meaning, and this tree has no embedding model; add an "embed" block naming one to sense.config.json, then run `sense download` (search works without it, on words and links)');
+    throw new SenseError('EMBED_DISABLED', 'related ranks notes by meaning, and this tree has no embedding model; add an "embed" block naming one to sense.config.json (a Hugging Face id fetches automatically at first use; `sense download` prefetches it) -- search works without it, on words and links');
   }
-  // search gates on the same flag (see wantsVectors above); reading it here too keeps
-  // `semantic: false` meaning one thing. Without this, an overlapping semantic-on preset's
-  // vectors would answer for a scope that declined them.
-  if (!effective.semantic) {
-    throw new SenseError('PRESET_NOT_SEMANTIC', `preset "${effective.presetName}" sets "semantic": false, so this scope has no vectors and related has no other signal; search it instead (words and links), or set semantic back on for that preset`);
+  // search gates on the same signal (see wantsVectors above); reading it here too keeps a
+  // preset's declared signals meaning one thing. Without this, an overlapping vectors-on
+  // preset's vectors would answer for a scope that declined them.
+  if (effective.signals.vectors === undefined) {
+    throw new SenseError('PRESET_NOT_SEMANTIC', `preset "${effective.presetName}" has no "vectors" signal, so this scope has no vectors and related has no other signal; search it instead (words and links), or add "vectors" to that preset's signals`);
   }
-  if (!modelPresent(cfg)) {
-    throw new SenseError('EMBED_MODEL_MISSING', 'related ranks notes by meaning, so it needs the embedding model, which is not downloaded; run `sense download` (search still works without it, on words and links)');
+  // A downloadable HF id proceeds -- embedPending's getProvider call fetches it lazily on
+  // consent. Only a local path with missing files can never fetch itself.
+  const e = embedConfig(cfg); // embedEnabled(cfg) above guarantees this is set
+  if (localModelMissing(e)) {
+    throw new SenseError('EMBED_MODEL_MISSING', `related ranks notes by meaning, so it needs the embedding model, but the local model path "${e.model}" is missing ${MODEL_FILENAMES}; point embed.model at a directory containing them (search still works without it, on words and links)`);
   }
   const allowed = scopedPaths(db, cfg, overrides);
   // Top up pending rows before the seed check, or a fresh index reports every note as

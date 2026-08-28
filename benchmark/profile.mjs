@@ -58,7 +58,7 @@ async function runChild(scenario, tree) {
   const { lib, cfg } = await buildCfg(tree);
   if (scenario === 'search' || scenario === 'semantic') {
     const { db } = lib.open(cfg);
-    await lib.search(db, cfg, 'the', { k: 10, semantic: scenario === 'semantic' });
+    await lib.search(db, cfg, 'the', { k: 10 });
     db.close();
   } else if (scenario === 'map') {
     const { db } = lib.open(cfg);
@@ -79,7 +79,7 @@ function hasEmbedFeature(tree) {
   try {
     const cfg = JSON.parse(readFileSync(configPath, 'utf8'));
     // v3: vectors follow presets (absent semantic = on); older configs keyed features.embed.
-    if (cfg.presets) return Object.values(cfg.presets).some((p) => p.semantic !== false);
+    if (cfg.presets) return Object.values(cfg.presets).some((p) => (p.signals ? 'vectors' in p.signals : p.semantic !== false));
     return Boolean(cfg.features?.embed);
   } catch {
     return false;

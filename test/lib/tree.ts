@@ -29,6 +29,30 @@ export function writeNote(baseDir: string, relPath: string, { frontmatter = {}, 
   writeFileSync(join(baseDir, relPath), `---\n${fm}\n---\n\n${body}\n`);
 }
 
+// 12 short, distinct Mandarin sentences: comfortably past the language-fit check's
+// classified-chunk floor, and one language throughout, for an unambiguous majority.
+export const CHINESE_SENTENCES = [
+  '今天天气非常好,适合出去散步。',
+  '这个软件可以帮助你管理你的时间。',
+  '请把这份文件交给经理签字。',
+  '中国有着悠久的历史和灿烂的文化。',
+  '我们计划下个月去北京旅游。',
+  '这本书讲述了一个动人的故事。',
+  '他每天早上都会去公园锻炼身体。',
+  '这家餐厅的菜味道非常地道。',
+  '学习一门新语言需要坚持和耐心。',
+  '这个城市的交通非常拥堵。',
+  '她喜欢在周末读书和画画。',
+  '科技的发展改变了我们的生活方式。',
+];
+
+// A tree whose classified majority is Mandarin, for the language-fit check on both sides.
+export function chineseTree(): string {
+  const baseDir = tmpTree();
+  writeNote(baseDir, 'zh.md', { body: CHINESE_SENTENCES.map((line, i) => `## S${i}\n\n${line}`).join('\n\n') });
+  return baseDir;
+}
+
 // v4 makes the `embed` block the whole vector switch, so a tree without one has no vectors
 // and never reaches the model. That is what a bare call gives you. Tests that want vectors
 // pass an `embed` block pointing at a local fixture model (see embed.test.ts).

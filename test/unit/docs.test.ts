@@ -1,8 +1,9 @@
 import assert from 'node:assert';
 import { execFileSync } from 'node:child_process';
 import { readdirSync, readFileSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { join, relative, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import cr from 'cr';
 import { SUPPORTED_CONFIG_VERSION } from 'sensemaking';
 import { parse } from 'yaml';
 import { packageRoot } from '../lib/cli.ts';
@@ -10,7 +11,13 @@ import { packageRoot } from '../lib/cli.ts';
 // Published surfaces drift silently: nothing fails when the README stops describing what
 // ships. These are the two facts cheap enough to assert -- the rest is RELEASING.md step 5.
 
-const readme = () => readFileSync(join(packageRoot, 'README.md'), 'utf8');
+// Windows checks out CRLF working trees (core.autocrlf), but these assertions are about
+// document structure, not the bytes on disk -- normalize so a `\n` in the patterns below means
+// the same thing on every platform. `cr` over a hand-rolled replace: it also folds a bare \r,
+// which a hand-rolled /\r\n/ misses.
+const read = (...parts: string[]) => cr(readFileSync(join(...parts), 'utf8'));
+
+const readme = () => read(packageRoot, 'README.md');
 
 describe('published docs', () => {
   it('README lists every command in the registry', async () => {
@@ -60,7 +67,7 @@ describe('shipped skills', () => {
     assert.ok(names.length > 0, 'no skills found to check');
     for (const name of names) {
       const file = join(packageRoot, 'skills', name, 'SKILL.md');
-      const fm = /^---\n([\s\S]*?)\n---\n/.exec(readFileSync(file, 'utf8'));
+      const fm = /^---\n([\s\S]*?)\n---\n/.exec(read(file));
       assert.ok(fm, `${name}/SKILL.md has no frontmatter block`);
       const parsed = parse(fm[1]) as { name?: string; description?: string };
       assert.equal(parsed.name, name, `${name}/SKILL.md declares a name that is not its directory`);
@@ -80,7 +87,10 @@ describe('shipped skills', () => {
 describe('no references to local planning files', () => {
   it('no tracked file points at plans/', () => {
     // This file names the directory it forbids, so it is the one exemption.
-    const self = relative(packageRoot, fileURLToPath(import.meta.url));
+    // git ls-files reports posix separators; relative() uses the platform's.
+    const self = relative(packageRoot, fileURLToPath(import.meta.url))
+      .split(sep)
+      .join('/');
     const tracked = execFileSync('git', ['ls-files', '-z'], { cwd: packageRoot, encoding: 'utf8' }).split('\0').filter(Boolean);
     const offenders = tracked.filter((file) => /\.(ts|js|mjs|cjs|md|json)$/.test(file) && file !== self && !file.startsWith('plans/') && readFileSync(join(packageRoot, file), 'utf8').includes('plans/'));
     assert.deepEqual(offenders, [], `these reference gitignored plans/: ${offenders.join(', ')}`);

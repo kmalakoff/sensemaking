@@ -25,14 +25,15 @@ function writeRaw(cfg: Record<string, unknown>): string {
 }
 
 describe('config version', () => {
-  it('v2 embed object form (api provider settings) survives migration as the v3 embed block', () => {
+  it('v2 embed object form (api provider settings) survives migration into the v5 embed block', () => {
     const dir = mkdtempSync(join(tmpdir(), 'sense-vv-'));
-    const provider = { model: 'custom/m', type: 'api', url: 'http://localhost:11434/v1', key: 'MY_KEY' };
-    writeFileSync(join(dir, 'sense.config.json'), JSON.stringify({ version: 2, scan: { include: ['**/*.md'] }, queries: {}, features: { links: true, embed: provider } }));
+    const v2Embed = { model: 'custom/m', type: 'api', url: 'http://localhost:11434/v1', key: 'MY_KEY' };
+    writeFileSync(join(dir, 'sense.config.json'), JSON.stringify({ version: 2, scan: { include: ['**/*.md'] }, queries: {}, features: { links: true, embed: v2Embed } }));
     const cfg = loadConfig(join(dir, 'sense.config.json'));
     assert.equal(cfg.migratedFrom, 2);
-    // Dropping these silently switched an api tree back to the built-in static model.
-    assert.deepEqual(JSON.parse(readFileSync(join(dir, 'sense.config.json'), 'utf8')).embed, provider);
+    // Dropping these silently switched an api tree back to the built-in static model; the v4 ->
+    // v5 step along the way renames type to provider ("api" -> "openai").
+    assert.deepEqual(JSON.parse(readFileSync(join(dir, 'sense.config.json'), 'utf8')).embed, { model: 'custom/m', url: 'http://localhost:11434/v1', key: 'MY_KEY', provider: 'openai' });
   });
 
   it('newer than supported: exit 1 with the version message', () => {
@@ -129,44 +130,80 @@ describe('config version', () => {
     assert.deepEqual(onDisk.features, { links: true });
   });
 
-  it('v2 -> v4: features.embed:false becomes presets.default.semantic:false and no embed block', () => {
+  it('v2 -> v5: features.embed:false becomes presets.default.signals:{"words":1,"links":1} and no embed block', () => {
     const configPath = writeRaw({ version: 2, scan: { include: ['*.md'] }, features: { embed: false }, queries: {} });
     const resolved = loadConfig(configPath);
-    assert.deepEqual(resolved.presets, { default: { include: ['*.md'], semantic: false } });
+    // v2 -> v3 turns this into presets.default.semantic:false; v4 -> v5 migrates that to
+    // signals: words plus links, since the links feature defaults on.
+    assert.deepEqual(resolved.presets, { default: { include: ['*.md'], signals: { words: 1, links: 1 } } });
     assert.equal(resolved.embed, undefined);
     assert.equal(resolved.features, undefined);
   });
 
-  it('v3 -> v4: a tree that embedded gets the model written into the file, and its signature does not move', () => {
+  it('v3 -> v5: a tree that embedded gets the model written into the file, and its signature does not move', () => {
     const configPath = writeRaw({ version: 3, presets: { default: { include: ['*.md'] } }, queries: {} });
     const resolved = loadConfig(configPath);
     assert.equal(resolved.migratedFrom, 3);
-    assert.deepEqual(resolved.embed, { model: DEFAULT_EMBED_MODEL, type: 'static' });
+    assert.deepEqual(resolved.embed, { model: DEFAULT_EMBED_MODEL, provider: 'static' });
     const onDisk = JSON.parse(readFileSync(configPath, 'utf8'));
     assert.equal(onDisk.version, SUPPORTED_CONFIG_VERSION);
-    assert.deepEqual(onDisk.embed, { model: DEFAULT_EMBED_MODEL, type: 'static' });
+    assert.deepEqual(onDisk.embed, { model: DEFAULT_EMBED_MODEL, provider: 'static' });
   });
 
-  it('v3 -> v4: presets keep semantic; all-false means no embed block, so vectors stay off', () => {
+  it('v3 -> v5: presets keep signals; all-false means no embed block, so vectors stay off', () => {
     const configPath = writeRaw({ version: 3, presets: { default: { include: ['*.md'], semantic: false }, raw: { include: ['raw/*.md'], semantic: false } }, queries: {} });
     const resolved = loadConfig(configPath);
     assert.equal(resolved.embed, undefined);
-    assert.deepEqual(resolved.presets, { default: { include: ['*.md'], semantic: false }, raw: { include: ['raw/*.md'], semantic: false } });
+    assert.deepEqual(resolved.presets, { default: { include: ['*.md'], signals: { words: 1, links: 1 } }, raw: { include: ['raw/*.md'], signals: { words: 1, links: 1 } } });
   });
 
-  it('v3 -> v4: a mixed tree keeps its lexical preset and gains the model for the rest', () => {
+  it('v3 -> v5: a mixed tree keeps its lexical preset and gains the model for the rest', () => {
     const configPath = writeRaw({ version: 3, presets: { default: { include: ['wiki/*.md'] }, raw: { include: ['raw/*.md'], semantic: false } }, queries: {} });
     const resolved = loadConfig(configPath);
-    assert.deepEqual(resolved.embed, { model: DEFAULT_EMBED_MODEL, type: 'static' });
-    assert.equal(resolved.presets.raw.semantic, false, 'the lexical layer stays lexical');
-    assert.equal(resolved.presets.default.semantic, undefined, 'the meaning layer keeps the default');
+    assert.deepEqual(resolved.embed, { model: DEFAULT_EMBED_MODEL, provider: 'static' });
+    assert.deepEqual(resolved.presets.raw.signals, { words: 1, links: 1 }, 'the lexical layer stays lexical, now spelled as signals');
+    assert.equal(resolved.presets.default.signals, undefined, 'the meaning layer keeps every signal whose prerequisites hold, so it needs no explicit key');
   });
 
-  it('v3 -> v4: an api embed block keeps model, type, url and key verbatim', () => {
-    const provider = { model: 'custom/m', type: 'api', url: 'http://localhost:11434/v1', key: 'MY_KEY' };
-    const configPath = writeRaw({ version: 3, presets: { default: { include: ['*.md'] } }, embed: provider, queries: {} });
+  it('v4 -> v5: semantic:false migrates to signals, dropping "links" from the exhaustive map when the links feature is off', () => {
+    const configPath = writeRaw({ version: 4, presets: { default: { include: ['*.md'], semantic: false } }, features: { links: false }, queries: {} });
     const resolved = loadConfig(configPath);
-    assert.deepEqual(resolved.embed, provider);
+    assert.deepEqual(resolved.presets.default.signals, { words: 1 }, 'links is off tree-wide, so the migrated preset does not name it');
+    assert.equal((resolved.presets.default as { semantic?: boolean }).semantic, undefined, '"semantic" leaves the config surface entirely');
+  });
+
+  it('v4 -> v5: a non-boolean semantic value is a named config error, not silently dropped', () => {
+    const configPath = writeRaw({ version: 4, presets: { default: { include: ['*.md'], semantic: { type: 'api' } } }, queries: {} });
+    assert.throws(() => loadConfig(configPath), /presets\.default\.semantic must be a boolean/);
+  });
+
+  it('v3 -> v5: an api embed block keeps model, url and key verbatim; type renames to provider', () => {
+    const v3Embed = { model: 'custom/m', type: 'api', url: 'http://localhost:11434/v1', key: 'MY_KEY' };
+    const configPath = writeRaw({ version: 3, presets: { default: { include: ['*.md'] } }, embed: v3Embed, queries: {} });
+    const resolved = loadConfig(configPath);
+    assert.deepEqual(resolved.embed, { model: 'custom/m', url: 'http://localhost:11434/v1', key: 'MY_KEY', provider: 'openai' });
+  });
+
+  it('v4 -> v5: embed.type renames to embed.provider, "api" auto-migrating to "openai"', () => {
+    const configPath = writeRaw({ version: 4, presets: { default: { include: ['*.md'] } }, embed: { model: 'custom/m', type: 'api', url: 'http://localhost:11434/v1' }, queries: {} });
+    const resolved = loadConfig(configPath);
+    assert.equal(resolved.migratedFrom, 4);
+    assert.deepEqual(resolved.embed, { model: 'custom/m', url: 'http://localhost:11434/v1', provider: 'openai' });
+    const onDisk = JSON.parse(readFileSync(configPath, 'utf8'));
+    assert.equal(onDisk.version, SUPPORTED_CONFIG_VERSION);
+    assert.deepEqual(onDisk.embed, { model: 'custom/m', url: 'http://localhost:11434/v1', provider: 'openai' });
+  });
+
+  it('v4 -> v5: embed.type "static" carries straight over to provider "static"', () => {
+    const configPath = writeRaw({ version: 4, presets: { default: { include: ['*.md'] } }, embed: { model: DEFAULT_EMBED_MODEL, type: 'static' }, queries: {} });
+    const resolved = loadConfig(configPath);
+    assert.deepEqual(resolved.embed, { model: DEFAULT_EMBED_MODEL, provider: 'static' });
+  });
+
+  it('v4 -> v5: no embed block stays absent', () => {
+    const configPath = writeRaw({ version: 4, presets: { default: { include: ['*.md'], semantic: false } }, queries: {} });
+    const resolved = loadConfig(configPath);
+    assert.equal(resolved.embed, undefined);
   });
 
   it('v2 -> v3: checks is dropped with a stderr note, and its queries are carried over as ordinary saved queries', () => {

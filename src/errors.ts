@@ -10,6 +10,7 @@ export type SenseErrorCode =
   | 'EMBED_DISABLED'
   | 'EMBED_MODEL'
   | 'EMBED_MODEL_MISSING'
+  | 'EMBED_MODEL_MISMATCH'
   | 'SEARCH_SYNTAX'
   | 'COLUMN_LIMIT'
   | 'PRESET_UNKNOWN'

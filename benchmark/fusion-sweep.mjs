@@ -5,9 +5,9 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { corpusLabels, corpusPath } from './lib/corpus.mjs';
-import { leverVec, loadModel, MODEL } from './lib/embed.mjs';
+import { leverVec, loadModel } from './lib/embed.mjs';
 import { orBag, readLabels } from './lib/labels.mjs';
-import { metrics } from './lib/metrics.mjs';
+import { mean, metrics } from './lib/metrics.mjs';
 
 const RRF_K = 60;
 const WEIGHTED_BM25 = 'bm25(content, 10.0, 5.0, 1.0)';
@@ -35,25 +35,26 @@ if (!tree || !labelsDir) {
   process.exit(2);
 }
 
-const { embedFull } = loadModel();
+const { embedFull, id, sha } = await loadModel();
 
 const files = readdirSync(tree)
   .filter((f) => f.endsWith('.md'))
   .sort();
 const docIds = files.map((f) => f.replace(/\.md$/, ''));
-const docs = files.map((f) => {
+const docs = [];
+for (const f of files) {
   const raw = readFileSync(join(tree, f), 'utf8');
   const m = raw.match(/^---\ntitle: (.*)\n---\n\n?/);
   let title = '';
   try {
     title = m ? JSON.parse(m[1]) : '';
   } catch {}
-  return leverVec(embedFull(`${title}\n${m ? raw.slice(m[0].length) : raw}`), DIMS, INT8);
-});
+  docs.push(leverVec(await embedFull(`${title}\n${m ? raw.slice(m[0].length) : raw}`), DIMS, INT8));
+}
 
 const ROOT = join(new URL('.', import.meta.url).pathname, '..');
 const lib = await import(pathToFileURL(join(ROOT, 'dist', 'esm', 'index.js')).href);
-const cfg = { presets: { default: { include: ['**/*.md'], semantic: false } }, queries: {}, features: { links: false, rank: false }, baseDir: tree, configPath: null };
+const cfg = { presets: { default: { include: ['**/*.md'], signals: { words: 1 } } }, queries: {}, features: { links: false, rank: false }, baseDir: tree, configPath: null };
 const { db } = lib.open(cfg);
 const bm25Stmt = db.prepare(`SELECT content.path AS path FROM content WHERE content MATCH ? ORDER BY ${WEIGHTED_BM25} LIMIT ${FETCH}`);
 
@@ -75,17 +76,16 @@ function topN(qv, n) {
   return top.map((t) => docIds[t.i]);
 }
 
-const perQuery = qids
-  .map((qid) => {
-    const text = queries.get(qid);
-    if (!text) return null;
-    let bm25 = [];
-    try {
-      bm25 = bm25Stmt.all(orBag(text)).map((r) => r.path.replace(/\.md$/, ''));
-    } catch {}
-    return { qid, bm25, vec: topN(leverVec(embedFull(text), DIMS, false), MAX_POOL) };
-  })
-  .filter(Boolean);
+const perQuery = [];
+for (const qid of qids) {
+  const text = queries.get(qid);
+  if (!text) continue;
+  let bm25 = [];
+  try {
+    bm25 = bm25Stmt.all(orBag(text)).map((r) => r.path.replace(/\.md$/, ''));
+  } catch {}
+  perQuery.push({ qid, bm25, vec: topN(leverVec(await embedFull(text), DIMS, false), MAX_POOL) });
+}
 db.close();
 
 // RRF with a weighted vector list: bm25 contributes 1/(k+i), vectors w/(k+j).
@@ -108,16 +108,11 @@ function signTest(up, down) {
   return Math.min(1, 2 * p);
 }
 
-const mean = (rows) => {
-  const n = rows.length;
-  return rows.reduce((acc, m) => ({ ndcg: acc.ndcg + m.ndcg / n, rr: acc.rr + m.rr / n, hit: acc.hit + m.hit / n }), { ndcg: 0, rr: 0, hit: 0 });
-};
-
 const baseline = perQuery.map((q) => metrics(rrfW(q.bm25, q.vec.slice(0, 30), 1), qrels.get(q.qid), K));
 const bm25Only = mean(perQuery.map((q) => metrics(q.bm25, qrels.get(q.qid), K)));
 
 const f = (v) => v.toFixed(4);
-console.log(`corpus: ${corpus} | split: ${SPLIT} | queries: ${perQuery.length} | k: ${K} | lever: ${INT8 ? 'int8' : 'f32'}-${DIMS} | model: ${MODEL.id}@${MODEL.revision.slice(0, 8)}`);
+console.log(`corpus: ${corpus} | split: ${SPLIT} | queries: ${perQuery.length} | k: ${K} | lever: ${INT8 ? 'int8' : 'f32'}-${DIMS} | model: ${id}@${sha.slice(0, 8)}`);
 console.log('paired columns compare per-query nDCG vs the bake-off shape (w=1, pool=30)\n');
 console.log(`| bm25 only | ${f(bm25Only.ndcg)} | ${f(bm25Only.rr)} | ${f(bm25Only.hit)} |`);
 console.log(`\n| pool | w | nDCG@${K} | MRR@${K} | hit@${K} | up | down | tie | p |`);

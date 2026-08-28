@@ -179,6 +179,17 @@ export function changedSignatureKeys(before: string, after: string): Set<string>
   return changed;
 }
 
+// Whether the embed segment only gained its resolved weight identity: same provider and
+// model, no identity recorded before, one now -- adopted into meta without a rebuild.
+export function embedIdentityAdopted(before: string, after: string): boolean {
+  const embedPart = (sig: string) => sig.split('|').find((p) => p.startsWith('embed:'));
+  const b = embedPart(before);
+  const a = embedPart(after);
+  if (b === undefined || a === undefined) return false;
+  const at = a.indexOf('@');
+  return b.indexOf('@') === -1 && at !== -1 && a.slice(0, at) === b;
+}
+
 // Names what moved, for the rebuild notice.
 export function signatureDiff(before: string, after: string): string {
   const changed = changedSignatureKeys(before, after);

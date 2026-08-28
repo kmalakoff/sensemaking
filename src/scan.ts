@@ -3,7 +3,7 @@ import { join, sep } from 'node:path';
 import removeMarkdown from 'remove-markdown';
 import { isCollection, parseDocument, visit } from 'yaml';
 import type { Config } from './config/index.ts';
-import { embedEnabled, presetNames, presetSemanticEnabled } from './config/index.ts';
+import { embedEnabled, presetHasSignal, presetNames } from './config/index.ts';
 import type { Feature } from './features/types.ts';
 
 // Filesystem -> rows. Pure data in, data + warnings out; db.ts does the SQL.
@@ -29,7 +29,10 @@ function normalizeText(value: unknown): string {
 // carry high IDF, so they outrank prose. remove-markdown misses wikilinks and tables.
 function stripText(value: string): string {
   const withoutWikilinks = value.replace(/\[\[([^\]|]+)\|([^\]]+)\]\]/g, '$2').replace(/\[\[([^\]]+)\]\]/g, '$1');
-  const withoutMarkdown = removeMarkdown(withoutWikilinks);
+  // remove-markdown deletes footnote definitions wholesale ("[^1]: text" -> ""), so unwrap
+  // them (and drop inline refs) before it runs; the definition text stays indexed.
+  const withoutFootnotes = withoutWikilinks.replace(/^\[\^[^\]]+\]:[ \t]?/gm, '').replace(/\[\^[^\]]+\]/g, '');
+  const withoutMarkdown = removeMarkdown(withoutFootnotes);
   const withoutTables = withoutMarkdown.replace(/^\s*\|?[-\s|:]+\|\s*$/gm, '').replace(/\|/g, ' ');
   return normalizeText(withoutTables);
 }
@@ -41,7 +44,7 @@ export interface FileStat {
   ctimeMs: number; // filesystem birthtime; a clone or copy resets it, like _mtime
   size: number;
   presets: string[]; // every declared preset covering this file (>= 1; union, overlap allowed)
-  embed: boolean; // true iff a model is named and some covering preset has semantic on
+  embed: boolean; // true iff a model is named and some covering preset's signals include vectors
 }
 
 // Presets are views, not partitions: they overlap freely, and a file's covering set (not one
@@ -70,7 +73,7 @@ export function listFiles(cfg: Config, baseDir: string): FileStat[] {
 
   // Which presets want vectors is a property of the config, not of any file.
   const embedding = embedEnabled(cfg);
-  const semanticPresets = embedding ? new Set(presetNames(cfg).filter((name) => presetSemanticEnabled(cfg, name))) : null;
+  const vectorPresets = embedding ? new Set(presetNames(cfg).filter((name) => presetHasSignal(cfg, name, 'vectors'))) : null;
 
   const files: FileStat[] = [];
   for (const relPath of [...coverage.keys()].sort()) {
@@ -80,7 +83,7 @@ export function listFiles(cfg: Config, baseDir: string): FileStat[] {
     const st = statSync(absPath, NO_THROW);
     if (!st?.isFile()) continue;
     const presets = [...(coverage.get(relPath) as Set<string>)].sort();
-    const embed = semanticPresets !== null && presets.some((name) => semanticPresets.has(name));
+    const embed = vectorPresets !== null && presets.some((name) => vectorPresets.has(name));
     files.push({ relPath, absPath, mtimeMs: st.mtimeMs, ctimeMs: st.birthtimeMs, size: st.size, presets, embed });
   }
   return files;

@@ -35,9 +35,9 @@ const qids = [...qrels.keys()].sort().slice(0, MAX_QUERIES === Infinity ? undefi
 // block, anyPresetEmbeds is false and the semantic pass silently measures lexical) and
 // vectors build lazily on the first participating call.
 const EMBED = { model: 'minishlab/potion-retrieval-32M', type: 'static' };
-// There is no per-call semantic option: the preset decides. `semanticOff` writes
-// `semantic: false` into the preset, which is the one lever the no-silent-change contract is
-// about.
+// There is no per-call semantic option: the preset decides. `semanticOff` writes a
+// vectors-free `signals` weight map into the preset, which is the one lever the
+// no-silent-change contract is about.
 const VARIANTS = [
   { name: 'bm25-only', features: { links: false, rank: false }, embed: false, semanticOff: true },
   { name: 'fused', features: undefined, embed: false, semanticOff: true },
@@ -48,7 +48,7 @@ const VARIANTS = [
 const results = [];
 for (const variant of VARIANTS) {
   const cfg = {
-    presets: { default: { include: ['**/*.md'], ...(variant.semanticOff ? { semantic: false } : {}) } },
+    presets: { default: { include: ['**/*.md'], ...(variant.semanticOff ? { signals: variant.features?.links === false ? { words: 1 } : { words: 1, links: 1 } } : {}) } },
     ...(variant.embed ? { embed: EMBED } : {}),
     features: variant.features,
     queries: {},

@@ -2,6 +2,7 @@ import assert from 'node:assert';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { segmentField, segmentMatch } from '../../src/segment.ts';
 import { runCli as spawnCli } from '../lib/cli.ts';
 
@@ -44,11 +45,17 @@ function paths(dir: string, args: string[]): string[] {
 }
 
 describe('segmentMatch', () => {
-  // Covers qualifier retargeting (title:/summary:/text: -> _seg columns), quoted-phrase
-  // passthrough (already-quoted text is left alone), and operator preservation (AND/OR/NOT/
-  // parens survive the rewrite around the segmented terms).
+  // Covers qualifier retargeting (title:/summary:/text: -> _seg columns), unqualified runs
+  // scoped to all three sidecars via FTS5's column-set filter (single grapheme and multi-grapheme
+  // phrase alike, since a bare unqualified token leaks the same way a phrase does), quoted-phrase
+  // passthrough (an author's own quoting is their escape hatch to FTS5's native syntax, left
+  // alone even though it can carry the same raw-column leak if they hand-space a CJK phrase --
+  // that is their choice to opt out, not this rewrite's to make for them), and operator
+  // preservation (AND/OR/NOT/parens survive the rewrite around the segmented terms).
+  const SEG = '{title_seg summary_seg text_seg}:';
   const cases: Array<[string, string]> = [
-    ['数据库', '"数 据 库"'],
+    ['数据库', `${SEG}"数 据 库"`],
+    ['数', `${SEG}数`],
     ['title:数据库', 'title_seg:"数 据 库"'],
     ['title: 数据库', 'title_seg:"数 据 库"'],
     ['summary:全文 OR text:检索', 'summary_seg:"全 文" OR text_seg:"检 索"'],
@@ -57,11 +64,42 @@ describe('segmentMatch', () => {
     ['title:revenue', 'title:revenue'],
     ['revenue OR earnings', 'revenue OR earnings'],
     ['"数据库 exact"', '"数据库 exact"'],
-    ['东京 NOT 京都', '"东 京" NOT "京 都"'],
+    ['"数 据"', '"数 据"'], // author's own hand-spaced quoted phrase: still byte-identical
+    ['东京 NOT 京都', `${SEG}"东 京" NOT ${SEG}"京 都"`],
+    ['东京 OR budget', `${SEG}"东 京" OR budget`],
+    ['budget 东京', `budget ${SEG}"东 京"`],
+    ['-title:东京 数据', `-title_seg:"东 京" ${SEG}"数 据"`],
+    ['东京 数据', `${SEG}"东 京" ${SEG}"数 据"`], // two runs, implicit AND, both column-set scoped
   ];
   for (const [input, want] of cases) {
     it(`rewrites ${JSON.stringify(input)}`, () => {
       assert.equal(segmentMatch(input), want);
+    });
+  }
+});
+
+describe('segmentMatch: unqualified rewrites are valid, composable FTS5 syntax', () => {
+  function buildDb() {
+    const db = new DatabaseSync(':memory:');
+    db.exec(`CREATE VIRTUAL TABLE content USING fts5(title, summary, text, path UNINDEXED, title_seg, summary_seg, text_seg, tokenize = 'porter unicode61')`);
+    const insert = db.prepare(`INSERT INTO content (rowid, title, summary, text, path, title_seg, summary_seg, text_seg) VALUES (?, ?, '', ?, ?, ?, '', ?)`);
+    const rows: Array<[string, string]> = [
+      ['东京', 'p1'], // pure CJK run
+      ['budget report', 'p2'], // pure Latin
+      ['数据 budget', 'p3'], // mixed CJK + Latin
+    ];
+    rows.forEach(([text, path], i) => insert.run(i + 1, '', text, path, '', segmentField(text)));
+    return db;
+  }
+
+  // Each case's rewrite must parse under FTS5 MATCH without throwing -- the risk this class of
+  // test exists for: a column-set group juxtaposed with a plain phrase via implicit AND, which is
+  // valid, unlike a parenthesized OR group in the same spot, which FTS5 rejects.
+  const queries = ['东京 OR budget', '-title:东京 数据', 'budget 东京', '东京 budget', '东京 数据'];
+  for (const q of queries) {
+    it(`MATCH accepts the rewrite of ${JSON.stringify(q)}`, () => {
+      const db = buildDb();
+      assert.doesNotThrow(() => db.prepare('SELECT rowid FROM content WHERE content MATCH ?').all(segmentMatch(q)));
     });
   }
 });

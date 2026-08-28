@@ -103,6 +103,43 @@ const MIGRATIONS: Record<number, (cfg: Record<string, unknown>) => Record<string
     }
     return result;
   },
+  // v4 -> v5: embed.type renames to embed.provider -- there are only three wire protocols
+  // now, so a provider name fits the shape better than a loader "type". "api" auto-migrates to
+  // "openai", the wire protocol it always was; any other value is carried over verbatim, since
+  // it is what v5 shape validation names the fix for.
+  //
+  // Also folded in here: a preset's `semantic` migrates to `signals`. false becomes an
+  // explicit exhaustive weight map (words, plus links when that feature is on, each at weight
+  // 1); true or absent needs no key at all, since default-on already means every signal whose
+  // prerequisites hold, each at weight 1. `semantic` leaves the config surface entirely once
+  // this step has run.
+  4: (cfg) => {
+    const prevEmbed = cfg.embed as Record<string, unknown> | undefined;
+    const result: Record<string, unknown> = { ...cfg, version: 5 };
+    if (prevEmbed) {
+      const { type, ...rest } = prevEmbed;
+      result.embed = type === undefined ? rest : { ...rest, provider: type === 'api' ? 'openai' : type };
+    }
+
+    const linksOn = (cfg.features as Record<string, unknown> | undefined)?.links !== false;
+    const presets = cfg.presets as Record<string, Record<string, unknown>> | undefined;
+    if (presets) {
+      const nextPresets: Record<string, unknown> = {};
+      for (const [name, preset] of Object.entries(presets)) {
+        const { semantic, ...rest } = preset;
+        if (semantic === undefined) {
+          nextPresets[name] = preset;
+          continue;
+        }
+        if (typeof semantic !== 'boolean') {
+          throw new SenseError('CONFIG_INVALID', `presets.${name}.semantic must be a boolean`);
+        }
+        nextPresets[name] = semantic === false ? { ...rest, signals: linksOn ? { words: 1, links: 1 } : { words: 1 } } : rest;
+      }
+      result.presets = nextPresets;
+    }
+    return result;
+  },
 };
 
 export function migrateConfig(cfg: Config): { cfg: Config; from: number } {
@@ -116,7 +153,19 @@ export function migrateConfig(cfg: Config): { cfg: Config; from: number } {
   return { cfg: current as unknown as Config, from };
 }
 
-function starterConfig(): Config {
+// `sense init`'s flags map onto these three `embed` keys one-to-one; an absent field
+// keeps the built-in default rather than merging partial input.
+export interface InitOverrides {
+  model?: string;
+  provider?: string;
+  url?: string;
+}
+
+function starterConfig(overrides?: InitOverrides): Config {
+  const embed: Record<string, unknown> = { model: DEFAULT_EMBED_MODEL, provider: 'static' };
+  if (overrides?.model !== undefined) embed.model = overrides.model;
+  if (overrides?.provider !== undefined) embed.provider = overrides.provider;
+  if (overrides?.url !== undefined) embed.url = overrides.url;
   return {
     $schema: 'https://unpkg.com/sensemaking/schema.json',
     version: SUPPORTED_CONFIG_VERSION,
@@ -125,19 +174,22 @@ function starterConfig(): Config {
       large: { include: ['**/*.md'], k: 20 },
     },
     // Written out rather than defaulted in code: this line is what makes `sense download`
-    // fetch 124 MB, so it belongs where it can be read and changed.
-    embed: { model: DEFAULT_EMBED_MODEL, type: 'static' },
+    // fetch a model, so it belongs where it can be read and changed.
+    embed: embed as Config['embed'],
     queries: {},
   };
 }
 
-// Refuses to overwrite an existing config.
-export function initConfig(dir: string): string {
+// Refuses to overwrite an existing config. `overrides` come from `sense init`'s flags; an
+// invalid --provider fails validateConfig's own shape check before anything is written.
+export function initConfig(dir: string, overrides?: InitOverrides): string {
   const configPath = join(dir, CONFIG_FILENAME);
   if (existsSync(configPath)) {
     throw new SenseError('CONFIG_EXISTS', `${CONFIG_FILENAME} already exists in ${dir}`);
   }
-  writeFileSync(configPath, `${JSON.stringify(starterConfig(), null, 2)}\n`);
+  const cfg = starterConfig(overrides);
+  validateConfig(cfg, configPath);
+  writeFileSync(configPath, `${JSON.stringify(cfg, null, 2)}\n`);
   return configPath;
 }
 

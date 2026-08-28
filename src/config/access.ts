@@ -1,3 +1,5 @@
+import { modelIdentity } from '../embed/identity.ts';
+import type { SignalName, SignalWeights } from './signals.ts';
 import { type Config, type EmbedConfig, FEATURE_NAMES, type FeatureName } from './types.ts';
 
 export function presetNames(cfg: Config): string[] {
@@ -9,18 +11,31 @@ export function embedEnabled(cfg: Config): boolean {
   return typeof cfg.embed?.model === 'string' && cfg.embed.model.length > 0;
 }
 
-// A preset's own vector participation: absent or true means on, false means off.
-export function presetSemanticEnabled(cfg: Config, name: string): boolean {
-  return cfg.presets[name]?.semantic !== false;
+// A preset's effective signal weights: declared exhaustively when `signals` is present;
+// otherwise every signal whose prerequisite holds, each at weight 1 -- words always, links when
+// the feature is on, vectors when the tree names a model. Single source search() and status/map
+// read.
+export function presetSignals(cfg: Config, name: string): SignalWeights {
+  const declared = cfg.presets[name]?.signals;
+  if (declared) return declared;
+  const signals: SignalWeights = { words: 1 };
+  if (cfg.features?.links !== false) signals.links = 1;
+  if (embedEnabled(cfg)) signals.vectors = 1;
+  return signals;
 }
 
-// Whether embedding needs to run: a model is named AND some preset wants vectors.
+export function presetHasSignal(cfg: Config, name: string, signal: SignalName): boolean {
+  return presetSignals(cfg, name)[signal] !== undefined;
+}
+
+// Whether embedding needs to run: a model is named AND some preset's effective signals include vectors.
 export function anyPresetEmbeds(cfg: Config): boolean {
-  return embedEnabled(cfg) && presetNames(cfg).some((name) => presetSemanticEnabled(cfg, name));
+  return presetNames(cfg).some((name) => presetHasSignal(cfg, name, 'vectors'));
 }
 
 // Opt-out features (default on): absent block or key means enabled. `rank` additionally
-// requires `links`. `embed` is derived, not a features-block member: on iff `embed` names a model.
+// requires `links`. `embed` is derived, not a features-block member: on iff some preset's
+// effective signals include vectors.
 export function featureEnabled(cfg: Config, name: FeatureName): boolean {
   if (name === 'embed') return anyPresetEmbeds(cfg);
   const enabled = cfg.features?.[name] !== false;
@@ -45,10 +60,10 @@ export function featureStates(cfg: Config): { on: FeatureName[]; off: FeatureNam
 // Resolved embed provider settings, or null when the config names no model. There is no
 // fallback to DEFAULT_EMBED_MODEL: that constant is a template `init` and the v4 migration
 // write into the file, never an implicit runtime default.
-export function embedConfig(cfg: Config): { model: string; type: 'static' | 'api'; url?: string; key?: string } | null {
+export function embedConfig(cfg: Config): { model: string; provider: 'static' | 'openai' | 'cohere'; url?: string; key?: string; languages?: string[] } | null {
   if (!embedEnabled(cfg)) return null;
   const e = cfg.embed as EmbedConfig;
-  return { model: e.model as string, type: e.type ?? 'static', url: e.url, key: e.key };
+  return { model: e.model as string, provider: e.provider ?? 'static', url: e.url, key: e.key, languages: e.languages };
 }
 
 // The configured FTS5 tokenizer, or undefined for the built-in default. Undefined rather than
@@ -65,7 +80,10 @@ export function featureSignature(cfg: Config): string {
     .filter((name) => name !== 'embed')
     .join(',');
   const e = embedConfig(cfg);
-  const embedPart = e ? `embed:${e.type}:${e.model}` : 'embed:off';
+  // Weight identity from identity.ts, no network: a static model's resolved sha or local
+  // size+mtime, appended once known so changed weights re-embed.
+  const identity = e && e.provider === 'static' ? modelIdentity(e.model) : undefined;
+  const embedPart = e ? `embed:${e.provider}:${e.model}${identity !== undefined ? `@${identity}` : ''}` : 'embed:off';
   // One keyed segment per preset so a rebuild notice can name exactly which preset moved.
   const presetsPart = [...presetNames(cfg)]
     .sort()
@@ -73,7 +91,7 @@ export function featureSignature(cfg: Config): string {
       const p = cfg.presets[name];
       const include = [...p.include].sort().join('+');
       const exclude = [...(p.exclude ?? [])].sort().join('+');
-      return `preset:${name}:${include}:${exclude}:${p.semantic === false ? 'off' : 'on'}`;
+      return `preset:${name}:${include}:${exclude}:${presetHasSignal(cfg, name, 'vectors') ? 'on' : 'off'}`;
     })
     .join('|');
   const tokenize = contentTokenize(cfg);

@@ -1,12 +1,13 @@
 import { SenseError } from '../errors.ts';
+import { SIGNAL_NAMES, SIGNAL_PREREQUISITES, type SignalName } from './signals.ts';
 import type { Config } from './types.ts';
 
 // Shape check for hand-edited files, so a typo names itself instead of surfacing as a
 // TypeError. Unknown top-level keys warn (forward compat); unknown keys inside a block error.
 const KNOWN_KEYS = new Set(['$schema', 'version', 'presets', 'features', 'embed', 'content', 'queries']);
-const KNOWN_PRESET_KEYS = new Set(['include', 'exclude', 'k', 'semantic', 'where']);
+const KNOWN_PRESET_KEYS = new Set(['include', 'exclude', 'k', 'signals', 'where']);
 const KNOWN_FEATURE_KEYS = new Set(['links', 'sections', 'tags', 'rank']);
-const KNOWN_EMBED_KEYS = new Set(['model', 'type', 'url', 'key']);
+const KNOWN_EMBED_KEYS = new Set(['model', 'provider', 'url', 'key', 'languages']);
 const KNOWN_CONTENT_KEYS = new Set(['tokenize']);
 const SAVED_SEARCH_KEYS = new Set(['search', 'preset', 'include', 'exclude', 'where', 'k']);
 
@@ -62,7 +63,7 @@ function validateFeaturesBlock(value: unknown, configPath: string): void {
 
 function validateEmbedBlock(value: unknown, configPath: string): void {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    throw new SenseError('CONFIG_INVALID', `${configPath}: embed must be an object of { model?, type?: "static"|"api", url?, key? }`);
+    throw new SenseError('CONFIG_INVALID', `${configPath}: embed must be an object of { model?, provider?: "static"|"openai"|"cohere", url?, key? }`);
   }
   const embed = value as Record<string, unknown>;
   const unknown = Object.keys(embed).filter((k) => !KNOWN_EMBED_KEYS.has(k));
@@ -77,14 +78,58 @@ function validateEmbedBlock(value: unknown, configPath: string): void {
   if (embed.model === undefined || embed.model === '') {
     throw new SenseError('CONFIG_INVALID', `${configPath}: embed.model is required when the "embed" block is present (it is what turns vectors on); remove the block to index without vectors`);
   }
-  if (embed.type !== undefined && embed.type !== 'static' && embed.type !== 'api') {
-    throw new SenseError('CONFIG_INVALID', `${configPath}: embed.type must be "static" or "api"`);
+  if (embed.provider !== undefined && embed.provider !== 'static' && embed.provider !== 'openai' && embed.provider !== 'cohere') {
+    throw new SenseError('CONFIG_INVALID', `${configPath}: embed.provider must be "static", "openai", or "cohere"`);
   }
   if (embed.url !== undefined && typeof embed.url !== 'string') {
     throw new SenseError('CONFIG_INVALID', `${configPath}: embed.url must be a string`);
   }
   if (embed.key !== undefined && typeof embed.key !== 'string') {
     throw new SenseError('CONFIG_INVALID', `${configPath}: embed.key must be a string`);
+  }
+  // openai has no default host, so a missing url would otherwise only surface at the first
+  // vector search; a config error belongs at config time.
+  if (embed.provider === 'openai' && (embed.url === undefined || embed.url === '')) {
+    throw new SenseError('CONFIG_INVALID', `${configPath}: embed.provider "openai" requires embed.url (e.g. "http://localhost:11434/v1" for Ollama)`);
+  }
+  if (embed.languages !== undefined && (!Array.isArray(embed.languages) || embed.languages.length === 0 || embed.languages.some((l) => typeof l !== 'string' || l === ''))) {
+    throw new SenseError('CONFIG_INVALID', `${configPath}: embed.languages must be a non-empty array of language tags (e.g. ["en", "zh"])`);
+  }
+}
+
+function isSignalName(value: unknown): value is SignalName {
+  return typeof value === 'string' && (SIGNAL_NAMES as readonly string[]).includes(value);
+}
+
+function isSignalWeight(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0;
+}
+
+// Shape (an object of signal name -> weight) plus the one cross-signal prerequisite that
+// doesn't need the top-level embed block: links is seeded by word-match rows, so declaring it
+// without words is always empty.
+function validatePresetSignals(name: string, value: unknown, configPath: string): void {
+  if (typeof value !== 'object' || value === null || Array.isArray(value) || Object.keys(value).length === 0) {
+    throw new SenseError(
+      'CONFIG_INVALID',
+      `${configPath}: presets.${name}.signals must be a non-empty object of signal name -> weight (a finite number > 0), naming ${SIGNAL_NAMES.join(', ')} -- a preset that searches nothing is a mistake; name at least "words", or omit "signals" to use every signal whose prerequisites hold at weight 1`
+    );
+  }
+  const entries = Object.entries(value as Record<string, unknown>);
+  const unknown = entries.filter(([k]) => !isSignalName(k)).map(([k]) => k);
+  if (unknown.length > 0) {
+    throw new SenseError('CONFIG_INVALID', `${configPath}: presets.${name}.signals names unknown signal(s) ${unknown.join(', ')}; valid signals are ${SIGNAL_NAMES.join(', ')}`);
+  }
+  for (const [signal, weight] of entries) {
+    if (!isSignalWeight(weight)) {
+      throw new SenseError('CONFIG_INVALID', `${configPath}: presets.${name}.signals.${signal} must be a finite number > 0`);
+    }
+  }
+  const names = new Set(entries.map(([k]) => k));
+  for (const [signal, requires] of Object.entries(SIGNAL_PREREQUISITES) as Array<[SignalName, SignalName]>) {
+    if (names.has(signal) && !names.has(requires)) {
+      throw new SenseError('CONFIG_INVALID', `${configPath}: presets.${name}.signals has "${signal}" without "${requires}"; add "${requires}" to presets.${name}.signals, or drop "${signal}"`);
+    }
   }
 }
 
@@ -95,7 +140,7 @@ function validatePreset(name: string, value: unknown, configPath: string): void 
   const preset = value as Record<string, unknown>;
   const unknown = Object.keys(preset).filter((k) => !KNOWN_PRESET_KEYS.has(k));
   if (unknown.length > 0) {
-    throw new SenseError('CONFIG_INVALID', `${configPath}: presets.${name} has unknown key(s) ${unknown.join(', ')}; a preset takes include, exclude, k, semantic, where`);
+    throw new SenseError('CONFIG_INVALID', `${configPath}: presets.${name} has unknown key(s) ${unknown.join(', ')}; a preset takes include, exclude, k, signals, where`);
   }
   if (!isNonEmptyStringArray(preset.include)) {
     throw new SenseError('CONFIG_INVALID', `${configPath}: presets.${name}.include must be a non-empty array of glob strings`);
@@ -103,9 +148,7 @@ function validatePreset(name: string, value: unknown, configPath: string): void 
   if (preset.exclude !== undefined && !isNonEmptyStringArray(preset.exclude)) {
     throw new SenseError('CONFIG_INVALID', `${configPath}: presets.${name}.exclude must be a non-empty array of glob strings`);
   }
-  if (preset.semantic !== undefined && typeof preset.semantic !== 'boolean') {
-    throw new SenseError('CONFIG_INVALID', `${configPath}: presets.${name}.semantic must be a boolean`);
-  }
+  if (preset.signals !== undefined) validatePresetSignals(name, preset.signals, configPath);
   if (preset.k !== undefined && (typeof preset.k !== 'number' || !Number.isInteger(preset.k) || preset.k <= 0)) {
     throw new SenseError('CONFIG_INVALID', `${configPath}: presets.${name}.k must be a positive integer`);
   }
@@ -177,7 +220,7 @@ export function validateConfig(parsed: unknown, configPath: string): Config {
 
   const presets = cfg.presets as Record<string, unknown> | undefined;
   if (!presets || typeof presets !== 'object' || Array.isArray(presets) || Object.keys(presets).length === 0) {
-    throw new SenseError('CONFIG_INVALID', `${configPath}: presets must be a non-empty object of preset name -> { include, exclude?, k?, semantic?, where? }`);
+    throw new SenseError('CONFIG_INVALID', `${configPath}: presets must be a non-empty object of preset name -> { include, exclude?, k?, signals?, where? }`);
   }
   for (const [name, value] of Object.entries(presets)) {
     validatePreset(name, value, configPath);
@@ -203,6 +246,16 @@ export function validateConfig(parsed: unknown, configPath: string): Config {
   }
   if (cfg.content !== undefined) {
     validateContentBlock(cfg.content, configPath);
+  }
+
+  // vectors' prerequisite is a named model, checked here once embed is known valid (or absent).
+  if (cfg.embed === undefined) {
+    for (const [name, value] of Object.entries(presets)) {
+      const signals = (value as Record<string, unknown>).signals as Record<string, unknown> | undefined;
+      if (signals && 'vectors' in signals) {
+        throw new SenseError('CONFIG_INVALID', `${configPath}: presets.${name}.signals includes "vectors", but no "embed" block names a model; add one, or drop "vectors" from presets.${name}.signals`);
+      }
+    }
   }
 
   return cfg as unknown as Config;

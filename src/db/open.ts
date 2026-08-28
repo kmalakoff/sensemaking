@@ -8,13 +8,13 @@ import { contentTokenize, featureSignature, STATE_DIR } from '../config/index.ts
 import { SenseError } from '../errors.ts';
 import { activeFeatures } from '../features/index.ts';
 import { registerFunctions } from '../sql-functions.ts';
-import { changedSignatureKeys, rebuildContentTable, reconcile, signatureDiff } from './reconcile.ts';
+import { changedSignatureKeys, embedIdentityAdopted, rebuildContentTable, reconcile, signatureDiff } from './reconcile.ts';
 import { getMeta, setMeta } from './shared.ts';
 
 export const DB_FILENAME = 'cache.db';
 // Cache shape version, independent of the config's own `version`. Bumping it rebuilds
 // existing trees on first query.
-export const SCHEMA_VERSION = '16';
+export const SCHEMA_VERSION = '17';
 
 export interface OpenResult {
   db: DatabaseSync;
@@ -124,6 +124,11 @@ export function open(cfg: ResolvedConfig): OpenResult {
       console.error('sense: config change (content tokenizer) rebuilds the text index; vectors, links, and sections are kept');
       db.exec('DROP TABLE content');
       tokenizeOnlyRebuild = true;
+    } else if (changedKeys.size === 1 && changedKeys.has('embed') && embedIdentityAdopted(features ?? '', wantFeatures)) {
+      // First sight of a resolved weight identity: the model itself hasn't changed, so
+      // adopt it into meta with no rebuild and no re-embed, mirroring the tokenize precedent.
+      console.error("sense: recorded the embedding model's resolved identity; vectors are unaffected");
+      setMeta(db, 'features', wantFeatures);
     } else {
       const changed = signatureDiff(features ?? '', wantFeatures);
       console.error(`sense: config change (${changed}) rebuilds the index`);
