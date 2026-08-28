@@ -1,11 +1,12 @@
 import assert from 'node:assert';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type { Config } from '../../src/config/index.ts';
 import { featureSignature } from '../../src/config/index.ts';
 import { runCli as spawnCli } from '../lib/cli.ts';
+import { writeModel } from '../lib/model.ts';
 
 // Every temp dir this file creates, cleaned up once after all its tests have run.
 const dirs: string[] = [];
@@ -213,5 +214,60 @@ describe('content.tokenize: a tokenize-only change rebuilds text only', () => {
     assert.equal(changed.status, 0, changed.stderr);
     assert.match(changed.stderr, /text index; vectors, links, and sections are kept/);
     assert.match(changed.stderr, /bad-date\.md: created is not a valid date/);
+  });
+});
+
+// The signature's embed segment carries the static model's resolved weight identity
+// (local path: size+mtime), following the content.tokenize precedent above -- gaining an
+// identity that was not tracked before adopts silently, but a changed identity re-embeds.
+describe('embed model identity in the signature', () => {
+  function embedTree(modelDir: string): string {
+    const dir = tempDir('sense-embed-sig-');
+    writeFileSync(join(dir, 'sense.config.json'), JSON.stringify({ version: 5, presets: { default: { include: ['*.md'] } }, embed: { model: modelDir, provider: 'static' }, queries: {} }));
+    writeFileSync(join(dir, 'a.md'), '---\ntitle: A\n---\n\napple\n');
+    return dir;
+  }
+
+  it('adopts a resolved identity that a prior signature never recorded, without a rebuild', () => {
+    const model = writeModel();
+    const dir = embedTree(model);
+    assert.equal(runCli(dir, ['sql', 'SELECT 1']).status, 0);
+
+    const cachePath = join(dir, '.sense', 'cache.db');
+    const setup = new DatabaseSync(cachePath);
+    // A real (non-NULL) vector, so its survival below actually proves nothing was re-embedded.
+    setup.prepare(`UPDATE embeddings SET scale = 1.0, vector = X'2A' WHERE "path" = 'a.md' AND chunk = 0`).run();
+    const before = (setup.prepare(`SELECT value FROM meta WHERE key = 'features'`).get() as { value: string }).value;
+    assert.match(before, /embed:static:[^|]+@/, 'the fixture is expected to already carry an identity segment');
+    // Simulate upgrading from a version that never tracked embed identity.
+    setup.prepare(`UPDATE meta SET value = ? WHERE key = 'features'`).run(before.replace(/(embed:static:[^|@]+)@[^|]+/, '$1'));
+    setup.close();
+
+    const result = runCli(dir, ['sql', 'SELECT 1']);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stderr, /recorded the embedding model's resolved identity/);
+    assert.ok(!result.stderr.includes('rebuilds the index'), result.stderr);
+
+    const after = new DatabaseSync(cachePath, { readOnly: true });
+    const row = after.prepare(`SELECT vector FROM embeddings WHERE "path" = 'a.md' AND chunk = 0`).get() as { vector: Uint8Array } | undefined;
+    const features = (after.prepare(`SELECT value FROM meta WHERE key = 'features'`).get() as { value: string }).value;
+    after.close();
+    assert.ok(row?.vector != null, 'adopting the identity must not clear or re-embed an existing vector');
+    assert.equal(features, before, 'meta is restored to the full signature, identity included');
+  });
+
+  it('a changed identity (swapped weights) re-embeds through the normal signature-diff rebuild', () => {
+    const model = writeModel();
+    const dir = embedTree(model);
+    assert.equal(runCli(dir, ['sql', 'SELECT 1']).status, 0);
+
+    // Touching the model file's mtime changes its recorded identity (size+mtime) with the
+    // config itself untouched -- the swapped-weights case F7 exists for.
+    const future = new Date(Date.now() + 5000);
+    utimesSync(join(model, 'model.safetensors'), future, future);
+
+    const result = runCli(dir, ['sql', 'SELECT 1']);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stderr, /config change \(embed settings\) rebuilds the index/);
   });
 });

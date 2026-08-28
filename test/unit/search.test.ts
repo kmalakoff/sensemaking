@@ -13,8 +13,8 @@ function write(baseDir: string, relPath: string, frontmatter: Record<string, unk
   writeFileSync(join(baseDir, relPath), `---\n${lines.join('\n')}\n---\n\n${content}\n`);
 }
 
-// v3 turns semantic on by default per preset; these tests never need vectors and must
-// never touch the network, so the default preset's semantic is pinned off explicitly.
+// These tests never need vectors and must never touch the network; no `embed` block means
+// no model named, so vectors stay off regardless of signals.
 function openTree(baseDir: string) {
   return open({ presets: { default: { include: ['*.md'] } }, queries: {}, baseDir, configPath: null });
 }
@@ -128,6 +128,19 @@ describe('search', () => {
       assert.ok(!text.includes(noise), `indexed text still contains "${noise}": ${JSON.stringify(text)}`);
     }
     for (const term of ['model', 'Remote', 'Margin']) {
+      const n = (db.prepare('SELECT count(*) AS n FROM content WHERE content MATCH ?').get(term) as { n: number }).n;
+      assert.equal(n, 1, `expected "${term}" to be searchable`);
+    }
+  });
+
+  it('footnote definition text is indexed and searchable; the ref markers are not', () => {
+    const baseDir = tmpTree();
+    write(baseDir, 'a.md', { title: 'A' }, 'A claim[^1] and another[^note].\n\n[^1]: gazelles graze at dawn\n[^note]: herons hunt at dusk');
+
+    const { db } = openTree(baseDir);
+    const { text } = db.prepare('SELECT text FROM content').get() as { text: string };
+    assert.ok(!text.includes('[^'), `ref markers survive in: ${JSON.stringify(text)}`);
+    for (const term of ['gazelles', 'herons', 'claim']) {
       const n = (db.prepare('SELECT count(*) AS n FROM content WHERE content MATCH ?').get(term) as { n: number }).n;
       assert.equal(n, 1, `expected "${term}" to be searchable`);
     }

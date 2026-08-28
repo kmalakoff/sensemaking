@@ -208,7 +208,7 @@ async function adversarialProbe() {
 
 // Vectors build lazily on the first semantic-participating query (embedPending tops up NULL
 // rows), not at reconcile -- so the warm-up call pays the embed cost and subsequent calls
-// don't. Model is assumed already cached in ~/.cache/sensemaking; this probe doesn't fetch it.
+// don't. Model is assumed already cached in ~/.sense/models; this probe doesn't fetch it.
 async function semanticProbe() {
   console.log('\n### probes: semantic (bare `search` warm-up + 3 timed, median)');
   const rows = [];

@@ -13,7 +13,7 @@ describe('scoped search does not starve on a truncated global pool', () => {
 
     const { db, cfg } = openConfig({
       presets: { default: { include: ['**/*.md'] } },
-      embed: { model: writeModel(), type: 'static' },
+      embed: { model: writeModel(), provider: 'static' },
       queries: {},
       baseDir,
       configPath: null,
@@ -57,7 +57,7 @@ describe('scoped search does not starve on a truncated global pool', () => {
 
     const { db, cfg } = openConfig({
       presets: { default: { include: ['**/*.md'] } },
-      embed: { model: writeModel(), type: 'static' },
+      embed: { model: writeModel(), provider: 'static' },
       queries: {},
       baseDir,
       configPath: null,

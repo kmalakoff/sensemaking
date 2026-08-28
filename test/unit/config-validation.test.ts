@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { featureSignature } from '../../src/config/index.ts';
+import { featureSignature, SUPPORTED_CONFIG_VERSION } from '../../src/config/index.ts';
 import { packageRoot, runCli } from '../lib/cli.ts';
 
 function runWith(config: string, args: string[] = ['--list']) {
@@ -82,17 +82,64 @@ describe('config validation', () => {
     assert.equal(runWith('{"version":4,"presets":{"default":{"include":["*.md"]}},"queries":{}}').status, 0);
   });
 
-  it('embed with an unknown type is rejected', () => {
-    const result = runWith('{"version":4,"presets":{"default":{"include":["*.md"]}},"embed":{"model":"some/model","type":"weird"}}');
+  it('embed with an unknown provider is rejected', () => {
+    const result = runWith('{"version":5,"presets":{"default":{"include":["*.md"]}},"embed":{"model":"some/model","provider":"weird"}}');
     assert.equal(result.status, 1);
-    assert.match(result.stderr, /embed\.type must be "static" or "api"/);
+    assert.match(result.stderr, /embed\.provider must be "static", "openai", or "cohere"/);
   });
 
-  it('a preset takes semantic as a boolean: it names whether that scope searches with vectors', () => {
+  it('a v4 config still carrying "semantic" migrates it to signals; a non-boolean value is a named migration error', () => {
     assert.equal(runWith('{"version":4,"presets":{"default":{"include":["*.md"],"semantic":false}},"queries":{}}').status, 0);
     const result = runWith('{"version":4,"presets":{"default":{"include":["*.md"],"semantic":{"type":"api"}}},"queries":{}}');
     assert.equal(result.status, 1);
     assert.match(result.stderr, /presets\.default\.semantic must be a boolean/);
+  });
+
+  it('signals must be a non-empty object naming valid signals', () => {
+    const empty = runWith('{"version":5,"presets":{"default":{"include":["*.md"],"signals":{}}},"queries":{}}');
+    assert.equal(empty.status, 1);
+    assert.match(empty.stderr, /presets\.default\.signals must be a non-empty object/);
+
+    const unknown = runWith('{"version":5,"presets":{"default":{"include":["*.md"],"signals":{"words":1,"typos":1}}},"queries":{}}');
+    assert.equal(unknown.status, 1);
+    assert.match(unknown.stderr, /presets\.default\.signals names unknown signal\(s\) typos/);
+    assert.match(unknown.stderr, /valid signals are words, links, vectors/);
+  });
+
+  it('a signal weight must be a finite number > 0', () => {
+    const zero = runWith('{"version":5,"presets":{"default":{"include":["*.md"],"signals":{"words":0}}},"queries":{}}');
+    assert.equal(zero.status, 1);
+    assert.match(zero.stderr, /presets\.default\.signals\.words must be a finite number > 0/);
+
+    const negative = runWith('{"version":5,"presets":{"default":{"include":["*.md"],"signals":{"words":-1}}},"queries":{}}');
+    assert.equal(negative.status, 1);
+    assert.match(negative.stderr, /presets\.default\.signals\.words must be a finite number > 0/);
+
+    const nonNumber = runWith('{"version":5,"presets":{"default":{"include":["*.md"],"signals":{"words":"1"}}},"queries":{}}');
+    assert.equal(nonNumber.status, 1);
+    assert.match(nonNumber.stderr, /presets\.default\.signals\.words must be a finite number > 0/);
+  });
+
+  it('signals: {"links":1} without "words" is rejected, naming both keys', () => {
+    const result = runWith('{"version":5,"presets":{"default":{"include":["*.md"],"signals":{"links":1}}},"queries":{}}');
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /presets\.default\.signals has "links" without "words"/);
+  });
+
+  it('signals: {"vectors":1} with no embed block is rejected, naming both keys', () => {
+    const result = runWith('{"version":5,"presets":{"default":{"include":["*.md"],"signals":{"vectors":1}}},"queries":{}}');
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /presets\.default\.signals includes "vectors", but no "embed" block names a model/);
+  });
+
+  it('signals: {"vectors":1} with an embed block present is accepted, even without "words"', () => {
+    const result = runWith('{"version":5,"presets":{"default":{"include":["*.md"],"signals":{"vectors":1}}},"embed":{"model":"some/model"},"queries":{}}');
+    assert.equal(result.status, 0, result.stderr);
+  });
+
+  it('signals: {"vectors":4} is accepted, weighting the vectors signal above default', () => {
+    const result = runWith('{"version":5,"presets":{"default":{"include":["*.md"],"signals":{"words":1,"vectors":4}}},"embed":{"model":"some/model"},"queries":{}}');
+    assert.equal(result.status, 0, result.stderr);
   });
 
   it('embed.model is required when the block is present -- provider settings without a model embed nothing', () => {
@@ -102,9 +149,10 @@ describe('config validation', () => {
   });
 
   it('a newer config version fails the version gate, not shape validation', () => {
-    const result = runWith(`{"version":${5},"embed":{"provider":"x"}}`);
+    const newer = SUPPORTED_CONFIG_VERSION + 1;
+    const result = runWith(`{"version":${newer},"embed":{"provider":"x"}}`);
     assert.equal(result.status, 1);
-    assert.match(result.stderr, /config version 5 requires a newer sense/);
+    assert.match(result.stderr, new RegExp(`config version ${newer} requires a newer sense`));
   });
 
   it('an unrecognised top-level key is reported, not silently ignored', () => {
@@ -178,7 +226,7 @@ describe('featureSignature', () => {
     // reach it the same way test/unit/verbs.test.ts reaches other src-internal helpers.
     const base = { presets: { default: { include: ['*.md'] }, raw: { include: ['raw/**/*.md'] } }, queries: {} };
     const vectorsOff = featureSignature(base);
-    const vectorsOn = featureSignature({ ...base, embed: { model: 'minishlab/potion-retrieval-32M', type: 'static' as const } });
+    const vectorsOn = featureSignature({ ...base, embed: { model: 'minishlab/potion-retrieval-32M', provider: 'static' as const } });
     assert.notEqual(vectorsOff, vectorsOn);
   });
 
@@ -186,5 +234,25 @@ describe('featureSignature', () => {
     const base = { presets: { default: { include: ['*.md'] } }, queries: {} };
     const widened = featureSignature({ presets: { default: { include: ['**/*.md'] } }, queries: {} });
     assert.notEqual(featureSignature(base), widened);
+  });
+});
+
+describe('embed block: openai url and declared languages', () => {
+  const withEmbed = (embed: string) => runWith(`{"version":5,"presets":{"default":{"include":["*.md"]}},"queries":{},"embed":${embed}}`);
+
+  it('openai without url is a config error naming the key', () => {
+    const result = withEmbed('{"model":"bge-m3","provider":"openai"}');
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /embed\.provider "openai" requires embed\.url/);
+  });
+
+  it('languages must be a non-empty array of tags', () => {
+    for (const bad of ['[]', '["en",3]']) {
+      const result = withEmbed(`{"model":"m","provider":"cohere","languages":${bad}}`);
+      assert.equal(result.status, 1, bad);
+      assert.match(result.stderr, /embed\.languages/);
+    }
+    const ok = withEmbed('{"model":"m","provider":"cohere","languages":["en","zh"]}');
+    assert.equal(ok.status, 0, ok.stderr);
   });
 });

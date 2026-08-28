@@ -74,12 +74,12 @@ ORDER BY bm25(content, 10.0, 5.0, 1.0) LIMIT 10
 ```json
 {
   "$schema": "https://unpkg.com/sensemaking/schema.json",
-  "version": 4,
+  "version": 5,
   "presets": {
     "default": { "include": ["**/*.md"], "k": 10 },
     "raw":     { "include": ["raw/**/*.md"], "k": 5 }
   },
-  "embed": { "model": "minishlab/potion-retrieval-32M", "type": "static" },
+  "embed": { "model": "minishlab/potion-retrieval-32M", "provider": "static" },
   "queries": {
     "dead-links": { "sql": "SELECT src, target FROM links WHERE dst IS NULL" },
     "by-tag":     { "sql": "SELECT path, title FROM frontmatter WHERE has(tags, ?) ORDER BY path" },
@@ -90,7 +90,7 @@ ORDER BY bm25(content, 10.0, 5.0, 1.0) LIMIT 10
 
 | key | holds |
 |---|---|
-| `presets` | named bundles of `include`/`exclude` globs, `k` (result count), `semantic` (vectors for this scope, on unless `false`), `where` (a standing SQL filter). A file is indexed if any preset includes it, embedded if a model is named and some covering preset has `semantic` on; `status` shows each preset's coverage. |
+| `presets` | named bundles of `include`/`exclude` globs, `k` (result count), `signals` (which engines this scope searches with -- `words`, `links`, `vectors`; every signal whose prerequisites hold, unless the preset lists them exhaustively), `where` (a standing SQL filter). A file is indexed if any preset includes it, embedded if a model is named and some covering preset's `signals` include `vectors`; `status` shows each preset's coverage. |
 | `embed` | the model vectors are built with. Naming one gives the tree vectors; omitting the block means none at all, whatever the presets say. `sense download` fetches it. |
 | `content` | settings for the `content` table. `tokenize` names the FTS5 tokenizer, defaulting to `porter unicode61`: name `trigram` for substring matching inside a Latin word, or `unicode61 tokenchars '-_'` to keep hyphenated terms whole. Languages written without word spaces (Chinese, Japanese, Thai, Khmer, Lao, Burmese) need no decision here: they are indexed per grapheme and searched as ordered phrases, substring semantics, what grep gives, needing no minimum length; naming a tokenizer turns that off, since the tree has then chosen its own scheme. Changing it rebuilds the text index only; vectors, links, and sections are kept. |
 | `queries` | entries runnable as `sense <name>`, each naming the verb it runs: `{ sql }` for SQL (`?` binds positional args) or `{ search }` for a ranked search with its settings baked in, so `sense hot` needs no flags. Running an entry validates it: a typo'd column errors and exits nonzero, and a parameterised entry validates with any argument, since preparing precedes binding. |
@@ -98,9 +98,37 @@ ORDER BY bm25(content, 10.0, 5.0, 1.0) LIMIT 10
 
 Bare commands use the `default` preset; `--preset` names another; flags override single fields. Editing a preset rebuilds the cache and says which preset caused it.
 
-Vectors need a model, and nothing downloads it implicitly: `sense download` fetches it once per machine into `$XDG_CACHE_HOME/sensemaking/models` (or `~/.cache/...`), one directory per model, shared by every tree (124 MB, never in the package). `embed.model` is a Hugging Face id, or a path to a directory holding `model.safetensors` and `tokenizer.json`, which `sense download` leaves to you to populate. A preset that asks for vectors without the model is an error naming `sense download`, rather than a quieter result that would make the same search answer differently before and after; a `semantic: false` preset never asks, so it is unaffected. An optional top-level `"embed": { "model", "type", "url", "key" }` block points at any Model2Vec model, local path, or OpenAI-compatible endpoint (Ollama, LM Studio, hosted). Embedding the notes themselves happens on the first semantic search, with progress.
+Vectors need a model. Naming a Hugging Face id in `embed.model` is consent to fetch it: it downloads lazily, on the first vector search, with progress on stderr, into `~/.sense/models` (huggingface_hub's cache layout, one snapshot directory per resolved revision, shared by every tree, 124 MB, never in the package). `sense download` prefetches the same model ahead of time, so the wait happens on your schedule instead of the first query's; it is idempotent and prints the resolved revision. `embed.model` is a Hugging Face id, or a path to a directory holding `model.safetensors` and `tokenizer.json`, which nothing fetches for you. A preset that asks for vectors when a local model path is missing those files is an error naming the fix, rather than a quieter result that would make the same search answer differently before and after; a preset whose `signals` exclude `vectors` never asks, so it is unaffected. An optional top-level `"embed": { "model", "provider", "url", "key" }` block points at any Model2Vec model, local path, or OpenAI-compatible endpoint (Ollama, LM Studio, hosted). Embedding the notes themselves happens on the first vector search, with progress.
 
 Two custom SQL functions. `has(field, value)`: array membership on JSON-array fields, substring on strings, false on missing keys. `segment(terms)`: rewrites a run of Chinese, Japanese, Thai, Khmer, Lao, or Burmese text into the ordered grapheme phrase the sidecar columns need, leaving everything else unchanged, so it is safe to add to any hand-written `MATCH`. Frontmatter parsing is lenient: syntax errors are per-file warnings, and the values are still indexed, so one bad note never costs you the crawl.
+
+## Providers
+
+`embed.provider` picks the wire protocol; `embed.model` names the model. [INTEGRATIONS.md](INTEGRATIONS.md) is the record of what has actually been run and verified against this codebase -- only that gets named as a recommendation.
+
+**static** -- a local, pure-JS Model2Vec model; no network at query time.
+
+```json
+"embed": { "model": "minishlab/potion-retrieval-32M", "provider": "static" }
+```
+
+`model` is a Hugging Face id, fetched to `~/.sense/models` on first use, or a path to a local directory holding `model.safetensors` and `tokenizer.json`.
+
+**openai** -- any endpoint serving an OpenAI-shaped `POST /embeddings`.
+
+```json
+"embed": { "model": "nomic-embed-text", "provider": "openai", "url": "http://localhost:11434/v1" }
+```
+
+Ollama serves this shape at `http://localhost:11434/v1`. LM Studio serves the same shape at `http://localhost:1234/v1`, with narrower platform support than Ollama: Apple Silicon only on Mac, AVX2 on Windows. Content stays on the machine for either. Any other OpenAI-shaped endpoint, including a hosted one, works the same way through `provider: "openai"` and its own `url`; a hosted endpoint means tree content is sent to that service.
+
+**cohere** -- Cohere's native `/v2/embed`, which expresses the doc/query distinction (`input_type`) the OpenAI shape cannot.
+
+```json
+"embed": { "model": "embed-v4.0", "provider": "cohere", "key": "COHERE_API_KEY" }
+```
+
+`key` names the environment variable holding the API key; the key value itself never goes in the config. Content is sent to Cohere.
 
 ## Scale
 
@@ -136,7 +164,7 @@ Two skills: `sense` for querying a tree (what each command is for, FTS5 syntax, 
 - **RAG / vector stores:** similarity can't express `WHERE status = 'active'`. Here vectors are one signal inside `search`: same SQLite file, filters compose, every row labels its evidence (`via`), and a preset turns vectors off per layer of the tree. No second store, no daemon, no native builds.
 - **Document-OS apps (Anytype, Logseq, SilverBullet, Capacities):** full applications with their own UI and storage. `sense` is headless: your files stay files, there's no app to run.
 
-Dependencies: [yaml](https://github.com/eemeli/yaml), [remove-markdown](https://github.com/zuchka/remove-markdown), [@huggingface/tokenizers](https://github.com/huggingface/tokenizers.js) (pure JS), and Node's built-in SQLite. No native builds.
+Dependencies: [yaml](https://github.com/eemeli/yaml), [remove-markdown](https://github.com/zuchka/remove-markdown), [@huggingface/tokenizers](https://github.com/huggingface/tokenizers.js), [franc-min](https://github.com/wooorm/franc) (all pure JS), and Node's built-in SQLite. No native builds.
 
 ## License
 

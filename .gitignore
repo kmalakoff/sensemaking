@@ -11,3 +11,6 @@ npm-debug.log*
 
 # local planning docs
 plans/
+
+# secrets for live provider tests
+.env.test

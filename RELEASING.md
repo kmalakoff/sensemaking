@@ -2,9 +2,19 @@
 
 Everything that can block a release runs **before** the version bump, and publishing is the last step of all. A regression or a stale doc found after `npm publish` is already shipped: consumers install it, and the only remedy is another release.
 
-Subagents dispatched during a release are spawned with `model: sonnet`. Reviews at high or max effort go through the `code-review-sonnet` skill, which keeps the built-in review's fork and its workers on Sonnet whatever the session model. When the session model is costlier than Sonnet, the multi-step steps below (the benchmark write-up, the docs reconcile) are dispatched to subagents rather than run inline; the session keeps the one-command gates and the reading of results.
+Subagents dispatched during a release are spawned with `model: sonnet`. Reviews at high or max effort go through the `coding-standards` skill, which keeps the built-in review's fork and its workers on Sonnet whatever the session model. When the session model is costlier than Sonnet, the multi-step steps below (the benchmark write-up, the docs reconcile) are dispatched to subagents rather than run inline; the session keeps the one-command gates and the reading of results.
 
 1. `npm test` and `npx tsds validate`, both clean. `npm run test:engines` when the release touches anything platform-near (SQLite pragmas, fs, watch): it runs the suite on the oldest supported Node, which is where "works on my machine" breaks.
+
+   `test/unit/live.test.ts` is the part CI cannot run: it talks to real endpoints, one gate variable per [INTEGRATIONS.md](INTEGRATIONS.md) row, read from `.env.test` (gitignored). A release that touches `src/embed/` runs it with the file populated, and the rows it verified get that day's date. Unset gates skip silently, so a green `npm test` alone does not mean the live paths ran -- check the count.
+
+   ```
+   SENSE_TEST_COHERE_KEY=...                          # cohere row
+   SENSE_TEST_OLLAMA_URL=http://localhost:11434/v1    # ollama rows
+   SENSE_TEST_OLLAMA_MODEL=qwen3-embedding:0.6b       # optional, this is the default
+   SENSE_TEST_OLLAMA_LANGUAGES=en,zh,ja,ru,de         # what that model declares; drives which language cases run
+   SENSE_TEST_LMSTUDIO_URL=http://localhost:1234/v1   # same three, LM Studio side; _KEY too if it wants one
+   ```
 
 2. **Regenerate the benchmarks**, still on the previous version number. No release goes out on numbers from an earlier run (see [BENCHMARKING.md](BENCHMARKING.md)):
 

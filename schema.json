@@ -12,12 +12,12 @@
     },
     "version": {
       "type": "integer",
-      "enum": [1, 2, 3, 4],
+      "enum": [1, 2, 3, 4, 5],
       "description": "Config format version. Older versions are auto-migrated (and the file rewritten) on load; a version newer than this sense build supports makes it exit with an error rather than misinterpret the file. Omit to default to 1."
     },
     "presets": {
       "type": "object",
-      "description": "File selection, index-time, and named search defaults. A preset is self-contained: no inheritance between presets, and no ordering -- presets may overlap freely (they are views, not partitions), and a preset whose globs match nothing is valid. A file is indexed iff any preset's include/exclude covers it (union across presets); `default` is used when a command names no preset, and must be declared. A file is embedded when the top-level `embed` block names a model and some covering preset has `semantic` on. `sense init` generates `default` plus one `large` example.",
+      "description": "File selection, index-time, and named search defaults. A preset is self-contained: no inheritance between presets, and no ordering -- presets may overlap freely (they are views, not partitions), and a preset whose globs match nothing is valid. A file is indexed iff any preset's include/exclude covers it (union across presets); `default` is used when a command names no preset, and must be declared. A file is embedded when the top-level `embed` block names a model and some covering preset's `signals` include `vectors`. `sense init` generates `default` plus one `large` example.",
       "minProperties": 1,
       "additionalProperties": {
         "type": "object",
@@ -36,9 +36,16 @@
             "minItems": 1,
             "description": "Glob patterns excluded from this preset's `include`, tsconfig-standard semantics."
           },
-          "semantic": {
-            "type": "boolean",
-            "description": "Vectors for the files this preset covers, and for searches scoped to it. Absent or true means on; only ever meaningfully written as false. A layer searched for exact wording (ingested sources, archives, generated output) sets it false: its files cost no embedding, and searches under it run on words and links. Requires the top-level `embed` block to name a model before any preset can use vectors."
+          "signals": {
+            "type": "object",
+            "additionalProperties": false,
+            "minProperties": 1,
+            "properties": {
+              "words": { "type": "number", "exclusiveMinimum": 0 },
+              "links": { "type": "number", "exclusiveMinimum": 0 },
+              "vectors": { "type": "number", "exclusiveMinimum": 0 }
+            },
+            "description": "Exhaustive when present: every signal this preset's searches compose, each mapped to its RRF weight (a finite number > 0; presence is enablement -- words = BM25 match, links = link-graph expansion, vectors = embedding similarity). A signal's RRF contribution is `weight / (RRF_K + rank)`; weight 1 (the default for every signal) reproduces unweighted scores exactly. Absent means every signal whose prerequisite holds, each at weight 1 -- words always, links when the `links` feature is on, vectors when the top-level `embed` block names a model. `links` requires `words` (link expansion is seeded by word matches); `vectors` requires the `embed` block. A layer searched for exact wording (ingested sources, archives, generated output) declares `{\"words\": 1, \"links\": 1}`: its files cost no embedding, and searches under it run on words and links only."
           },
           "k": {
             "type": "integer",
@@ -78,11 +85,11 @@
     "embed": {
       "type": "object",
       "additionalProperties": false,
-      "description": "The vector switch and the model it uses. Present with a `model` means every indexed file gets vectors; omit the block entirely to index without vectors. `model` (required: Hugging Face id or local path), `type` (`static` = built-in pure-JS Model2Vec loader, default; `api` = OpenAI-compatible POST /embeddings), `url` (api base, e.g. http://localhost:11434/v1), `key` (name of the env var holding the bearer token). Nothing downloads the model implicitly -- run `sense download` once per machine. Changing model or type rebuilds the cache like a feature toggle.",
+      "description": "The vector switch and the model it uses. Present with a `model` means every indexed file gets vectors; omit the block entirely to index without vectors. `model` (required: Hugging Face id or local path), `provider` (`static` = built-in pure-JS Model2Vec loader, default; `openai` = OpenAI-compatible POST /embeddings, covering Ollama, LM Studio, and other compatible endpoints; `cohere` = native Cohere `/v2/embed`), `url` (openai provider base, e.g. http://localhost:11434/v1), `key` (name of the env var holding the bearer token). Nothing downloads the model implicitly -- run `sense download` once per machine. Changing model or provider rebuilds the cache like a feature toggle.",
       "required": ["model"],
       "properties": {
         "model": { "type": "string" },
-        "type": { "type": "string", "enum": ["static", "api"] },
+        "provider": { "type": "string", "enum": ["static", "openai", "cohere"] },
         "url": { "type": "string" },
         "key": { "type": "string" }
       }

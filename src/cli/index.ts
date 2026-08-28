@@ -4,7 +4,7 @@ import type { Command } from './types.ts';
 // top-level usage() and the command's own parse() error/--help output, so there is one
 // copy of each line, not two that can drift.
 export const USAGE = {
-  init: 'init',
+  init: 'init [--model id-or-path] [--provider static|openai|cohere] [--url url]',
   watch: 'watch [--force] [--config path]',
   status: 'status [--format table|json] [--config path]',
   download: 'download [--config path]',

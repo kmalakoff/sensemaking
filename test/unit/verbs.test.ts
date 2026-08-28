@@ -101,7 +101,7 @@ describe('mapTree', () => {
     assert.equal(byName.get('default')?.files, 2);
     assert.equal(byName.get('a')?.files, 1);
     assert.equal(byName.get('b')?.files, 1);
-    // semantic is off everywhere in this fixture, so nothing is embedded.
+    // no embed block in this fixture, so nothing is embedded anywhere.
     assert.equal(byName.get('a')?.embedded, 0);
   });
 });
@@ -840,8 +840,8 @@ describe('search resolution precedence', () => {
   });
 });
 
-// --lexical was removed with the per-preset `semantic` switch: search is search, and a tree
-// without an `embed` block simply has fewer signals.
+// --lexical was removed with the per-preset vector switch (now `signals`): search is search,
+// and a tree without an `embed` block simply has fewer signals.
 describe('removed flags', () => {
   it('--lexical is no longer a flag: it exits 2 with the usage line rather than being ignored', () => {
     const base = makeTree();

@@ -171,13 +171,29 @@ export function featuresLine(features: { on: string[]; off: string[] }): string 
   return `features: ${features.on.join(', ')}${off}`;
 }
 
-export function presetsLines(presets: Array<{ name: string; files: number; embedded: number; semantic?: boolean }>): string[] {
-  // "0 embedded" is ambiguous between a scope that declined vectors and one that has not built
-  // them yet, so a semantic-off preset says which.
-  return ['presets:', ...presets.map((p) => `  ${p.name}: ${p.files} file(s), ${p.embedded} embedded${p.semantic === false ? ' (semantic: false)' : ''}`)];
+// name, or name:weight when the weight is not the default 1.
+function signalLabels(signals: Record<string, number>): string {
+  return Object.entries(signals)
+    .map(([name, weight]) => (weight === 1 ? name : `${name}:${weight}`))
+    .join(', ');
 }
 
-export function renderMap(result: { docs: { count: number; bytes: number }; fields: Row[]; fieldsTotal: number; features: { on: string[]; off: string[] }; presets: Array<{ name: string; files: number; embedded: number; semantic?: boolean }>; hubs: Row[]; recent: Row[]; recentCaveat: string | null }): string {
+export function presetsLines(presets: Array<{ name: string; files: number; embedded: number; signals: Record<string, number> }>): string[] {
+  // "0 embedded" is ambiguous between a scope that declined vectors and one that has not built
+  // them yet, so a preset without the vectors signal says what it uses instead.
+  return ['presets:', ...presets.map((p) => `  ${p.name}: ${p.files} file(s), ${p.embedded} embedded${p.signals.vectors !== undefined ? '' : ` (signals: ${signalLabels(p.signals)})`}`)];
+}
+
+export function renderMap(result: {
+  docs: { count: number; bytes: number };
+  fields: Row[];
+  fieldsTotal: number;
+  features: { on: string[]; off: string[] };
+  presets: Array<{ name: string; files: number; embedded: number; signals: Record<string, number> }>;
+  hubs: Row[];
+  recent: Row[];
+  recentCaveat: string | null;
+}): string {
   const parts = [`docs: ${result.docs.count} (${Math.round(result.docs.bytes / 1024)} KB)`, featuresLine(result.features), '', ...presetsLines(result.presets), '', renderRows(result.fields, 'table')];
   if (result.fieldsTotal > result.fields.length) parts.push(`(+${result.fieldsTotal - result.fields.length} more fields)`);
   if (result.hubs.length > 0) parts.push('\nhubs (by link rank):', renderRows(result.hubs, 'table'));

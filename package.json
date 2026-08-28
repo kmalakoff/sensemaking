@@ -77,17 +77,25 @@
   },
   "dependencies": {
     "@huggingface/tokenizers": "^0.1.3",
+    "franc-min": "^6.2.0",
     "remove-markdown": "^0.6.4",
     "yaml": "^2.9.0"
   },
   "devDependencies": {
     "@types/mocha": "*",
     "@types/node": "*",
+    "cr": "^0.1.0",
     "node-version-use": "*",
     "ts-dev-stack": "*",
     "tsds-config": "*"
   },
   "engines": {
     "node": ">=22.20"
+  },
+  "allowScripts": {
+    "node-semvers": true,
+    "node-filename-to-dist-paths": true,
+    "node-version-use": true,
+    "thread-sleep-compat": true
   }
 }

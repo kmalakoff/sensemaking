@@ -8,12 +8,12 @@ Four tree shapes, each with its config and the commands an agent actually runs. 
 
 ```json
 {
-  "version": 4,
+  "version": 5,
   "presets": {
     "default": { "include": ["wiki/**/*.md"], "k": 10 },
     "raw":     { "include": ["raw/**/*.md"], "k": 5 }
   },
-  "embed": { "model": "minishlab/potion-retrieval-32M", "type": "static" },
+  "embed": { "model": "minishlab/potion-retrieval-32M", "provider": "static" },
   "queries": {
     "uncompiled": { "sql": "SELECT path, _mtime FROM frontmatter WHERE path LIKE 'raw/%' AND path NOT IN (SELECT dst FROM links WHERE dst IS NOT NULL) ORDER BY _mtime DESC" },
     "stubs":      { "sql": "SELECT path, _size FROM frontmatter WHERE path LIKE 'wiki/%' AND _size < 500 ORDER BY _size" },
@@ -37,12 +37,12 @@ What the shape buys: bare search never ranks raw noise above compiled pages; the
 
 ```json
 {
-  "version": 4,
+  "version": 5,
   "presets": {
     "default": { "include": ["memory/**/*.md"], "k": 10 },
     "archive": { "include": ["archive/**/*.md"], "k": 10 }
   },
-  "embed": { "model": "minishlab/potion-retrieval-32M", "type": "static" },
+  "embed": { "model": "minishlab/potion-retrieval-32M", "provider": "static" },
   "queries": {
     "project":    { "sql": "SELECT path, kind, created, title FROM frontmatter WHERE project = ? ORDER BY created DESC" },
     "steers":     { "sql": "SELECT path, created, title FROM frontmatter WHERE kind = 'steer' AND project = ? ORDER BY created" },
@@ -73,12 +73,12 @@ Presets are structural (live vs archived); per-project filtering is metadata (`p
 
 ```json
 {
-  "version": 4,
+  "version": 5,
   "presets": {
     "default": { "include": ["reviews/**/*.md", "notes/**/*.md"], "k": 10 },
     "source":  { "include": ["sources/**/*.md"], "k": 5 }
   },
-  "embed": { "model": "minishlab/potion-retrieval-32M", "type": "static" },
+  "embed": { "model": "minishlab/potion-retrieval-32M", "provider": "static" },
   "queries": {
     "unsupported": { "sql": "SELECT path, title FROM frontmatter WHERE path LIKE 'reviews/%' AND path NOT IN (SELECT src FROM links WHERE dst LIKE 'notes/%')" },
     "unread":      { "sql": "SELECT path FROM frontmatter WHERE path LIKE 'sources/%' AND path NOT IN (SELECT dst FROM links WHERE dst IS NOT NULL)" },

@@ -1,5 +1,5 @@
 import { SenseError } from '../errors.ts';
-import { presetNames } from './access.ts';
+import { presetNames, presetSignals } from './access.ts';
 import type { Config, EffectiveSearch, Preset, SearchOverrides } from './types.ts';
 
 // Looks up a declared preset by name, defaulting to `default`. Throws naming every declared
@@ -23,5 +23,5 @@ export function resolveSearch(cfg: Config, opts: SearchOverrides = {}): Effectiv
   // --no-exclude widens past the preset's exclusions; an explicit --exclude alongside it is
   // still the scope for this command, since it says what to leave out rather than what to keep.
   const exclude = opts.exclude ?? (opts.noExclude ? undefined : preset.exclude);
-  return { presetName, k, where, include, exclude, semantic: preset.semantic !== false };
+  return { presetName, k, where, include, exclude, signals: presetSignals(cfg, presetName) };
 }

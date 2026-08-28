@@ -2,7 +2,8 @@
   "extends": "tsds-config/tsconfig.json",
   "compilerOptions": {
     "outDir": "dist",
-    "types": ["mocha", "node"]
+    "types": ["mocha", "node"],
+    "lib": ["es2022"]
   },
   "include": ["src", "test"],
   "exclude": ["node_modules", "dist"]
