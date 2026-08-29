@@ -1,5 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 import type { Config } from '../../config/index.ts';
+import { contentTokenize } from '../../config/index.ts';
 import { getColumns } from '../shared.ts';
 import { withTransaction } from '../transaction.ts';
 import type { Capability, Connection, Statement, Store, VectorWriteRow } from '../types.ts';
@@ -38,7 +39,7 @@ export function createStore(db: DatabaseSync, conn: Connection, cfg: Config, bas
     },
     lexical: {
       async query(terms, opts) {
-        return queryLexical(conn, terms, opts);
+        return queryLexical(conn, terms, opts, contentTokenize(cfg) === undefined);
       },
     },
     vectors: {

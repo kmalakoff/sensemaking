@@ -3,6 +3,7 @@ import { SenseError } from '../../errors.ts';
 import { activeFeatures } from '../../features/index.ts';
 import type { ExtractedDoc, ReconcileDelta } from '../../features/types.ts';
 import { progress } from '../../output/progress.ts';
+import type { ParsedDoc } from '../../scan/index.ts';
 import { listFiles, RESERVED_COLUMNS } from '../../scan/index.ts';
 import { reparseFiles } from '../../scan/reparse.ts';
 import { getColumns, quoteIdent } from '../shared.ts';
@@ -10,12 +11,22 @@ import { withTransaction } from '../transaction.ts';
 import type { Connection } from '../types.ts';
 
 // Mirrors src/store/sqlite/reconcile.ts's frontmatter-upsert shape (dynamic ALTER TABLE per
-// discovered key, ON CONFLICT upsert keeping the row's identity stable) but with no `content`
-// FTS table: this store has no lexical implementation this phase (see duckdb/store.ts). The one
-// forced divergence is the ALTER TABLE type: DuckDB requires a declared column type where
-// sqlite accepts none, so every dynamic frontmatter column is VARIANT (the only DuckDB type
-// that can hold the different JS types mapValue() produces across files for the same key).
+// discovered key, ON CONFLICT upsert keeping the row's identity stable). `content` is a plain
+// table, not FTS-virtual (D1: DuckDB's fts index is built lazily, on first lexical query, from
+// this table -- see duckdb/lexical.ts), so its rows are maintained here unconditionally. The one
+// forced divergence for frontmatter itself is the ALTER TABLE type: DuckDB requires a declared
+// column type where sqlite accepts none, so every dynamic frontmatter column is VARIANT (the
+// only DuckDB type that can hold the different JS types mapValue() produces across files for
+// the same key).
 const CORE_FRONTMATTER_COLUMNS = new Set(['path', '_mtime', '_ctime', '_size', '_parse_error']);
+
+// No rowid coupling needed (unlike sqlite's content, which links to frontmatter's rowid):
+// `path` is content's own primary key, so this is a plain per-doc row.
+const INSERT_CONTENT_SQL = `INSERT INTO content ("path", title, summary, text) VALUES (?, ?, ?, ?)`;
+
+function contentRow(doc: ParsedDoc): unknown[] {
+  return [doc.relPath, doc.search.title, doc.search.summary, doc.search.text];
+}
 
 // No compile-time column cap in DuckDB (unlike SQLite's SQLITE_MAX_COLUMN); kept as a sanity
 // fence anyway so a runaway frontmatter generator fails with a clear message instead of an
@@ -79,6 +90,14 @@ export async function reconcile(conn: Connection, cfg: Config, baseDir: string):
       );
       await conn.runBatch(insertSql, rows);
     }
+
+    const contentTouched = [...vanished, ...reparsedExisting];
+    if (contentTouched.length > 0)
+      await conn.runBatch(
+        'DELETE FROM content WHERE "path" = ?',
+        contentTouched.map((p) => [p])
+      );
+    if (parsedDocs.length > 0) await conn.runBatch(INSERT_CONTENT_SQL, parsedDocs.map(contentRow));
 
     if (vanished.length > 0)
       await conn.runBatch(

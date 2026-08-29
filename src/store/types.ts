@@ -6,6 +6,9 @@
 // (rather than present-but-inert); 'phrases'/'snippets'/'watch-concurrency' are the finer
 // behaviors sqlite's FTS5 path carries. A tree whose config needs a capability the chosen
 // store lacks fails at open (or at first use for a lazily-detected need), named.
+// 'phrases' means quoted-phrase (`"..."`) matching only -- not FTS5's wider query grammar
+// (prefix `*`, boolean AND/OR/NOT, NEAR, `^`, column filters), which duckdb's lexical path
+// rejects loudly rather than interpret (see store/duckdb/lexical.ts).
 export type Capability = 'phrases' | 'snippets' | 'watch-concurrency' | 'lexical' | 'vectors';
 
 export interface RunResult {

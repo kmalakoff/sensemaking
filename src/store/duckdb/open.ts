@@ -15,10 +15,10 @@ import { createStore } from './store.ts';
 
 export const DB_FILENAME = 'cache.duckdb';
 // Independent of sqlite's SCHEMA_VERSION -- the two stores' cache shapes evolve separately
-// (no content/fts table here, VARIANT frontmatter columns instead of untyped ones), and the
-// store name already joins the feature signature (see featureSignature), so a config's `store`
-// key switching cleanly rebuilds rather than reusing the other engine's stale cache shape.
-export const SCHEMA_VERSION = '1';
+// (VARIANT frontmatter columns instead of untyped ones), and the store name already joins the
+// feature signature (see featureSignature), so a config's `store` key switching cleanly
+// rebuilds rather than reusing the other engine's stale cache shape.
+export const SCHEMA_VERSION = '2';
 
 export interface OpenResult {
   store: Store;
@@ -28,11 +28,14 @@ export interface OpenResult {
   warnings: string[];
 }
 
-// No content/fts table, no tokenizer resolution (this store has no lexical implementation yet
-// -- see duckdb/store.ts's CAPABILITIES): schema is the core frontmatter/preset_files/meta
-// tables plus whatever the active features add through the same portable Connection sqlite uses.
+// `content` is a plain table (not FTS-virtual): D1 builds DuckDB's fts index over it lazily,
+// only when a lexical query actually runs (see duckdb/lexical.ts), and reads it directly for
+// contains() substring/phrase/unspaced-script verification either way. No tokenizer resolution
+// -- this store always uses the fts extension's default (porter) stemmer, unlike sqlite's
+// configurable `content.tokenize` (not read here; D1 does not extend that knob to DuckDB).
 async function ensureSchema(conn: Connection, cfg: Config): Promise<void> {
   await conn.exec(`CREATE TABLE IF NOT EXISTS frontmatter ("path" TEXT PRIMARY KEY, "_mtime" DOUBLE, "_ctime" DOUBLE, "_size" INTEGER, "_parse_error" TEXT)`);
+  await conn.exec(`CREATE TABLE IF NOT EXISTS content ("path" TEXT PRIMARY KEY, title TEXT, summary TEXT, text TEXT)`);
   await conn.exec(`CREATE TABLE IF NOT EXISTS preset_files ("path" TEXT, preset TEXT, PRIMARY KEY ("path", preset))`);
   await conn.exec('CREATE INDEX IF NOT EXISTS preset_files_preset ON preset_files(preset)');
   for (const feature of activeFeatures(cfg)) await feature.schema(conn);
