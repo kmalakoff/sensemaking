@@ -22,7 +22,7 @@ export default async function named(ctx: Ctx, queryName: string): Promise<void> 
   if ('sql' in entry) {
     // A saved statement written against `scope` is preset-agnostic, so the same entry can be
     // re-pointed at another layer from the command line instead of being copied per preset.
-    runSql(cfg, entry.sql, params, format, `query "${queryName}"`, values.preset as string | undefined);
+    await runSql(cfg, entry.sql, params, format, `query "${queryName}"`, values.preset as string | undefined);
     return;
   }
 
@@ -36,5 +36,5 @@ export default async function named(ctx: Ctx, queryName: string): Promise<void> 
   const include = (values.include as string[] | undefined) ?? entry.include;
   const exclude = (values.exclude as string[] | undefined) ?? entry.exclude;
   const noExclude = values['no-exclude'] === true;
-  await withDb(ctx, configPath, async (db, resolvedCfg) => printRows(await search(db, resolvedCfg, entry.search, { k, where, preset, include, exclude, noExclude }), format));
+  await withDb(ctx, configPath, async (store, resolvedCfg) => printRows(await search(store, resolvedCfg, entry.search, { k, where, preset, include, exclude, noExclude }), format));
 }

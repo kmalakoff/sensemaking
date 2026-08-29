@@ -37,6 +37,16 @@ function warnOversize(bytes: number, rowCount: number): void {
 // b's value under both headers. `columns` is the fallback that labels a 0-row result, and with
 // no rows and no statement (a bounded command that found nothing) csv writes nothing at all --
 // a bare newline would read to a csv parser as one empty record.
+// JSON.stringify throws on BigInt, and stores return int64 as BigInt (DuckDB does). A value
+// that fits a safe integer stays a number; a larger one becomes its decimal string, since a
+// JSON number cannot carry it losslessly.
+const MAX_SAFE = BigInt(Number.MAX_SAFE_INTEGER);
+const bigintSafe = (_key: string, value: unknown): unknown => (typeof value === 'bigint' ? (value >= -MAX_SAFE && value <= MAX_SAFE ? Number(value) : value.toString()) : value);
+
+export function stringifyJson(value: unknown, indent?: number): string {
+  return JSON.stringify(value, bigintSafe, indent);
+}
+
 export function printRows(rows: Row[], format: RowFormat, columns?: string[]): void {
   if (format === 'csv') {
     // Collapsed the same way a row object collapses them, so a statement naming a column
@@ -54,21 +64,23 @@ export function printRows(rows: Row[], format: RowFormat, columns?: string[]): v
   warnOversize(Buffer.byteLength(rendered), rows.length);
 }
 
-// Streaming counterpart for the one unbounded caller, `sense sql`: rows arrive from an
-// iterator, so a large result is never held here as rows and again as a rendered string.
-// Table buffers by necessity (a column is as wide as its widest cell, which the last row can
-// change); json and csv write row by row. The writes are synchronous, so when stdout is a pipe
-// Node buffers what the reader has not taken yet -- the saving is this module's copies, not
-// the operating system's.
-export function printRowStream(rows: Iterable<Row>, format: RowFormat, columns: string[]): void {
-  const iterator = rows[Symbol.iterator]();
+// Streaming counterpart for the one unbounded caller, `sense sql`: rows arrive from an async
+// iterator (raw.prepare().iterate(), one microtask for the whole statement, not per row), so a
+// large result is never held here as rows and again as a rendered string. Table buffers by
+// necessity (a column is as wide as its widest cell, which the last row can change); json and
+// csv write row by row. The writes are synchronous, so when stdout is a pipe Node buffers what
+// the reader has not taken yet -- the saving is this module's copies, not the operating system's.
+export async function printRowStream(rows: AsyncIterable<Row>, format: RowFormat, columns: string[]): Promise<void> {
+  const iterator = rows[Symbol.asyncIterator]();
   // One step before any write. FTS5 parses a MATCH expression at step time rather than at
   // prepare time, so a bad search string throws here, with stdout still clean for the error.
-  const first = iterator.next();
-  const rest: Iterable<Row> = { [Symbol.iterator]: () => iterator };
+  const first = await iterator.next();
+  const rest: AsyncIterable<Row> = { [Symbol.asyncIterator]: () => iterator };
 
   if (format === 'table') {
-    printRows(first.done ? [] : [first.value, ...rest], format, columns);
+    const collected: Row[] = first.done ? [] : [first.value];
+    for await (const row of rest) collected.push(row);
+    printRows(collected, format, columns);
     return;
   }
 
@@ -83,13 +95,8 @@ export function printRowStream(rows: Iterable<Row>, format: RowFormat, columns: 
   if (format === 'json') {
     // Byte-identical to JSON.stringify(rows, null, 2) + newline: each row re-indented one
     // level, comma-joined, inside the array brackets written here.
-    // JSON.stringify throws on BigInt, so a row with an int64 past 2^53 (setReadBigInts) is
-    // converted via the replacer: a value that fits a safe integer stays a number, a larger one
-    // becomes its decimal string, since a JSON number cannot carry it losslessly.
-    const MAX_SAFE = BigInt(Number.MAX_SAFE_INTEGER);
-    const bigintSafe = (_key: string, value: unknown) => (typeof value === 'bigint' ? (value >= -MAX_SAFE && value <= MAX_SAFE ? Number(value) : value.toString()) : value);
     const indent = (row: Row) =>
-      JSON.stringify(row, bigintSafe, 2)
+      stringifyJson(row, 2)
         .split('\n')
         .map((line) => `  ${line}`)
         .join('\n');
@@ -99,7 +106,7 @@ export function printRowStream(rows: Iterable<Row>, format: RowFormat, columns: 
       write('[\n');
       write(indent(first.value));
       rowCount = 1;
-      for (const row of rest) {
+      for await (const row of rest) {
         write(',\n');
         write(indent(row));
         rowCount++;
@@ -114,7 +121,7 @@ export function printRowStream(rows: Iterable<Row>, format: RowFormat, columns: 
     write(`${csvLine(names)}\n`);
     write(`${csvLine(names.map((name) => first.value[name]))}\n`);
     rowCount = 1;
-    for (const row of rest) {
+    for await (const row of rest) {
       write(`${csvLine(names.map((name) => row[name]))}\n`);
       rowCount++;
     }
@@ -140,7 +147,7 @@ function fitWidths(widths: number[], limit: number): number[] {
 }
 
 function renderRows(rows: Row[], format: Format, width = process.stdout.columns): string {
-  if (format === 'json') return JSON.stringify(rows, null, 2);
+  if (format === 'json') return stringifyJson(rows, 2);
   if (rows.length === 0) return '(0 rows)';
 
   const columns = Object.keys(rows[0]);

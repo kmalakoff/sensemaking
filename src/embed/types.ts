@@ -1,3 +1,9 @@
+// Storage lever fixed by the bake-off (benchmark/reports/2026-08-13-static-model-bakeoff.md):
+// int8 at 256 dims is quality-free vs f32-512 when fused. Also the duckdb store's FLOAT[N]
+// column width, so both stores share one source of truth for it rather than a schema
+// constant drifting from the quantization one.
+export const STORE_DIMS = 256;
+
 // The provider contract every wire protocol implements: a Liskov-substitutable
 // surface so query/search code never branches on provider identity.
 export interface EmbedProvider {

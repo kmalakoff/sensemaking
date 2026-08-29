@@ -1,1 +1,1 @@
-ignores: ["node-version-use", "ts-dev-stack", "sensemaking", "franc-min"]
+ignores: ["node-version-use", "ts-dev-stack", "sensemaking", "franc-min", "@duckdb/node-api", "install-module-linked"]

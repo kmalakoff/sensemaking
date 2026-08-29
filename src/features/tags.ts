@@ -61,26 +61,25 @@ function extract(_raw: string, body: string, _search?: { title: string; summary:
 
 export const tags: Feature = {
   name: 'tags',
-  schema(db) {
-    db.exec('CREATE TABLE IF NOT EXISTS tags ("path" TEXT, tag TEXT, PRIMARY KEY ("path", tag))');
-    db.exec('CREATE INDEX IF NOT EXISTS tags_tag ON tags(tag)');
+  async schema(db) {
+    await db.exec('CREATE TABLE IF NOT EXISTS tags ("path" TEXT, tag TEXT, PRIMARY KEY ("path", tag))');
+    await db.exec('CREATE INDEX IF NOT EXISTS tags_tag ON tags(tag)');
   },
   extract,
-  // Per-file rows with nothing else to resolve, so only a vanished file needs a delete here;
-  // store() below handles a reparse's stale rows itself.
-  remove(db, path, delta) {
-    if (!delta.vanished.includes(path)) return;
-    db.prepare('DELETE FROM tags WHERE "path" = ?').run(path);
+  // Blanket clear-then-reinsert (store() below always writes the full found list back), so
+  // remove() covers both a vanished file and a reparsed one that already had rows -- no
+  // per-file NOT IN diffing, which cannot be expressed as one statement shared across files.
+  async remove(db, paths) {
+    if (paths.length === 0) return;
+    await db.runBatch(
+      'DELETE FROM tags WHERE "path" = ?',
+      paths.map((p) => [p])
+    );
   },
-  store(db, path, extracted) {
-    const found = extracted as string[];
-    if (found.length === 0) {
-      db.prepare('DELETE FROM tags WHERE "path" = ?').run(path);
-    } else {
-      const placeholders = found.map(() => '?').join(', ');
-      db.prepare(`DELETE FROM tags WHERE "path" = ? AND tag NOT IN (${placeholders})`).run(path, ...found);
-    }
-    const insert = db.prepare('INSERT OR IGNORE INTO tags ("path", tag) VALUES (?, ?)');
-    for (const tag of found) insert.run(path, tag);
+  async store(db, docs) {
+    const rows: unknown[][] = [];
+    for (const { path, extracted } of docs) for (const tag of extracted as string[]) rows.push([path, tag]);
+    if (rows.length === 0) return;
+    await db.runBatch('INSERT OR IGNORE INTO tags ("path", tag) VALUES (?, ?)', rows);
   },
 };

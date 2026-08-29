@@ -1,7 +1,7 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { refsMainPath, snapshotDir, writeLanguages, writeRef } from '../../src/embed/store.ts';
+import { scratchDir } from './scratch.ts';
 
 const DIMS = 8;
 
@@ -44,7 +44,7 @@ function writeModelFiles(dir: string, groups: string[][] = DEFAULT_GROUPS): void
 }
 
 export function writeModel(groups?: string[][]): string {
-  const dir = mkdtempSync(join(tmpdir(), 'sense-model-'));
+  const dir = scratchDir('model');
   writeModelFiles(dir, groups);
   return dir;
 }

@@ -1,5 +1,3 @@
-import type { DatabaseSync } from 'node:sqlite';
-
 // A frontmatter key with punctuation (`plugin-id`, `a.b`) is a real column, but naming it
 // unquoted in SQL parses as an expression: `plugin-id` is `plugin - id`, and SQLite's error
 // names a fragment (`plugin`) the user never wrote. This maps that fragment back to the
@@ -9,7 +7,9 @@ function startsWithBoundary(name: string, prefix: string): boolean {
   return name.length > prefix.length && name.startsWith(prefix) && /\W/.test(name[prefix.length]);
 }
 
-export function columnHint(db: DatabaseSync, err: Error): Error {
+// columns: the tree's frontmatter columns (store.docs.columns()), read by the caller so this
+// stays a pure function rather than a store dependency.
+export function columnHint(columns: string[], err: Error): Error {
   const match = /no such column: (\S+)/.exec(err.message);
   if (!match) return err;
   const token = match[1];
@@ -18,7 +18,6 @@ export function columnHint(db: DatabaseSync, err: Error): Error {
   // directly, so stripping here never needs to special-case it.
   const aliasStripped = token.replace(/^[A-Za-z_]\w*\./, '');
   const forms = new Set([token, aliasStripped]);
-  const columns = (db.prepare('PRAGMA table_info(frontmatter)').all() as Array<{ name: string }>).map((c) => c.name);
   const candidates = new Set<string>();
   for (const name of columns) {
     for (const form of forms) {

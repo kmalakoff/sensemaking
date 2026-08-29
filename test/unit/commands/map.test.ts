@@ -8,7 +8,7 @@ import { openTree, tmpTree, writeNote } from '../../lib/tree.ts';
 // with the checkout time, so raw mtime order can silently pass off a tie as edit history.
 
 describe('mapTree recent caveat', () => {
-  it('flags a checkout: same mtime second, differing ms, across a majority of files', () => {
+  it('flags a checkout: same mtime second, differing ms, across a majority of files', async () => {
     const baseDir = tmpTree();
     const paths: string[] = [];
     for (let i = 0; i < 10; i++) {
@@ -24,14 +24,14 @@ describe('mapTree recent caveat', () => {
       utimesSync(`${baseDir}/${relPath}`, mtime, mtime);
     });
 
-    const { db, cfg } = openTree(baseDir);
-    const result = mapTree(db, cfg);
+    const { store, cfg } = await openTree(baseDir);
+    const result = await mapTree(store, cfg);
     assert.ok(result.recentCaveat, 'expected a checkout caveat');
     assert.match(result.recentCaveat as string, /10 of 10 files share one modified second/);
     assert.match(renderMap(result), /10 of 10 files share one modified second/);
   });
 
-  it('does not flag a natural spread of mtimes across distinct seconds', () => {
+  it('does not flag a natural spread of mtimes across distinct seconds', async () => {
     const baseDir = tmpTree();
     const paths: string[] = [];
     for (let i = 0; i < 10; i++) {
@@ -45,8 +45,8 @@ describe('mapTree recent caveat', () => {
       utimesSync(`${baseDir}/${relPath}`, mtime, mtime);
     });
 
-    const { db, cfg } = openTree(baseDir);
-    const result = mapTree(db, cfg);
+    const { store, cfg } = await openTree(baseDir);
+    const result = await mapTree(store, cfg);
     assert.equal(result.recentCaveat, null);
     assert.ok(!renderMap(result).includes('share one modified second'));
   });

@@ -4,7 +4,7 @@ import type { Config } from './types.ts';
 
 // Shape check for hand-edited files, so a typo names itself instead of surfacing as a
 // TypeError. Unknown top-level keys warn (forward compat); unknown keys inside a block error.
-const KNOWN_KEYS = new Set(['$schema', 'version', 'presets', 'features', 'embed', 'content', 'queries']);
+const KNOWN_KEYS = new Set(['$schema', 'version', 'presets', 'features', 'embed', 'content', 'store', 'queries']);
 const KNOWN_PRESET_KEYS = new Set(['include', 'exclude', 'k', 'signals', 'where']);
 const KNOWN_FEATURE_KEYS = new Set(['links', 'sections', 'tags', 'rank']);
 // Exported so a docs test can assert every key here has a schema.json property -- one source
@@ -32,7 +32,7 @@ export function validateLegacyScan(parsed: unknown, configPath: string): void {
 }
 
 // Only the shape is checked here. Whether the linked SQLite accepts the tokenizer is settled
-// by probing it in db.ts, so this never has to carry a table of which version added what.
+// by probing it in store/sqlite/open.ts, so this never has to carry a table of which version added what.
 function validateContentBlock(value: unknown, configPath: string): void {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw new SenseError('CONFIG_INVALID', `${configPath}: content must be an object of { tokenize?: string }`);
@@ -44,6 +44,12 @@ function validateContentBlock(value: unknown, configPath: string): void {
   }
   if (block.tokenize !== undefined && (typeof block.tokenize !== 'string' || block.tokenize.trim() === '')) {
     throw new SenseError('CONFIG_INVALID', `${configPath}: content.tokenize must be a non-empty string, e.g. "trigram" or "unicode61 tokenchars '-_'"`);
+  }
+}
+
+function validateStoreKey(value: unknown, configPath: string): void {
+  if (value !== 'sqlite' && value !== 'duckdb') {
+    throw new SenseError('CONFIG_INVALID', `${configPath}: store must be "sqlite" or "duckdb"`);
   }
 }
 
@@ -251,6 +257,9 @@ export function validateConfig(parsed: unknown, configPath: string): Config {
   }
   if (cfg.content !== undefined) {
     validateContentBlock(cfg.content, configPath);
+  }
+  if (cfg.store !== undefined) {
+    validateStoreKey(cfg.store, configPath);
   }
 
   // vectors' prerequisite is a named model, checked here once embed is known valid (or absent).

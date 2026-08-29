@@ -71,6 +71,10 @@ export interface Config {
   // Settings for the `content` FTS5 table. `tokenize` decides which languages the tree can be
   // word-searched in at all; changing it rebuilds the index.
   content?: { tokenize?: string };
+  // Backing store engine for this tree; defaults to "sqlite" (zero-dependency). "duckdb" is an
+  // optional dependency and, in this build, implements only the portable surface (frontmatter,
+  // links, sections, tags, rank, raw sql) -- a config needing lexical or vector search under it fails at open.
+  store?: 'sqlite' | 'duckdb';
   queries: Record<string, SavedQuery>;
 }
 

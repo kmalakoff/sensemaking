@@ -1,5 +1,5 @@
 import { peek } from '../commands/peek.ts';
-import { renderPeek } from '../output/output.ts';
+import { renderPeek, stringifyJson } from '../output/output.ts';
 import { USAGE } from './index.ts';
 import { CONFIG, FORMAT, formatOf, parse, SCOPE, scopeOf, withDb } from './shared.ts';
 import type { Command } from './types.ts';
@@ -10,10 +10,10 @@ const peekCmd: Command = (ctx) => {
   const [pathArg] = positionals;
   if (!pathArg) ctx.usageError(usage);
   const format = formatOf(values);
-  return withDb(ctx, values.config as string | undefined, (db, cfg) => {
+  return withDb(ctx, values.config as string | undefined, async (store, cfg) => {
     const overrides = scopeOf(values);
-    const result = peek(db, cfg, pathArg, overrides);
-    console.log(format === 'json' ? JSON.stringify(result, null, 2) : renderPeek(result));
+    const result = await peek(store, cfg, pathArg, overrides);
+    console.log(format === 'json' ? stringifyJson(result, 2) : renderPeek(result));
   });
 };
 export default peekCmd;

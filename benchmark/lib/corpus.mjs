@@ -170,6 +170,15 @@ function specKey(spec) {
   return `synthetic-n${full.notes}-t${full.noteTokens}-h${full.headingsPerNote}-l${full.linksPerNote}-f${full.distinctFields}-fpn${full.fieldsPerNote}-s${full.seed}-${short}`;
 }
 
+// The one write site for the sense.config.json files the harness owns. The store is a
+// run-time fact, not a build fact: corpus cache entries are shared across stores, so the
+// key is added only when a run names one (run.mjs rewrites the config per run), never
+// baked in at build time.
+export function writeTreeConfig(tree, config, { store } = {}) {
+  if (store) config = { ...config, store };
+  writeFileSync(join(tree, 'sense.config.json'), JSON.stringify(config));
+}
+
 const CORPORA = {
   // Real Obsidian-style tree: wikilinks, frontmatter, no relevance labels.
   'obsidian-hub': {
@@ -235,7 +244,7 @@ const BUILDERS = {
       const title = JSON.stringify(doc.title ?? '');
       writeFileSync(join(tree, `${doc._id}.md`), `---\ntitle: ${title}\n---\n\n${doc.text}\n`);
     }
-    writeFileSync(join(tree, 'sense.config.json'), '{"version":1,"scan":{"include":["**/*.md"]},"queries":{}}');
+    writeTreeConfig(tree, { version: 1, scan: { include: ['**/*.md'] }, queries: {} });
     execFileSync('cp', [join(inner, 'queries.jsonl'), labels]);
     execFileSync('bash', ['-c', `cp ${JSON.stringify(join(inner, 'qrels'))}/*.tsv ${JSON.stringify(labels)}`]);
   },
@@ -295,7 +304,7 @@ const BUILDERS = {
         kept.add(id);
       }
     }
-    writeFileSync(join(tree, 'sense.config.json'), '{"version":1,"scan":{"include":["**/*.md"]},"queries":{}}');
+    writeTreeConfig(tree, { version: 1, scan: { include: ['**/*.md'] }, queries: {} });
     execFileSync('rm', [zip]);
 
     // Labels in BEIR format, restricted to pages that made it into the tree.
@@ -378,7 +387,7 @@ const BUILDERS = {
       console.error(`miracl-${lang}: shard ${shard + 1}/${shards}, judged kept ${kept.size}/${judged.size}, candidates seen ${candidatesSeen}`);
     }
     for (const doc of reservoir) writeDoc(doc);
-    writeFileSync(join(tree, 'sense.config.json'), '{"version":1,"scan":{"include":["**/*.md"]},"queries":{}}');
+    writeTreeConfig(tree, { version: 1, scan: { include: ['**/*.md'] }, queries: {} });
 
     // Labels: BEIR 3-column test.tsv (MIRACL's dev split is the only publicly-labeled split --
     // it stands in as this harness's "test" split), queries restricted to ones with a judged
@@ -408,7 +417,7 @@ BUILDERS.replicate = (spec, dest) => {
     execFileSync('cp', ['-R', src, copy]);
     execFileSync('rm', ['-rf', join(copy, '.git'), join(copy, '.sense'), join(copy, 'sense.config.json')]);
   }
-  writeFileSync(join(dest, 'sense.config.json'), '{"version":1,"scan":{"include":["**/*.md"]},"queries":{}}');
+  writeTreeConfig(dest, { version: 1, scan: { include: ['**/*.md'] }, queries: {} });
 };
 
 // Synthetic tree for shape sweeps (benchmark/sweep.mjs): every dimension holds the rest of
@@ -457,10 +466,9 @@ BUILDERS.synthetic = (spec, dest) => {
 
   if (cfg.presets) {
     const presets = Object.fromEntries(cfg.presets.map((p) => [p.name, { include: [`${p.dir}/**/*.md`], ...(p.semantic === false ? { semantic: false } : {}) }]));
-    writeFileSync(join(dest, 'sense.config.json'), `${JSON.stringify({ version: 3, presets, queries: {} }, null, 2)}\n`);
+    writeTreeConfig(dest, { version: 3, presets, queries: {} });
   } else {
-    const features = cfg.embed ? ', "features": {"embed": true}' : '';
-    writeFileSync(join(dest, 'sense.config.json'), `{"version": 2, "scan": {"include": ["**/*.md"]}, "queries": {}${features}}\n`);
+    writeTreeConfig(dest, { version: 2, scan: { include: ['**/*.md'] }, queries: {}, ...(cfg.embed ? { features: { embed: true } } : {}) });
   }
 };
 

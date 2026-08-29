@@ -11,6 +11,6 @@ const searchCmd: Command = async (ctx) => {
   if (!terms) ctx.usageError(usage);
   const k = parseK(values.k as string | undefined, ctx.usageError);
   const format = rowFormatOf(values);
-  await withDb(ctx, values.config as string | undefined, async (db, cfg) => printRows(await search(db, cfg, terms, { k, ...scopeOf(values) }), format));
+  await withDb(ctx, values.config as string | undefined, async (store, cfg) => printRows(await search(store, cfg, terms, { k, ...scopeOf(values) }), format));
 };
 export default searchCmd;
