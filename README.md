@@ -13,7 +13,7 @@ Markdown notes accumulate: research, decisions, meeting notes, agent output. Pas
 ```bash
 npm install -g sensemaking
 cd your-notes && sense init
-sense download          # the embedding model, once per machine; nothing fetches it implicitly
+sense download          # the embedding model, once per machine; the first vector search fetches it otherwise
 ```
 
 Needs Node 22.20 or newer: the first release whose built-in SQLite has both FTS5, which `sense search` indexes prose with, and row-returning `INSERT ... RETURNING`, which `sense path` and `peek` walk the link graph with.
@@ -34,6 +34,7 @@ Every file becomes rows in these tables, plus whatever an enabled feature adds o
 | `frontmatter` | one column per key, plus `path`, `_mtime`, `_size`, `_rank`, `_parse_error` | filtering |
 | `content` | `title`, `summary`, `text`, `path`; on the default `sqlite` store an FTS5 index with machine-written `title_seg`/`summary_seg`/`text_seg` sidecars for matching in Chinese, Japanese, Thai, Khmer, Lao, and Burmese, on `duckdb` a plain table that matches those scripts as substrings | search and ranking |
 | `links` | `src`, `target` as written, `dst` resolved (`NULL` = dead link, but see the skill: a link to an attachment can never resolve) | graph |
+| `tags` | `path`, `tag`; frontmatter and inline `#tags` merged and deduplicated, nested tags stored full | tag filters |
 | `sections` | heading, `level`, `start_line`, `end_line`, `tokens` estimate | structure |
 | `preset_files` | `path`, `preset` | which presets cover which files; `sql --preset` binds these as a `scope` table to join, since `sql` is otherwise index-wide |
 
@@ -147,7 +148,7 @@ These are release gates rather than hopes: every release regenerates the numbers
 npx skills add kmalakoff/sensemaking   # -g for global, -a claude-code to target
 ```
 
-Two skills: `sense` for querying a tree (what each command is for, FTS5 syntax, reading the `via`/`score`/`similarity` columns, worked examples) and `sense-setup` for making one, where features, frontmatter conventions, and note size are decisions with consequences either way.
+Three skills: `sense` for querying a tree (what each command is for, FTS5 syntax, reading the `via`/`score`/`similarity` columns, worked examples), `sense-setup` for making one, where features, frontmatter conventions, and note size are decisions with consequences either way, and `sense-bases` for translating an Obsidian Bases `.base` file into sense SQL.
 
 ## Prior art
 

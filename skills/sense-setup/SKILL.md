@@ -1,6 +1,6 @@
 ---
 name: sense-setup
-description: "Set up the sense CLI on a markdown tree and make the tree-design decisions that shape it: sense init, presets (which files, which settings, whether the scope searches by meaning), the embed block that names the model, and the trade-offs of frontmatter conventions, summaries, folder layout, and note size. Use when creating or restructuring a markdown knowledge base, running sense init, editing sense.config.json, configuring search scope or vectors, or deciding how notes should be written for an agent to query later."
+description: "Set up the sense CLI on a markdown tree and make the tree-design decisions that shape it: sense init, presets (which files, which settings, whether the scope searches by meaning), the embed block that names the model, and the trade-offs of frontmatter conventions, summaries, folder layout, and note size. Use when creating or restructuring a markdown knowledge base, running sense init, editing sense.config.json, choosing the backing store (sqlite or duckdb), configuring search scope or vectors, or deciding how notes should be written for an agent to query later."
 ---
 
 # sense: setup and tree design

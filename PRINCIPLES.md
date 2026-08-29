@@ -94,7 +94,8 @@ leaves the machine.
 
 A store implements the contract with its engine's own mechanisms, not a
 simulation of another store's: SQLite uses FTS5 and its UDFs, DuckDB uses its
-fts extension and vector types, Turso uses Tantivy FTS and vector distances.
+fts extension and vector types; a future Turso store would use Tantivy FTS
+and vector distances.
 Normalization lives at the exported API, the Store interface, named errors,
 and result shapes. A SQL translation layer that makes one engine speak
 another's dialect is a violation, however uniform the output looks.

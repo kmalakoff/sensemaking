@@ -24,7 +24,7 @@ The default run answers "did the working tree regress?" `local` is whatever is c
 
 Two kinds of metric per version:
 
-- **Wall-time:** spawns the CLI per operation, so every number includes ~40 ms of Node startup. This is what a calling agent pays per invocation. On embed-enabled trees `run.mjs` also times `find --semantic` (`semantic_find_ms`); its delta over `find_ms` is the per-invocation semantic cost: model load, query embed, vector scan (null on trees without embed).
+- **Wall-time:** spawns the CLI per operation, so every number includes ~40 ms of Node startup. This is what a calling agent pays per invocation. On embed-enabled trees `run.mjs` also times `search` with vectors (`semantic_find_ms`); its delta over `find_ms` is the per-invocation semantic cost: model load, query embed, vector scan (null on trees without embed).
 - **In-process:** imports the version's `dist/esm/index.js` as a library and times the engine alone: cold index build, the no-change freshness check, and incremental updates (1 file touched, 10 files modified). Pure Node, no platform dependence.
 
 ## Maintaining
@@ -42,7 +42,7 @@ Two kinds of metric per version:
 - Wall minus in-process ≈ per-invocation overhead: process spawn, Node/V8 startup, importing sense and its dependencies, argv parsing. The two move independently. If the in-process number grows, the engine (scan/reconcile/SQL) got slower; if the gap grows while in-process stays flat, startup got heavier, typically a new dependency imported at module top level, which every invocation pays for before any work happens. Commands lazy-load from `src/cli/` (cli.ts imports no tree code), so a heavy import belongs inside the one command that uses it; `--version` is the canary: it should stay at bare Node startup (~25 ms here).
 - The update rows include everything reconcile does after re-parsing: link re-resolution across the whole table and a full PageRank pass. They are the numbers to watch as features add reconcile work.
 - The bulk-change pair measures `watch`: without a watcher, the first query after many files change pays the whole reparse; with one running, the reparse happened in the background and the query pays only the freshness check.
-- Token columns (`map`, `peek`, `find` row) are output-size contracts, not performance: they must stay roughly flat as trees grow. A token number that scales with tree size is a context-bloat regression even if timings look fine. The `find` row is measured in json, per row actually returned, and tracks summary and snippet length rather than tree size.
+- Token columns (`map`, `peek`, `search` row) are output-size contracts, not performance: they must stay roughly flat as trees grow. A token number that scales with tree size is a context-bloat regression even if timings look fine. The `search` row is measured in json, per row actually returned, and tracks summary and snippet length rather than tree size.
 - Watch for: cold build growing worse than linearly with note count; the no-change check drifting above ~50 ms at 10k notes; the update rows drifting away from the freshness check they now track (update minus no-change is the real update work; it should stay in the tens of ms); any stress-table row moving (each guards a fixed shape cliff).
 
 ## Scale
@@ -65,11 +65,11 @@ Current numbers: see "Numbers of record" below.
 
 ## Retrieval quality
 
-`benchmark/eval.mjs <corpus>` runs every labeled query through the shipped library in four passes and reports nDCG@10, MRR@10 and hit@10 against the corpus qrels: **bm25-only** (links and rank off), **fused** (BM25 + link expansion), **fused-embed-configured** (the embed block present, the preset `semantic: false`; a hidden guard pass), and **semantic** (embed block present, preset semantic on). There is no per-call semantic switch: the preset decides, so the guard exercises the one lever a tree owner actually has. Queries are natural-language text submitted as an OR bag of words (the standard bag-of-words baseline; bare FTS5 terms AND-join and punctuation is syntax).
+`benchmark/eval.mjs <corpus>` runs every labeled query through the shipped library in four passes and reports nDCG@10, MRR@10 and hit@10 against the corpus qrels: **bm25-only** (links and rank off), **fused** (BM25 + link expansion), **fused-embed-configured** (the embed block present, the preset's `signals` without `vectors`; a hidden guard pass), and **semantic** (embed block present, `vectors` in the preset's `signals`). There is no per-call semantic switch: the preset decides, so the guard exercises the one lever a tree owner actually has. Queries are natural-language text submitted as an OR bag of words (the standard bag-of-words baseline; bare FTS5 terms AND-join and punctuation is syntax).
 
 Two guards run before any number is reported:
 
-- **Bit-identity.** The guard pass must return rows identical to fused, query for query; a divergence aborts the run with a nonzero exit. This is what makes "a semantic:false preset changes nothing on an embed-configured tree" a tested claim rather than a design intention.
+- **Bit-identity.** The guard pass must return rows identical to fused, query for query; a divergence aborts the run with a nonzero exit. This is what makes "a vectors-free preset changes nothing on an embed-configured tree" a tested claim rather than a design intention.
 - **Paired per-query deltas.** Point metrics hide whether a change moved many queries a little or a few queries a lot, and at these sample sizes a 0.01 difference can be noise. Every comparison also reports wins/losses and a sign-test z (|z| > 2 is beyond noise).
 
 Labeled corpora convert their labels to one format (`labels/queries.jsonl` + `test.tsv`, read by `benchmark/lib/labels.mjs`):
@@ -78,7 +78,7 @@ Labeled corpora convert their labels to one format (`labels/queries.jsonl` + `te
 - **fever:** FEVER dev split, 2,860 Wikipedia pages cited as evidence by 13,229 verifiable claims, with sentence link annotations kept as wikilinks. The claims are the queries; the corpus that can measure whether link fusion helps or hurts ranking.
 - **miracl-\<lang\>:** per-language MIRACL (`benchmark/lib/corpus.mjs`'s `miracl` builder), judged docs as a floor plus reservoir-sampled distractors toward ~3-5k docs. The multilingual counterpart to nfcorpus/fever's English-only pair; CJK-script queries need `orBag`'s unigram split (see the methodology changelog) or they score at chance level.
 
-Storage-lever and fusion-weight choices (dims, int8 vs f32, per-signal RRF weight) are measured against these same corpora by `bakeoff.mjs` and `weight-sweep.mjs`. Read: the published BEIR BM25 (Anserini) baseline for NFCorpus is nDCG@10 ≈ 0.32, which the FTS5 pipeline matches, so `find`'s lexical layer is a faithful BM25 rather than an approximation. NFCorpus and FEVER are the ends of one vocabulary-gap axis (NFCorpus: layman queries over jargon documents, 31% of queries have no relevant document in the top 10; FEVER: claims quote their evidence nearly verbatim, 99.7% hit@10 for plain BM25), and no customer tree sits at either end -- a change that wins on one by losing on the other is fitted to a corpus nobody has.
+Storage-lever and fusion-weight choices (dims, int8 vs f32, per-signal RRF weight) are measured against these same corpora by `bakeoff.mjs` and `weight-sweep.mjs`. Read: the published BEIR BM25 (Anserini) baseline for NFCorpus is nDCG@10 ≈ 0.32, which the FTS5 pipeline matches, so `search`'s lexical layer is a faithful BM25 rather than an approximation. NFCorpus and FEVER are the ends of one vocabulary-gap axis (NFCorpus: layman queries over jargon documents, 31% of queries have no relevant document in the top 10; FEVER: claims quote their evidence nearly verbatim, 99.7% hit@10 for plain BM25), and no customer tree sits at either end -- a change that wins on one by losing on the other is fitted to a corpus nobody has.
 
 Current numbers: see "Numbers of record" below.
 
