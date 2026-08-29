@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { Tokenizer } from '@huggingface/tokenizers';
 import { SenseError } from '../errors.ts';
 import { downloadModel, isDownloadable, MODEL_FILENAMES, MODEL_FILES, modelDir, readLanguages } from './store.ts';
 import type { EmbedProvider } from './types.ts';
@@ -37,8 +38,6 @@ export async function staticProvider(model: string): Promise<EmbedProvider> {
   const matrix = dataStart % 4 === 0 ? new Float32Array(raw.buffer, dataStart, spec.shape[0] * dims) : new Float32Array(raw.buffer.slice(dataStart, dataStart + spec.shape[0] * dims * 4));
 
   const tokenizerJson = JSON.parse(readFileSync(join(dir, 'tokenizer.json'), 'utf8'));
-  // Lazy import: the tokenizer loads only on the semantic path, never at CLI startup.
-  const { Tokenizer } = await import('@huggingface/tokenizers');
   const tok = new Tokenizer(tokenizerJson, {});
   const unkId = tokenizerJson.model?.vocab?.[tokenizerJson.model?.unk_token] ?? -1;
 

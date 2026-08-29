@@ -1,11 +1,11 @@
 import assert from 'node:assert';
 import { createServer } from 'http';
+import { getProvider } from '../../../src/embed/registry.ts';
 import { listen } from '../../lib/server.ts';
 
 // Registry behavior the providers share: rejection eviction and owner-declared languages.
 describe('provider registry', () => {
   it('a rejected construction is retried, not cached for the process lifetime', async () => {
-    const { getProvider } = await import('../../../src/embed/registry.ts');
     let calls = 0;
     const server = createServer((_req, res) => {
       calls++;
@@ -25,7 +25,6 @@ describe('provider registry', () => {
   });
 
   it('two trees sharing an endpoint and model but declaring different languages get their own provider', async () => {
-    const { getProvider } = await import('../../../src/embed/registry.ts');
     const server = createServer((_req, res) => {
       res.setHeader('content-type', 'application/json');
       res.end(JSON.stringify({ data: [{ embedding: [0.1, 0.2] }] }));
@@ -39,7 +38,6 @@ describe('provider registry', () => {
   });
 
   it('embed.languages overrides the provider and feeds the fit check', async () => {
-    const { getProvider } = await import('../../../src/embed/registry.ts');
     const server = createServer((_req, res) => {
       res.setHeader('content-type', 'application/json');
       res.end(JSON.stringify({ data: [{ embedding: [0.1, 0.2] }] }));

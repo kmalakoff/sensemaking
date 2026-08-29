@@ -2,6 +2,7 @@ import assert from 'node:assert';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { Tokenizer } from '@huggingface/tokenizers';
 import { staticProvider } from '../../../src/embed/static.ts';
 import { downloadModelRevision, MODEL_FILES, snapshotDir } from '../../../src/embed/store.ts';
 import type { EmbedProvider } from '../../../src/embed/types.ts';
@@ -69,7 +70,7 @@ function assertVectorParity(category: string, expected: number[], actual: Float3
 
 describe('embedding parity against the Python reference', () => {
   let provider: EmbedProvider;
-  let tokenizer: InstanceType<typeof import('@huggingface/tokenizers').Tokenizer>;
+  let tokenizer: InstanceType<typeof Tokenizer>;
 
   before(async function () {
     // A cold machine downloads ~129 MB into the real store here (once); every later run of
@@ -95,7 +96,6 @@ describe('embedding parity against the Python reference', () => {
     // Loaded independently of staticProvider, exactly as src/embed/static.ts does, so this
     // exercises the raw tokenizer output (pre unk-filter) rather than the provider's filtered ids.
     const tokenizerJson = JSON.parse(readFileSync(join(modelPath, 'tokenizer.json'), 'utf8'));
-    const { Tokenizer } = await import('@huggingface/tokenizers');
     tokenizer = new Tokenizer(tokenizerJson, {});
   });
 
