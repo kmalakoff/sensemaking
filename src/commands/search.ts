@@ -186,7 +186,9 @@ export async function search(store: Store, cfg: ResolvedConfig, terms: string, o
   }
 
   await store.exec('DROP TABLE IF EXISTS _search');
-  await store.exec('CREATE TEMP TABLE _search ("path" TEXT PRIMARY KEY, score REAL, via TEXT, hit TEXT, lines TEXT, similarity REAL)');
+  // DOUBLE, not REAL: sqlite's REAL is an 8-byte double but duckdb's is a 4-byte float, and the
+  // rounded score/similarity are printed at full precision in rows.
+  await store.exec('CREATE TEMP TABLE _search ("path" TEXT PRIMARY KEY, score DOUBLE, via TEXT, hit TEXT, lines TEXT, similarity DOUBLE)');
   if (candidates.size > 0) {
     await store.runBatch(
       'INSERT INTO _search ("path", score, via, hit, lines, similarity) VALUES (?, ?, ?, ?, ?, ?)',
