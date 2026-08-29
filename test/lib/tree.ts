@@ -1,13 +1,15 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { Config, Preset } from 'sensemaking';
 import { open } from 'sensemaking';
+import { scratchDir } from './scratch.ts';
 
 // Throwaway markdown trees for unit tests.
 
+export { scratchDir } from './scratch.ts';
+
 export function tmpTree(): string {
-  return mkdtempSync(join(tmpdir(), 'sense-test-'));
+  return scratchDir('test');
 }
 
 export interface NoteSpec {

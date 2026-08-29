@@ -1,14 +1,16 @@
-import type { DatabaseSync, StatementSync } from 'node:sqlite';
-import type { Config } from '../config/index.ts';
-import { contentTokenize } from '../config/index.ts';
-import { SenseError } from '../errors.ts';
-import { activeFeatures } from '../features/index.ts';
-import type { ReconcileDelta } from '../features/types.ts';
-import { progress } from '../output/progress.ts';
-import type { ParsedDoc } from '../scan/index.ts';
-import { listFiles, parseFile, RESERVED_COLUMNS } from '../scan/index.ts';
-import { segmentField } from '../text/segment.ts';
-import { getColumns, getMeta, quoteIdent, setMeta } from './shared.ts';
+import type { Config } from '../../config/index.ts';
+import { contentTokenize } from '../../config/index.ts';
+import { SenseError } from '../../errors.ts';
+import { activeFeatures } from '../../features/index.ts';
+import type { ExtractedDoc, ReconcileDelta } from '../../features/types.ts';
+import { progress } from '../../output/progress.ts';
+import type { ParsedDoc } from '../../scan/index.ts';
+import { listFiles, parseFile, RESERVED_COLUMNS } from '../../scan/index.ts';
+import { reparseFiles } from '../../scan/reparse.ts';
+import { segmentField } from '../../text/segment.ts';
+import { getColumns, getMeta, quoteIdent, setMeta } from '../shared.ts';
+import { withTransaction } from '../transaction.ts';
+import type { Connection } from '../types.ts';
 
 // Feature-owned columns (`_rank`) must stay out of the upsert: a reparse would null the last
 // computed value on every touch, not just the reconciles that recompute it.
@@ -21,21 +23,18 @@ const MAX_FRONTMATTER_COLUMNS = 2000;
 // literal instead of two copies drifting apart.
 const INSERT_CONTENT_SQL = `INSERT INTO content (rowid, title, summary, text, "path", title_seg, summary_seg, text_seg) VALUES ((SELECT rowid FROM frontmatter WHERE "path" = ?), ?, ?, ?, ?, ?, ?, ?)`;
 
-// Shared by reconcile() and the tokenize-only rebuild in open(), so content population is
-// defined once. Assumes the frontmatter row for doc.relPath already exists (rowid lookup).
-function insertContentRow(insertBody: StatementSync, doc: ParsedDoc, segmenting: boolean): void {
-  insertBody.run(doc.relPath, doc.search.title, doc.search.summary, doc.search.text, doc.relPath, segmenting ? segmentField(doc.search.title) : '', segmenting ? segmentField(doc.search.summary) : '', segmenting ? segmentField(doc.search.text) : '');
+// A single content row's param tuple, matching INSERT_CONTENT_SQL's placeholder order.
+// Assumes the frontmatter row for doc.relPath already exists (rowid subquery).
+function contentRow(doc: ParsedDoc, segmenting: boolean): unknown[] {
+  return [doc.relPath, doc.search.title, doc.search.summary, doc.search.text, doc.relPath, segmenting ? segmentField(doc.search.title) : '', segmenting ? segmentField(doc.search.summary) : '', segmenting ? segmentField(doc.search.text) : ''];
 }
 
-export function reconcile(db: DatabaseSync, cfg: Config, baseDir: string): { parsed: number; warnings: string[] } {
+export async function reconcile(conn: Connection, cfg: Config, baseDir: string): Promise<{ parsed: number; warnings: string[] }> {
   const files = listFiles(cfg, baseDir);
   const currentSet = new Set(files.map((f) => f.relPath));
 
-  const existingRows = db.prepare(`SELECT "path", "_mtime", "_size" FROM frontmatter`).all() as Array<{
-    path: string;
-    _mtime: number;
-    _size: number;
-  }>;
+  const existingStmt = await conn.prepare('SELECT "path", "_mtime", "_size" FROM frontmatter');
+  const existingRows = (await existingStmt.all()) as Array<{ path: string; _mtime: number; _size: number }>;
   const existing = new Map(existingRows.map((r) => [r.path, r]));
   const vanished = existingRows.filter((r) => !currentSet.has(r.path)).map((r) => r.path);
 
@@ -47,31 +46,14 @@ export function reconcile(db: DatabaseSync, cfg: Config, baseDir: string): { par
   if (vanished.length === 0 && toReparse.length === 0) return { parsed: 0, warnings: [] };
 
   const features = activeFeatures(cfg);
-  const seenColumns = getColumns(db);
-  const newColumns: string[] = [];
-  const parsedDocs: ParsedDoc[] = [];
-  const warnings: string[] = [];
+  const seenColumns = await getColumns(conn);
 
   // Bulk reparses (a sync, a cold build) are the long silences a query can hit; short
   // reconciles stay silent (progress() has a threshold).
   const report = progress('reparsing files', toReparse.length);
-  let parsedCount = 0;
-  for (const file of toReparse) {
-    // A doc only gets extract/store from features that apply to it (currently: embed, via
-    // FileStat.embed -- true iff the config names an embedding model).
-    const fileFeatures = features.filter((feature) => !feature.enabledForFile || feature.enabledForFile(cfg, file));
-    const { doc, warnings: fileWarnings } = parseFile(file, fileFeatures, cfg);
-    report.tick(++parsedCount);
-    warnings.push(...fileWarnings);
-    for (const key of Object.keys(doc.data)) {
-      if (!seenColumns.has(key)) {
-        seenColumns.add(key);
-        newColumns.push(key);
-      }
-    }
-    parsedDocs.push(doc);
-  }
+  const { docs: parsedDocs, warnings, newColumns } = reparseFiles(toReparse, features, cfg, seenColumns, report.tick);
   report.finish();
+  for (const col of newColumns) seenColumns.add(col);
 
   const allColumns = [...seenColumns];
   // Fence before ALTERing: SQLite's own failure past this point is a raw
@@ -94,36 +76,36 @@ export function reconcile(db: DatabaseSync, cfg: Config, baseDir: string): { par
 
   const added = toReparse.filter((f) => !existing.has(f.relPath)).map((f) => f.relPath);
   const delta: ReconcileDelta = { files, reparsed: parsedDocs.map((d) => d.relPath), added, vanished };
+  const addedSet = new Set(added);
+  const reparsedExisting = parsedDocs.map((d) => d.relPath).filter((p) => !addedSet.has(p));
 
   const txStart = Date.now();
-  db.exec('BEGIN');
-  try {
-    for (const col of newColumns) db.exec(`ALTER TABLE frontmatter ADD COLUMN ${quoteIdent(col)}`);
-    // FTS5 has no upsert, so delete-before-insert into `content`; coupled to the
-    // frontmatter rowid (indexed via its PRIMARY KEY) instead of the UNINDEXED `path`
-    // column, which a per-row DELETE would otherwise scan the whole table to find.
-    const delBody = db.prepare(`DELETE FROM content WHERE rowid = (SELECT rowid FROM frontmatter WHERE "path" = ?)`);
-    const delPresetFiles = db.prepare(`DELETE FROM preset_files WHERE "path" = ?`);
-    const insertPresetFile = db.prepare(`INSERT INTO preset_files ("path", preset) VALUES (?, ?)`);
+  await withTransaction(conn, async () => {
+    for (const col of newColumns) await conn.exec(`ALTER TABLE frontmatter ADD COLUMN ${quoteIdent(col)}`);
+
+    // content's rowid lookup depends on the frontmatter row it's coupled to, so every content
+    // delete/insert below must run after that row exists (vanished paths still have their
+    // frontmatter row at this point) and before it is removed (vanished frontmatter delete
+    // comes last).
     if (vanished.length > 0) {
-      const del = db.prepare(`DELETE FROM frontmatter WHERE "path" = ?`);
-      for (const path of vanished) {
-        // content delete must run first: it looks up the frontmatter rowid by path, which
-        // the frontmatter delete below would otherwise have already removed.
-        delBody.run(path);
-        del.run(path);
-        delPresetFiles.run(path);
-        for (const feature of features) feature.remove?.(db, path, delta);
-      }
+      await conn.runBatch(
+        'DELETE FROM content WHERE rowid = (SELECT rowid FROM frontmatter WHERE "path" = ?)',
+        vanished.map((p) => [p])
+      );
     }
+    if (reparsedExisting.length > 0) {
+      // FTS5 has no upsert, so delete-before-insert into `content`, coupled to the frontmatter
+      // rowid (indexed via its PRIMARY KEY) rather than the UNINDEXED `path` column, which a
+      // per-row DELETE would otherwise scan the whole table to find.
+      await conn.runBatch(
+        'DELETE FROM content WHERE rowid = (SELECT rowid FROM frontmatter WHERE "path" = ?)',
+        reparsedExisting.map((p) => [p])
+      );
+    }
+
     if (parsedDocs.length > 0) {
-      const insert = db.prepare(insertSql);
-      const insertBody = db.prepare(INSERT_CONTENT_SQL);
-      // A non-default tokenizer means the tree has chosen its own scheme; a phrase query over
-      // grapheme runs would be nonsense against trigram, so the sidecars stay empty.
-      const segmenting = contentTokenize(cfg) === undefined;
-      for (const doc of parsedDocs) {
-        const values = writableColumns.map((col) => {
+      const rows = parsedDocs.map((doc) =>
+        writableColumns.map((col) => {
           if (col === 'path') return doc.relPath;
           if (col === '_mtime') return doc.mtimeMs;
           if (col === '_ctime') return doc.ctimeMs;
@@ -131,37 +113,54 @@ export function reconcile(db: DatabaseSync, cfg: Config, baseDir: string): { par
           // Written per parse, unlike _rank, which a feature pass owns and the upsert skips.
           if (col === '_parse_error') return doc.parseError;
           return doc.data[col] ?? null;
-        });
-        // Frontmatter upsert first: content's rowid lookup below depends on this row existing.
-        insert.run(...values);
-        // Only for docs that have rows: an unconditional delete made cold crawls quadratic.
-        if (existing.has(doc.relPath)) {
-          delBody.run(doc.relPath);
-          for (const feature of features) feature.remove?.(db, doc.relPath, delta);
-        }
-        insertContentRow(insertBody, doc, segmenting);
-        // A preset edit forces a full rebuild, so an unchanged doc's coverage is already
-        // correct; new docs have nothing to clear, which keeps cold builds linear.
-        if (existing.has(doc.relPath)) delPresetFiles.run(doc.relPath);
-        for (const presetName of doc.presets) insertPresetFile.run(doc.relPath, presetName);
-        for (const feature of features) feature.store?.(db, doc.relPath, doc.extracted[feature.name], delta);
-      }
+        })
+      );
+      await conn.runBatch(insertSql, rows);
+
+      // A non-default tokenizer means the tree has chosen its own scheme; a phrase query over
+      // grapheme runs would be nonsense against trigram, so the sidecars stay empty.
+      const segmenting = contentTokenize(cfg) === undefined;
+      await conn.runBatch(
+        INSERT_CONTENT_SQL,
+        parsedDocs.map((doc) => contentRow(doc, segmenting))
+      );
     }
-    for (const feature of features) feature.afterReconcile?.(db, delta);
-    db.exec('COMMIT');
-  } catch (err) {
-    db.exec('ROLLBACK');
-    throw err;
-  }
+
+    if (vanished.length > 0)
+      await conn.runBatch(
+        'DELETE FROM frontmatter WHERE "path" = ?',
+        vanished.map((p) => [p])
+      );
+
+    // A preset edit forces a full rebuild, so an unchanged doc's coverage is already correct;
+    // new docs have nothing to clear, which keeps cold builds linear.
+    const presetTouched = [...vanished, ...reparsedExisting];
+    if (presetTouched.length > 0)
+      await conn.runBatch(
+        'DELETE FROM preset_files WHERE "path" = ?',
+        presetTouched.map((p) => [p])
+      );
+    const presetRows: unknown[][] = [];
+    for (const doc of parsedDocs) for (const presetName of doc.presets) presetRows.push([doc.relPath, presetName]);
+    if (presetRows.length > 0) await conn.runBatch('INSERT INTO preset_files ("path", preset) VALUES (?, ?)', presetRows);
+
+    const removedPaths = [...vanished, ...reparsedExisting];
+    if (removedPaths.length > 0) for (const feature of features) await feature.remove?.(conn, removedPaths, delta);
+    for (const feature of features) {
+      const docsForFeature: ExtractedDoc[] = parsedDocs.map((doc) => ({ path: doc.relPath, extracted: doc.extracted[feature.name] }));
+      await feature.store?.(conn, docsForFeature, delta);
+    }
+    for (const feature of features) await feature.afterReconcile?.(conn, delta);
+  });
 
   // Reconcile's own write-transaction duration, for open()'s derived busy_timeout (F):
   // keep the observed max so a big watcher reconcile's lock hold is what the next open bounds its wait against.
   const durationMs = Date.now() - txStart;
-  const prevRaw = getMeta(db, 'reconcile_max_ms');
+  const prevRaw = await getMeta(conn, 'reconcile_max_ms');
   // -1, not 0, so a genuinely 0ms first reconcile (sub-millisecond, common on a tiny tree)
   // still gets recorded instead of losing to the "nothing recorded yet" default.
   const prevMax = prevRaw === null ? -1 : Number(prevRaw);
-  if (durationMs > prevMax) setMeta(db, 'reconcile_max_ms', String(durationMs));
+  if (durationMs > prevMax) await setMeta(conn, 'reconcile_max_ms', String(durationMs));
 
   return { parsed: parsedDocs.length, warnings };
 }
@@ -203,23 +202,20 @@ export function signatureDiff(before: string, after: string): string {
 // run here -- doc.search (title/summary/text) is all content population needs. Returns
 // parseFile's per-file warnings (e.g. a bad date) so open() can surface them -- mtimes are
 // untouched, so reconcile() never reparses these files and would otherwise never emit them again.
-export function rebuildContentTable(db: DatabaseSync, cfg: Config, baseDir: string): string[] {
-  const known = new Set((db.prepare('SELECT "path" FROM frontmatter').all() as Array<{ path: string }>).map((r) => r.path));
+export async function rebuildContentTable(conn: Connection, cfg: Config, baseDir: string): Promise<string[]> {
+  const stmt = await conn.prepare('SELECT "path" FROM frontmatter');
+  const known = new Set(((await stmt.all()) as Array<{ path: string }>).map((r) => r.path));
   const files = listFiles(cfg, baseDir).filter((f) => known.has(f.relPath));
   const segmenting = contentTokenize(cfg) === undefined;
-  const insertBody = db.prepare(INSERT_CONTENT_SQL);
   const warnings: string[] = [];
-  db.exec('BEGIN');
-  try {
-    for (const file of files) {
-      const { doc, warnings: fileWarnings } = parseFile(file);
-      warnings.push(...fileWarnings);
-      insertContentRow(insertBody, doc, segmenting);
-    }
-    db.exec('COMMIT');
-  } catch (err) {
-    db.exec('ROLLBACK');
-    throw err;
+  const rows: unknown[][] = [];
+  for (const file of files) {
+    const { doc, warnings: fileWarnings } = parseFile(file);
+    warnings.push(...fileWarnings);
+    rows.push(contentRow(doc, segmenting));
   }
+  await withTransaction(conn, async () => {
+    if (rows.length > 0) await conn.runBatch(INSERT_CONTENT_SQL, rows);
+  });
   return warnings;
 }

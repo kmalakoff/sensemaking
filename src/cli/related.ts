@@ -14,9 +14,9 @@ const relatedCmd: Command = (ctx) => {
   if (!pathArg) ctx.usageError(usage);
   const k = parseK(values.k as string | undefined, ctx.usageError) ?? RELATED_DEFAULT_K;
   const format = rowFormatOf(values);
-  return withDb(ctx, values.config as string | undefined, async (db, cfg) => {
+  return withDb(ctx, values.config as string | undefined, async (store, cfg) => {
     const overrides = scopeOf(values);
-    printRows((await relatedNotes(db, cfg, pathArg, overrides, k)) as Row[], format);
+    printRows((await relatedNotes(store, cfg, pathArg, overrides, k)) as Row[], format);
   });
 };
 export default relatedCmd;

@@ -76,8 +76,8 @@ const embedMsPerDoc = (now() - tEmbed) / files.length;
 const ROOT = join(new URL('.', import.meta.url).pathname, '..');
 const lib = await import(pathToFileURL(join(ROOT, 'dist', 'esm', 'index.js')).href);
 const cfg = { presets: { default: { include: ['**/*.md'], signals: { words: 1 } } }, queries: {}, features: { links: false, rank: false }, baseDir: tree, configPath: null };
-const { db } = lib.open(cfg);
-const bm25Stmt = db.prepare(`SELECT content.path AS path FROM content WHERE content MATCH ? ORDER BY ${WEIGHTED_BM25} LIMIT ${FETCH}`);
+const { store } = await lib.open(cfg);
+const bm25Stmt = await store.prepare(`SELECT content.path AS path FROM content WHERE content MATCH ? ORDER BY ${WEIGHTED_BM25} LIMIT ${FETCH}`);
 
 const { queries, qrels } = readLabels(labelsDir);
 const qids = [...qrels.keys()].sort().slice(0, MAX_QUERIES === Infinity ? undefined : MAX_QUERIES);
@@ -95,7 +95,7 @@ for (const qid of qids) {
   bm25Ms += now() - t0;
   perQuery.push({ qid, bm25, qFull: await embedFull(text) });
 }
-db.close();
+await store.close();
 bm25Ms /= perQuery.length;
 
 const bm25Base = mean(perQuery.map((q) => metrics(q.bm25, qrels.get(q.qid), K)));

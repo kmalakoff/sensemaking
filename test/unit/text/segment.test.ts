@@ -1,30 +1,17 @@
 import assert from 'node:assert';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { segmentField, segmentMatch } from '../../../src/text/segment.ts';
 import { runCli as spawnCli } from '../../lib/cli.ts';
-
-// Every temp dir this file creates, cleaned up once after all its tests have run.
-const dirs: string[] = [];
-
-function tempDir(prefix: string): string {
-  const dir = mkdtempSync(join(tmpdir(), prefix));
-  dirs.push(dir);
-  return dir;
-}
-
-after(() => {
-  for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
-});
+import { scratchDir } from '../../lib/scratch.ts';
 
 function writeConfig(dir: string, extra: Record<string, unknown> = {}): void {
   writeFileSync(join(dir, 'sense.config.json'), JSON.stringify({ version: 4, presets: { default: { include: ['*.md'] } }, ...extra, queries: {} }));
 }
 
 function makeTree(extra: Record<string, unknown> = {}): string {
-  const dir = tempDir('sense-segment-');
+  const dir = scratchDir('segment');
   writeConfig(dir, extra);
   writeFileSync(join(dir, 'zh.md'), '---\ntitle: 中文\n---\n数据库全文搜索很有用。\n');
   writeFileSync(join(dir, 'ja.md'), '---\ntitle: 日本語\n---\nデータベース全文検索は便利です。\n');
@@ -147,7 +134,7 @@ describe('substring parity: search behaves like grep over unspaced-script text',
   };
 
   function makeParityTree(): string {
-    const dir = tempDir('sense-parity-');
+    const dir = scratchDir('parity');
     writeConfig(dir);
     for (const [name, body] of Object.entries(docs)) writeFileSync(join(dir, name), `---\ntitle: note\n---\n${body}\n`);
     return dir;
@@ -189,7 +176,7 @@ describe('substring parity: search behaves like grep over unspaced-script text',
 
 describe('ranking: mirrored bm25 weights put a title hit above a body hit', () => {
   function makeRankTree(): string {
-    const dir = tempDir('sense-rank-');
+    const dir = scratchDir('rank');
     writeConfig(dir);
     writeFileSync(join(dir, 'title-hit.md'), '---\ntitle: 数据库指南\n---\n说明文档。\n');
     writeFileSync(join(dir, 'body-hit.md'), '---\ntitle: 工具说明\n---\n这是关于数据库的详细文档。\n');
