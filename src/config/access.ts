@@ -6,6 +6,11 @@ export function presetNames(cfg: Config): string[] {
   return Object.keys(cfg.presets);
 }
 
+// The backing store engine this tree uses; absent means the default.
+export function storeName(cfg: Config): 'sqlite' | 'duckdb' {
+  return cfg.store ?? 'sqlite';
+}
+
 // Whether the tree names a model at all.
 export function embedEnabled(cfg: Config): boolean {
   return typeof cfg.embed?.model === 'string' && cfg.embed.model.length > 0;

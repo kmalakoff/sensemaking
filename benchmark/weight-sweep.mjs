@@ -83,8 +83,8 @@ if (MODEL_ID) {
 // bm25 candidate lists via the real index -- identical SQL to find's candidate query, same as
 // bakeoff.mjs/bakeoff-http.mjs.
 const cfg = { presets: { default: { include: ['**/*.md'], signals: { words: 1 } } }, queries: {}, features: { links: false, rank: false }, baseDir: tree, configPath: null };
-const { db } = lib.open(cfg);
-const bm25Stmt = db.prepare(`SELECT content.path AS path FROM content WHERE content MATCH ? ORDER BY ${WEIGHTED_BM25} LIMIT ${FETCH}`);
+const { store } = await lib.open(cfg);
+const bm25Stmt = await store.prepare(`SELECT content.path AS path FROM content WHERE content MATCH ? ORDER BY ${WEIGHTED_BM25} LIMIT ${FETCH}`);
 
 const { queries, qrels } = readLabels(labelsDir);
 const qids = [...qrels.keys()].sort();
@@ -115,7 +115,7 @@ for (const qid of qids) {
   const qv = await embedQuery(text);
   perQuery.push({ qid, bm25, vec: topN(qv, FETCH) });
 }
-db.close();
+await store.close();
 
 // Same weighted-RRF combiner as fusion-sweep.mjs: bm25 contributes 1/(k+i), vectors w/(k+j) --
 // the same shape search()'s signal weights compose (weight * 1/(RRF_K + rank)).

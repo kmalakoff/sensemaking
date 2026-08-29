@@ -28,7 +28,7 @@ function specificPhase(callFrame) {
   if (url.includes('/dist/esm/features/links')) return 'links';
   if (url.includes('/dist/esm/graph')) return 'pagerank';
   if (url.includes('/dist/esm/features/embed') || url.includes('tokenizers')) return 'embed';
-  if (url.includes('/dist/esm/db')) return 'db-reconcile';
+  if (url.includes('/dist/esm/store')) return 'db-reconcile';
   if (url.includes('/dist/esm/commands')) return 'commands';
   if (url.includes('node:sqlite') || /sqlite/i.test(fn)) return 'sqlite';
   if (url.includes('node:fs') || url.includes('fast-glob')) return 'fs-glob';
@@ -57,17 +57,17 @@ async function buildCfg(tree) {
 async function runChild(scenario, tree) {
   const { lib, cfg } = await buildCfg(tree);
   if (scenario === 'search' || scenario === 'semantic') {
-    const { db } = lib.open(cfg);
-    await lib.search(db, cfg, 'the', { k: 10 });
-    db.close();
+    const { store } = await lib.open(cfg);
+    await lib.search(store, cfg, 'the', { k: 10 });
+    await store.close();
   } else if (scenario === 'map') {
-    const { db } = lib.open(cfg);
-    lib.mapTree(db, cfg);
-    db.close();
+    const { store } = await lib.open(cfg);
+    await lib.mapTree(store, cfg);
+    await store.close();
   } else {
     // prime / cold / nochange / update1: open+close is the whole scenario.
-    const { db } = lib.open(cfg);
-    db.close();
+    const { store } = await lib.open(cfg);
+    await store.close();
   }
 }
 

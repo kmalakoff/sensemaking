@@ -1,23 +1,13 @@
 import assert from 'node:assert';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { runCli as spawnCli } from '../../lib/cli.ts';
 import { writeModel } from '../../lib/model.ts';
+import { scratchDir } from '../../lib/scratch.ts';
 
 // Follows the embed-identity signature pattern in db/open.test.ts: simulate a stale on-disk
 // signature, then prove the next open() rebuilds instead of adopting it silently.
-
-const dirs: string[] = [];
-function tempDir(prefix: string): string {
-  const dir = mkdtempSync(join(tmpdir(), prefix));
-  dirs.push(dir);
-  return dir;
-}
-after(() => {
-  for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
-});
 
 function runCli(dir: string, args: string[]) {
   return spawnCli([...args, '--config', join(dir, 'sense.config.json')]);
@@ -26,7 +16,7 @@ function runCli(dir: string, args: string[]) {
 describe('D8 migration: chunk version in the feature signature', () => {
   it('the embed segment carries a chunk-version token', () => {
     const model = writeModel();
-    const dir = tempDir('sense-chunk-sig-');
+    const dir = scratchDir('chunk-sig');
     writeFileSync(join(dir, 'sense.config.json'), JSON.stringify({ version: 5, presets: { default: { include: ['*.md'] } }, embed: { model, provider: 'static' }, queries: {} }));
     writeFileSync(join(dir, 'a.md'), '---\ntitle: A\n---\n\napple\n');
     assert.equal(runCli(dir, ['sql', 'SELECT 1']).status, 0);
@@ -40,7 +30,7 @@ describe('D8 migration: chunk version in the feature signature', () => {
 
   it('a cache signature without the chunk token rebuilds on next open, even with an unchanged model', () => {
     const model = writeModel();
-    const dir = tempDir('sense-chunk-sig-');
+    const dir = scratchDir('chunk-sig');
     writeFileSync(join(dir, 'sense.config.json'), JSON.stringify({ version: 5, presets: { default: { include: ['*.md'] } }, embed: { model, provider: 'static' }, queries: {} }));
     writeFileSync(join(dir, 'a.md'), '---\ntitle: A\n---\n\napple\n');
     assert.equal(runCli(dir, ['sql', 'SELECT 1']).status, 0);
@@ -67,7 +57,7 @@ describe('D8 migration: chunk version in the feature signature', () => {
 
   it('embed.chunkTokens appends its value onto the chunk-version token', () => {
     const model = writeModel();
-    const dir = tempDir('sense-chunk-sig-');
+    const dir = scratchDir('chunk-sig');
     writeFileSync(join(dir, 'sense.config.json'), JSON.stringify({ version: 5, presets: { default: { include: ['*.md'] } }, embed: { model, provider: 'static', chunkTokens: 100 }, queries: {} }));
     writeFileSync(join(dir, 'a.md'), '---\ntitle: A\n---\n\napple\n');
     assert.equal(runCli(dir, ['sql', 'SELECT 1']).status, 0);
@@ -81,7 +71,7 @@ describe('D8 migration: chunk version in the feature signature', () => {
 
   it('setting, changing, or clearing embed.chunkTokens each rebuild the index', () => {
     const model = writeModel();
-    const dir = tempDir('sense-chunk-sig-');
+    const dir = scratchDir('chunk-sig');
     const configPath = join(dir, 'sense.config.json');
     const writeCfg = (chunkTokens?: number) => writeFileSync(configPath, JSON.stringify({ version: 5, presets: { default: { include: ['*.md'] } }, embed: { model, provider: 'static', ...(chunkTokens !== undefined ? { chunkTokens } : {}) }, queries: {} }));
 

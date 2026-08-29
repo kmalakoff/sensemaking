@@ -2,8 +2,7 @@
 // baseline is package.json's version, so a bare run answers "did the working tree regress?".
 // usage: node benchmark/compare.mjs [corpus-or-dir] [version...]
 import { spawnSync } from 'node:child_process';
-import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { cached } from './lib/cache.mjs';
@@ -29,7 +28,8 @@ if (!existsSync(treeDir)) {
 }
 const versions = versionArgs.length > 0 ? versionArgs : [releasedBaseline(), 'local'];
 
-const work = mkdtempSync(join(tmpdir(), 'sense-bench-'));
+mkdirSync(join(benchDir, '..', '.tmp'), { recursive: true });
+const work = mkdtempSync(join(benchDir, '..', '.tmp', 'bench-'));
 
 function rootFor(version) {
   if (version === 'local') return ROOT;

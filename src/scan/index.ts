@@ -6,7 +6,7 @@ import { textFromBlocks } from '../text/strip.ts';
 import { looksLikeDatetime, mapValue, normalizeText, parseFrontmatter, RESERVED_COLUMNS, splitFrontmatter } from './frontmatter.ts';
 import type { FileStat } from './list.ts';
 
-// Filesystem -> rows. Pure data in, data + warnings out; db.ts does the SQL.
+// Filesystem -> rows. Pure data in, data + warnings out; store/sqlite/reconcile.ts does the SQL.
 
 export { looksLikeDatetime, normalizeDate, RESERVED_COLUMNS } from './frontmatter.ts';
 export type { FileStat } from './list.ts';
