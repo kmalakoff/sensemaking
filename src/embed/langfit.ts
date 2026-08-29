@@ -1,4 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
+import { franc } from 'franc-min';
 import { getMeta, setMeta } from '../db/shared.ts';
 import { SenseError } from '../errors.ts';
 import { toIso3 } from './languages.ts';
@@ -19,7 +20,7 @@ export function languageDistribution(db: DatabaseSync): LangCounts | undefined {
   return raw ? JSON.parse(raw) : undefined;
 }
 
-function classify(franc: (text: string) => string, text: string): string | undefined {
+function classify(text: string): string | undefined {
   const code = franc(text.slice(0, SAMPLE_CHARS));
   return code === 'und' ? undefined : code;
 }
@@ -28,11 +29,10 @@ function classify(franc: (text: string) => string, text: string): string | undef
 // declares languages and a clear majority classified so far is not among them.
 export async function checkLanguageFit(db: DatabaseSync, provider: EmbedProvider, texts: string[]): Promise<void> {
   if (texts.length === 0) return;
-  const { franc } = await import('franc-min');
   const persisted = languageDistribution(db) ?? {};
   const merged = { ...persisted };
   for (const text of texts) {
-    const code = classify(franc, text);
+    const code = classify(text);
     if (code) merged[code] = (merged[code] ?? 0) + 1;
   }
 

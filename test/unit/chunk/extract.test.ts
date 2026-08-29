@@ -2,16 +2,12 @@ import assert from 'node:assert';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { fromMarkdown } from 'mdast-util-from-markdown';
-import { gfmFromMarkdown } from 'mdast-util-gfm';
-import { gfm } from 'micromark-extension-gfm';
 import { extractText } from '../../../src/chunk/extract.ts';
 import { parse } from '../../../src/chunk/parse.ts';
 import type { Block } from '../../../src/chunk/types.ts';
 
 function extractParagraph(body: string): string {
-  const tree = fromMarkdown(body, { extensions: [gfm()], mdastExtensions: [gfmFromMarkdown()] });
-  return extractText(tree.children[0]);
+  return extractText(parse(body)[0].node);
 }
 
 // Regression suite over test/fixtures/chunk/cases/: real hub-corpus samples plus synthetic

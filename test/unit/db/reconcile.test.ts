@@ -2,7 +2,7 @@ import assert from 'node:assert';
 import { mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { clearCache, open, SenseError } from 'sensemaking';
+import { clearCache, mapTree, open, SenseError } from 'sensemaking';
 import { openTree, tmpTree, writeNote } from '../../lib/tree.ts';
 
 function tmpReconcileTree(): string {
@@ -233,11 +233,10 @@ describe('_ctime core column', () => {
     second.db.close();
   });
 
-  it('map does not list _ctime as a frontmatter field', async () => {
+  it('map does not list _ctime as a frontmatter field', () => {
     const baseDir = tmpTree();
     writeNote(baseDir, 'a.md', { frontmatter: { title: 'A' } });
     const { db, cfg } = openTree(baseDir);
-    const { mapTree } = await import('sensemaking');
     const fields = mapTree(db, cfg).fields.map((f) => f.field);
     assert.ok(!fields.includes('_ctime'), `internal column leaked: ${fields.join(', ')}`);
     db.close();
