@@ -1,11 +1,16 @@
 import { existsSync, readFileSync } from 'node:fs';
+import Module from 'node:module';
 import { join } from 'node:path';
-import { Tokenizer } from '@huggingface/tokenizers';
 import { SenseError } from '../errors.ts';
 import { downloadModel, isDownloadable, MODEL_FILENAMES, MODEL_FILES, modelDir, readLanguages } from './store.ts';
 import type { EmbedProvider } from './types.ts';
 
 const BATCH_CAP = 64;
+
+// @huggingface/tokenizers is a 540K static import; a top-level import put it on every command's
+// module graph regardless of whether the semantic path ran, shipped as the 0.17.0 regression.
+// Deferred to a synchronous require inside staticProvider so only the embed path pays for it.
+const _require = typeof require === 'undefined' ? Module.createRequire(import.meta.url) : require;
 
 // Model2Vec safetensors + pure-JS tokenizer. Encode convention from model2vec/model.py: no
 // special tokens, drop unk ids, mean-pool, L2-normalize.
@@ -38,6 +43,7 @@ export async function staticProvider(model: string): Promise<EmbedProvider> {
   const matrix = dataStart % 4 === 0 ? new Float32Array(raw.buffer, dataStart, spec.shape[0] * dims) : new Float32Array(raw.buffer.slice(dataStart, dataStart + spec.shape[0] * dims * 4));
 
   const tokenizerJson = JSON.parse(readFileSync(join(dir, 'tokenizer.json'), 'utf8'));
+  const { Tokenizer } = _require('@huggingface/tokenizers') as typeof import('@huggingface/tokenizers');
   const tok = new Tokenizer(tokenizerJson, {});
   const unkId = tokenizerJson.model?.vocab?.[tokenizerJson.model?.unk_token] ?? -1;
 

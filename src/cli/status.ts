@@ -1,9 +1,9 @@
 import { dirname } from 'node:path';
-import { presetCoverage } from '../commands/index.ts';
+import { presetCoverage } from '../commands/status.ts';
 import { embedConfig, featureStates, SUPPORTED_CONFIG_VERSION } from '../config/index.ts';
 import { docCount, getMeta, open, SCHEMA_VERSION } from '../db/index.ts';
+import { languageDistribution } from '../embed/distribution.ts';
 import { probeReachable } from '../embed/http.ts';
-import { languageDistribution } from '../embed/langfit.ts';
 import { isDownloadable, MODEL_FILENAMES, modelDir, modelPresent, readLanguages } from '../embed/store.ts';
 import { featuresLine, presetsLines } from '../output/output.ts';
 import { USAGE } from './index.ts';

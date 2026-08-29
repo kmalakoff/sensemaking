@@ -6,7 +6,7 @@ import { createServer, type Server } from 'http';
 import type { Config } from 'sensemaking';
 import { peek, presetCoverage, type SenseError, search } from 'sensemaking';
 import { relatedNotes } from '../../src/commands/index.ts';
-import { languageDistribution } from '../../src/embed/langfit.ts';
+import { languageDistribution } from '../../src/embed/distribution.ts';
 import { similarNotes } from '../../src/embed/query.ts';
 import { downloadModel, hasModelFiles, isDownloadable, modelDir } from '../../src/embed/store.ts';
 import type { Chunk } from '../../src/features/embed.ts';

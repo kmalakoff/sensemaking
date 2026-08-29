@@ -1,4 +1,4 @@
-import { search } from '../commands/index.ts';
+import { search } from '../commands/search.ts';
 import { printRows } from '../output/output.ts';
 import { USAGE } from './index.ts';
 import { CONFIG, FORMAT, parse, parseK, rowFormatOf, SEARCH_FLAGS, scopeOf, withDb } from './shared.ts';
