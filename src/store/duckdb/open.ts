@@ -1,6 +1,6 @@
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import type { DuckDBConnection } from '@duckdb/node-api';
+import type { DuckDBConnection, DuckDBInstance } from '@duckdb/node-api';
 import type { Config, ResolvedConfig } from '../../config/index.ts';
 import { featureSignature, STATE_DIR } from '../../config/index.ts';
 import { STORE_DIMS } from '../../embed/types.ts';
@@ -54,7 +54,7 @@ async function ensureSchema(conn: Connection, cfg: Config): Promise<void> {
   if ((await getMeta(conn, 'features')) === null) await setMeta(conn, 'features', featureSignature(cfg, FEATURES));
 }
 
-async function connect(cfg: ResolvedConfig): Promise<{ duckdb: DuckDBConnection; conn: Connection; cfg: ResolvedConfig; dbPath: string; parsed: number; warnings: string[] }> {
+async function connect(cfg: ResolvedConfig): Promise<{ instance: DuckDBInstance; duckdb: DuckDBConnection; conn: Connection; cfg: ResolvedConfig; dbPath: string; parsed: number; warnings: string[] }> {
   const stateDir = join(cfg.baseDir, STATE_DIR);
   mkdirSync(stateDir, { recursive: true });
   const dbPath = join(stateDir, DB_FILENAME);
@@ -73,14 +73,17 @@ async function connect(cfg: ResolvedConfig): Promise<{ duckdb: DuckDBConnection;
   }
 
   let duckdb: DuckDBConnection;
+  let instance: DuckDBInstance | undefined;
   try {
     // On-disk files default to an older storage format for cross-version compatibility, which
     // rejects VARIANT columns ("VARIANT columns are not supported in storage versions prior to
     // v1.5.0"); this store's dynamic frontmatter columns need VARIANT (see reconcile.ts), so
     // the format floor is pinned explicitly. :memory: databases are unaffected either way.
-    const instance = await DuckDBInstance.create(dbPath, { storage_compatibility_version: 'v1.5.0' });
+    instance = await DuckDBInstance.create(dbPath, { storage_compatibility_version: 'v1.5.0' });
     duckdb = await instance.connect();
   } catch (err) {
+    // create() may have succeeded before connect() failed: close it, or its WAL stays open.
+    instance?.closeSync();
     throw new SenseError('STORE_DEPENDENCY_MISSING', `store "duckdb" failed to open ${dbPath}: ${(err as Error).message}`);
   }
   await registerFunctions(duckdb);
@@ -96,7 +99,9 @@ async function connect(cfg: ResolvedConfig): Promise<{ duckdb: DuckDBConnection;
     // rebuild instead, same as sqlite's open() (see its comment for why this is announced).
     const reason = version !== null && version !== SCHEMA_VERSION ? 'cache format changed (new sensemaking version)' : 'config change (features, tokenizer, or presets)';
     console.error(`sense: ${reason}; rebuilding the index`);
+    // Close before clearCache deletes the files underneath the still-open instance.
     duckdb.disconnectSync();
+    instance.closeSync();
     clearCache(cfg);
     return connect(cfg);
   }
@@ -104,10 +109,10 @@ async function connect(cfg: ResolvedConfig): Promise<{ duckdb: DuckDBConnection;
   await ensureSchema(conn, cfg);
 
   const { parsed, warnings } = await reconcile(conn, cfg, cfg.baseDir);
-  return { duckdb, conn, cfg, dbPath, parsed, warnings };
+  return { instance, duckdb, conn, cfg, dbPath, parsed, warnings };
 }
 
 export async function openDuckdb(cfg: ResolvedConfig): Promise<OpenResult> {
-  const { duckdb, conn, cfg: resolvedCfg, dbPath, parsed, warnings } = await connect(cfg);
-  return { store: createStore(duckdb, conn, resolvedCfg, resolvedCfg.baseDir), cfg: resolvedCfg, dbPath, parsed, warnings };
+  const { instance, duckdb, conn, cfg: resolvedCfg, dbPath, parsed, warnings } = await connect(cfg);
+  return { store: createStore(instance, duckdb, conn, resolvedCfg, resolvedCfg.baseDir), cfg: resolvedCfg, dbPath, parsed, warnings };
 }
