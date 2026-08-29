@@ -55,8 +55,8 @@ for (const f of files) {
 const ROOT = join(new URL('.', import.meta.url).pathname, '..');
 const lib = await import(pathToFileURL(join(ROOT, 'dist', 'esm', 'index.js')).href);
 const cfg = { presets: { default: { include: ['**/*.md'], signals: { words: 1 } } }, queries: {}, features: { links: false, rank: false }, baseDir: tree, configPath: null };
-const { db } = lib.open(cfg);
-const bm25Stmt = db.prepare(`SELECT content.path AS path FROM content WHERE content MATCH ? ORDER BY ${WEIGHTED_BM25} LIMIT ${FETCH}`);
+const { store } = await lib.open(cfg);
+const bm25Stmt = await store.prepare(`SELECT content.path AS path FROM content WHERE content MATCH ? ORDER BY ${WEIGHTED_BM25} LIMIT ${FETCH}`);
 
 const { queries, qrels } = readLabels(labelsDir, SPLIT);
 const qids = [...qrels.keys()].sort();
@@ -86,7 +86,7 @@ for (const qid of qids) {
   } catch {}
   perQuery.push({ qid, bm25, vec: topN(leverVec(await embedFull(text), DIMS, false), MAX_POOL) });
 }
-db.close();
+await store.close();
 
 // RRF with a weighted vector list: bm25 contributes 1/(k+i), vectors w/(k+j).
 function rrfW(bm25, vec, w) {

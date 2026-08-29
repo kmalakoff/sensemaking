@@ -17,8 +17,7 @@
 // on disk (the script never writes into it -- markdown files are copied out to temp).
 
 import { execFileSync, spawnSync } from 'node:child_process';
-import { cpSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -29,7 +28,8 @@ if (!vaultName || !vaultPath) {
 }
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
-const work = mkdtempSync(join(tmpdir(), 'sense-oracle-'));
+mkdirSync(join(repoRoot, '.tmp'), { recursive: true });
+const work = mkdtempSync(join(repoRoot, '.tmp', 'oracle-'));
 
 try {
   // 1. Obsidian's parse, straight from its cache. Inline tags carry '#'; frontmatter comes

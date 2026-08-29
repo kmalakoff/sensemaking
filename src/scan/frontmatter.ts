@@ -1,6 +1,6 @@
 import { isCollection, parseDocument, visit } from 'yaml';
 
-// Frontmatter keys that would collide with table columns. Exported so db.ts's upsert can tell
+// Frontmatter keys that would collide with table columns. Exported so reconcile.ts's upsert can tell
 // a feature-owned column (`_rank`) from a parsed one and leave it alone on reparse.
 export const RESERVED_COLUMNS = new Set(['path', '_mtime', '_ctime', '_size', '_rank', '_parse_error', 'content', 'links', 'sections']);
 

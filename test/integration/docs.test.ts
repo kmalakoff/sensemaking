@@ -1,13 +1,13 @@
 import assert from 'node:assert';
 import { execFileSync } from 'node:child_process';
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import cr from 'cr';
 import { SUPPORTED_CONFIG_VERSION } from 'sensemaking';
 import { parse } from 'yaml';
 import { KNOWN_EMBED_KEYS } from '../../src/config/index.ts';
-import { packageRoot } from '../lib/cli.ts';
+import { packageRoot } from '../lib/scratch.ts';
 
 // Published surfaces drift silently: nothing fails when the README stops describing what
 // ships. These are the two facts cheap enough to assert -- the rest is RELEASING.md step 5.
@@ -106,7 +106,10 @@ describe('no references to local planning files', () => {
       .split(sep)
       .join('/');
     const tracked = execFileSync('git', ['ls-files', '-z'], { cwd: packageRoot, encoding: 'utf8' }).split('\0').filter(Boolean);
-    const offenders = tracked.filter((file) => /\.(ts|js|mjs|cjs|md|json)$/.test(file) && file !== self && !file.startsWith('plans/') && readFileSync(join(packageRoot, file), 'utf8').includes('plans/'));
+    // git ls-files reports the index, which still names a file staged-but-not-yet-committed as
+    // deleted in a working tree (a mid-flight rename/removal); skip what isn't actually there
+    // rather than let readFileSync throw on a path this check never meant to police.
+    const offenders = tracked.filter((file) => /\.(ts|js|mjs|cjs|md|json)$/.test(file) && file !== self && !file.startsWith('plans/') && existsSync(join(packageRoot, file)) && readFileSync(join(packageRoot, file), 'utf8').includes('plans/'));
     assert.deepEqual(offenders, [], `these reference gitignored plans/: ${offenders.join(', ')}`);
   });
 });

@@ -1,14 +1,14 @@
 import assert from 'node:assert';
-import { mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { featureSignature, SUPPORTED_CONFIG_VERSION } from '../../../src/config/index.ts';
 import { FEATURES } from '../../../src/features/index.ts';
-import { packageRoot, runCli } from '../../lib/cli.ts';
+import { runCli } from '../../lib/cli.ts';
+import { packageRoot, scratchDir } from '../../lib/scratch.ts';
 
 function runWith(config: string, args: string[] = ['--list']) {
-  const dir = mkdtempSync(join(tmpdir(), 'sense-validate-'));
+  const dir = scratchDir('validate');
   writeFileSync(join(dir, 'sense.config.json'), config);
   return runCli([...args, '--config', join(dir, 'sense.config.json')]);
 }
@@ -157,7 +157,7 @@ describe('config validation', () => {
   });
 
   it('an unrecognised top-level key is reported, not silently ignored', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'sense-unknown-'));
+    const dir = scratchDir('unknown');
     const configPath = join(dir, 'sense.config.json');
     writeFileSync(configPath, JSON.stringify({ version: 4, presets: { default: { include: ['*.md'] } }, queries: {}, bogus: true }));
     const result = runCli(['--list', '--config', configPath]);
@@ -173,7 +173,7 @@ describe('config validation', () => {
   });
 
   it('checks is rejected with a named error, not silently ignored as an unknown key', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'sense-checks-'));
+    const dir = scratchDir('checks');
     const configPath = join(dir, 'sense.config.json');
     writeFileSync(configPath, JSON.stringify({ version: 4, presets: { default: { include: ['*.md'] } }, queries: {}, checks: { nope: 'empty' } }));
     const result = runCli(['--list', '--config', configPath]);
@@ -268,5 +268,30 @@ describe('embed block: openai url and declared languages', () => {
     assert.equal(withEmbed('{"model":"m"}').status, 0, 'absent is valid');
     const ok = withEmbed('{"model":"m","chunkTokens":100}');
     assert.equal(ok.status, 0, ok.stderr);
+  });
+});
+
+describe('store key', () => {
+  const withStore = (store: string) => runWith(`{"version":5,"presets":{"default":{"include":["*.md"]}},"queries":{},"store":${store}}`);
+
+  it('absent defaults to sqlite (no error)', () => {
+    const result = runWith('{"version":5,"presets":{"default":{"include":["*.md"]}},"queries":{}}');
+    assert.equal(result.status, 0, result.stderr);
+  });
+
+  it('"sqlite" and "duckdb" are both accepted values', () => {
+    assert.equal(withStore('"sqlite"').status, 0, withStore('"sqlite"').stderr);
+  });
+
+  it('an unknown store name is a named config error, not a silent fallback', () => {
+    const result = withStore('"postgres"');
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /store must be "sqlite" or "duckdb"/);
+  });
+
+  it('a non-string store value is rejected', () => {
+    const result = withStore('7');
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /store must be "sqlite" or "duckdb"/);
   });
 });

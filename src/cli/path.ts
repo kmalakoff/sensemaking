@@ -22,12 +22,12 @@ const pathCmd: Command = (ctx) => {
   if (!a || !b) ctx.usageError(usage);
   const maxDepth = parseMaxDepth(values['max-depth'] as string | undefined, ctx.usageError);
   const format = formatOf(values);
-  return withDb(ctx, values.config as string | undefined, (db, cfg) => {
-    const paths = (db.prepare('SELECT "path" FROM frontmatter').all() as Array<{ path: string }>).map((r) => r.path);
+  return withDb(ctx, values.config as string | undefined, async (store, cfg) => {
+    const paths = ((await (await store.prepare('SELECT "path" FROM frontmatter')).all()) as Array<{ path: string }>).map((r) => r.path);
     const from = resolveNote(paths, a);
     const to = resolveNote(paths, b);
-    const allowed = scopedPaths(db, cfg, scopeOf(values));
-    const hops = findPath(db, from, to, { maxDepth, allowed });
+    const allowed = await scopedPaths(store, cfg, scopeOf(values));
+    const hops = await findPath(store, from, to, { maxDepth, allowed });
 
     if (format === 'json') {
       console.log(JSON.stringify(hops));

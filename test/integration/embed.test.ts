@@ -45,7 +45,7 @@ function openSemantic(baseDir: string, embed: Config['embed']) {
 // Nothing downloads implicitly. search has
 // two other signals to fall back on and says so; related has none and must say why.
 describe('missing model', () => {
-  it('sense download is idempotent: an already-present model reports that and exits 0', () => {
+  it('sense download is idempotent: an already-present model reports that and exits 0', async () => {
     const baseDir = fruitTree();
     writeFileSync(join(baseDir, 'sense.config.json'), JSON.stringify({ version: 4, presets: { default: { include: ['**/*.md'] } }, embed: { model: writeModel(), provider: 'static' }, queries: {} }));
     for (const pass of ['first', 'second']) {
@@ -56,13 +56,13 @@ describe('missing model', () => {
   });
 
   it('search fails rather than silently dropping to two signals: the same query must not answer differently before and after a download', async () => {
-    const { db, cfg } = openSemantic(fruitTree(), { model: '/nonexistent/model-xyz', provider: 'static' });
+    const { store: db, cfg } = await openSemantic(fruitTree(), { model: '/nonexistent/model-xyz', provider: 'static' });
     await assert.rejects(() => search(db, cfg, 'apple'), /searches with vectors, but the local model path .* is missing/);
-    db.close();
+    await db.close();
   });
 
   it('a preset that does not ask for vectors is unaffected by a missing model', async () => {
-    const { db, cfg } = openConfig({
+    const { store: db, cfg } = await openConfig({
       presets: { default: { include: ['**/*.md'], signals: { words: 1, links: 1 } } },
       embed: { model: '/nonexistent/model-xyz', provider: 'static' },
       queries: {},
@@ -70,7 +70,7 @@ describe('missing model', () => {
       configPath: null,
     });
     const rows = (await search(db, cfg, 'apple')) as Array<{ via: string }>;
-    db.close();
+    await db.close();
     assert.ok(rows.length > 0, 'lexical rows still come back');
     assert.ok(!rows.some((r) => r.via.includes('vector')), JSON.stringify(rows));
   });
@@ -78,9 +78,9 @@ describe('missing model', () => {
 
 describe('embed feature', () => {
   it('semantic expansion surfaces a note FTS5 cannot reach, labeled via=vector with a lines range', async () => {
-    const { db, cfg } = openSemantic(fruitTree(), { model: writeModel(), provider: 'static' });
+    const { store: db, cfg } = await openSemantic(fruitTree(), { model: writeModel(), provider: 'static' });
     const rows = (await search(db, cfg, 'pomme')) as Array<{ path: string; via: string; lines: string }>;
-    db.close();
+    await db.close();
     const hit = rows[0];
     assert.equal(hit.path, 'a.md', JSON.stringify(rows));
     assert.equal(hit.via, 'vector'); // zero FTS matches for 'pomme'
@@ -88,27 +88,27 @@ describe('embed feature', () => {
   });
 
   it('a term both matched and vector-near composes via=match+vector', async () => {
-    const { db, cfg } = openSemantic(fruitTree(), { model: writeModel(), provider: 'static' });
+    const { store: db, cfg } = await openSemantic(fruitTree(), { model: writeModel(), provider: 'static' });
     const rows = (await search(db, cfg, 'apple')) as Array<{ path: string; via: string }>;
-    db.close();
+    await db.close();
     assert.equal(rows[0].path, 'a.md');
     // link expansion re-includes match seeds, so the full composition is match+link+vector
     assert.match(rows[0].via, /^match\+.*vector$/);
   });
 
   it('a tree with no embed block searches on words and links only, and carries no similarity column', async () => {
-    const { db, cfg } = openConfig({ presets: { default: { include: ['**/*.md'] } }, queries: {}, baseDir: fruitTree(), configPath: null });
+    const { store: db, cfg } = await openConfig({ presets: { default: { include: ['**/*.md'] } }, queries: {}, baseDir: fruitTree(), configPath: null });
     const rows = (await search(db, cfg, 'apple OR stone')) as Array<{ via: string; similarity?: number }>;
-    db.close();
+    await db.close();
     assert.ok(rows.length > 0, JSON.stringify(rows));
     assert.ok(!rows.some((r) => r.via.includes('vector')), JSON.stringify(rows));
     assert.ok(!rows.some((r) => 'similarity' in r), JSON.stringify(rows));
   });
 
   it('a tree with no embed block answers an unmatched word with zero rows, not an error', async () => {
-    const { db, cfg } = openConfig({ presets: { default: { include: ['**/*.md'] } }, queries: {}, baseDir: fruitTree(), configPath: null });
+    const { store: db, cfg } = await openConfig({ presets: { default: { include: ['**/*.md'] } }, queries: {}, baseDir: fruitTree(), configPath: null });
     const rows = (await search(db, cfg, 'pomme')) as Array<{ path: string; via: string }>;
-    db.close();
+    await db.close();
     // 'pomme' has no lexical match anywhere in the fixture and the tree has no vectors, so
     // this is simply zero rows. Fewer signals is not an error.
     assert.deepEqual(rows, []);
@@ -117,7 +117,7 @@ describe('embed feature', () => {
 
 describe('declared signals', () => {
   it('signals: {"words":1} carries no vector rows and no similarity column, even with a model configured', async () => {
-    const { db, cfg } = openConfig({
+    const { store: db, cfg } = await openConfig({
       presets: { default: { include: ['**/*.md'], signals: { words: 1 } } },
       embed: { model: writeModel(), provider: 'static' },
       queries: {},
@@ -128,7 +128,7 @@ describe('declared signals', () => {
     // 'pomme' is only reachable through the vector this preset declined; dropping "vectors"
     // must answer it the same as a tree with no embed block at all: zero rows.
     const zero = await search(db, cfg, 'pomme');
-    db.close();
+    await db.close();
     assert.ok(rows.length > 0, JSON.stringify(rows));
     assert.ok(!rows.some((r) => r.via.includes('vector')), JSON.stringify(rows));
     assert.ok(!rows.some((r) => 'similarity' in r), JSON.stringify(rows));
@@ -139,7 +139,7 @@ describe('declared signals', () => {
     const baseDir = tmpTree();
     writeNote(baseDir, 'floor.md', { frontmatter: { title: 'Floor' }, body: 'The price floor is set. See [[context]] for background.' });
     writeNote(baseDir, 'context.md', { frontmatter: { title: 'Context' }, body: 'Nothing about pricing here.' });
-    const { db, cfg } = openConfig({
+    const { store: db, cfg } = await openConfig({
       presets: { default: { include: ['**/*.md'], signals: { words: 1, vectors: 1 } } },
       embed: { model: writeModel(), provider: 'static' },
       queries: {},
@@ -147,7 +147,7 @@ describe('declared signals', () => {
       configPath: null,
     });
     const rows = (await search(db, cfg, 'price')) as Array<{ path: string; via: string }>;
-    db.close();
+    await db.close();
     assert.ok(
       rows.some((r) => r.path === 'floor.md' && r.via.includes('match')),
       JSON.stringify(rows)
@@ -160,7 +160,7 @@ describe('declared signals', () => {
 
   it("a signal weight scales its RRF contribution: doubling the vectors weight doubles a vector-only row's score", async () => {
     const withWeight = async (vectorsWeight: number) => {
-      const { db, cfg } = openConfig({
+      const { store: db, cfg } = await openConfig({
         presets: { default: { include: ['**/*.md'], signals: { words: 1, vectors: vectorsWeight } } },
         embed: { model: writeModel(), provider: 'static' },
         queries: {},
@@ -170,7 +170,7 @@ describe('declared signals', () => {
       // 'pomme' has zero lexical matches in the fixture, so every row here is via=vector only,
       // scored at exactly weight / (RRF_K + rank) with no other signal's contribution folded in.
       const rows = (await search(db, cfg, 'pomme')) as Array<{ via: string; score: number }>;
-      db.close();
+      await db.close();
       return rows;
     };
     const weight1 = await withWeight(1);
@@ -210,9 +210,9 @@ describe('embed api type', () => {
   after(() => server.close());
 
   it('expands through an OpenAI-compatible endpoint', async () => {
-    const { db, cfg } = openSemantic(fruitTree(), { model: 'test-model', provider: 'openai', url });
+    const { store: db, cfg } = await openSemantic(fruitTree(), { model: 'test-model', provider: 'openai', url });
     const rows = (await search(db, cfg, 'pomme')) as Array<{ path: string; via: string }>;
-    db.close();
+    await db.close();
     assert.equal(rows[0].path, 'a.md', JSON.stringify(rows));
     assert.equal(rows[0].via, 'vector');
   });
@@ -220,13 +220,13 @@ describe('embed api type', () => {
 
 describe('semantic absence signal', () => {
   it('vector rows carry cosine similarity: a real match runs high, absent vocabulary near zero', async () => {
-    const { db, cfg } = openSemantic(fruitTree(), { model: writeModel(), provider: 'static' });
+    const { store: db, cfg } = await openSemantic(fruitTree(), { model: writeModel(), provider: 'static' });
 
     // The lexical baseline is a second tree with no embed block: vectors are all-or-nothing
     // per tree now, so there is no per-call opt-out to compare against.
-    const lexical = openConfig({ presets: { default: { include: ['**/*.md'] } }, queries: {}, baseDir: fruitTree(), configPath: null });
-    const absent = await search(lexical.db, lexical.cfg, 'zzznotaword');
-    lexical.db.close();
+    const lexical = await openConfig({ presets: { default: { include: ['**/*.md'] } }, queries: {}, baseDir: fruitTree(), configPath: null });
+    const absent = await search(lexical.store, lexical.cfg, 'zzznotaword');
+    await lexical.store.close();
     assert.equal(absent.length, 0, 'lexical search answers absence with zero rows');
 
     const semantic = (await search(db, cfg, 'zzznotaword')) as Array<{ via: string; similarity: number }>;
@@ -238,37 +238,37 @@ describe('semantic absence signal', () => {
 
     const real = (await search(db, cfg, 'pomme')) as Array<{ path: string; similarity: number }>;
     assert.ok(real[0].similarity > 0.9, `apple ≡ pomme in the fixture, got ${real[0].similarity}`);
-    db.close();
+    await db.close();
   });
 });
 
 describe('chunking covers the body, not the raw file', () => {
-  it('the first chunk starts at the first body line, so no chunk is the frontmatter block', () => {
+  it('the first chunk starts at the first body line, so no chunk is the frontmatter block', async () => {
     const baseDir = tmpTree();
     writeNote(baseDir, 'a.md', { frontmatter: { title: 'A', status: 'open' }, body: '# Heading\n\nprose about orchards' });
-    const { db } = openSemantic(baseDir, { model: writeModel(), provider: 'static' });
-    const chunks = db.prepare('SELECT chunk, start_line, end_line FROM embeddings WHERE "path" = ? ORDER BY chunk').all('a.md') as Array<{ chunk: number; start_line: number; end_line: number }>;
+    const { store: db } = await openSemantic(baseDir, { model: writeModel(), provider: 'static' });
+    const chunks = (await (await db.prepare('SELECT chunk, start_line, end_line FROM embeddings WHERE "path" = ? ORDER BY chunk')).all('a.md')) as Array<{ chunk: number; start_line: number; end_line: number }>;
     // sections is 1-indexed over the raw file, so agreeing with it is the whole invariant:
     // both must point at the same heading line for a range to be a direct Read range.
-    const heading = db.prepare('SELECT start_line FROM sections WHERE "path" = ? AND idx = 0').get('a.md') as { start_line: number };
-    db.close();
+    const heading = (await (await db.prepare('SELECT start_line FROM sections WHERE "path" = ? AND idx = 0')).get('a.md')) as { start_line: number };
+    await db.close();
     assert.equal(chunks.length, 1, `frontmatter must not become a chunk of its own: ${JSON.stringify(chunks)}`);
     assert.equal(chunks[0].start_line, heading.start_line, 'the chunk starts where sections says the heading is, not at line 1');
   });
 
-  it('a frontmatter-only note has no chunks at all', () => {
+  it('a frontmatter-only note has no chunks at all', async () => {
     const baseDir = tmpTree();
     writeNote(baseDir, 'stub.md', { frontmatter: { title: 'Stub', type: 'project' }, body: '' });
-    const { db } = openSemantic(baseDir, { model: writeModel(), provider: 'static' });
-    const n = (db.prepare('SELECT COUNT(*) AS n FROM embeddings WHERE "path" = ?').get('stub.md') as { n: number }).n;
-    db.close();
+    const { store: db } = await openSemantic(baseDir, { model: writeModel(), provider: 'static' });
+    const n = ((await (await db.prepare('SELECT COUNT(*) AS n FROM embeddings WHERE "path" = ?')).get('stub.md')) as { n: number }).n;
+    await db.close();
     assert.equal(n, 0, 'an empty body embeds to nothing, rather than to a vector of its own YAML');
   });
 
   // W0 finding: ~29% of hub-corpus blocks become YAML noise if chunk() ever sees the raw file
   // instead of the frontmatter-stripped body. List-valued keys are the case that spans several
   // raw lines, so a wrong offset would put a chunk extent, or its text, inside the YAML block.
-  it('list-valued frontmatter (aliases, tags) never leaks into chunk text, and extents map to real body lines', () => {
+  it('list-valued frontmatter (aliases, tags) never leaks into chunk text, and extents map to real body lines', async () => {
     const baseDir = tmpTree();
     const fm = 'title: A\naliases:\n  - Alpha\n  - A1\ntags:\n  - x\n  - y';
     writeNote(baseDir, 'a.md', { frontmatter: fm, body: '# Heading\n\nprose about orchards' });
@@ -291,7 +291,7 @@ describe('chunking covers the body, not the raw file', () => {
 
   // W3b: embed.chunkTokens overrides workingSize under the shipped pgc policy, so pairs that
   // fit under the 500-token default no longer fit under a 100-token owner lever.
-  it('embed.chunkTokens produces more, smaller chunks than the 500-token default for the same body', () => {
+  it('embed.chunkTokens produces more, smaller chunks than the 500-token default for the same body', async () => {
     const baseDir = tmpTree();
     const paragraph = Array.from({ length: 150 }, () => 'word').join(' '); // ~187 estimated tokens
     const body = Array.from({ length: 8 }, () => paragraph).join('\n\n');
@@ -316,9 +316,9 @@ describe('similarity is a cosine, so it is bounded', () => {
     const body = '# Orchard\n\napple orchard prose that both notes share exactly';
     writeNote(baseDir, 'one.md', { frontmatter: { title: 'One' }, body });
     writeNote(baseDir, 'two.md', { frontmatter: { title: 'One' }, body });
-    const { db, cfg } = openSemantic(baseDir, { model: writeModel(), provider: 'static' });
+    const { store: db, cfg } = await openSemantic(baseDir, { model: writeModel(), provider: 'static' });
     const rows = await relatedNotes(db, cfg, 'one.md', {}, 5);
-    db.close();
+    await db.close();
     // int8 storage dequantises a little either side of the true cosine; clamping keeps the
     // column a number a reader can reason about.
     assert.equal(rows[0].path, 'two.md');
@@ -331,9 +331,9 @@ describe('similarity provenance', () => {
     const base = tmpTree();
     // Chunk 1 (heading "Walls"): vector-far from the query. Chunk 2 ("Orchard"): vector-identical.
     writeNote(base, 'two.md', { body: '# Walls\n\nstone walls here\n\n# Orchard\n\nAn apple every day\n' });
-    const { db, cfg } = openSemantic(base, { model: writeModel(), provider: 'static' });
+    const { store: db, cfg } = await openSemantic(base, { model: writeModel(), provider: 'static' });
     const rows = (await search(db, cfg, 'pomme')) as Array<{ path: string; similarity: number; lines: string }>;
-    db.close();
+    await db.close();
     const hit = rows.find((r) => r.path === 'two.md');
     assert.ok(hit, JSON.stringify(rows));
     assert.ok(hit.similarity > 0.9, `best chunk is the orchard section, got ${hit.similarity}`);
@@ -343,12 +343,12 @@ describe('similarity provenance', () => {
 });
 
 describe('vector coverage', () => {
-  it('every indexed file gets embedding rows when the config names a model: vectors are per-tree, not per-preset', () => {
+  it('every indexed file gets embedding rows when the config names a model: vectors are per-tree, not per-preset', async () => {
     const baseDir = tmpTree();
     writeNote(baseDir, 'a/one.md', { frontmatter: { title: 'Fruit' }, body: 'An apple every day' });
     writeNote(baseDir, 'b/two.md', { frontmatter: { title: 'Walls' }, body: 'stone walls' });
 
-    const { db } = openConfig({
+    const { store: db } = await openConfig({
       presets: { default: { include: ['**/*.md'] }, a: { include: ['a/**/*.md'] }, b: { include: ['b/**/*.md'] } },
       embed: { model: writeModel(), provider: 'static' },
       queries: {},
@@ -356,23 +356,23 @@ describe('vector coverage', () => {
       configPath: null,
     });
 
-    const rows = db.prepare('SELECT DISTINCT "path" FROM embeddings ORDER BY "path"').all() as Array<{ path: string }>;
+    const rows = (await (await db.prepare('SELECT DISTINCT "path" FROM embeddings ORDER BY "path"')).all()) as Array<{ path: string }>;
     assert.deepEqual(
       rows.map((r) => r.path),
       ['a/one.md', 'b/two.md']
     );
 
-    const coverage = db.prepare('SELECT preset, path FROM preset_files ORDER BY preset, path').all() as Array<{ preset: string; path: string }>;
+    const coverage = (await (await db.prepare('SELECT preset, path FROM preset_files ORDER BY preset, path')).all()) as Array<{ preset: string; path: string }>;
     assert.deepEqual(coverage, [
       { preset: 'a', path: 'a/one.md' },
       { preset: 'b', path: 'b/two.md' },
       { preset: 'default', path: 'a/one.md' },
       { preset: 'default', path: 'b/two.md' },
     ]);
-    db.close();
+    await db.close();
   });
 
-  it('per-preset coverage counts real vectors, not the NULL placeholder rows reconcile writes', () => {
+  it('per-preset coverage counts real vectors, not the NULL placeholder rows reconcile writes', async () => {
     const baseDir = tmpTree();
     writeNote(baseDir, 'a/one.md', { frontmatter: { title: 'Fruit' }, body: 'An apple every day' });
 
@@ -383,24 +383,24 @@ describe('vector coverage', () => {
       baseDir,
       configPath: null,
     };
-    const { db, cfg } = openConfig(cfgObj);
+    const { store: db, cfg } = await openConfig(cfgObj);
     // Vectors are lazy: rows exist with vector NULL until the first search that uses them.
     // Coverage saying "1 embedded" here contradicted status's own "0 embedded, 1 pending" line.
-    const before = presetCoverage(db, cfg);
+    const before = await presetCoverage(db, cfg);
     assert.deepEqual(before, [{ name: 'default', files: 1, embedded: 0, signals: { words: 1, links: 1, vectors: 1 } }]);
-    db.close();
+    await db.close();
   });
 });
 
 describe('related command', () => {
   it('surfaces a semantically similar note that is not linked, excluding self/outbound/backlinks', async () => {
-    const { db, cfg } = openSemantic(relatedTree(), { model: writeModel(), provider: 'static' });
+    const { store: db, cfg } = await openSemantic(relatedTree(), { model: writeModel(), provider: 'static' });
     // Sanity-check the fixture's link shape (what related must exclude).
-    const peeked = peek(db, cfg, 'target.md');
+    const peeked = await peek(db, cfg, 'target.md');
     assert.deepEqual(peeked.outbound, ['linked.md']);
     assert.deepEqual(peeked.backlinks, ['backlinker.md']);
     const result = await relatedNotes(db, cfg, 'target.md', {}, 5);
-    db.close();
+    await db.close();
     const paths = result.map((r) => r.path);
     assert.ok(paths.includes('similar.md'), JSON.stringify(result));
     assert.ok(!paths.includes('linked.md'), JSON.stringify(result));
@@ -411,10 +411,10 @@ describe('related command', () => {
   });
 
   it('respects scope: a --where that drops a candidate keeps it out of related', async () => {
-    const { db, cfg } = openSemantic(relatedTree(), { model: writeModel(), provider: 'static' });
+    const { store: db, cfg } = await openSemantic(relatedTree(), { model: writeModel(), provider: 'static' });
     await search(db, cfg, 'apple');
     const result = await relatedNotes(db, cfg, 'target.md', { where: `f."path" != 'similar.md'` }, 5);
-    db.close();
+    await db.close();
     assert.ok(!result.map((r) => r.path).includes('similar.md'), JSON.stringify(result));
   });
 
@@ -424,27 +424,27 @@ describe('related command', () => {
     // 22 apple-similar backlinkers. peek's backlinks display truncates at 20; related's
     // exclude set is built from the full, untruncated links table, so none of the 22 leaks in.
     for (let i = 0; i < 22; i++) writeNote(baseDir, `back${String(i).padStart(2, '0')}.md`, { frontmatter: { title: `Back ${i}` }, body: 'An apple every day. See [[target]].' });
-    const { db, cfg } = openSemantic(baseDir, { model: writeModel(), provider: 'static' });
+    const { store: db, cfg } = await openSemantic(baseDir, { model: writeModel(), provider: 'static' });
     await search(db, cfg, 'apple');
-    const peeked = peek(db, cfg, 'target.md');
+    const peeked = await peek(db, cfg, 'target.md');
     assert.equal(peeked.backlinksTotal, 22);
     assert.equal(peeked.backlinks.length, 20, 'peek display list is truncated; related must not inherit that truncation');
     const result = await relatedNotes(db, cfg, 'target.md', {}, 5);
-    db.close();
+    await db.close();
     assert.deepEqual(result, [], `every apple-similar note here is a backlink, so related must be empty: ${JSON.stringify(result)}`);
   });
 
   // Vectors are related's only signal, so every way of not having them names itself. An empty
   // table is then unambiguous: nothing near in meaning that this note does not already link to.
   it('errors when the tree names no embedding model, rather than answering []', async () => {
-    const { db, cfg } = openConfig({ presets: { default: { include: ['**/*.md'] } }, queries: {}, baseDir: relatedTree(), configPath: null });
+    const { store: db, cfg } = await openConfig({ presets: { default: { include: ['**/*.md'] } }, queries: {}, baseDir: relatedTree(), configPath: null });
     await assert.rejects(() => relatedNotes(db, cfg, 'target.md', {}, 5), /no embedding model/);
-    db.close();
+    await db.close();
   });
 
   it("errors on a preset without the vectors signal instead of borrowing another preset's vectors", async () => {
     const baseDir = relatedTree();
-    const { db, cfg } = openConfig({
+    const { store: db, cfg } = await openConfig({
       presets: { default: { include: ['**/*.md'] }, lex: { include: ['**/*.md'], signals: { words: 1, links: 1 } } },
       queries: {},
       embed: { model: writeModel(), provider: 'static' },
@@ -454,37 +454,37 @@ describe('related command', () => {
     // The files are embedded, via the overlapping vectors-on preset. Reading the signals is
     // what stops those vectors answering for a scope that declined them.
     await assert.rejects(() => relatedNotes(db, cfg, 'target.md', { preset: 'lex' }, 5), /no "vectors" signal/);
-    db.close();
+    await db.close();
   });
 
   it('errors when the seed note has no indexed text, rather than answering []', async () => {
     const baseDir = relatedTree();
     writeNote(baseDir, 'stub.md', { frontmatter: { title: 'Stub' }, body: '' });
-    const { db, cfg } = openSemantic(baseDir, { model: writeModel(), provider: 'static' });
+    const { store: db, cfg } = await openSemantic(baseDir, { model: writeModel(), provider: 'static' });
     await assert.rejects(() => relatedNotes(db, cfg, 'stub.md', {}, 5), /no indexed text/);
-    db.close();
+    await db.close();
   });
 
   it('computes the lazy vectors itself, so a fresh index answers without a prior semantic search', async () => {
-    const { db, cfg } = openSemantic(relatedTree(), { model: writeModel(), provider: 'static' });
+    const { store: db, cfg } = await openSemantic(relatedTree(), { model: writeModel(), provider: 'static' });
     const result = await relatedNotes(db, cfg, 'target.md', {}, 5);
-    db.close();
+    await db.close();
     assert.ok(result.map((r) => r.path).includes('similar.md'), JSON.stringify(result));
   });
 
   it('says the model is missing rather than answering []: an empty table reads as "nothing is related"', async () => {
-    const { db, cfg } = openSemantic(relatedTree(), { model: '/nonexistent/model-xyz', provider: 'static' });
+    const { store: db, cfg } = await openSemantic(relatedTree(), { model: '/nonexistent/model-xyz', provider: 'static' });
     await assert.rejects(() => relatedNotes(db, cfg, 'target.md', {}, 5), /local model path .* is missing/);
-    db.close();
+    await db.close();
   });
 });
 
 describe('similarNotes (unit)', () => {
   it('ranks by cosine, honoring exclude and self-exclusion', async () => {
-    const { db, cfg } = openSemantic(relatedTree(), { model: writeModel(), provider: 'static' });
+    const { store: db, cfg } = await openSemantic(relatedTree(), { model: writeModel(), provider: 'static' });
     await search(db, cfg, 'apple'); // warm the lazy vectors, see peek related tests above
-    const result = similarNotes(db, cfg, 'target.md', { exclude: new Set(['linked.md', 'backlinker.md']), k: 5 });
-    db.close();
+    const result = await similarNotes(db, cfg, 'target.md', { exclude: new Set(['linked.md', 'backlinker.md']), k: 5 });
+    await db.close();
     assert.deepEqual(
       result.map((r) => r.path),
       ['similar.md', 'unrelated.md']
@@ -493,29 +493,29 @@ describe('similarNotes (unit)', () => {
   });
 
   it('honors an allowed set (scope)', async () => {
-    const { db, cfg } = openSemantic(relatedTree(), { model: writeModel(), provider: 'static' });
+    const { store: db, cfg } = await openSemantic(relatedTree(), { model: writeModel(), provider: 'static' });
     await search(db, cfg, 'apple');
-    const result = similarNotes(db, cfg, 'target.md', { exclude: new Set(['linked.md', 'backlinker.md']), allowed: new Set(['similar.md']), k: 5 });
-    db.close();
+    const result = await similarNotes(db, cfg, 'target.md', { exclude: new Set(['linked.md', 'backlinker.md']), allowed: new Set(['similar.md']), k: 5 });
+    await db.close();
     assert.deepEqual(
       result.map((r) => r.path),
       ['similar.md']
     );
   });
 
-  it('returns [] when the target note has no stored vectors, even though the embeddings table exists', () => {
+  it('returns [] when the target note has no stored vectors, even though the embeddings table exists', async () => {
     // default covers everything but opts target.md out of vectors; preset "b" embeds only
     // unrelated.md, so the embeddings table exists (unlike the table-absent case above) but
     // carries no row at all for target.md.
-    const { db, cfg } = openConfig({
+    const { store: db, cfg } = await openConfig({
       presets: { default: { include: ['**/*.md'] }, b: { include: ['unrelated.md'] } },
       embed: { model: writeModel(), provider: 'static' },
       queries: {},
       baseDir: relatedTree(),
       configPath: null,
     });
-    const result = similarNotes(db, cfg, 'target.md', { exclude: new Set(), k: 5 });
-    db.close();
+    const result = await similarNotes(db, cfg, 'target.md', { exclude: new Set(), k: 5 });
+    await db.close();
     assert.deepEqual(result, []);
   });
 });
@@ -530,7 +530,7 @@ describe('model cache location and naming', () => {
     for (const dir of seeded) rmSync(dir, { recursive: true, force: true });
   });
 
-  it('an unresolved Hugging Face id names its (fileless) repo dir under ~/.sense/models', () => {
+  it('an unresolved Hugging Face id names its (fileless) repo dir under ~/.sense/models', async () => {
     // Fixture ids, never real ones: a real id resolves on any machine whose owner has
     // actually downloaded it, and this test is about the unresolved shape.
     const a = modelDir('sense-test-fixture/unresolved-a');
@@ -540,7 +540,7 @@ describe('model cache location and naming', () => {
     assert.notEqual(a, b, 'two models coexist rather than sharing a directory');
   });
 
-  it('a local path is used as a path, never mangled into a cache key', () => {
+  it('a local path is used as a path, never mangled into a cache key', async () => {
     // A path (POSIX, Windows drive letter, or relative) is used as-is, never mangled into a
     // cache-key-style directory name.
     for (const path of ['./local-model', '/abs/path/model', 'C:\\models\\mine', 'a/b/c', 'noslash']) {
@@ -568,7 +568,7 @@ describe('model cache location and naming', () => {
     assert.equal(dir, modelDir(model));
   });
 
-  it('~/.sense/models is the one cache root; the old XDG-relocatable cache is orphaned', () => {
+  it('~/.sense/models is the one cache root; the old XDG-relocatable cache is orphaned', async () => {
     assert.equal(modelDir('org/name').includes(homedir()), true);
   });
 });
@@ -583,9 +583,9 @@ describe('related on a heading-dense note', () => {
     writeNote(baseDir, 'similar.md', { frontmatter: { title: 'Similar' }, body: 'pomme' });
     writeNote(baseDir, 'unrelated.md', { frontmatter: { title: 'Unrelated' }, body: 'stone' });
 
-    const { db, cfg } = openSemantic(baseDir, { model: writeModel(), provider: 'static' });
+    const { store: db, cfg } = await openSemantic(baseDir, { model: writeModel(), provider: 'static' });
     const result = await relatedNotes(db, cfg, 'target.md', {}, 5);
-    db.close();
+    await db.close();
     assert.equal(result[0]?.path, 'similar.md', JSON.stringify(result));
   });
 });
@@ -607,9 +607,9 @@ describe('multilingual semantic mechanism', () => {
       const baseDir = tmpTree();
       writeNote(baseDir, 'a.md', { body: seed });
       writeNote(baseDir, 'b.md', { body: far });
-      const { db, cfg } = openSemantic(baseDir, { model: writeModel([near, [far]]), provider: 'static' });
+      const { store: db, cfg } = await openSemantic(baseDir, { model: writeModel([near, [far]]), provider: 'static' });
       const rows = (await search(db, cfg, query)) as Array<{ path: string; via: string; lines: string }>;
-      db.close();
+      await db.close();
       const hit = rows[0];
       assert.equal(hit.path, 'a.md', JSON.stringify(rows));
       assert.equal(hit.via, 'vector');
@@ -636,7 +636,7 @@ describe('language fit check', () => {
   }
 
   it('a majority-Chinese tree under a model declaring only English throws EMBED_MODEL_MISMATCH naming the model, its languages, the majority, and the fix', async () => {
-    const { db, cfg } = openSemantic(chineseTree(), { model: chineseModel(['en']), provider: 'static' });
+    const { store: db, cfg } = await openSemantic(chineseTree(), { model: chineseModel(['en']), provider: 'static' });
     await assert.rejects(
       () => search(db, cfg, 'anything'),
       (err: SenseError) => {
@@ -648,20 +648,20 @@ describe('language fit check', () => {
         return true;
       }
     );
-    db.close();
+    await db.close();
   });
 
   it('the same tree passes when the model also declares zh', async () => {
-    const { db, cfg } = openSemantic(chineseTree(), { model: chineseModel(['en', 'zh']), provider: 'static' });
+    const { store: db, cfg } = await openSemantic(chineseTree(), { model: chineseModel(['en', 'zh']), provider: 'static' });
     const rows = await search(db, cfg, 'anything');
-    db.close();
+    await db.close();
     assert.ok(Array.isArray(rows));
   });
 
   it('no languages.json at all: the check stays off regardless of majority', async () => {
-    const { db, cfg } = openSemantic(chineseTree(), { model: chineseModel(undefined), provider: 'static' });
+    const { store: db, cfg } = await openSemantic(chineseTree(), { model: chineseModel(undefined), provider: 'static' });
     const rows = await search(db, cfg, 'anything');
-    db.close();
+    await db.close();
     assert.ok(Array.isArray(rows));
   });
 
@@ -677,10 +677,10 @@ describe('language fit check', () => {
     ] as const) {
       writeNote(baseDir, `${lang}.md`, { body: sentences.map((s, i) => `## S${i}\n\n${s}`).join('\n\n') });
     }
-    const { db, cfg } = openSemantic(baseDir, { model: chineseModel(['en']), provider: 'static' });
+    const { store: db, cfg } = await openSemantic(baseDir, { model: chineseModel(['en']), provider: 'static' });
     const rows = await search(db, cfg, 'anything');
-    const dist = languageDistribution(db);
-    db.close();
+    const dist = await languageDistribution(db);
+    await db.close();
     assert.ok(Array.isArray(rows));
     assert.ok(dist, 'a distribution is recorded even without an error');
     const total = Object.values(dist as Record<string, number>).reduce((a, b) => a + b, 0);
@@ -690,7 +690,7 @@ describe('language fit check', () => {
     }
   });
 
-  it('sense status prints the declared languages and the detected distribution', () => {
+  it('sense status prints the declared languages and the detected distribution', async () => {
     const baseDir = chineseTree();
     const model = chineseModel(['en', 'zh']);
     writeFileSync(join(baseDir, 'sense.config.json'), JSON.stringify({ version: 4, presets: { default: { include: ['**/*.md'] } }, embed: { model, provider: 'static' }, queries: {} }));
@@ -712,9 +712,9 @@ describe('query that rewrites to nothing', () => {
   it('unspaced-script punctuation alone returns zero rows, not an FTS5 syntax error', async () => {
     const baseDir = tmpTree();
     writeNote(baseDir, 'zh.md', { frontmatter: { title: '笔记' }, body: '季度审查会议。' });
-    const { db, cfg } = openConfig({ presets: { default: { include: ['**/*.md'] } }, queries: {}, baseDir, configPath: null });
+    const { store: db, cfg } = await openConfig({ presets: { default: { include: ['**/*.md'] } }, queries: {}, baseDir, configPath: null });
     const rows = await search(db, cfg, '。');
-    db.close();
+    await db.close();
     assert.deepEqual(rows, []);
   });
 });

@@ -102,6 +102,9 @@
     "ts-dev-stack": "*",
     "tsds-config": "*"
   },
+  "optionalDependencies": {
+    "@duckdb/node-api": "^1.5.5-r.4"
+  },
   "engines": {
     "node": ">=22.20"
   },

@@ -1,11 +1,12 @@
 import { dirname } from 'node:path';
 import { presetCoverage } from '../commands/status.ts';
 import { embedConfig, featureStates, SUPPORTED_CONFIG_VERSION } from '../config/index.ts';
-import { docCount, getMeta, open, SCHEMA_VERSION } from '../db/index.ts';
 import { languageDistribution } from '../embed/distribution.ts';
 import { probeReachable } from '../embed/http.ts';
 import { isDownloadable, MODEL_FILENAMES, modelDir, modelPresent, readLanguages } from '../embed/store.ts';
 import { featuresLine, presetsLines } from '../output/output.ts';
+import { docCount, getMeta, openStore, SCHEMA_VERSION } from '../store/index.ts';
+import type { Store } from '../store/types.ts';
 import { USAGE } from './index.ts';
 import { CONFIG, FORMAT, formatOf, parse, printWarnings } from './shared.ts';
 import type { Command } from './types.ts';
@@ -18,18 +19,18 @@ import type { Command } from './types.ts';
 // Vectors are computed on the first semantic query, not at reconcile, so a tree can have a
 // semantic-on preset with nothing embedded yet -- reported here because a fast reconcile on
 // such a tree otherwise reads as "the feature isn't on".
-function vectorState(db: ReturnType<typeof open>['db']): { embedded: number; pending: number } | null {
+async function vectorState(store: Store): Promise<{ embedded: number; pending: number } | null> {
   try {
-    const row = db.prepare('SELECT COUNT(vector) AS embedded, COUNT(*) - COUNT(vector) AS pending FROM embeddings').get() as { embedded: number; pending: number };
-    return row;
+    const stmt = await store.prepare('SELECT COUNT(vector) AS embedded, COUNT(*) - COUNT(vector) AS pending FROM embeddings');
+    return (await stmt.get()) as { embedded: number; pending: number };
   } catch {
     return null;
   }
 }
 
-function parseErrorCount(db: ReturnType<typeof open>['db']): number {
-  const row = db.prepare(`SELECT COUNT(*) AS n FROM frontmatter WHERE "_parse_error" IS NOT NULL`).get() as { n: number };
-  return row.n;
+async function parseErrorCount(store: Store): Promise<number> {
+  const stmt = await store.prepare(`SELECT COUNT(*) AS n FROM frontmatter WHERE "_parse_error" IS NOT NULL`);
+  return ((await stmt.get()) as { n: number }).n;
 }
 
 // A URL can carry credentials in its userinfo (https://user:pass@host/v1). status output gets
@@ -58,23 +59,23 @@ const status: Command = async (ctx) => {
   const { values } = parse(ctx.argv, `usage: ${ctx.name} ${USAGE.status}`, { ...FORMAT, ...CONFIG });
   const format = formatOf(values);
   const cfg = ctx.resolveConfig(values.config as string | undefined);
-  const { db, dbPath, warnings } = open(cfg);
+  const { store, dbPath, warnings } = await openStore(cfg);
   printWarnings(warnings);
 
   const features = featureStates(cfg);
   const e = embedConfig(cfg);
   const hasModel = e ? modelPresent(cfg) : false;
   const reachable = e ? await embedReachable(e) : null;
-  const vectors = e ? vectorState(db) : null;
-  const presets = presetCoverage(db, cfg);
+  const vectors = e ? await vectorState(store) : null;
+  const presets = await presetCoverage(store, cfg);
   const staticLanguages = e && e.provider === 'static' ? readLanguages(e.model) : undefined;
   const declaredLanguages = staticLanguages && staticLanguages.length > 0 ? staticLanguages : null;
-  const detectedLanguages = languageDistribution(db) ?? null;
-  const heartbeat = getMeta(db, 'watch_heartbeat');
+  const detectedLanguages = (await languageDistribution(store)) ?? null;
+  const heartbeat = await getMeta(store, 'watch_heartbeat');
   // Derived at open() (F): 3x the largest reconcile this cache has ever held its write
   // transaction for, floored at 30s -- read back from the connection rather than
   // recomputed here, so this always reports what open() actually set.
-  const busyTimeoutMs = (db.prepare('PRAGMA busy_timeout').get() as { timeout: number }).timeout;
+  const busyTimeoutMs = ((await (await store.prepare('PRAGMA busy_timeout')).get()) as { timeout: number }).timeout;
   // The env var holds the token; only its name and whether it is set are ever reported.
   const keyEnv = e?.key ? { name: e.key, set: (process.env[e.key] ?? '') !== '' } : null;
   const result = {
@@ -86,14 +87,14 @@ const status: Command = async (ctx) => {
     cache: dirname(dbPath),
     db: dbPath,
     cacheSchema: SCHEMA_VERSION,
-    docs: docCount(db),
-    unparseableFrontmatter: parseErrorCount(db),
+    docs: await docCount(store),
+    unparseableFrontmatter: await parseErrorCount(store),
     features: features.on,
     featuresOff: features.off,
     embed: e ? { provider: e.provider, model: e.model, dir: e.provider === 'static' ? modelDir(e.model) : null, url: e.url ? redactUrl(e.url) : null, reachable, keyEnv, downloaded: hasModel, languages: declaredLanguages, detectedLanguages, ...(vectors ?? {}) } : null,
     presets,
     queries: Object.keys(cfg.queries ?? {}).length,
-    watcherPid: getMeta(db, 'watch_pid'),
+    watcherPid: await getMeta(store, 'watch_pid'),
     watcherHeartbeatSecondsAgo: heartbeat ? Math.round((Date.now() - Date.parse(heartbeat)) / 1000) : null,
     busyTimeoutMs,
   };
@@ -143,6 +144,6 @@ const status: Command = async (ctx) => {
     console.log(result.watcherHeartbeatSecondsAgo === null ? 'watcher:  none' : `watcher:  ${pid}last heartbeat ${result.watcherHeartbeatSecondsAgo}s ago`);
     console.log(`sqlite:   busy_timeout ${result.busyTimeoutMs}ms (derived: 3x the largest reconcile this cache has recorded, floored at 30000ms)`);
   }
-  db.close();
+  await store.close();
 };
 export default status;

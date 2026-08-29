@@ -33,23 +33,31 @@ function chunksOf(blocks: Block[], body: string, search?: { title: string; summa
 
 export const embed: Feature = {
   name: 'embed',
-  schema(db) {
-    db.exec(`CREATE TABLE IF NOT EXISTS embeddings ("path" TEXT, chunk INTEGER, start_line INTEGER, end_line INTEGER, scale REAL, vector BLOB, PRIMARY KEY ("path", chunk))`);
+  async schema(db) {
+    await db.exec(`CREATE TABLE IF NOT EXISTS embeddings ("path" TEXT, chunk INTEGER, start_line INTEGER, end_line INTEGER, scale REAL, vector BLOB, PRIMARY KEY ("path", chunk))`);
   },
   extract(raw, body, search, _data, cfg, blocks) {
     // Lines the frontmatter occupies, so body line 1 maps back to its raw line number.
     // blocks comes from parseFile's shared parse; falls back to parsing body for a direct call.
     return chunksOf(blocks ?? parse(body), body, search, raw.split('\n').length - body.split('\n').length, cfg?.embed?.chunkTokens);
   },
-  remove(db, path) {
-    db.prepare('DELETE FROM embeddings WHERE "path" = ?').run(path);
+  async remove(db, paths) {
+    if (paths.length === 0) return;
+    await db.runBatch(
+      'DELETE FROM embeddings WHERE "path" = ?',
+      paths.map((p) => [p])
+    );
   },
-  // A tree with no embedding model never had extract() run for the doc (db.ts's per-file
-  // filter skips it), so extracted is undefined here -- store nothing, i.e. no rows.
-  store(db, path, extracted) {
-    if (!extracted) return;
-    const insert = db.prepare('INSERT INTO embeddings ("path", chunk, start_line, end_line, scale, vector) VALUES (?, ?, ?, ?, NULL, NULL)');
-    (extracted as Chunk[]).forEach((c, idx) => insert.run(path, idx, c.startLine, c.endLine));
+  // A tree with no embedding model never had extract() run for the doc (reconcile.ts's per-file
+  // filter skips it), so extracted is undefined here -- those docs contribute no rows.
+  async store(db, docs) {
+    const rows: unknown[][] = [];
+    for (const { path, extracted } of docs) {
+      if (!extracted) continue;
+      (extracted as Chunk[]).forEach((c, idx) => rows.push([path, idx, c.startLine, c.endLine]));
+    }
+    if (rows.length === 0) return;
+    await db.runBatch('INSERT INTO embeddings ("path", chunk, start_line, end_line, scale, vector) VALUES (?, ?, ?, ?, NULL, NULL)', rows);
   },
   enabledForFile(_cfg, file) {
     return file.embed;

@@ -57,7 +57,7 @@ for (const variant of VARIANTS) {
     baseDir: tree,
     configPath: null,
   };
-  const { db } = lib.open(cfg);
+  const { store } = await lib.open(cfg);
   const perQuery = new Map();
   let errors = 0;
   let ms = 0;
@@ -67,7 +67,7 @@ for (const variant of VARIANTS) {
     const t0 = process.hrtime.bigint();
     let rows = [];
     try {
-      rows = await lib.search(db, cfg, orBag(text), { k: K });
+      rows = await lib.search(store, cfg, orBag(text), { k: K });
     } catch {
       errors++;
     }
@@ -75,7 +75,7 @@ for (const variant of VARIANTS) {
     const ranked = rows.map((r) => r.path.replace(/\.md$/, ''));
     perQuery.set(qid, { m: metrics(ranked, qrels.get(qid), K), rows: JSON.stringify(rows) });
   }
-  db.close();
+  await store.close();
   results.push({ ...variant, perQuery, errors, ms: ms / qids.length });
 }
 

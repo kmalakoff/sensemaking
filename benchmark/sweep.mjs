@@ -8,7 +8,7 @@ import { appendFileSync, cpSync, mkdirSync, rmSync, statSync, utimesSync } from 
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { syntheticPath } from './lib/corpus.mjs';
-import { futureDate, median, timedCli, walkMd } from './lib/measure.mjs';
+import { futureDate, median, medianAsync, timedCli, walkMd } from './lib/measure.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const CLI = join(ROOT, 'bin', 'cli.js');
@@ -72,19 +72,19 @@ async function measurePoint(spec) {
     const target = mdFiles.reduce((a, b) => (statSync(join(work, b)).size > statSync(join(work, a)).size ? b : a));
     const cfg = lib.loadConfig(join(work, 'sense.config.json'));
 
-    const openClose = () => {
+    const openClose = async () => {
       const t = process.hrtime.bigint();
-      const { db } = lib.open(cfg);
+      const { store } = await lib.open(cfg);
       const ms = Number(process.hrtime.bigint() - t) / 1e6;
-      db.close();
+      await store.close();
       return ms;
     };
 
     const t0 = process.hrtime.bigint();
-    openClose();
+    await openClose();
     const cold_build_ms = Math.round(Number(process.hrtime.bigint() - t0) / 1e6);
-    const open_nochange_ms = median(openClose, 5);
-    const update_1_file_ms = median(() => {
+    const open_nochange_ms = await medianAsync(openClose, 5);
+    const update_1_file_ms = await medianAsync(async () => {
       utimesSync(join(work, target), futureDate(), futureDate());
       return openClose();
     }, 3);
@@ -306,14 +306,14 @@ for (const dimension of dimensions) {
       let bulk_open_ms;
       try {
         const mdFiles = walkMd(work);
-        const { db } = lib.open(lib.loadConfig(join(work, 'sense.config.json')));
-        db.close();
+        const { store } = await lib.open(lib.loadConfig(join(work, 'sense.config.json')));
+        await store.close();
         const future = () => new Date(Date.now() + 120_000 + Math.random() * 60_000);
         for (const f of mdFiles.slice(0, touchFiles)) utimesSync(join(work, f), future(), future());
         const t = process.hrtime.bigint();
-        const { db: db2 } = lib.open(lib.loadConfig(join(work, 'sense.config.json')));
+        const { store: store2 } = await lib.open(lib.loadConfig(join(work, 'sense.config.json')));
         bulk_open_ms = Math.round(Number(process.hrtime.bigint() - t) / 1e6);
-        db2.close();
+        await store2.close();
       } finally {
         rmSync(work, { recursive: true, force: true });
       }

@@ -35,15 +35,21 @@ function extract(raw: string): Section[] {
 
 export const sections: Feature = {
   name: 'sections',
-  schema(db) {
-    db.exec(`CREATE TABLE IF NOT EXISTS sections ("path" TEXT, idx INTEGER, level INTEGER, heading TEXT, start_line INTEGER, end_line INTEGER, tokens INTEGER, PRIMARY KEY ("path", idx))`);
+  async schema(db) {
+    await db.exec(`CREATE TABLE IF NOT EXISTS sections ("path" TEXT, idx INTEGER, level INTEGER, heading TEXT, start_line INTEGER, end_line INTEGER, tokens INTEGER, PRIMARY KEY ("path", idx))`);
   },
   extract,
-  remove(db, path) {
-    db.prepare('DELETE FROM sections WHERE "path" = ?').run(path);
+  async remove(db, paths) {
+    if (paths.length === 0) return;
+    await db.runBatch(
+      'DELETE FROM sections WHERE "path" = ?',
+      paths.map((p) => [p])
+    );
   },
-  store(db, path, extracted) {
-    const insert = db.prepare('INSERT INTO sections ("path", idx, level, heading, start_line, end_line, tokens) VALUES (?, ?, ?, ?, ?, ?, ?)');
-    (extracted as Section[]).forEach((s, idx) => insert.run(path, idx, s.level, s.heading, s.startLine, s.endLine, s.tokens));
+  async store(db, docs) {
+    const rows: unknown[][] = [];
+    for (const { path, extracted } of docs) (extracted as Section[]).forEach((s, idx) => rows.push([path, idx, s.level, s.heading, s.startLine, s.endLine, s.tokens]));
+    if (rows.length === 0) return;
+    await db.runBatch('INSERT INTO sections ("path", idx, level, heading, start_line, end_line, tokens) VALUES (?, ?, ?, ?, ?, ?, ?)', rows);
   },
 };

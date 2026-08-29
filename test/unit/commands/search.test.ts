@@ -11,7 +11,7 @@ describe('scoped search does not starve on a truncated global pool', () => {
     for (let i = 0; i < 200; i++) writeNote(baseDir, `decoys/decoy${String(i).padStart(3, '0')}.md`, { frontmatter: { title: 'Decoy' }, body: 'An apple every day' });
     writeNote(baseDir, 'plugins/target.md', { frontmatter: { title: 'Target' }, body: 'An apple every day' });
 
-    const { db, cfg } = openConfig({
+    const { store, cfg } = await openConfig({
       presets: { default: { include: ['**/*.md'] } },
       embed: { model: writeModel(), provider: 'static' },
       queries: {},
@@ -20,8 +20,8 @@ describe('scoped search does not starve on a truncated global pool', () => {
     });
     // 'zzzznonexistent' kills every lexical row (FTS5 ANDs bare terms), forcing the vector
     // path to be the only signal, and it drops from the mean pool as an unknown token.
-    const rows = (await search(db, cfg, 'apple zzzznonexistent', { k: 8, include: ['plugins/**'] })) as Array<{ path: string }>;
-    db.close();
+    const rows = (await search(store, cfg, 'apple zzzznonexistent', { k: 8, include: ['plugins/**'] })) as Array<{ path: string }>;
+    await store.close();
     assert.ok(
       rows.some((r) => r.path === 'plugins/target.md'),
       JSON.stringify(rows)
@@ -39,9 +39,9 @@ describe('scoped search does not starve on a truncated global pool', () => {
         body: 'alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho sigma tau upsilon phi chi psi omega gizmo',
       });
 
-    const { db, cfg } = openConfig({ presets: { default: { include: ['**/*.md'] } }, queries: {}, baseDir, configPath: null });
-    const rows = (await search(db, cfg, 'gizmo', { k: 5, include: ['plugins/**'] })) as Array<{ path: string }>;
-    db.close();
+    const { store, cfg } = await openConfig({ presets: { default: { include: ['**/*.md'] } }, queries: {}, baseDir, configPath: null });
+    const rows = (await search(store, cfg, 'gizmo', { k: 5, include: ['plugins/**'] })) as Array<{ path: string }>;
+    await store.close();
     assert.equal(rows.length, 5, JSON.stringify(rows));
     assert.ok(
       rows.every((r) => r.path.startsWith('plugins/')),
@@ -55,15 +55,15 @@ describe('scoped search does not starve on a truncated global pool', () => {
     for (let i = 0; i < 40; i++) writeNote(baseDir, `decoy${String(i).padStart(3, '0')}.md`, { frontmatter: { title: 'Decoy', status: 'other' }, body: 'An apple every day' });
     for (let i = 0; i < 3; i++) writeNote(baseDir, `target${String(i).padStart(3, '0')}.md`, { frontmatter: { title: 'Target', status: 'active' }, body: 'An apple every day' });
 
-    const { db, cfg } = openConfig({
+    const { store, cfg } = await openConfig({
       presets: { default: { include: ['**/*.md'] } },
       embed: { model: writeModel(), provider: 'static' },
       queries: {},
       baseDir,
       configPath: null,
     });
-    const rows = (await search(db, cfg, 'pomme', { k: 8, where: "f.status = 'active'" })) as Array<{ path: string }>;
-    db.close();
+    const rows = (await search(store, cfg, 'pomme', { k: 8, where: "f.status = 'active'" })) as Array<{ path: string }>;
+    await store.close();
     assert.equal(rows.length, 3, JSON.stringify(rows));
     assert.ok(
       rows.every((r) => r.path.startsWith('target')),

@@ -14,6 +14,6 @@ export function activeFeatures(cfg: Config): Feature[] {
   return FEATURES.filter((feature) => featureEnabled(cfg, feature.name));
 }
 
-export { linkEdges } from './links.ts';
+export { LINK_EDGES_SQL, linkEdges, toEdges } from './links.ts';
 export type { Section } from './sections.ts';
 export type { Feature } from './types.ts';

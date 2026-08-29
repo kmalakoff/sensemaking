@@ -6,7 +6,7 @@ import { appendFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'nod
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { CORPUS_NAMES, corpusPath } from './lib/corpus.mjs';
-import { futureDate, median as sharedMedian, timedCli, walkMd } from './lib/measure.mjs';
+import { futureDate, medianAsync, timedCli, walkMd } from './lib/measure.mjs';
 
 const [pkgRootArg, treeArg] = process.argv.slice(2);
 if (!pkgRootArg || !treeArg) {
@@ -91,34 +91,36 @@ try {
   // open() takes an already-resolved config, not a file to migrate -- so the shape here has
   // to match this package's own dialect (v1 `scan` pre-rename, v3 `presets` since).
   const cfg = NEW_DIALECT ? { presets: { default: { include: ['**/*.md'] } }, queries: {}, baseDir: tree, configPath: null } : { scan: { include: ['**/*.md'] }, queries: {}, baseDir: tree, configPath: null };
-  const openClose = () => {
+  // await tolerates a pre-rename package's synchronous open(); `store ?? db` picks whichever
+  // dialect's result field this pkgRoot's build actually returns.
+  const openClose = async () => {
     const t = process.hrtime.bigint();
-    const { db } = lib.open(cfg);
+    const opened = await lib.open(cfg);
+    const handle = opened.store ?? opened.db;
     const ms = Number(process.hrtime.bigint() - t) / 1e6;
-    db.close();
+    await handle.close();
     return ms;
   };
-  const median = sharedMedian;
   const touch = (files) => {
     const future = futureDate();
     for (const f of files) utimesSync(join(tree, f.rel), future, future);
   };
 
-  const noChange = median(openClose, 5);
-  const touch1 = median(() => {
+  const noChange = await medianAsync(openClose, 5);
+  const touch1 = await medianAsync(() => {
     touch(mdFiles.slice(0, 1));
     return openClose();
   }, 3);
-  const modify10 = median(() => {
+  const modify10 = await medianAsync(() => {
     for (const f of mdFiles.slice(0, 10)) appendFileSync(join(tree, f.rel), ' benchmark-edit');
     touch(mdFiles.slice(0, 10));
     return openClose();
   }, 3);
   rmSync(join(tree, '.sense'), { recursive: true, force: true });
   const t = process.hrtime.bigint();
-  const { db } = lib.open(cfg);
+  const opened = await lib.open(cfg);
   const coldBuild = Math.round(Number(process.hrtime.bigint() - t) / 1e6);
-  db.close();
+  await (opened.store ?? opened.db).close();
   inproc = { cold_build_ms: coldBuild, open_nochange_ms: noChange, update_1_file_ms: touch1, update_10_files_ms: modify10 };
 } catch (err) {
   inproc = { error: String(err.message ?? err).split('\n')[0] };

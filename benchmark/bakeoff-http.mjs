@@ -88,8 +88,8 @@ const embedMsPerDoc = (now() - tEmbed) / docTexts.length;
 
 // --- bm25 candidate lists via the real index (identical SQL to find's candidate query) ---
 const cfg = { presets: { default: { include: ['**/*.md'], signals: { words: 1 } } }, queries: {}, features: { links: false, rank: false }, baseDir: tree, configPath: null };
-const { db } = lib.open(cfg);
-const bm25Stmt = db.prepare(`SELECT content.path AS path FROM content WHERE content MATCH ? ORDER BY ${WEIGHTED_BM25} LIMIT ${FETCH}`);
+const { store } = await lib.open(cfg);
+const bm25Stmt = await store.prepare(`SELECT content.path AS path FROM content WHERE content MATCH ? ORDER BY ${WEIGHTED_BM25} LIMIT ${FETCH}`);
 
 const { queries, qrels } = readLabels(labelsDir);
 const qids = [...qrels.keys()].sort().slice(0, MAX_QUERIES === Infinity ? undefined : MAX_QUERIES);
@@ -111,7 +111,7 @@ for (const qid of qids) {
   qEmbedMs += now() - t1;
   perQuery.push({ qid, bm25, qFull });
 }
-db.close();
+await store.close();
 bm25Ms /= perQuery.length;
 qEmbedMs /= perQuery.length;
 
