@@ -86,30 +86,42 @@ async function connect(cfg: ResolvedConfig): Promise<{ instance: DuckDBInstance;
     instance?.closeSync();
     throw new SenseError('STORE_DEPENDENCY_MISSING', `store "duckdb" failed to open ${dbPath}: ${(err as Error).message}`);
   }
-  await registerFunctions(duckdb);
-  const conn = createConnection(duckdb);
+  // A throw below (schema, reconcile's COLUMN_LIMIT) would leak the open instance, whose WAL
+  // then locks the .duckdb file undeletable on Windows. closed marks the rebuild branch.
+  let closed = false;
+  try {
+    await registerFunctions(duckdb);
+    const conn = createConnection(duckdb);
 
-  await conn.exec('CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)');
+    await conn.exec('CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)');
 
-  const version = await getMeta(conn, 'schema_version');
-  const features = await getMeta(conn, 'features');
-  const wantFeatures = featureSignature(cfg, FEATURES);
-  if ((version !== null && version !== SCHEMA_VERSION) || (features !== null && features !== wantFeatures)) {
-    // Reconcile only reparses changed files, so a stale cache can't be patched incrementally --
-    // rebuild instead, same as sqlite's open() (see its comment for why this is announced).
-    const reason = version !== null && version !== SCHEMA_VERSION ? 'cache format changed (new sensemaking version)' : 'config change (features, tokenizer, or presets)';
-    console.error(`sense: ${reason}; rebuilding the index`);
-    // Close before clearCache deletes the files underneath the still-open instance.
-    duckdb.disconnectSync();
-    instance.closeSync();
-    clearCache(cfg);
-    return connect(cfg);
+    const version = await getMeta(conn, 'schema_version');
+    const features = await getMeta(conn, 'features');
+    const wantFeatures = featureSignature(cfg, FEATURES);
+    if ((version !== null && version !== SCHEMA_VERSION) || (features !== null && features !== wantFeatures)) {
+      // Reconcile only reparses changed files, so a stale cache can't be patched incrementally --
+      // rebuild instead, same as sqlite's open() (see its comment for why this is announced).
+      const reason = version !== null && version !== SCHEMA_VERSION ? 'cache format changed (new sensemaking version)' : 'config change (features, tokenizer, or presets)';
+      console.error(`sense: ${reason}; rebuilding the index`);
+      // Close before clearCache deletes the files underneath the still-open instance.
+      closed = true;
+      duckdb.disconnectSync();
+      instance.closeSync();
+      clearCache(cfg);
+      return connect(cfg);
+    }
+
+    await ensureSchema(conn, cfg);
+
+    const { parsed, warnings } = await reconcile(conn, cfg, cfg.baseDir);
+    return { instance, duckdb, conn, cfg, dbPath, parsed, warnings };
+  } catch (err) {
+    if (!closed) {
+      duckdb.disconnectSync();
+      instance?.closeSync();
+    }
+    throw err;
   }
-
-  await ensureSchema(conn, cfg);
-
-  const { parsed, warnings } = await reconcile(conn, cfg, cfg.baseDir);
-  return { instance, duckdb, conn, cfg, dbPath, parsed, warnings };
 }
 
 export async function openDuckdb(cfg: ResolvedConfig): Promise<OpenResult> {

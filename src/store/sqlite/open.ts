@@ -96,84 +96,96 @@ async function connect(cfg: ResolvedConfig): Promise<ConnectResult> {
   const dbPath = join(stateDir, DB_FILENAME);
 
   const db = new DatabaseSync(dbPath);
-  db.exec('PRAGMA journal_mode = WAL');
-  // Covers a concurrent watcher's bulk reconcile (~5s for 500 files at 26k notes). A query
-  // that outwaits it still fails loudly.
-  db.exec('PRAGMA busy_timeout = 30000');
-  registerFunctions(db, contentTokenize(cfg) === undefined);
-  const conn = createConnection(db);
+  // A throw below (tokenizer probe, schema, reconcile's COLUMN_LIMIT) must release this handle,
+  // or on Windows the leaked WAL db is undeletable and scratch cleanup fails with EPERM/EBUSY.
+  // closed marks the rebuild branches that close-and-recurse, so the catch never double-closes.
+  let closed = false;
+  try {
+    db.exec('PRAGMA journal_mode = WAL');
+    // Covers a concurrent watcher's bulk reconcile (~5s for 500 files at 26k notes). A query
+    // that outwaits it still fails loudly.
+    db.exec('PRAGMA busy_timeout = 30000');
+    registerFunctions(db, contentTokenize(cfg) === undefined);
+    const conn = createConnection(db);
 
-  db.exec('CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)');
+    db.exec('CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)');
 
-  // Before the rebuild branch below, never after: that branch deletes the cache, so a typo'd
-  // tokenizer validated later would cost a full re-index (and re-embed) to reach its own error.
-  const tokenize = resolveTokenize(db, cfg);
+    // Before the rebuild branch below, never after: that branch deletes the cache, so a typo'd
+    // tokenizer validated later would cost a full re-index (and re-embed) to reach its own error.
+    const tokenize = resolveTokenize(db, cfg);
 
-  // Schema-version or feature-set mismatch: reconcile only reparses changed files, so an
-  // old cache can't be patched incrementally -- rebuild instead (cheap: nothing expensive lives here).
-  const version = await getMeta(conn, 'schema_version');
-  const features = await getMeta(conn, 'features');
-  const wantFeatures = featureSignature(cfg, FEATURES);
-  let tokenizeOnlyRebuild = false;
-  if ((version !== null && version !== SCHEMA_VERSION) || (features !== null && features !== wantFeatures)) {
-    // Indexing derives from presets, so a config edit rebuilding the cache must say so and
-    // name what changed -- silent rebuilds make derived indexing look like a hang or a bug.
-    if (version !== null && version !== SCHEMA_VERSION) {
-      console.error('sense: cache format changed (new sensemaking version); rebuilding the index');
+    // Schema-version or feature-set mismatch: reconcile only reparses changed files, so an
+    // old cache can't be patched incrementally -- rebuild instead (cheap: nothing expensive lives here).
+    const version = await getMeta(conn, 'schema_version');
+    const features = await getMeta(conn, 'features');
+    const wantFeatures = featureSignature(cfg, FEATURES);
+    let tokenizeOnlyRebuild = false;
+    if ((version !== null && version !== SCHEMA_VERSION) || (features !== null && features !== wantFeatures)) {
+      // Indexing derives from presets, so a config edit rebuilding the cache must say so and
+      // name what changed -- silent rebuilds make derived indexing look like a hang or a bug.
+      if (version !== null && version !== SCHEMA_VERSION) {
+        console.error('sense: cache format changed (new sensemaking version); rebuilding the index');
+        closed = true;
+        db.close();
+        clearCache(cfg);
+        return connect(cfg);
+      }
+      const changedKeys = changedSignatureKeys(features ?? '', wantFeatures);
+      // Only the tokenizer moved: frontmatter, links, sections, and embeddings are file-derived
+      // and tokenizer-independent, so they don't need re-deriving. Everything else -- a preset
+      // edit, an embed model change -- still takes the full clear/reopen below.
+      if (changedKeys.size === 1 && changedKeys.has('tokenize')) {
+        console.error('sense: config change (content tokenizer) rebuilds the text index; vectors, links, and sections are kept');
+        db.exec('DROP TABLE content');
+        tokenizeOnlyRebuild = true;
+      } else if (changedKeys.size === 1 && changedKeys.has('embed') && embedIdentityAdopted(features ?? '', wantFeatures)) {
+        // First sight of a resolved weight identity: the model itself hasn't changed, so
+        // adopt it into meta with no rebuild and no re-embed, mirroring the tokenize precedent.
+        console.error("sense: recorded the embedding model's resolved identity; vectors are unaffected");
+        await setMeta(conn, 'features', wantFeatures);
+      } else {
+        const changed = signatureDiff(features ?? '', wantFeatures);
+        console.error(`sense: config change (${changed}) rebuilds the index`);
+        closed = true;
+        db.close();
+        clearCache(cfg);
+        return connect(cfg);
+      }
+    }
+
+    // Meta can lie after a crash between table creation and the signature write; the table's
+    // own DDL cannot. A mismatch here rebuilds no matter what meta says. A tokenize-only rebuild
+    // just dropped content above, so storedTokenize sees no table and this guard is skipped
+    // naturally rather than needing its own case.
+    const stored = storedTokenize(db);
+    if (stored !== null && stored !== tokenize) {
+      console.error('sense: cache was built with a different content tokenizer; rebuilding the index');
+      closed = true;
       db.close();
       clearCache(cfg);
       return connect(cfg);
     }
-    const changedKeys = changedSignatureKeys(features ?? '', wantFeatures);
-    // Only the tokenizer moved: frontmatter, links, sections, and embeddings are file-derived
-    // and tokenizer-independent, so they don't need re-deriving. Everything else -- a preset
-    // edit, an embed model change -- still takes the full clear/reopen below.
-    if (changedKeys.size === 1 && changedKeys.has('tokenize')) {
-      console.error('sense: config change (content tokenizer) rebuilds the text index; vectors, links, and sections are kept');
-      db.exec('DROP TABLE content');
-      tokenizeOnlyRebuild = true;
-    } else if (changedKeys.size === 1 && changedKeys.has('embed') && embedIdentityAdopted(features ?? '', wantFeatures)) {
-      // First sight of a resolved weight identity: the model itself hasn't changed, so
-      // adopt it into meta with no rebuild and no re-embed, mirroring the tokenize precedent.
-      console.error("sense: recorded the embedding model's resolved identity; vectors are unaffected");
+
+    await ensureSchema(conn, cfg, tokenize);
+
+    let rebuildWarnings: string[] = [];
+    if (tokenizeOnlyRebuild) {
+      rebuildWarnings = await rebuildContentTable(conn, cfg, cfg.baseDir);
       await setMeta(conn, 'features', wantFeatures);
-    } else {
-      const changed = signatureDiff(features ?? '', wantFeatures);
-      console.error(`sense: config change (${changed}) rebuilds the index`);
-      db.close();
-      clearCache(cfg);
-      return connect(cfg);
     }
+
+    // 3x the largest reconcile this cache has recorded, floored at 30s and capped at 10min.
+    // Installed before reconcile() -- that call is the one that races a watcher's transaction.
+    const recordedMaxMs = Number((await getMeta(conn, 'reconcile_max_ms')) ?? '0');
+    db.exec(`PRAGMA busy_timeout = ${Math.min(Math.max(30000, 3 * recordedMaxMs), 600_000)}`);
+
+    const { parsed, warnings } = await reconcile(conn, cfg, cfg.baseDir);
+
+    return { db, conn, cfg, dbPath, parsed, warnings: [...rebuildWarnings, ...warnings] };
+  } catch (err) {
+    if (!closed) db.close();
+    throw err;
   }
-
-  // Meta can lie after a crash between table creation and the signature write; the table's
-  // own DDL cannot. A mismatch here rebuilds no matter what meta says. A tokenize-only rebuild
-  // just dropped content above, so storedTokenize sees no table and this guard is skipped
-  // naturally rather than needing its own case.
-  const stored = storedTokenize(db);
-  if (stored !== null && stored !== tokenize) {
-    console.error('sense: cache was built with a different content tokenizer; rebuilding the index');
-    db.close();
-    clearCache(cfg);
-    return connect(cfg);
-  }
-
-  await ensureSchema(conn, cfg, tokenize);
-
-  let rebuildWarnings: string[] = [];
-  if (tokenizeOnlyRebuild) {
-    rebuildWarnings = await rebuildContentTable(conn, cfg, cfg.baseDir);
-    await setMeta(conn, 'features', wantFeatures);
-  }
-
-  // 3x the largest reconcile this cache has recorded, floored at 30s and capped at 10min.
-  // Installed before reconcile() -- that call is the one that races a watcher's transaction.
-  const recordedMaxMs = Number((await getMeta(conn, 'reconcile_max_ms')) ?? '0');
-  db.exec(`PRAGMA busy_timeout = ${Math.min(Math.max(30000, 3 * recordedMaxMs), 600_000)}`);
-
-  const { parsed, warnings } = await reconcile(conn, cfg, cfg.baseDir);
-
-  return { db, conn, cfg, dbPath, parsed, warnings: [...rebuildWarnings, ...warnings] };
 }
 
 // The sqlite store's open: connects synchronously (see connect() above), then wraps the

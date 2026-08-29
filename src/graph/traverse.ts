@@ -17,16 +17,15 @@ async function resetVisited(store: Store): Promise<void> {
 
 // Materializes the caller-resolved scope Set into a temp table so it joins like any other
 // indexed column. `extra`, when given, is always in scope -- findPath's `to` endpoint.
-// json_each is SQLite dialect (phase 3: a portable store would need its own array-materialize).
 async function setupAllowed(store: Store, allowed: Set<string>, extra?: string): Promise<void> {
+  const all = new Set(allowed);
+  if (extra !== undefined) all.add(extra);
   await store.exec('DROP TABLE IF EXISTS temp.allowed_nodes');
   await store.exec('CREATE TEMP TABLE allowed_nodes (path TEXT PRIMARY KEY)');
-  const insertAllowed = await store.prepare('INSERT INTO allowed_nodes SELECT DISTINCT value FROM json_each(?1)');
-  await insertAllowed.run(JSON.stringify([...allowed]));
-  if (extra !== undefined) {
-    const insertExtra = await store.prepare('INSERT OR IGNORE INTO allowed_nodes VALUES (?)');
-    await insertExtra.run(extra);
-  }
+  await store.runBatch(
+    'INSERT INTO allowed_nodes (path) VALUES (?)',
+    [...all].map((p) => [p])
+  );
 }
 
 // Only resolved links (dst IS NOT NULL) are followed, in either direction.
@@ -39,8 +38,8 @@ function candidateSelect(direction: Direction): string {
 }
 
 // One ring: candidates adjacent to the previous ring's frontier (?1), anti-joined against
-// everything already visited, optionally filtered to the allowed set, capped (?3) and
-// inserted at the new depth (?2). RETURNING hands back exactly what this ring newly reached.
+// everything already visited, optionally filtered to the allowed set, and inserted at the
+// new depth (?2). RETURNING hands back exactly what this ring newly reached.
 function ringSql(direction: Direction, hasAllowed: boolean): string {
   return `
 INSERT INTO visited (path, depth, pred)
@@ -50,7 +49,6 @@ WHERE NOT EXISTS (SELECT 1 FROM visited v2 WHERE v2.path = cand.path)
 ${hasAllowed ? 'AND EXISTS (SELECT 1 FROM allowed_nodes a WHERE a.path = cand.path)' : ''}
 GROUP BY cand.path
 ORDER BY cand.path
-LIMIT ?3
 RETURNING path`;
 }
 
@@ -82,7 +80,7 @@ export async function findPath(store: Store, from: string, to: string, opts: Fin
 
   const stmt = await store.prepare(ringSql(direction, !!opts.allowed));
   for (let ring = 1; ring <= maxDepth; ring++) {
-    const rows = (await stmt.all(ring - 1, ring, -1)) as Array<{ path: string }>;
+    const rows = (await stmt.all(ring - 1, ring)) as Array<{ path: string }>;
     if (rows.length === 0) break;
     if (rows.some((row) => row.path === to)) return reconstructPath(store, to);
   }
