@@ -54,21 +54,23 @@ export function printRows(rows: Row[], format: RowFormat, columns?: string[]): v
   warnOversize(Buffer.byteLength(rendered), rows.length);
 }
 
-// Streaming counterpart for the one unbounded caller, `sense sql`: rows arrive from an
-// iterator, so a large result is never held here as rows and again as a rendered string.
-// Table buffers by necessity (a column is as wide as its widest cell, which the last row can
-// change); json and csv write row by row. The writes are synchronous, so when stdout is a pipe
-// Node buffers what the reader has not taken yet -- the saving is this module's copies, not
-// the operating system's.
-export function printRowStream(rows: Iterable<Row>, format: RowFormat, columns: string[]): void {
-  const iterator = rows[Symbol.iterator]();
+// Streaming counterpart for the one unbounded caller, `sense sql`: rows arrive from an async
+// iterator (raw.prepare().iterate(), one microtask for the whole statement, not per row), so a
+// large result is never held here as rows and again as a rendered string. Table buffers by
+// necessity (a column is as wide as its widest cell, which the last row can change); json and
+// csv write row by row. The writes are synchronous, so when stdout is a pipe Node buffers what
+// the reader has not taken yet -- the saving is this module's copies, not the operating system's.
+export async function printRowStream(rows: AsyncIterable<Row>, format: RowFormat, columns: string[]): Promise<void> {
+  const iterator = rows[Symbol.asyncIterator]();
   // One step before any write. FTS5 parses a MATCH expression at step time rather than at
   // prepare time, so a bad search string throws here, with stdout still clean for the error.
-  const first = iterator.next();
-  const rest: Iterable<Row> = { [Symbol.iterator]: () => iterator };
+  const first = await iterator.next();
+  const rest: AsyncIterable<Row> = { [Symbol.asyncIterator]: () => iterator };
 
   if (format === 'table') {
-    printRows(first.done ? [] : [first.value, ...rest], format, columns);
+    const collected: Row[] = first.done ? [] : [first.value];
+    for await (const row of rest) collected.push(row);
+    printRows(collected, format, columns);
     return;
   }
 
@@ -99,7 +101,7 @@ export function printRowStream(rows: Iterable<Row>, format: RowFormat, columns: 
       write('[\n');
       write(indent(first.value));
       rowCount = 1;
-      for (const row of rest) {
+      for await (const row of rest) {
         write(',\n');
         write(indent(row));
         rowCount++;
@@ -114,7 +116,7 @@ export function printRowStream(rows: Iterable<Row>, format: RowFormat, columns: 
     write(`${csvLine(names)}\n`);
     write(`${csvLine(names.map((name) => first.value[name]))}\n`);
     rowCount = 1;
-    for (const row of rest) {
+    for await (const row of rest) {
       write(`${csvLine(names.map((name) => row[name]))}\n`);
       rowCount++;
     }

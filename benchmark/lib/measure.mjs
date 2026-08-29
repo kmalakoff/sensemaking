@@ -23,6 +23,14 @@ export function median(fn, runs) {
   return Math.round(times[Math.floor(runs / 2)] * 10) / 10;
 }
 
+// Awaits each run in turn: an async fn through median()'s Array.from would sort promises.
+export async function medianAsync(fn, runs) {
+  const times = [];
+  for (let i = 0; i < runs; i++) times.push(await fn());
+  times.sort((a, b) => a - b);
+  return Math.round(times[Math.floor(runs / 2)] * 10) / 10;
+}
+
 // Median wall time of `runs` spawns of the CLI; bytes/stderr are from the last run.
 export function timedCli(spawnOnce, runs) {
   const times = [];

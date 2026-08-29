@@ -20,7 +20,7 @@ The default run answers "did the working tree regress?" `local` is whatever is c
 
 `compare.mjs` installs each npm version into a temp dir (`local` = this working tree), gives every version an isolated copy of the tree with a v1 config (the lowest common denominator every version can read; copies keep cache formats and config auto-migration from cross-contaminating), runs `benchmark/run.mjs` per version, and prints the table. `run.mjs` can also run alone against any single package root + tree; it prints one JSON row.
 
-`bakeoff.mjs` and `weight-sweep.mjs` measure one specific model/dims/weight choice against a labeled corpus's qrels -- decision-support for a config default, not a release gate. `oracle.mjs` is the correctness gate against Obsidian's own metadataCache (RELEASING.md step 3), needs Obsidian running, and stores nothing.
+`bakeoff.mjs` and `weight-sweep.mjs` measure one specific model/dims/weight choice against a labeled corpus's qrels, decision-support for a config default, not a release gate. `oracle.mjs` is the correctness gate against Obsidian's own metadataCache (RELEASING.md step 3), needs Obsidian running, and stores nothing.
 
 Two kinds of metric per version:
 
@@ -34,7 +34,7 @@ Two kinds of metric per version:
 - The performance tables regenerate every release; the retrieval-quality tables regenerate when retrieval itself changes: fusion, ranking, the default model, tokenizer, chunking. A quality report older than the current version is expected, and says the ranking has not moved since; a retrieval change shipped without a fresh report is the gap to catch.
 - To add a metric: one measured field in `run.mjs`, one row in the `ROWS` table in `compare.mjs`. Versions lacking a command report `—` automatically; a version that errors reports the error.
 - Corpus pins live in `benchmark/lib/corpus.mjs`. If a pin must move (repo disappears, need a bigger corpus), regenerate every column at the new pin.
-- Each sitting is a new file in `benchmark/reports/`, never an edit to a previous one -- the directory is a history, not a rolling doc. Update "Numbers of record" below to point at it. Add a "Methodology changelog" entry only when the change is about HOW something is measured (a new guard, a new corpus, a harness bug fix, a discipline rule); a numbers-only regeneration gets a report file and nothing else.
+- Each sitting is a new file in `benchmark/reports/`, never an edit to a previous one. The directory is a history, not a rolling doc. Update "Numbers of record" below to point at it. Add a "Methodology changelog" entry only when the change is about HOW something is measured (a new guard, a new corpus, a harness bug fix, a discipline rule); a numbers-only regeneration gets a report file and nothing else.
 
 ## Interpreting
 
@@ -49,9 +49,9 @@ Two kinds of metric per version:
 
 The README claims linear scaling and links here rather than carrying figures of its own. `obsidian-hub-x2` and `obsidian-hub-x4` (13k / 26k notes) are named corpora that replicate the pinned hub tree N times under one root: real notes, real frontmatter, real links, regenerated from nothing like every corpus. Duplicate basenames across copies stress link-ambiguity resolution harder than a natural tree. Run `node benchmark/run.mjs . <corpusPath>` per tree; regenerate scale rows together with the main table, in the same report file.
 
-Cold-crawl wall numbers move with file-cache state: the first pass of the day reads high, so only a same-sitting, same-cache version A/B is a meaningful comparison for that row -- confirmed more than once across sittings (see the reports).
+Cold-crawl wall numbers move with file-cache state: the first pass of the day reads high, so only a same-sitting, same-cache version A/B is a meaningful comparison for that row, confirmed more than once across sittings (see the reports).
 
-What the scale rows watch, in order of what actually breaks: the per-query freshness check (stats every file, linear, the cost every call pays), cold crawl (linear; a quadratic here was found and fixed at 13k/26k -- FTS5 DELETE by column scanned the whole table, and delete-before-insert ran per doc on cold builds where the table was empty), reconcile after updates (linear; dominated by whole-table link re-resolution plus a full PageRank pass), and the watcher race (a query during the watcher's bulk write transaction waits on `busy_timeout`, sized at 30s to cover ~3x the largest measured reconcile).
+What the scale rows watch, in order of what actually breaks: the per-query freshness check (stats every file, linear, the cost every call pays), cold crawl (linear; a quadratic here was found and fixed at 13k/26k. FTS5 DELETE by column scanned the whole table, and delete-before-insert ran per doc on cold builds where the table was empty), reconcile after updates (linear; dominated by whole-table link re-resolution plus a full PageRank pass), and the watcher race (a query during the watcher's bulk write transaction waits on `busy_timeout`, sized at 30s to cover ~3x the largest measured reconcile).
 
 Current numbers: see "Numbers of record" below.
 
@@ -78,7 +78,7 @@ Labeled corpora convert their labels to one format (`labels/queries.jsonl` + `te
 - **fever:** FEVER dev split, 2,860 Wikipedia pages cited as evidence by 13,229 verifiable claims, with sentence link annotations kept as wikilinks. The claims are the queries; the corpus that can measure whether link fusion helps or hurts ranking.
 - **miracl-\<lang\>:** per-language MIRACL (`benchmark/lib/corpus.mjs`'s `miracl` builder), judged docs as a floor plus reservoir-sampled distractors toward ~3-5k docs. The multilingual counterpart to nfcorpus/fever's English-only pair; CJK-script queries need `orBag`'s unigram split (see the methodology changelog) or they score at chance level.
 
-Storage-lever and fusion-weight choices (dims, int8 vs f32, per-signal RRF weight) are measured against these same corpora by `bakeoff.mjs` and `weight-sweep.mjs`. Read: the published BEIR BM25 (Anserini) baseline for NFCorpus is nDCG@10 ≈ 0.32, which the FTS5 pipeline matches, so `find`'s lexical layer is a faithful BM25 rather than an approximation. NFCorpus and FEVER are the ends of one vocabulary-gap axis (NFCorpus: layman queries over jargon documents, 31% of queries have no relevant document in the top 10; FEVER: claims quote their evidence nearly verbatim, 99.7% hit@10 for plain BM25), and no customer tree sits at either end -- a change that wins on one by losing on the other is fitted to a corpus nobody has.
+Storage-lever and fusion-weight choices (dims, int8 vs f32, per-signal RRF weight) are measured against these same corpora by `bakeoff.mjs` and `weight-sweep.mjs`. Read: the published BEIR BM25 (Anserini) baseline for NFCorpus is nDCG@10 ≈ 0.32, which the FTS5 pipeline matches, so `find`'s lexical layer is a faithful BM25 rather than an approximation. NFCorpus and FEVER are the ends of one vocabulary-gap axis (NFCorpus: layman queries over jargon documents, 31% of queries have no relevant document in the top 10; FEVER: claims quote their evidence nearly verbatim, 99.7% hit@10 for plain BM25), and no customer tree sits at either end. A change that wins on one by losing on the other is fitted to a corpus nobody has.
 
 Current numbers: see "Numbers of record" below.
 
@@ -89,7 +89,7 @@ are hard boundaries: a chunk never spans one, and a heading is never orphaned fr
 content under it. Inside a section, consecutive paragraphs pair up, capped by the
 2×workingSize invariant (workingSize defaults to 500 estimated tokens; `embed.chunkTokens`
 lowers it for a small-context model). A line too long to fit alone splits line -> sentence ->
-word, sentences and words found via `Intl.Segmenter` (ECMA-402) -- the only way an unbroken
+word, sentences and words found via `Intl.Segmenter` (ECMA-402), the only way an unbroken
 CJK line becomes splittable at all. Code fences, tables, and list groups are atomic: parsed
 as typed nodes, they are never cut internally. Every chunk carries the note's title and
 summary as a prefix, and the text is embedded raw, markdown syntax included, with no
@@ -112,7 +112,7 @@ history; each entry names the commit that introduced the change.
 - **2026-08-13, `566c86a`.** `eval.mjs` gains its four-pass structure (bm25-only / fused /
   embed-on / semantic, later renamed fused-embed-configured), the bit-identity guard (the
   guard pass must return rows identical to fused, query for query), and paired per-query
-  deltas (wins/losses plus a sign-test z, |z| > 2 read as beyond noise) -- up from an
+  deltas (wins/losses plus a sign-test z, |z| > 2 read as beyond noise), up from an
   original two-pass bm25-only/fused design with no guard. First table under this scheme:
   the 0.6.0 sitting (benchmark/reports/2026-08-13-0.6.0-release-gate.md).
 - **2026-08-13, `6818180`.** "Regenerate before the version bump, not after publishing"

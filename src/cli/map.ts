@@ -7,8 +7,8 @@ import type { Command } from './types.ts';
 const map: Command = (ctx) => {
   const { values } = parse(ctx.argv, `usage: ${ctx.name} ${USAGE.map}`, { ...SCOPE, ...FORMAT, ...CONFIG });
   const format = formatOf(values);
-  return withDb(ctx, values.config as string | undefined, (db, cfg) => {
-    const result = mapTree(db, cfg, scopeOf(values));
+  return withDb(ctx, values.config as string | undefined, async (store, cfg) => {
+    const result = await mapTree(store, cfg, scopeOf(values));
     console.log(format === 'json' ? JSON.stringify(result, null, 2) : renderMap(result));
   });
 };

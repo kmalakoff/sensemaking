@@ -90,7 +90,7 @@ ORDER BY bm25(content, 10.0, 5.0, 1.0) LIMIT 10
 
 | key | holds |
 |---|---|
-| `presets` | named bundles of `include`/`exclude` globs, `k` (result count), `signals` (which engines this scope searches with -- `words`, `links`, `vectors`; every signal whose prerequisites hold, unless the preset lists them exhaustively), `where` (a standing SQL filter). A file is indexed if any preset includes it, embedded if a model is named and some covering preset's `signals` include `vectors`; `status` shows each preset's coverage. |
+| `presets` | named bundles of `include`/`exclude` globs, `k` (result count), `signals` (which engines this scope searches with, `words`, `links`, `vectors`; every signal whose prerequisites hold, unless the preset lists them exhaustively), `where` (a standing SQL filter). A file is indexed if any preset includes it, embedded if a model is named and some covering preset's `signals` include `vectors`; `status` shows each preset's coverage. |
 | `embed` | the model vectors are built with. Naming one gives the tree vectors; omitting the block means none at all, whatever the presets say. `sense download` fetches it. |
 | `content` | settings for the `content` table. `tokenize` names the FTS5 tokenizer, defaulting to `porter unicode61`: name `trigram` for substring matching inside a Latin word, or `unicode61 tokenchars '-_'` to keep hyphenated terms whole. Languages written without word spaces (Chinese, Japanese, Thai, Khmer, Lao, Burmese) need no decision here: they are indexed per grapheme and searched as ordered phrases, substring semantics, what grep gives, needing no minimum length; naming a tokenizer turns that off, since the tree has then chosen its own scheme. Changing it rebuilds the text index only; vectors, links, and sections are kept. |
 | `queries` | entries runnable as `sense <name>`, each naming the verb it runs: `{ sql }` for SQL (`?` binds positional args) or `{ search }` for a ranked search with its settings baked in, so `sense hot` needs no flags. Running an entry validates it: a typo'd column errors and exits nonzero, and a parameterised entry validates with any argument, since preparing precedes binding. |
@@ -104,9 +104,9 @@ Two custom SQL functions. `has(field, value)`: array membership on JSON-array fi
 
 ## Providers
 
-`embed.provider` picks the wire protocol; `embed.model` names the model. [INTEGRATIONS.md](INTEGRATIONS.md) is the record of what has actually been run and verified against this codebase -- only that gets named as a recommendation.
+`embed.provider` picks the wire protocol; `embed.model` names the model. [INTEGRATIONS.md](INTEGRATIONS.md) is the record of what has actually been run and verified against this codebase. Only that gets named as a recommendation.
 
-**static** -- a local, pure-JS Model2Vec model; no network at query time.
+**static**. A local, pure-JS Model2Vec model; no network at query time.
 
 ```json
 "embed": { "model": "minishlab/potion-retrieval-32M", "provider": "static" }
@@ -114,7 +114,7 @@ Two custom SQL functions. `has(field, value)`: array membership on JSON-array fi
 
 `model` is a Hugging Face id, fetched to `~/.sense/models` on first use, or a path to a local directory holding `model.safetensors` and `tokenizer.json`.
 
-**openai** -- any endpoint serving an OpenAI-shaped `POST /embeddings`.
+**openai**. Any endpoint serving an OpenAI-shaped `POST /embeddings`.
 
 ```json
 "embed": { "model": "nomic-embed-text", "provider": "openai", "url": "http://localhost:11434/v1" }
@@ -122,7 +122,7 @@ Two custom SQL functions. `has(field, value)`: array membership on JSON-array fi
 
 Ollama serves this shape at `http://localhost:11434/v1`. LM Studio serves the same shape at `http://localhost:1234/v1`, with narrower platform support than Ollama: Apple Silicon only on Mac, AVX2 on Windows. Content stays on the machine for either. Any other OpenAI-shaped endpoint, including a hosted one, works the same way through `provider: "openai"` and its own `url`; a hosted endpoint means tree content is sent to that service.
 
-**cohere** -- Cohere's native `/v2/embed`, which expresses the doc/query distinction (`input_type`) the OpenAI shape cannot.
+**cohere**. Cohere's native `/v2/embed`, which expresses the doc/query distinction (`input_type`) the OpenAI shape cannot.
 
 ```json
 "embed": { "model": "embed-v4.0", "provider": "cohere", "key": "COHERE_API_KEY" }

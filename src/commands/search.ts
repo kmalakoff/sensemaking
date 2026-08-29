@@ -1,12 +1,12 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { DatabaseSync } from 'node:sqlite';
 import type { ResolvedConfig } from '../config/index.ts';
 import { contentTokenize, embedConfig, featureEnabled, resolveSearch } from '../config/index.ts';
 import { localModelMissing, MODEL_FILENAMES } from '../embed/store.ts';
 import { SenseError } from '../errors.ts';
 import type { Row } from '../output/output.ts';
 import { searchError } from '../output/search-error.ts';
+import type { LexicalHit, Store } from '../store/types.ts';
 import { segmentMatch } from '../text/segment.ts';
 import { materializeScope, narrowByWhere, rawScope, scopeHasEmbeddings } from './scope.ts';
 import { linksCandidates, vectorsCandidates, wordsCandidates } from './signals.ts';
@@ -103,8 +103,9 @@ function lineNumberAt(text: string, offset: number): number {
   return line;
 }
 
-function lineRangeFor(db: DatabaseSync, path: string, line: number): string | null {
-  const row = db.prepare('SELECT start_line, end_line FROM sections WHERE "path" = ? AND start_line <= ? AND end_line >= ? ORDER BY start_line DESC LIMIT 1').get(path, line, line) as { start_line: number; end_line: number } | undefined;
+async function lineRangeFor(store: Store, path: string, line: number): Promise<string | null> {
+  const stmt = await store.prepare('SELECT start_line, end_line FROM sections WHERE "path" = ? AND start_line <= ? AND end_line >= ? ORDER BY start_line DESC LIMIT 1');
+  const row = (await stmt.get(path, line, line)) as { start_line: number; end_line: number } | undefined;
   return row ? `L${row.start_line}-${row.end_line}` : null;
 }
 
@@ -119,19 +120,19 @@ export interface SearchOptions {
 
 // The declared or defaulted signals compose via RRF; `via` names which ones produced each row.
 // `opts` arrives already resolved (config.ts:resolveSearch).
-export async function search(db: DatabaseSync, cfg: ResolvedConfig, terms: string, opts: SearchOptions = {}): Promise<Row[]> {
+export async function search(store: Store, cfg: ResolvedConfig, terms: string, opts: SearchOptions = {}): Promise<Row[]> {
   const effective = resolveSearch(cfg, opts);
   const { k, signals } = effective;
 
-  const allPaths = (db.prepare('SELECT "path" FROM frontmatter').all() as Array<{ path: string }>).map((r) => r.path);
-  const scopePaths = rawScope(db, cfg, opts, allPaths);
+  const allPaths = ((await (await store.prepare('SELECT "path" FROM frontmatter')).all()) as Array<{ path: string }>).map((r) => r.path);
+  const scopePaths = await rawScope(store, cfg, opts, allPaths);
   const scopeActive = scopePaths.size < allPaths.length;
   // The set every candidate pool must be filtered to before truncation: scope narrowed by
   // --where, the same composition scopedPaths() gives the other commands. Runs the same where
   // fragment matchSql does, so a bad column gets the same attributed error either way.
   let allowedPaths: Set<string>;
   try {
-    allowedPaths = narrowByWhere(db, scopePaths, effective.where);
+    allowedPaths = await narrowByWhere(store, scopePaths, effective.where);
   } catch (err) {
     throw searchError(err as Error, terms, effective.where);
   }
@@ -146,7 +147,7 @@ export async function search(db: DatabaseSync, cfg: ResolvedConfig, terms: strin
       throw new SenseError('EMBED_MODEL_MISSING', `preset "${effective.presetName}" searches with vectors, but the local model path "${e.model}" is missing ${MODEL_FILENAMES}; point embed.model at a directory containing them, or drop "vectors" from that preset's signals to search without them`);
     }
   }
-  const semanticEnabled = wantsVectors && scopeHasEmbeddings(db, cfg, allowedPaths);
+  const semanticEnabled = wantsVectors && (await scopeHasEmbeddings(store, cfg, allowedPaths));
 
   // Terms pass to MATCH as written, with one transform: a run of text whose language marks no
   // word boundaries becomes a quoted grapheme phrase (and a title:/summary:/text: qualifier
@@ -165,17 +166,17 @@ export async function search(db: DatabaseSync, cfg: ResolvedConfig, terms: strin
   // after -- otherwise scoped notes ranking below the global top-`fetch` never reach the
   // filter. A join against a temp table, not a bound parameter list: real scopes run to
   // thousands of paths, past SQLITE_MAX_VARIABLE_NUMBER on older builds.
-  if (scopeActive) materializeScope(db, '_search_scope', scopePaths);
+  if (scopeActive) await materializeScope(store, '_search_scope', scopePaths);
   const scopeCond = scopeActive ? `AND content.path IN (SELECT "path" FROM _search_scope)` : '';
   const query = contentTokenize(cfg) === undefined ? segmentMatch(terms) : terms;
 
   const candidates = new Map<string, { score: number; via: string }>();
-  let matchRows: Array<{ path: string; hit: string | null }> = [];
+  let matchRows: LexicalHit[] = [];
   // A query that rewrites to nothing (e.g. only unspaced-script punctuation) has no
   // searchable words: zero lexical rows, and the other signals still compose.
   if (signals.words !== undefined && query.trim() !== '') {
     try {
-      matchRows = wordsCandidates(db, candidates, query, whereJoin, whereCond, scopeCond, fetch, signals.words);
+      matchRows = await wordsCandidates(store, candidates, query, whereJoin, whereCond, scopeCond, fetch, signals.words);
     } catch (err) {
       throw searchError(err as Error, terms, scope);
     }
@@ -185,18 +186,24 @@ export async function search(db: DatabaseSync, cfg: ResolvedConfig, terms: strin
   // from via='link' rows (never in matchRows, so absent from this set) below.
   const oversized = new Set(matchRows.filter((r) => r.hit === null).map((r) => r.path));
 
-  if (signals.links !== undefined) linksCandidates(db, candidates, matchRows, allPaths, allowedPaths, fetch, signals.links);
+  if (signals.links !== undefined) await linksCandidates(store, candidates, matchRows, allPaths, allowedPaths, fetch, signals.links);
 
   let chunkLines = new Map<string, string>();
   let chunkSimilarity = new Map<string, number>();
   if (semanticEnabled) {
-    ({ chunkLines, chunkSimilarity } = await vectorsCandidates(db, cfg, candidates, terms, fetch, allowedPaths, signals.vectors as number));
+    ({ chunkLines, chunkSimilarity } = await vectorsCandidates(store, cfg, candidates, terms, fetch, allowedPaths, signals.vectors as number));
   }
 
-  db.exec('DROP TABLE IF EXISTS _search');
-  db.exec('CREATE TEMP TABLE _search ("path" TEXT PRIMARY KEY, score REAL, via TEXT, hit TEXT, lines TEXT, similarity REAL)');
-  const insert = db.prepare('INSERT INTO _search ("path", score, via, hit, lines, similarity) VALUES (?, ?, ?, ?, ?, ?)');
-  for (const [path, c] of candidates) insert.run(path, c.score, c.via, hits.get(path) ?? null, chunkLines.get(path) ?? null, chunkSimilarity.get(path) ?? null);
+  await store.exec('DROP TABLE IF EXISTS _search');
+  // DOUBLE, not REAL: sqlite's REAL is an 8-byte double but duckdb's is a 4-byte float, and the
+  // rounded score/similarity are printed at full precision in rows.
+  await store.exec('CREATE TEMP TABLE _search ("path" TEXT PRIMARY KEY, score DOUBLE, via TEXT, hit TEXT, lines TEXT, similarity DOUBLE)');
+  if (candidates.size > 0) {
+    await store.runBatch(
+      'INSERT INTO _search ("path", score, via, hit, lines, similarity) VALUES (?, ?, ?, ?, ?, ?)',
+      [...candidates].map(([path, c]) => [path, c.score, c.via, hits.get(path) ?? null, chunkLines.get(path) ?? null, chunkSimilarity.get(path) ?? null])
+    );
+  }
 
   // All three candidate paths (match, link, vector) already filtered to scope+where before
   // reaching _search; this reapplies --where anyway since the join to frontmatter is already
@@ -205,13 +212,12 @@ export async function search(db: DatabaseSync, cfg: ResolvedConfig, terms: strin
   // lines is always present now: semantic rows carry their chunk's range, oversized-doc
   // lexical rows gain one below, everything else stays null. similarity stays semantic-only.
   const similarityCol = semanticEnabled ? ', _search.similarity' : '';
-  const rows = db
-    .prepare(
-      `SELECT f."path" AS path, content.title, content.summary, _search.hit, _search.via, round(_search.score, 4) AS score, _search.lines${similarityCol}
+  const selectStmt = await store.prepare(
+    `SELECT f."path" AS path, content.title, content.summary, _search.hit, _search.via, round(_search.score, 4) AS score, _search.lines${similarityCol}
        FROM _search JOIN frontmatter f ON f."path" = _search."path" JOIN content ON content.path = _search."path"
        ${where} ORDER BY _search.score DESC LIMIT ?`
-    )
-    .all(k) as Row[];
+  );
+  const rows = (await selectStmt.all(k)) as Row[];
 
   if (oversized.size > 0) {
     const bareTerms = extractBareTerms(terms);
@@ -225,7 +231,7 @@ export async function search(db: DatabaseSync, cfg: ResolvedConfig, terms: strin
       }
       const { excerpt, offset } = computeExcerpt(text, bareTerms);
       row.hit = excerpt;
-      if (row.lines == null) row.lines = featureEnabled(cfg, 'sections') ? lineRangeFor(db, row.path as string, lineNumberAt(text, offset)) : null;
+      if (row.lines == null) row.lines = featureEnabled(cfg, 'sections') ? await lineRangeFor(store, row.path as string, lineNumberAt(text, offset)) : null;
     }
   }
 

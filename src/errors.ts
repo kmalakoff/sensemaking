@@ -15,7 +15,10 @@ export type SenseErrorCode =
   | 'COLUMN_LIMIT'
   | 'PRESET_UNKNOWN'
   | 'PRESET_NOT_SEMANTIC'
-  | 'NOTE_NOT_EMBEDDED';
+  | 'NOTE_NOT_EMBEDDED'
+  | 'STORE_UNKNOWN'
+  | 'STORE_DEPENDENCY_MISSING'
+  | 'STORE_CAPABILITY_MISSING';
 
 export class SenseError extends Error {
   code: SenseErrorCode;
