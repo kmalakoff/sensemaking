@@ -30,22 +30,16 @@ describe('openStore: store selection and capability gating', () => {
     await result.store.close();
   });
 
-  it('an embed block a preset actually uses fails at open for a store lacking "vectors", naming the store and the capability', async () => {
+  it('an embed block a preset actually uses opens successfully now that duckdb implements "vectors" (D2)', async () => {
     const baseDir = tmpTree();
     writeNote(baseDir, 'a.md', { frontmatter: { title: 'A' } });
-    await assert.rejects(
-      () =>
-        openStore({
-          ...cfgFor(baseDir),
-          store: 'duckdb',
-          embed: { model: 'minishlab/potion-retrieval-32M' },
-        }),
-      (err: Error) => {
-        assert.match(err.message, /duckdb/);
-        assert.match(err.message, /vectors/);
-        return true;
-      }
-    );
+    const result = await openStore({
+      ...cfgFor(baseDir),
+      store: 'duckdb',
+      embed: { model: 'minishlab/potion-retrieval-32M' },
+    });
+    assert.equal(result.store.name, 'duckdb');
+    await result.store.close();
   });
 
   it('an embed block present but excluded from every preset’s signals does not trip the gate', async () => {
