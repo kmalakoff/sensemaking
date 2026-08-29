@@ -14,7 +14,8 @@ const argv = process.argv.slice(2);
 // a compare run stays a valid sqlite measurement.
 const storeIdx = argv.indexOf('--store');
 const store = storeIdx >= 0 ? argv[storeIdx + 1] : null;
-const [pkgRootArg, treeArg] = argv.filter((_a, i) => i !== storeIdx && i !== storeIdx + 1);
+// With no flag storeIdx is -1, and filtering on storeIdx + 1 (0) would drop the first positional.
+const [pkgRootArg, treeArg] = storeIdx >= 0 ? argv.filter((_a, i) => i !== storeIdx && i !== storeIdx + 1) : argv;
 if (!pkgRootArg || !treeArg) {
   console.error('usage: node bench/run.mjs <package-root> <notes-dir|corpus-name> [--store <name>]');
   process.exit(2);

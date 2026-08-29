@@ -23,7 +23,9 @@ function releasedBaseline() {
 const argv = process.argv.slice(2);
 const storeIdx = argv.indexOf('--store');
 const store = storeIdx >= 0 ? argv[storeIdx + 1] : null;
-const [corpusArg, ...versionArgs] = argv.filter((_a, i) => i !== storeIdx && i !== storeIdx + 1);
+// With no flag storeIdx is -1, and filtering on storeIdx + 1 (0) would drop the first positional.
+const positional = storeIdx >= 0 ? argv.filter((_a, i) => i !== storeIdx && i !== storeIdx + 1) : argv;
+const [corpusArg, ...versionArgs] = positional;
 const treeDir = corpusArg ? (corpusPath(corpusArg) ?? resolve(corpusArg)) : corpusPath('obsidian-hub');
 if (!existsSync(treeDir)) {
   console.error(`not a corpus name or directory: ${corpusArg}`);
