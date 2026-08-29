@@ -1,32 +1,19 @@
 import assert from 'node:assert';
-import { mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import type { Config } from '../../../src/config/index.ts';
-import { featureSignature } from '../../../src/config/index.ts';
-import { FEATURES } from '../../../src/features/index.ts';
-import { runCli as spawnCli } from '../../lib/cli.ts';
-import { writeModel } from '../../lib/model.ts';
-import { openTree, tmpTree, writeNote } from '../../lib/tree.ts';
-
-// Every temp dir this file creates, cleaned up once after all its tests have run.
-const dirs: string[] = [];
-
-function tempDir(prefix: string): string {
-  const dir = mkdtempSync(join(tmpdir(), prefix));
-  dirs.push(dir);
-  return dir;
-}
-
-after(() => {
-  for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
-});
+import type { Config } from '../../../../src/config/index.ts';
+import { featureSignature } from '../../../../src/config/index.ts';
+import { FEATURES } from '../../../../src/features/index.ts';
+import { runCli as spawnCli } from '../../../lib/cli.ts';
+import { writeModel } from '../../../lib/model.ts';
+import { scratchDir } from '../../../lib/scratch.ts';
+import { openTree, tmpTree, writeNote } from '../../../lib/tree.ts';
 
 // A note in a language written without spaces, which is what the setting exists for: unicode61
 // has no segmenter, so the whole run indexes as one token and word search cannot reach it.
 function makeTree(tokenize?: string): string {
-  const dir = tempDir('sense-tokenize-');
+  const dir = scratchDir('tokenize');
   const content = tokenize === undefined ? {} : { content: { tokenize } };
   writeFileSync(join(dir, 'sense.config.json'), JSON.stringify({ version: 4, presets: { default: { include: ['*.md'] } }, ...content, queries: {} }));
   writeFileSync(join(dir, 'cjk.md'), '---\ntitle: notes\n---\n数据库全文搜索很有用。\n');
@@ -149,7 +136,7 @@ describe('content.tokenize', () => {
   });
 
   it('an unknown key inside the block names itself', () => {
-    const dir = tempDir('sense-tokenize-');
+    const dir = scratchDir('tokenize');
     writeFileSync(join(dir, 'sense.config.json'), JSON.stringify({ version: 4, presets: { default: { include: ['*.md'] } }, content: { tokeniz: 'trigram' }, queries: {} }));
     const result = runCli(dir, ['sql', 'SELECT 1']);
     assert.equal(result.status, 1);
@@ -157,7 +144,7 @@ describe('content.tokenize', () => {
   });
 
   it('a non-string value is refused before it reaches DDL', () => {
-    const dir = tempDir('sense-tokenize-');
+    const dir = scratchDir('tokenize');
     writeFileSync(join(dir, 'sense.config.json'), JSON.stringify({ version: 4, presets: { default: { include: ['*.md'] } }, content: { tokenize: 7 }, queries: {} }));
     const result = runCli(dir, ['sql', 'SELECT 1']);
     assert.equal(result.status, 1);
@@ -223,7 +210,7 @@ describe('content.tokenize: a tokenize-only change rebuilds text only', () => {
 // identity that was not tracked before adopts silently, but a changed identity re-embeds.
 describe('embed model identity in the signature', () => {
   function embedTree(modelDir: string): string {
-    const dir = tempDir('sense-embed-sig-');
+    const dir = scratchDir('embed-sig');
     writeFileSync(join(dir, 'sense.config.json'), JSON.stringify({ version: 5, presets: { default: { include: ['*.md'] } }, embed: { model: modelDir, provider: 'static' }, queries: {} }));
     writeFileSync(join(dir, 'a.md'), '---\ntitle: A\n---\n\napple\n');
     return dir;
@@ -274,62 +261,65 @@ describe('embed model identity in the signature', () => {
 });
 
 // Fix F: busy_timeout derives from what reconcile has observed itself take, not a
-// constant. See src/db/reconcile.ts (meta.reconcile_max_ms bookkeeping) and src/db/open.ts (derivation).
+// constant. See src/store/sqlite/reconcile.ts (meta.reconcile_max_ms bookkeeping) and
+// src/store/sqlite/open.ts (derivation).
 
 describe('derived busy_timeout', () => {
-  it('a reconcile that does work records its duration in meta.reconcile_max_ms', () => {
+  it('a reconcile that does work records its duration in meta.reconcile_max_ms', async () => {
     const baseDir = tmpTree();
     writeNote(baseDir, 'a.md', { body: 'body' });
 
-    const { db } = openTree(baseDir);
-    const row = db.prepare(`SELECT value FROM meta WHERE key = 'reconcile_max_ms'`).get() as { value: string } | undefined;
+    const { store } = await openTree(baseDir);
+    const row = (await (await store.prepare(`SELECT value FROM meta WHERE key = 'reconcile_max_ms'`)).get()) as { value: string } | undefined;
     assert.ok(row, 'expected reconcile_max_ms to be recorded after a reconcile that parsed a file');
     assert.ok(Number(row?.value) >= 0);
-    db.close();
+    await store.close();
   });
 
-  it('a fabricated large reconcile_max_ms makes the next open derive a 3x busy_timeout', () => {
+  it('a fabricated large reconcile_max_ms makes the next open derive a 3x busy_timeout', async () => {
     const baseDir = tmpTree();
     writeNote(baseDir, 'a.md', { body: 'body' });
 
-    const first = openTree(baseDir);
-    first.db.close();
+    const first = await openTree(baseDir);
+    await first.store.close();
 
     // reopen with nothing changed (fast no-op reconcile, doesn't touch meta itself) and fabricate a huge recorded max
-    const probe = openTree(baseDir);
-    probe.db.prepare(`INSERT INTO meta (key, value) VALUES ('reconcile_max_ms', '50000') ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run();
-    probe.db.close();
+    const probe = await openTree(baseDir);
+    const insertMax = await probe.store.prepare(`INSERT INTO meta (key, value) VALUES ('reconcile_max_ms', '50000') ON CONFLICT(key) DO UPDATE SET value = excluded.value`);
+    await insertMax.run();
+    await probe.store.close();
 
-    const second = openTree(baseDir);
-    const timeout = (second.db.prepare('PRAGMA busy_timeout').get() as { timeout: number }).timeout;
+    const second = await openTree(baseDir);
+    const timeout = ((await (await second.store.prepare('PRAGMA busy_timeout')).get()) as { timeout: number }).timeout;
     assert.equal(timeout, 150000, '3x the fabricated 50000ms max');
-    second.db.close();
+    await second.store.close();
   });
 
-  it('one pathological recorded max is capped at 10 minutes, not honoured forever', () => {
+  it('one pathological recorded max is capped at 10 minutes, not honoured forever', async () => {
     const baseDir = tmpTree();
     writeNote(baseDir, 'a.md', { body: 'body' });
-    const first = openTree(baseDir);
-    first.db.close();
+    const first = await openTree(baseDir);
+    await first.store.close();
 
-    const probe = openTree(baseDir);
+    const probe = await openTree(baseDir);
     // an 8-minute build would derive 24min; the cap keeps later opens bounded
-    probe.db.prepare(`INSERT INTO meta (key, value) VALUES ('reconcile_max_ms', '480000') ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run();
-    probe.db.close();
+    const insertMax = await probe.store.prepare(`INSERT INTO meta (key, value) VALUES ('reconcile_max_ms', '480000') ON CONFLICT(key) DO UPDATE SET value = excluded.value`);
+    await insertMax.run();
+    await probe.store.close();
 
-    const second = openTree(baseDir);
-    const timeout = (second.db.prepare('PRAGMA busy_timeout').get() as { timeout: number }).timeout;
+    const second = await openTree(baseDir);
+    const timeout = ((await (await second.store.prepare('PRAGMA busy_timeout')).get()) as { timeout: number }).timeout;
     assert.equal(timeout, 600000);
-    second.db.close();
+    await second.store.close();
   });
 
-  it('a small or absent recorded max stays at the 30s floor', () => {
+  it('a small or absent recorded max stays at the 30s floor', async () => {
     const baseDir = tmpTree();
     writeNote(baseDir, 'a.md', { body: 'body' });
 
-    const { db } = openTree(baseDir);
-    const timeout = (db.prepare('PRAGMA busy_timeout').get() as { timeout: number }).timeout;
+    const { store } = await openTree(baseDir);
+    const timeout = ((await (await store.prepare('PRAGMA busy_timeout')).get()) as { timeout: number }).timeout;
     assert.equal(timeout, 30000);
-    db.close();
+    await store.close();
   });
 });

@@ -1,0 +1,54 @@
+import type { DuckDBConnection } from '@duckdb/node-api';
+import { segmentMatch } from '../../text/segment.ts';
+import { basenameImpl, hasImpl } from '../sql-functions.ts';
+
+// Dynamic, not a top-level import: sqlite trees must never even attempt to resolve this optional
+// peer dependency (see open.ts's connect()). By the time this runs, open.ts has already resolved
+// the package successfully, so this import just reuses it (Node caches module resolution).
+export async function registerFunctions(conn: DuckDBConnection): Promise<void> {
+  const { DuckDBIntegerType, DuckDBScalarFunction, DuckDBVarCharType } = await import('@duckdb/node-api');
+  conn.registerScalarFunction(
+    DuckDBScalarFunction.create({
+      name: 'has',
+      parameterTypes: [DuckDBVarCharType.instance, DuckDBVarCharType.instance],
+      returnType: DuckDBIntegerType.instance,
+      mainFunction(_info, inputChunk, outputVector) {
+        const fieldVec = inputChunk.getColumnVector(0);
+        const valueVec = inputChunk.getColumnVector(1);
+        for (let i = 0; i < inputChunk.rowCount; i++) outputVector.setItem(i, hasImpl(fieldVec.getItem(i), valueVec.getItem(i)));
+        outputVector.flush();
+      },
+    })
+  );
+  conn.registerScalarFunction(
+    DuckDBScalarFunction.create({
+      name: 'basename',
+      parameterTypes: [DuckDBVarCharType.instance],
+      varArgsType: DuckDBVarCharType.instance,
+      returnType: DuckDBVarCharType.instance,
+      mainFunction(_info, inputChunk, outputVector) {
+        const pathVec = inputChunk.getColumnVector(0);
+        const suffixVec = inputChunk.columnCount > 1 ? inputChunk.getColumnVector(1) : null;
+        for (let i = 0; i < inputChunk.rowCount; i++) outputVector.setItem(i, basenameImpl(pathVec.getItem(i), suffixVec ? suffixVec.getItem(i) : undefined));
+        outputVector.flush();
+      },
+    })
+  );
+  // segment() rewrites unspaced-script runs into the grapheme phrase FTS5's `_seg` sidecars
+  // need (see src/text/segment.ts); this store has no lexical implementation yet, so nothing
+  // consumes it during reconcile/search, but hand-written raw SQL naming it gets the real
+  // implementation -- never a silent passthrough that would make an unspaced-script query
+  // return wrong results without saying so (principle 6).
+  conn.registerScalarFunction(
+    DuckDBScalarFunction.create({
+      name: 'segment',
+      parameterTypes: [DuckDBVarCharType.instance],
+      returnType: DuckDBVarCharType.instance,
+      mainFunction(_info, inputChunk, outputVector) {
+        const textVec = inputChunk.getColumnVector(0);
+        for (let i = 0; i < inputChunk.rowCount; i++) outputVector.setItem(i, segmentMatch(String(textVec.getItem(i) ?? '')));
+        outputVector.flush();
+      },
+    })
+  );
+}

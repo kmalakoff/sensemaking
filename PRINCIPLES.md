@@ -37,7 +37,7 @@ it is never silent.
 ## 4. Naming a model is consent
 
 No `embed` block, no vectors, no downloads, zero cost. The model named in
-the config is the consent to fetch it — consent is the file's content, and
+the config is the consent to fetch it. Consent is the file's content, and
 the file belongs to the tree owner whoever wrote the line, so anything that
 writes a model into a config (init included) says so loudly, with the
 download consequence and the prefetch command. A default English model is
@@ -51,7 +51,7 @@ feature change.
 Which signals a search composes (words, links, vectors) is per-preset
 configuration, not a library constant, because no fusion policy is universally
 correct: with the static model, cosine-only lost to BM25 (nfcorpus nDCG@10
-0.309 vs 0.323), and with bge-small-en-v1.5 it won (0.343) — which signal helps
+0.309 vs 0.323), and with bge-small-en-v1.5 it won (0.343). Which signal helps
 is model- and corpus-contingent, so the tree owner decides. Every result row
 labels the signals that produced it (`via`). Costs derive from declarations: a
 file earns vectors exactly when a vector-declaring preset covers it.
@@ -61,7 +61,7 @@ file earns vectors exactly when a vector-declaring preset covers it.
 The same query never silently answers differently based on what happens to be
 installed or reachable. Errors name the fix in the caller's terms: a config
 key, a command. Provable unfitness fails loudly; unprovable fitness is never
-attested — the library reports what it measured and nothing more.
+attested. The library reports what it measured and nothing more.
 
 ## 7. Configuration has one home
 
@@ -75,7 +75,7 @@ enters the file.
 
 `sense init` writes the file. Its flags map one-to-one onto config keys and
 are documented in `sense init --help` and the setup skill. An operation that
-is not a config key — fetching a model, building an index — is a command, not
+is not a config key, fetching a model, building an index, is a command, not
 an init flag.
 
 A key earns its place only when different trees legitimately need different
@@ -85,7 +85,7 @@ values; otherwise it is a constant or a code decision. Machine-level assets
 ## 8. Documented means tested
 
 An integration or model named in the docs was run and verified here.
-INTEGRATIONS.md holds the matrix — what was tested, against which endpoint or
-model, on what date — and the README links it. Options that were not run are
+INTEGRATIONS.md holds the matrix: what was tested, against which endpoint or
+model, on what date, and the README links it. Options that were not run are
 not named. A remote provider's row records one extra fact: tree content
 leaves the machine.

@@ -8,7 +8,7 @@ description: "Translate an Obsidian Bases .base file into sense SQL that returns
 A `.base` file is YAML: filters selecting notes, formulas computing values, and views ordering
 and grouping them. Obsidian evaluates it against its own metadata cache; sense holds the same
 data in SQL tables. Every Bases construct that selects or computes rows has a SQL equivalent.
-What has none is presentation (`columnSize`, card layout) -- those change pixels, not rows, so
+What has none is presentation (`columnSize`, card layout), those change pixels, not rows, so
 a translation loses nothing by ignoring them.
 
 Translate one view to one query: base-level `filters` AND the view's `filters`, the view's
@@ -64,7 +64,7 @@ did, and `SELECT name FROM pragma_table_info('frontmatter')` lists what exists.
 `isEmpty()` has four true cases because empty is stored three ways: NULL (key absent), `''`
 (empty string value), `'[]'` (a list written `[]`), and `'[null]'` (a list key above a bare
 `-`). Obsidian's `isEmpty()` is true for all of them; `IS NULL` alone finds only the first.
-The IN list is the whole test -- `json_array_length()` is not: it reads `'[null]'` as length
+The IN list is the whole test. `json_array_length()` is not: it reads `'[null]'` as length
 1 and throws on plain strings. The same trap inside a list: `json_each` hands a string member
 to `value` as plain text, so `json_type(value)` throws `malformed JSON` on it; the scan's own
 `type` column is the discriminator.
@@ -103,12 +103,12 @@ A formula referencing another formula becomes a CTE layer: SQL cannot read a SEL
 the same SELECT list, so each dependency level computes its formulas as columns and the next
 level reads them (`WITH t AS (SELECT ..., <level-1 formulas> FROM frontmatter) SELECT ...,
 <level-2 formulas> FROM t`). A five-formula chain is however many *levels* it has, not five
-CTEs -- formulas that only read base columns share one layer.
+CTEs. Formulas that only read base columns share one layer.
 
 ## Views
 
 - `sort:` (multi-key, each with direction) -> `ORDER BY a DESC, b ASC`. `limit:` -> `LIMIT`.
-- `groupBy` does not collapse rows -- Obsidian shows every row bucketed under headers with
+- `groupBy` does not collapse rows. Obsidian shows every row bucketed under headers with
   per-group summaries. The SQL producing the same rows and numbers is ordering plus window
   functions, not GROUP BY:
 
@@ -120,7 +120,7 @@ CTEs -- formulas that only read base columns share one layer.
   ORDER BY f.status, f.days DESC
   ```
 
-  A collapsed one-row-per-group report is plain `GROUP BY` -- that is a different result than
+  A collapsed one-row-per-group report is plain `GROUP BY`. That is a different result than
   the Bases view shows.
 - View `summaries` (Sum, Average, Median via ordering, Unique, Filled, Checked) are the
   matching aggregates, windowed as above to keep the rows, or a separate aggregate query.
@@ -128,7 +128,7 @@ CTEs -- formulas that only read base columns share one layer.
 ## `this`
 
 `this` is the note the base is evaluated against: the embedding note, or Obsidian's active
-pane. sense has no pane, so the caller supplies the path as a bound parameter -- `sense sql
+pane. sense has no pane, so the caller supplies the path as a bound parameter: `sense sql
 "..." <path>`, or a saved query run as `sense <name> <path>`. A CTE keeps it single-bind:
 
 ```sql

@@ -1,4 +1,4 @@
-export { anyPresetEmbeds, contentTokenize, embedConfig, embedEnabled, enabledFeatures, featureEnabled, featureSignature, featureStates, presetHasSignal, presetNames, presetSignals } from './access.ts';
+export { anyPresetEmbeds, contentTokenize, embedConfig, embedEnabled, enabledFeatures, featureEnabled, featureSignature, featureStates, presetHasSignal, presetNames, presetSignals, storeName } from './access.ts';
 export type { InitOverrides } from './load.ts';
 export { findConfigPath, initConfig, loadConfig, migrateConfig } from './load.ts';
 export { resolvePreset, resolveSearch } from './resolve.ts';

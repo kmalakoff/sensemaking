@@ -91,13 +91,13 @@ LIMIT 20
 
 Run as `sense sql "..." current-note.md`, or saved with the `?` in place and the path passed
 as the parameter. The `or:` block reproduces Obsidian's semantics exactly: rows qualify by
-overlap, by linking to the note, or by being linked from it -- so leaf notes the current note
+overlap, by linking to the note, or by being linked from it, so leaf notes the current note
 links to appear even at zero overlap, as they do in Obsidian.
 
 ## Notes that recur across translations
 
 - Multiple views over the same base share the base-level filter; write it once per query
-  rather than factoring it out -- saved queries are self-contained by design.
+  rather than factoring it out. Saved queries are self-contained by design.
 - `sort` keys referencing formulas sort by the SELECT alias.
 - A `groupBy` view keeps its rows; see the window-function shape in SKILL.md. Only a
   deliberately collapsed report wants `GROUP BY`.

@@ -1,6 +1,6 @@
 import Module from 'node:module';
-import type { DatabaseSync } from 'node:sqlite';
 import { SenseError } from '../errors.ts';
+import type { Store } from '../store/types.ts';
 import { languageDistribution, saveLanguageDistribution } from './distribution.ts';
 import { toIso3 } from './languages.ts';
 import type { EmbedProvider } from './types.ts';
@@ -24,10 +24,10 @@ function classify(franc: typeof import('franc-min')['franc'], text: string): str
 
 // Merges chunk texts into the persisted distribution; throws (without persisting) if the model
 // declares languages and a clear majority classified so far is not among them.
-export async function checkLanguageFit(db: DatabaseSync, provider: EmbedProvider, texts: string[]): Promise<void> {
+export async function checkLanguageFit(store: Store, provider: EmbedProvider, texts: string[]): Promise<void> {
   if (texts.length === 0) return;
   const { franc } = _require('franc-min') as typeof import('franc-min');
-  const persisted = languageDistribution(db) ?? {};
+  const persisted = (await languageDistribution(store)) ?? {};
   const merged = { ...persisted };
   for (const text of texts) {
     const code = classify(franc, text);
@@ -46,5 +46,5 @@ export async function checkLanguageFit(db: DatabaseSync, provider: EmbedProvider
       );
     }
   }
-  saveLanguageDistribution(db, merged);
+  await saveLanguageDistribution(store, merged);
 }

@@ -10,9 +10,9 @@ const peekCmd: Command = (ctx) => {
   const [pathArg] = positionals;
   if (!pathArg) ctx.usageError(usage);
   const format = formatOf(values);
-  return withDb(ctx, values.config as string | undefined, (db, cfg) => {
+  return withDb(ctx, values.config as string | undefined, async (store, cfg) => {
     const overrides = scopeOf(values);
-    const result = peek(db, cfg, pathArg, overrides);
+    const result = await peek(store, cfg, pathArg, overrides);
     console.log(format === 'json' ? JSON.stringify(result, null, 2) : renderPeek(result));
   });
 };

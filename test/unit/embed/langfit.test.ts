@@ -1,9 +1,8 @@
 import assert from 'node:assert';
-import { DatabaseSync } from 'node:sqlite';
 import { languageDistribution } from '../../../src/embed/distribution.ts';
 import { checkLanguageFit } from '../../../src/embed/langfit.ts';
 import type { EmbedProvider } from '../../../src/embed/types.ts';
-import { CHINESE_SENTENCES } from '../../lib/tree.ts';
+import { CHINESE_SENTENCES, openTree, tmpTree } from '../../lib/tree.ts';
 
 // languageDistribution now lives in src/embed/distribution.ts (split out so status.ts's read of
 // the persisted counts never pulls in franc-min), but is exercised here alongside
@@ -27,10 +26,9 @@ const EN_SENTENCES = [
 ];
 const ES_SENTENCES = ['El clima ha sido muy agradable esta semana, perfecto para caminar al aire libre.', 'Por favor entregue el documento firmado al gerente antes del final del día.', 'Ella disfruta leyendo novelas y pintando paisajes los fines de semana tranquilos.'];
 
-function db(): DatabaseSync {
-  const database = new DatabaseSync(':memory:');
-  database.exec('CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)');
-  return database;
+async function db() {
+  const { store } = await openTree(tmpTree());
+  return store;
 }
 
 function provider(languages?: string[]): EmbedProvider {
@@ -49,61 +47,61 @@ function provider(languages?: string[]): EmbedProvider {
 }
 
 describe('languageDistribution', () => {
-  it('is undefined before anything has been classified', () => {
-    assert.equal(languageDistribution(db()), undefined);
+  it('is undefined before anything has been classified', async () => {
+    assert.equal(await languageDistribution(await db()), undefined);
   });
 
   it('reflects what checkLanguageFit persisted', async () => {
-    const database = db();
+    const database = await db();
     await checkLanguageFit(database, provider(), CHINESE_SENTENCES.slice(0, 5));
-    assert.deepEqual(languageDistribution(database), { cmn: 5 });
+    assert.deepEqual(await languageDistribution(database), { cmn: 5 });
   });
 });
 
 describe('checkLanguageFit', () => {
   it('no-ops on an empty text list: no persistence, no throw', async () => {
-    const database = db();
+    const database = await db();
     await checkLanguageFit(database, provider(['en']), []);
-    assert.equal(languageDistribution(database), undefined);
+    assert.equal(await languageDistribution(database), undefined);
   });
 
   it('merges into the persisted distribution across calls', async () => {
-    const database = db();
+    const database = await db();
     await checkLanguageFit(database, provider(), CHINESE_SENTENCES.slice(0, 3));
     await checkLanguageFit(database, provider(), EN_SENTENCES.slice(0, 2));
-    assert.deepEqual(languageDistribution(database), { cmn: 3, eng: 2 });
+    assert.deepEqual(await languageDistribution(database), { cmn: 3, eng: 2 });
   });
 
   it('never throws below the 10-classified-chunk floor, declared languages notwithstanding', async () => {
-    const database = db();
+    const database = await db();
     // 5 classified chunks, all "cmn", against a model declaring only "en" -- would be a 100%
     // mismatch above the floor, but MIN_CLASSIFIED gates the check off entirely below it.
     await checkLanguageFit(database, provider(['en']), CHINESE_SENTENCES.slice(0, 5));
-    assert.deepEqual(languageDistribution(database), { cmn: 5 });
+    assert.deepEqual(await languageDistribution(database), { cmn: 5 });
   });
 
   it('never throws when the majority is under 50%, even above the classified floor', async () => {
-    const database = db();
+    const database = await db();
     // 10 total classified: 4 cmn (40%), 3 eng, 3 spa -- no code reaches the 50% majority rule.
     await checkLanguageFit(database, provider(['en']), [...CHINESE_SENTENCES.slice(0, 4), ...EN_SENTENCES.slice(0, 3), ...ES_SENTENCES]);
-    assert.deepEqual(languageDistribution(database), { cmn: 4, eng: 3, spa: 3 });
+    assert.deepEqual(await languageDistribution(database), { cmn: 4, eng: 3, spa: 3 });
   });
 
   it('does not throw when the majority language is among the declared languages', async () => {
-    const database = db();
+    const database = await db();
     await checkLanguageFit(database, provider(['zh']), CHINESE_SENTENCES); // toIso3('zh') === 'cmn'
-    assert.deepEqual(languageDistribution(database), { cmn: 12 });
+    assert.deepEqual(await languageDistribution(database), { cmn: 12 });
   });
 
   it('never throws when the provider declares no languages at all', async () => {
-    const database = db();
+    const database = await db();
     await checkLanguageFit(database, provider(undefined), CHINESE_SENTENCES);
     await checkLanguageFit(database, provider([]), CHINESE_SENTENCES);
-    assert.deepEqual(languageDistribution(database), { cmn: 24 });
+    assert.deepEqual(await languageDistribution(database), { cmn: 24 });
   });
 
   it('throws EMBED_MODEL_MISMATCH naming the model, declared languages, majority code, and the fix, once the majority (>=50%, >=10 classified) is not declared', async () => {
-    const database = db();
+    const database = await db();
     await assert.rejects(
       () => checkLanguageFit(database, provider(['en']), CHINESE_SENTENCES),
       (err: Error & { code?: string }) => {
@@ -119,11 +117,11 @@ describe('checkLanguageFit', () => {
   });
 
   it('throws without persisting: a mismatch leaves the prior distribution untouched', async () => {
-    const database = db();
+    const database = await db();
     await checkLanguageFit(database, provider(['en']), CHINESE_SENTENCES.slice(0, 5)); // below the floor, persists
-    assert.deepEqual(languageDistribution(database), { cmn: 5 });
+    assert.deepEqual(await languageDistribution(database), { cmn: 5 });
     await assert.rejects(() => checkLanguageFit(database, provider(['en']), CHINESE_SENTENCES.slice(5, 10)), /not among them/);
     // The would-be merge (10 total, 100% cmn) crossed the floor and mismatched -- never saved.
-    assert.deepEqual(languageDistribution(database), { cmn: 5 });
+    assert.deepEqual(await languageDistribution(database), { cmn: 5 });
   });
 });

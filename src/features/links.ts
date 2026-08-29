@@ -1,8 +1,8 @@
 import posix from 'node:path/posix';
-import type { DatabaseSync } from 'node:sqlite';
 import type { FileStat } from '../scan/index.ts';
+import type { Connection } from '../store/types.ts';
 import { maskRegions } from './fences.ts';
-import type { Feature, ReconcileDelta } from './types.ts';
+import type { ExtractedDoc, Feature, ReconcileDelta } from './types.ts';
 
 // links(src, target, target_base, dst, embed): target as written, target_base its baseKey
 // (indexed, for the incremental resolve below), dst the resolved path or NULL (a
@@ -112,35 +112,54 @@ interface LinkRow {
   embed: number;
 }
 
-// Applies resolveTarget to `rows`, writing only rows whose dst actually changes. The UPDATE
-// keys on (src, target): a link/embed sibling pair shares one resolution, so either row's
-// mismatch rewrites both.
-function resolveRows(db: DatabaseSync, rows: LinkRow[], pathSet: Set<string>, byBase: Map<string, string[]>): boolean {
-  const update = db.prepare('UPDATE links SET dst = ? WHERE src = ? AND target = ?');
-  let changed = false;
+// resolveTarget applied to `rows`, returning just the rows whose dst actually changed -- the
+// caller writes those in one runBatch call, keyed on (src, target) so a link/embed sibling
+// pair sharing one resolution rewrites both.
+function resolveRows(rows: LinkRow[], pathSet: Set<string>, byBase: Map<string, string[]>): LinkRow[] {
+  const changed: LinkRow[] = [];
   for (const row of rows) {
     const dst = resolveTarget(row.src, row.target, pathSet, byBase);
-    if (dst !== row.dst) {
-      update.run(dst, row.src, row.target);
-      changed = true;
-    }
+    if (dst !== row.dst) changed.push({ ...row, dst });
   }
   return changed;
 }
 
+async function writeResolved(db: Connection, rows: LinkRow[]): Promise<void> {
+  if (rows.length === 0) return;
+  await db.runBatch(
+    'UPDATE links SET dst = ? WHERE src = ? AND target = ?',
+    rows.map((r) => [r.dst, r.src, r.target])
+  );
+}
+
 // A new or deleted file can change any note's resolution, so re-resolve the whole table.
 // Fallback for cold builds and large deltas -- see afterReconcile's threshold.
-function resolveAll(db: DatabaseSync, files: FileStat[]): boolean {
+async function resolveAll(db: Connection, files: FileStat[]): Promise<boolean> {
   const pathSet = new Set(files.map((f) => f.relPath));
   const byBase = buildByBase(files);
-  const rows = db.prepare('SELECT src, target, dst, embed FROM links').all() as unknown as LinkRow[];
-  return resolveRows(db, rows, pathSet, byBase);
+  const stmt = await db.prepare('SELECT src, target, dst, embed FROM links');
+  const rows = (await stmt.all()) as unknown as LinkRow[];
+  const changed = resolveRows(rows, pathSet, byBase);
+  await writeResolved(db, changed);
+  return changed.length > 0;
+}
+
+// Chunked so a large-but-under-threshold delta never exceeds SQLite's bound-variable limit
+// (SQLITE_MAX_VARIABLE_NUMBER, 32766); harmless headroom on DuckDB, which has no such cap.
+async function selectIn(db: Connection, column: string, keys: string[]): Promise<LinkRow[]> {
+  const rows: LinkRow[] = [];
+  for (let i = 0; i < keys.length; i += 500) {
+    const chunk = keys.slice(i, i + 500);
+    const stmt = await db.prepare(`SELECT src, target, dst, embed FROM links WHERE ${column} IN (${chunk.map(() => '?').join(', ')})`);
+    rows.push(...((await stmt.all(...chunk)) as unknown as LinkRow[]));
+  }
+  return rows;
 }
 
 // Re-resolve only what this reconcile could have touched: re-stored sources, links whose
 // target basename matches an added/vanished file, and links whose dst just vanished. All
 // three are indexed lookups, so this never reads the whole table.
-function resolveIncremental(db: DatabaseSync, delta: ReconcileDelta): boolean {
+async function resolveIncremental(db: Connection, delta: ReconcileDelta): Promise<boolean> {
   const pathSet = new Set(delta.files.map((f) => f.relPath));
   const byBase = buildByBase(delta.files);
 
@@ -153,113 +172,112 @@ function resolveIncremental(db: DatabaseSync, delta: ReconcileDelta): boolean {
   const collect = (rows: LinkRow[]) => {
     for (const row of rows) candidates.set(`${row.src}\0${row.target}\0${row.embed}`, row);
   };
-  // Chunked so a large-but-under-threshold delta never exceeds SQLite's bound-variable
-  // limit (SQLITE_MAX_VARIABLE_NUMBER, 32766).
-  const collectIn = (column: string, keys: string[]) => {
-    for (let i = 0; i < keys.length; i += 500) {
-      const chunk = keys.slice(i, i + 500);
-      const placeholders = chunk.map(() => '?').join(', ');
-      collect(db.prepare(`SELECT src, target, dst, embed FROM links WHERE ${column} IN (${placeholders})`).all(...chunk) as unknown as LinkRow[]);
-    }
-  };
+  collect(await selectIn(db, 'src', delta.reparsed));
+  collect(await selectIn(db, 'target_base', [...changedBasenames]));
+  collect(await selectIn(db, 'dst', delta.vanished));
 
-  collectIn('src', delta.reparsed);
-  collectIn('target_base', [...changedBasenames]);
-  collectIn('dst', delta.vanished);
-
-  return resolveRows(db, [...candidates.values()], pathSet, byBase);
+  const changed = resolveRows([...candidates.values()], pathSet, byBase);
+  await writeResolved(db, changed);
+  return changed.length > 0;
 }
 
-// Resolved edges, for rank and for search's graph expansion.
-export function linkEdges(db: DatabaseSync): [string, string][] {
-  // One edge per row, as 0.12's grain always had it -- two written targets resolving to one
-  // dst stay two edges (a weight the fusion evals were gated on). The only exclusion is an
-  // embed whose exact (src, target) also exists as a link: that second row is new with the
-  // embed grain and would double an edge that used to be one row. The NOT EXISTS probes the
-  // primary key and fires only for embed rows; both branches still scan the table.
-  // Self-edges (same-note anchors) are excluded here so PageRank mass is not self-recycled --
-  // Obsidian's own graph view hides self-loops too. The rows themselves stay in the table for
-  // backlinks/peek.
-  const sql = `SELECT src, dst FROM links WHERE dst IS NOT NULL AND embed = 0 AND src != dst
+// One edge per row, as 0.12's grain always had it -- two written targets resolving to one
+// dst stay two edges (a weight the fusion evals were gated on). The only exclusion is an
+// embed whose exact (src, target) also exists as a link: that second row is new with the
+// embed grain and would double an edge that used to be one row. The NOT EXISTS probes the
+// primary key and fires only for embed rows; both branches still scan the table.
+// Self-edges (same-note anchors) are excluded here so PageRank mass is not self-recycled --
+// Obsidian's own graph view hides self-loops too. The rows themselves stay in the table for
+// backlinks/peek. Exported (not just linkEdges below) so commands/signals.ts's async caller,
+// which only has the Store's prepare(), can run the identical statement itself.
+export const LINK_EDGES_SQL = `SELECT src, dst FROM links WHERE dst IS NOT NULL AND embed = 0 AND src != dst
     UNION ALL
     SELECT src, dst FROM links l WHERE dst IS NOT NULL AND embed = 1 AND src != dst
       AND NOT EXISTS (SELECT 1 FROM links l0 WHERE l0.src = l.src AND l0.target = l.target AND l0.embed = 0)`;
-  return (db.prepare(sql).all() as Array<{ src: string; dst: string }>).map((r) => [r.src, r.dst]);
+
+export function toEdges(rows: Array<{ src: string; dst: string }>): [string, string][] {
+  return rows.map((r) => [r.src, r.dst]);
 }
 
-// remove() has already deleted the rows by the time afterReconcile runs, so it records here
-// whether they carried edges. Keyed on the delta object, so the state dies with the reconcile.
-const removedWithLinks = new WeakMap<ReconcileDelta, Set<string>>();
-
-function recordRemoved(delta: ReconcileDelta, path: string): void {
-  let set = removedWithLinks.get(delta);
-  if (!set) {
-    set = new Set();
-    removedWithLinks.set(delta, set);
-  }
-  set.add(path);
+// Resolved edges, for rank (inside reconcile's afterReconcile pass).
+export async function linkEdges(db: Connection): Promise<[string, string][]> {
+  const stmt = await db.prepare(LINK_EDGES_SQL);
+  return toEdges((await stmt.all()) as Array<{ src: string; dst: string }>);
 }
 
-// remove() runs per path; the vanished list is an array, so cache the Set per delta.
-const vanishedSets = new WeakMap<ReconcileDelta, Set<string>>();
-function vanishedSet(delta: ReconcileDelta): Set<string> {
-  let set = vanishedSets.get(delta);
-  if (!set) {
-    set = new Set(delta.vanished);
-    vanishedSets.set(delta, set);
-  }
-  return set;
-}
+// remove()/store() have already deleted rows by the time afterReconcile runs, so this records
+// whether any reconcile pass deleted at least one link row -- whether a file vanished, or a
+// reparse's stale rows shrank. dstChanged alone misses the reparsed-to-zero-links case (no
+// surviving rows to re-resolve). Keyed on the delta object, so the state dies with the reconcile.
+const removedWithLinks = new WeakMap<ReconcileDelta, boolean>();
 
 export const links: Feature = {
   name: 'links',
-  schema(db) {
-    db.exec('CREATE TABLE IF NOT EXISTS links (src TEXT, target TEXT, target_base TEXT, dst TEXT, embed INTEGER, PRIMARY KEY (src, target, embed))');
-    db.exec('CREATE INDEX IF NOT EXISTS links_dst ON links(dst)');
-    db.exec('CREATE INDEX IF NOT EXISTS links_target_base ON links(target_base)');
+  async schema(db) {
+    await db.exec('CREATE TABLE IF NOT EXISTS links (src TEXT, target TEXT, target_base TEXT, dst TEXT, embed INTEGER, PRIMARY KEY (src, target, embed))');
+    await db.exec('CREATE INDEX IF NOT EXISTS links_dst ON links(dst)');
+    await db.exec('CREATE INDEX IF NOT EXISTS links_target_base ON links(target_base)');
   },
   extract,
-  // Reparsed docs are diffed in store() below instead of wiped here: deleting and
-  // re-inserting resets dst to NULL, which made every touch-only reparse read as an edge
-  // change and recompute PageRank -- measured as most of the remaining update cost.
-  remove(db, path, delta) {
-    if (!vanishedSet(delta).has(path)) return;
-    const result = db.prepare('DELETE FROM links WHERE src = ?').run(path);
-    if (Number(result.changes) > 0) recordRemoved(delta, path);
+  // Reparsed docs are diffed in store() below instead of wiped here: deleting and re-inserting
+  // resets dst to NULL, which made every touch-only reparse read as an edge change and
+  // recompute PageRank -- measured as most of the remaining update cost. Only genuinely
+  // vanished files clear here.
+  async remove(db, paths, delta) {
+    const vanishedSet = new Set(delta.vanished);
+    const vanished = paths.filter((p) => vanishedSet.has(p));
+    if (vanished.length === 0) return;
+    const existingRows = await selectIn(db, 'src', vanished);
+    await db.runBatch(
+      'DELETE FROM links WHERE src = ?',
+      vanished.map((p) => [p])
+    );
+    if (existingRows.length > 0) removedWithLinks.set(delta, true);
   },
-  store(db, path, extracted, delta) {
-    const targets = extracted as Array<{ target: string; embed: boolean }>;
-    // Stale rows (target/embed pairs the new parse no longer contains) are real edge removals.
-    // \0 can't appear in a target, so the composite key never collides.
-    let stale: ReturnType<ReturnType<DatabaseSync['prepare']>['run']>;
-    if (targets.length === 0) {
-      stale = db.prepare('DELETE FROM links WHERE src = ?').run(path);
-    } else {
-      const placeholders = targets.map(() => '?').join(', ');
-      const keys = targets.map((t) => `${t.target}\0${t.embed ? '1' : '0'}`);
-      stale = db.prepare(`DELETE FROM links WHERE src = ? AND (target || char(0) || embed) NOT IN (${placeholders})`).run(path, ...keys);
+  async store(db, docs: ExtractedDoc[], delta) {
+    const byPath = new Map(docs.map((d) => [d.path, d.extracted as Array<{ target: string; embed: boolean }>]));
+    const addedSet = new Set(delta.added);
+    const reparsedExisting = docs.map((d) => d.path).filter((p) => !addedSet.has(p));
+
+    // Stale rows (existing target/embed pairs the new parse no longer contains) are real edge
+    // removals; diffed in JS from one bulk SELECT rather than a per-file NOT IN statement, so
+    // this whole pass costs one query plus one batched DELETE regardless of file count.
+    const existingRows = await selectIn(db, 'src', reparsedExisting);
+    const staleRows = existingRows.filter((row) => {
+      const targets = byPath.get(row.src) ?? [];
+      return !targets.some((t) => t.target === row.target && (t.embed ? 1 : 0) === row.embed);
+    });
+    if (staleRows.length > 0) {
+      await db.runBatch(
+        'DELETE FROM links WHERE src = ? AND target = ? AND embed = ?',
+        staleRows.map((r) => [r.src, r.target, r.embed])
+      );
+      removedWithLinks.set(delta, true);
     }
-    if (Number(stale.changes) > 0) recordRemoved(delta, path);
-    // Upsert preserves dst on surviving rows, so an unchanged link resolves to the same
-    // value and reports no change; only genuinely new rows start at NULL.
-    const insert = db.prepare('INSERT INTO links (src, target, target_base, dst, embed) VALUES (?, ?, ?, NULL, ?) ON CONFLICT(src, target, embed) DO UPDATE SET target_base = excluded.target_base');
-    // A same-note anchor's dst is always its own src, never another file's basename, so it
-    // gets no target_base -- SQL's `IN` never matches NULL, keeping it out of
-    // resolveIncremental's cross-file collectIn('target_base', ...) entirely.
-    for (const { target, embed } of targets) insert.run(path, target, target.startsWith('#') ? null : baseKey(cleanTarget(target)), embed ? 1 : 0);
+
+    // Upsert preserves dst on surviving rows, so an unchanged link resolves to the same value
+    // and reports no change; only genuinely new rows start at NULL. A same-note anchor's dst is
+    // always its own src, never another file's basename, so it gets no target_base -- SQL's
+    // `IN` never matches NULL, keeping it out of resolveIncremental's target_base lookup.
+    const upsertRows: unknown[][] = [];
+    for (const [path, targets] of byPath) {
+      for (const { target, embed } of targets) upsertRows.push([path, target, target.startsWith('#') ? null : baseKey(cleanTarget(target)), embed ? 1 : 0]);
+    }
+    if (upsertRows.length > 0) {
+      await db.runBatch('INSERT INTO links (src, target, target_base, dst, embed) VALUES (?, ?, ?, NULL, ?) ON CONFLICT(src, target, embed) DO UPDATE SET target_base = excluded.target_base', upsertRows);
+    }
   },
-  afterReconcile(db, delta) {
-    // Any deleted rows that carried edges mean the edge set shrank -- whether the file
-    // vanished or was reparsed down to fewer/no links. dstChanged alone misses the
-    // reparsed-to-zero-links case (no surviving rows to re-resolve).
-    const removeHadLinks = (removedWithLinks.get(delta)?.size ?? 0) > 0;
+  async afterReconcile(db, delta) {
+    // Any deleted rows mean the edge set shrank -- whether the file vanished or was reparsed
+    // down to fewer/no links.
+    const removeHadLinks = removedWithLinks.get(delta) ?? false;
 
     const churn = delta.reparsed.length + delta.vanished.length;
     // Past this share of the tree, a full pass is the only one guaranteed to match
     // resolveTarget's ambiguity rules. A cold build clears the threshold on its own.
     const large = delta.files.length === 0 || churn > 0.2 * delta.files.length;
 
-    const dstChanged = large ? resolveAll(db, delta.files) : resolveIncremental(db, delta);
+    const dstChanged = large ? await resolveAll(db, delta.files) : await resolveIncremental(db, delta);
     delta.linksChanged = dstChanged || removeHadLinks;
   },
 };

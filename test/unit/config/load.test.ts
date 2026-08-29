@@ -1,15 +1,15 @@
 import assert from 'node:assert';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { loadConfig, SUPPORTED_CONFIG_VERSION } from 'sensemaking';
 import { DEFAULT_EMBED_MODEL } from '../../../src/config/index.ts';
 import { runCli as spawnCli } from '../../lib/cli.ts';
+import { scratchDir } from '../../lib/scratch.ts';
 
 const runCli = (configPath: string) => spawnCli(['--list', '--config', configPath]);
 
 function writeConfig(version: number | undefined): string {
-  const dir = mkdtempSync(join(tmpdir(), 'sense-version-'));
+  const dir = scratchDir('version');
   const configPath = join(dir, 'sense.config.json');
   const cfg: Record<string, unknown> = { scan: { include: ['*.md'] }, queries: {} };
   if (version !== undefined) cfg.version = version;
@@ -18,7 +18,7 @@ function writeConfig(version: number | undefined): string {
 }
 
 function writeRaw(cfg: Record<string, unknown>): string {
-  const dir = mkdtempSync(join(tmpdir(), 'sense-version-'));
+  const dir = scratchDir('version');
   const configPath = join(dir, 'sense.config.json');
   writeFileSync(configPath, JSON.stringify(cfg));
   return configPath;
@@ -26,7 +26,7 @@ function writeRaw(cfg: Record<string, unknown>): string {
 
 describe('config version', () => {
   it('v2 embed object form (api provider settings) survives migration into the v5 embed block', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'sense-vv-'));
+    const dir = scratchDir('vv');
     const v2Embed = { model: 'custom/m', type: 'api', url: 'http://localhost:11434/v1', key: 'MY_KEY' };
     writeFileSync(join(dir, 'sense.config.json'), JSON.stringify({ version: 2, scan: { include: ['**/*.md'] }, queries: {}, features: { links: true, embed: v2Embed } }));
     const cfg = loadConfig(join(dir, 'sense.config.json'));

@@ -2,12 +2,13 @@ import type { ParseArgsOptionsConfig } from 'node:util';
 import { parseArgs } from 'node:util';
 import type { ResolvedConfig, SearchOverrides } from '../config/index.ts';
 import { resolvePreset } from '../config/index.ts';
-import type { OpenResult } from '../db/index.ts';
-import { open } from '../db/index.ts';
 import { columnHint } from '../output/column-hint.ts';
 import type { Row, RowFormat } from '../output/output.ts';
 import { printRowStream } from '../output/output.ts';
 import { searchError } from '../output/search-error.ts';
+import type { OpenResult } from '../store/index.ts';
+import { openStore } from '../store/index.ts';
+import type { Store } from '../store/types.ts';
 import type { Ctx } from './types.ts';
 
 // Spreadable option fragments -- one flag name keeps one meaning across every command's table.
@@ -99,14 +100,14 @@ export function printWarnings(warnings: string[]): void {
   for (const w of warnings) console.warn(w);
 }
 
-export async function withDb(ctx: Ctx, configPath: string | undefined, fn: (db: OpenResult['db'], cfg: ResolvedConfig) => void | Promise<void>): Promise<void> {
+export async function withDb(ctx: Ctx, configPath: string | undefined, fn: (store: OpenResult['store'], cfg: ResolvedConfig) => void | Promise<void>): Promise<void> {
   const cfg = ctx.resolveConfig(configPath);
-  const { db, warnings } = open(cfg);
+  const { store, warnings } = await openStore(cfg);
   printWarnings(warnings);
   try {
-    await fn(db, cfg);
+    await fn(store, cfg);
   } finally {
-    db.close();
+    await store.close();
   }
 }
 
@@ -115,15 +116,16 @@ export async function withDb(ctx: Ctx, configPath: string | undefined, fn: (db: 
 // shadowing the base tables, cannot cover `content`, because FTS5 `MATCH` uses the table name
 // as a hidden column and a view has none. A flag that silently scoped three tables of four
 // would look scoped and not be.
-function bindScope(db: OpenResult['db'], cfg: ResolvedConfig, preset: string): void {
+async function bindScope(store: Store, cfg: ResolvedConfig, preset: string): Promise<void> {
   const { name } = resolvePreset(cfg, preset); // unknown names throw, listing what is declared
-  db.exec('DROP TABLE IF EXISTS temp.scope');
-  db.exec('CREATE TEMP TABLE scope ("path" TEXT PRIMARY KEY)');
-  db.prepare('INSERT INTO temp.scope ("path") SELECT "path" FROM preset_files WHERE preset = ?').run(name);
+  await store.exec('DROP TABLE IF EXISTS temp.scope');
+  await store.exec('CREATE TEMP TABLE scope ("path" TEXT PRIMARY KEY)');
+  const insert = await store.prepare('INSERT INTO temp.scope ("path") SELECT "path" FROM preset_files WHERE preset = ?');
+  await insert.run(name);
 }
 
 // An unbound `?` silently binds NULL, so mismatched param counts fail loudly instead.
-export function runSql(cfg: ResolvedConfig, sql: string, params: string[], format: RowFormat, label: string, preset?: string): void {
+export async function runSql(cfg: ResolvedConfig, sql: string, params: string[], format: RowFormat, label: string, preset?: string): Promise<void> {
   const placeholderCount = (sql.match(/\?/g) ?? []).length;
   if (params.length !== placeholderCount) {
     console.error(`${label} expects ${placeholderCount} parameter(s), got ${params.length}`);
@@ -136,9 +138,9 @@ export function runSql(cfg: ResolvedConfig, sql: string, params: string[], forma
     console.error(`add: JOIN scope ON scope."path" = <table>."path"`);
     process.exit(2);
   }
-  const { db, warnings } = open(cfg);
+  const { store, warnings } = await openStore(cfg);
   printWarnings(warnings);
-  if (preset !== undefined) bindScope(db, cfg, preset);
+  if (preset !== undefined) await bindScope(store, cfg, preset);
   // Streamed rather than collected: `sql` is the one caller whose result size is the
   // statement's business, not this package's, so the rows are never held here in bulk.
   // columns() reads the statement's own metadata, so a 0-row csv still has its header.
@@ -146,18 +148,17 @@ export function runSql(cfg: ResolvedConfig, sql: string, params: string[], forma
   // partial output; the nonzero exit code is the caller's signal, output completeness is not
   // guaranteed on failure.
   try {
-    const statement = db.prepare(sql);
-    statement.setReadBigInts(true); // int64 past 2^53 arrives as BigInt instead of throwing at step time
+    const statement = await store.raw.prepare(sql);
     const columns = statement.columns().map((c) => c.name);
-    printRowStream(statement.iterate(...params) as Iterable<Row>, format, columns);
+    await printRowStream(statement.iterate(...params) as AsyncIterable<Row>, format, columns);
   } catch (err) {
-    const hinted = columnHint(db, err as Error); // pragma needs the db still open
-    db.close();
+    const hinted = columnHint(await store.docs.columns(), err as Error); // columns read while the store is still open
+    await store.close();
     // A saved query or ad-hoc SQL can carry `content MATCH ?` too, so the same FTS5
     // punctuation trap applies -- the bound parameters are the search terms there. SQL
     // without MATCH gets its error verbatim; search advice on a plain typo would mislead.
     if (/\bMATCH\b/i.test(sql)) throw searchError(hinted, params.join(' '));
     throw hinted;
   }
-  db.close();
+  await store.close();
 }

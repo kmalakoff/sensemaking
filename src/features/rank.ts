@@ -7,17 +7,22 @@ import type { Feature } from './types.ts';
 
 export const rank: Feature = {
   name: 'rank',
-  schema(db) {
-    const columns = db.prepare('PRAGMA table_info(frontmatter)').all() as Array<{ name: string }>;
-    if (!columns.some((c) => c.name === '_rank')) db.exec('ALTER TABLE frontmatter ADD COLUMN "_rank" REAL');
+  async schema(db) {
+    const stmt = await db.prepare('PRAGMA table_info(frontmatter)');
+    const columns = (await stmt.all()) as Array<{ name: string }>;
+    if (!columns.some((c) => c.name === '_rank')) await db.exec('ALTER TABLE frontmatter ADD COLUMN "_rank" REAL');
   },
-  afterReconcile(db, delta) {
+  async afterReconcile(db, delta) {
     // Only an explicit linksChanged:false skips. Rank also depends on the node set, so any
     // add or vanish recomputes -- otherwise a new linkless note keeps _rank NULL.
     if (delta.linksChanged === false && delta.added.length === 0 && delta.vanished.length === 0) return;
-    const nodes = (db.prepare('SELECT "path" FROM frontmatter').all() as Array<{ path: string }>).map((r) => r.path);
-    const ranks = pagerank(nodes, linkEdges(db));
-    const update = db.prepare('UPDATE frontmatter SET "_rank" = ? WHERE "path" = ?');
-    for (const [path, value] of ranks) update.run(value, path);
+    const pathsStmt = await db.prepare('SELECT "path" FROM frontmatter');
+    const nodes = ((await pathsStmt.all()) as Array<{ path: string }>).map((r) => r.path);
+    const ranks = pagerank(nodes, await linkEdges(db));
+    if (ranks.size === 0) return;
+    await db.runBatch(
+      'UPDATE frontmatter SET "_rank" = ? WHERE "path" = ?',
+      [...ranks].map(([path, value]) => [value, path])
+    );
   },
 };

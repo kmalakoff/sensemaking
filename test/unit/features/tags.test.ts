@@ -1,13 +1,15 @@
 import assert from 'node:assert';
 import { rmSync } from 'node:fs';
 import { join } from 'node:path';
+import type { Store } from '../../../src/store/types.ts';
 import { openTree, tmpTree, writeNote } from '../../lib/tree.ts';
 
 // extract() policy: what counts as a tag, from frontmatter or the prose, and what does not.
 // Every case runs through a real index build and checks the tags table, not extract() directly.
 
-function tagsOf(db: ReturnType<typeof openTree>['db'], path: string): string[] {
-  return (db.prepare('SELECT tag FROM tags WHERE "path" = ? ORDER BY tag').all(path) as Array<{ tag: string }>).map((r) => r.tag);
+async function tagsOf(store: Store, path: string): Promise<string[]> {
+  const stmt = await store.prepare('SELECT tag FROM tags WHERE "path" = ? ORDER BY tag');
+  return ((await stmt.all(path)) as Array<{ tag: string }>).map((r) => r.tag);
 }
 
 const CASES: Array<{ name: string; frontmatter?: Record<string, unknown> | string; body?: string; expect: string[] }> = [
@@ -92,52 +94,52 @@ const CASES: Array<{ name: string; frontmatter?: Record<string, unknown> | strin
 
 describe('tags extraction policy', () => {
   for (const { name, frontmatter, body, expect: want } of CASES) {
-    it(name, () => {
+    it(name, async () => {
       const baseDir = tmpTree();
       writeNote(baseDir, 'a.md', { frontmatter: frontmatter ?? {}, body: body ?? 'body' });
-      const { db } = openTree(baseDir);
-      assert.deepEqual(tagsOf(db, 'a.md'), want);
-      db.close();
+      const { store } = await openTree(baseDir);
+      assert.deepEqual(await tagsOf(store, 'a.md'), want);
+      await store.close();
     });
   }
 });
 
 describe('tags structure', () => {
-  it('a nested tag is findable through the parent-prefix EXISTS pattern', () => {
+  it('a nested tag is findable through the parent-prefix EXISTS pattern', async () => {
     const baseDir = tmpTree();
     writeNote(baseDir, 'a.md', { body: 'shelved under #book/scifi' });
-    const { db } = openTree(baseDir);
-    const hit = db.prepare(`SELECT "path" FROM tags WHERE tag = 'book' OR tag LIKE 'book/%'`).all() as Array<{ path: string }>;
+    const { store } = await openTree(baseDir);
+    const hit = (await (await store.prepare(`SELECT "path" FROM tags WHERE tag = 'book' OR tag LIKE 'book/%'`)).all()) as Array<{ path: string }>;
     assert.deepEqual(
       hit.map((r) => r.path),
       ['a.md']
     );
-    db.close();
+    await store.close();
   });
 
-  it('editing a file to remove a tag removes its row on the next open', () => {
+  it('editing a file to remove a tag removes its row on the next open', async () => {
     const baseDir = tmpTree();
     writeNote(baseDir, 'a.md', { body: 'about #alpha and #beta' });
-    const first = openTree(baseDir);
-    assert.deepEqual(tagsOf(first.db, 'a.md'), ['alpha', 'beta']);
-    first.db.close();
+    const first = await openTree(baseDir);
+    assert.deepEqual(await tagsOf(first.store, 'a.md'), ['alpha', 'beta']);
+    await first.store.close();
 
     writeNote(baseDir, 'a.md', { body: 'about #alpha only now' });
-    const second = openTree(baseDir);
-    assert.deepEqual(tagsOf(second.db, 'a.md'), ['alpha']);
-    second.db.close();
+    const second = await openTree(baseDir);
+    assert.deepEqual(await tagsOf(second.store, 'a.md'), ['alpha']);
+    await second.store.close();
   });
 
-  it('a vanished file leaves no tags rows', () => {
+  it('a vanished file leaves no tags rows', async () => {
     const baseDir = tmpTree();
     writeNote(baseDir, 'a.md', { body: 'about #alpha' });
-    const first = openTree(baseDir);
-    assert.deepEqual(tagsOf(first.db, 'a.md'), ['alpha']);
-    first.db.close();
+    const first = await openTree(baseDir);
+    assert.deepEqual(await tagsOf(first.store, 'a.md'), ['alpha']);
+    await first.store.close();
 
     rmSync(join(baseDir, 'a.md'));
-    const second = openTree(baseDir);
-    assert.deepEqual(second.db.prepare('SELECT * FROM tags').all(), []);
-    second.db.close();
+    const second = await openTree(baseDir);
+    assert.deepEqual(await (await second.store.prepare('SELECT * FROM tags')).all(), []);
+    await second.store.close();
   });
 });
