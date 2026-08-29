@@ -1,11 +1,10 @@
+import Module from 'node:module';
 import type { DatabaseSync } from 'node:sqlite';
-import { franc } from 'franc-min';
-import { getMeta, setMeta } from '../db/shared.ts';
 import { SenseError } from '../errors.ts';
+import { languageDistribution, saveLanguageDistribution } from './distribution.ts';
 import { toIso3 } from './languages.ts';
 import type { EmbedProvider } from './types.ts';
 
-const META_KEY = 'embed_languages';
 // franc's own reliability floor is a handful of characters; this is a cheap upper bound, not a
 // per-chunk minimum -- a short chunk is simply more likely to come back 'und' (unclassified).
 const SAMPLE_CHARS = 300;
@@ -13,14 +12,12 @@ const SAMPLE_CHARS = 300;
 // never fires below this many classified chunks, declared languages or not.
 const MIN_CLASSIFIED = 10;
 
-type LangCounts = Record<string, number>;
+// franc-min is a 148K static import; a top-level import put it on every command's module graph
+// regardless of whether the semantic path ran, shipped as the 0.17.0 regression. Deferred to a
+// synchronous require inside checkLanguageFit so only the embed path pays for it.
+const _require = typeof require === 'undefined' ? Module.createRequire(import.meta.url) : require;
 
-export function languageDistribution(db: DatabaseSync): LangCounts | undefined {
-  const raw = getMeta(db, META_KEY);
-  return raw ? JSON.parse(raw) : undefined;
-}
-
-function classify(text: string): string | undefined {
+function classify(franc: typeof import('franc-min')['franc'], text: string): string | undefined {
   const code = franc(text.slice(0, SAMPLE_CHARS));
   return code === 'und' ? undefined : code;
 }
@@ -29,10 +26,11 @@ function classify(text: string): string | undefined {
 // declares languages and a clear majority classified so far is not among them.
 export async function checkLanguageFit(db: DatabaseSync, provider: EmbedProvider, texts: string[]): Promise<void> {
   if (texts.length === 0) return;
+  const { franc } = _require('franc-min') as typeof import('franc-min');
   const persisted = languageDistribution(db) ?? {};
   const merged = { ...persisted };
   for (const text of texts) {
-    const code = classify(text);
+    const code = classify(franc, text);
     if (code) merged[code] = (merged[code] ?? 0) + 1;
   }
 
@@ -48,5 +46,5 @@ export async function checkLanguageFit(db: DatabaseSync, provider: EmbedProvider
       );
     }
   }
-  setMeta(db, META_KEY, JSON.stringify(merged));
+  saveLanguageDistribution(db, merged);
 }

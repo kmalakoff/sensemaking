@@ -1,4 +1,5 @@
-import { resolveNote, scopedPaths } from '../commands/index.ts';
+import { resolveNote } from '../commands/peek.ts';
+import { scopedPaths } from '../commands/scope.ts';
 import { findPath } from '../graph/traverse.ts';
 import type { Row } from '../output/output.ts';
 import { printRows } from '../output/output.ts';

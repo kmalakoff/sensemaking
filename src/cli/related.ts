@@ -1,4 +1,4 @@
-import { relatedNotes } from '../commands/index.ts';
+import { relatedNotes } from '../commands/related.ts';
 import type { Row } from '../output/output.ts';
 import { printRows } from '../output/output.ts';
 import { USAGE } from './index.ts';

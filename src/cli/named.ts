@@ -1,4 +1,4 @@
-import { search } from '../commands/index.ts';
+import { search } from '../commands/search.ts';
 import { printRows } from '../output/output.ts';
 import { CONFIG, FORMAT, parse, parseK, rowFormatOf, runSql, SEARCH_FLAGS, withDb } from './shared.ts';
 import type { Ctx } from './types.ts';
