@@ -2,6 +2,7 @@ import type { DuckDBConnection, DuckDBType, DuckDBValue } from '@duckdb/node-api
 import { withTransaction } from '../transaction.ts';
 import type { Connection, VectorCandidate, VectorSimilar, VectorWriteRow } from '../types.ts';
 import { rewriteUpdate } from './batch.ts';
+import { duckdbApi } from './native.ts';
 
 // This store keeps vectors as native FLOAT[dims] arrays (dims fixed at DDL time by
 // duckdb/open.ts's ensureSchema, from embed/types.ts's STORE_DIMS) and scans them with
@@ -10,16 +11,11 @@ import { rewriteUpdate } from './batch.ts';
 // representation and stays as it is. Every function here takes `dims` as a parameter rather
 // than importing STORE_DIMS directly, so it is testable at any width (store.ts wires the real
 // constant at the call site).
-
-// Loaded lazily, same as duckdb/open.ts's connect(): a value import of '@duckdb/node-api'
-// must never sit at module top level, or a sqlite-only tree would resolve this optional
-// dependency just by importing store/index.ts. By the time any function below runs, open()
-// already imported it successfully, so this just returns the cached module.
-let api: Promise<typeof import('@duckdb/node-api')> | undefined;
-function duckdbApi(): Promise<typeof import('@duckdb/node-api')> {
-  if (!api) api = import('@duckdb/node-api');
-  return api;
-}
+//
+// A value import of '@duckdb/node-api' must never sit at module top level, or a sqlite-only
+// tree would resolve this optional dependency just by importing store/index.ts -- native.ts's
+// shared duckdbApi() (not a bare import of its own) is what keeps that lazy and reuses whatever
+// open.ts already resolved, including via an on-demand install (see native.ts).
 
 // A bind position whose type is left to auto-inference (safe for plain strings/numbers; only
 // the vector ARRAY positions below need an explicit type -- see writeVectorBatch's comment).

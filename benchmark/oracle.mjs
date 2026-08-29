@@ -17,7 +17,7 @@
 // on disk (the script never writes into it -- markdown files are copied out to temp).
 
 import { execFileSync, spawnSync } from 'node:child_process';
-import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -38,6 +38,12 @@ try {
   const dumpPath = join(work, 'oracle.json');
   const code = `const fs=require('fs'); const out=app.vault.getMarkdownFiles().map(f=>{const c=app.metadataCache.getFileCache(f)||{}; return {p:f.path, inline:(c.tags||[]).map(t=>t.tag), fm:c.frontmatter ? (c.frontmatter.tags ?? c.frontmatter.tag ?? null) : null, hasFm:!!c.frontmatter, resolved:Object.keys(app.metadataCache.resolvedLinks[f.path]||{}), unresolved:Object.keys(app.metadataCache.unresolvedLinks[f.path]||{}), headings:(c.headings||[]).map(h=>({l:h.level,s:h.position.start.line,e:h.position.end.line})), sections:(c.sections||[]).map(s=>({t:s.type,s:s.position.start.line,e:s.position.end.line}))}}); fs.writeFileSync(${JSON.stringify(dumpPath)}, JSON.stringify(out)); 'wrote ' + out.length`;
   execFileSync('obsidian', [`vault=${vaultName}`, 'eval', `code=${code}`], { stdio: ['ignore', 'inherit', 'inherit'] });
+  // The CLI can exit 0 with empty stdout before the eval's write lands; the dump file is the signal.
+  const deadline = Date.now() + 120_000;
+  while (!existsSync(dumpPath)) {
+    if (Date.now() > deadline) throw new Error(`oracle dump did not appear at ${dumpPath} within 120s; is the vault fully loaded in Obsidian?`);
+    await new Promise((r) => setTimeout(r, 100));
+  }
   const oracle = JSON.parse(readFileSync(dumpPath, 'utf8'));
 
   // macOS hands out NFD paths while Obsidian reports NFC and collapses non-breaking spaces in

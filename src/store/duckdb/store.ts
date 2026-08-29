@@ -8,6 +8,7 @@ import { getColumns } from '../shared.ts';
 import { hasVectorRow, pendingRows } from '../sqlite/vectors.ts';
 import { withTransaction } from '../transaction.ts';
 import type { Capability, Connection, Statement, Store } from '../types.ts';
+import { storeRowToJs } from './connection.ts';
 import { createLexicalIndex } from './lexical.ts';
 import { reconcile } from './reconcile.ts';
 import { scanCandidates, scanSimilar, writeVectorBatch } from './vectors.ts';
@@ -82,8 +83,8 @@ export function createStore(duckdb: DuckDBConnection, conn: Connection, cfg: Con
             let yielded = 0;
             do {
               await reader.readUntil(reader.currentRowCount + 2048);
-              const rows = reader.getRowObjectsJS();
-              for (; yielded < rows.length; yielded++) yield rows[yielded];
+              const rows = reader.getRowObjectsJS() as Array<Record<string, unknown>>;
+              for (; yielded < rows.length; yielded++) yield storeRowToJs(rows[yielded]);
             } while (!reader.done);
           },
         };

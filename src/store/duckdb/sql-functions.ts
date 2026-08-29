@@ -1,12 +1,15 @@
 import type { DuckDBConnection } from '@duckdb/node-api';
 import { segmentMatch } from '../../text/segment.ts';
 import { basenameImpl, hasImpl } from '../sql-functions.ts';
+import { duckdbApi } from './native.ts';
 
 // Dynamic, not a top-level import: sqlite trees must never even attempt to resolve this optional
-// peer dependency (see open.ts's connect()). By the time this runs, open.ts has already resolved
-// the package successfully, so this import just reuses it (Node caches module resolution).
+// peer dependency (see open.ts's connect()). Goes through native.ts's shared duckdbApi(), not a
+// bare `import('@duckdb/node-api')` of its own -- by the time this runs, open.ts has already
+// resolved the package, possibly via an on-demand install, and a second independent bare-specifier
+// lookup in the same process would hit Node's stale pre-install resolution miss (see native.ts).
 export async function registerFunctions(conn: DuckDBConnection): Promise<void> {
-  const { DuckDBIntegerType, DuckDBScalarFunction, DuckDBVarCharType } = await import('@duckdb/node-api');
+  const { DuckDBIntegerType, DuckDBScalarFunction, DuckDBVarCharType } = await duckdbApi();
   conn.registerScalarFunction(
     DuckDBScalarFunction.create({
       name: 'has',

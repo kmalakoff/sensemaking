@@ -89,3 +89,12 @@ INTEGRATIONS.md holds the matrix — what was tested, against which endpoint or
 model, on what date — and the README links it. Options that were not run are
 not named. A remote provider's row records one extra fact: tree content
 leaves the machine.
+
+## 9. Each store is native, not emulated
+
+A store implements the contract with its engine's own mechanisms, not a
+simulation of another store's: SQLite uses FTS5 and its UDFs, DuckDB uses its
+fts extension and vector types, Turso uses Tantivy FTS and vector distances.
+Normalization lives at the exported API, the Store interface, named errors,
+and result shapes. A SQL translation layer that makes one engine speak
+another's dialect is a violation, however uniform the output looks.

@@ -10,6 +10,7 @@ import { getMeta, setMeta } from '../shared.ts';
 import { clearCache } from '../sqlite/open.ts';
 import type { Connection, Store } from '../types.ts';
 import { createConnection } from './connection.ts';
+import { DUCKDB_PACKAGE, duckdbApi } from './native.ts';
 import { reconcile } from './reconcile.ts';
 import { registerFunctions } from './sql-functions.ts';
 import { createStore } from './store.ts';
@@ -61,12 +62,14 @@ async function connect(cfg: ResolvedConfig): Promise<{ duckdb: DuckDBConnection;
   // Dynamic, not a top-level import: sqlite trees must never even attempt to resolve this
   // optional peer dependency, so nothing in this store's module graph imports it as a value
   // until a duckdb tree is actually opened (types-only imports elsewhere are erased and cost
-  // nothing either way).
+  // nothing either way). Installed on first use if missing, and shared with sql-functions.ts
+  // and vectors.ts (see native.ts's duckdbApi).
   let DuckDBInstance: typeof import('@duckdb/node-api').DuckDBInstance;
   try {
-    ({ DuckDBInstance } = await import('@duckdb/node-api'));
+    ({ DuckDBInstance } = await duckdbApi());
   } catch (err) {
-    throw new SenseError('STORE_DEPENDENCY_MISSING', `store "duckdb" needs the optional @duckdb/node-api package, which is not installed; run \`npm install @duckdb/node-api\` (${(err as Error).message})`);
+    if (err instanceof SenseError) throw err;
+    throw new SenseError('STORE_DEPENDENCY_MISSING', `store "duckdb" needs the ${DUCKDB_PACKAGE} package (${(err as Error).message})`);
   }
 
   let duckdb: DuckDBConnection;

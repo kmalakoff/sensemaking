@@ -1,16 +1,22 @@
 // Benchmark one package against one tree; prints a JSON row for BENCHMARKING.md. Wall-time
 // metrics spawn the CLI (what an agent pays); in-process ones time the engine alone.
-// usage: node benchmark/run.mjs <package-root> <notes-dir>
+// usage: node benchmark/run.mjs <package-root> <notes-dir|corpus-name> [--store <name>]
 import { spawn, spawnSync } from 'node:child_process';
-import { appendFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import { appendFileSync, rmSync, statSync, utimesSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { CORPUS_NAMES, corpusPath } from './lib/corpus.mjs';
+import { CORPUS_NAMES, corpusPath, writeTreeConfig } from './lib/corpus.mjs';
 import { futureDate, medianAsync, timedCli, walkMd } from './lib/measure.mjs';
 
-const [pkgRootArg, treeArg] = process.argv.slice(2);
+const argv = process.argv.slice(2);
+// The store is a config fact the harness writes into the tree. Pre-store packages have no
+// `search` verb and read the config as-is, so they ignore the flag and every old column of
+// a compare run stays a valid sqlite measurement.
+const storeIdx = argv.indexOf('--store');
+const store = storeIdx >= 0 ? argv[storeIdx + 1] : null;
+const [pkgRootArg, treeArg] = argv.filter((_a, i) => i !== storeIdx && i !== storeIdx + 1);
 if (!pkgRootArg || !treeArg) {
-  console.error('usage: node bench/run.mjs <package-root> <notes-dir|corpus-name>');
+  console.error('usage: node bench/run.mjs <package-root> <notes-dir|corpus-name> [--store <name>]');
   process.exit(2);
 }
 // Absolute from the start: spawns below run with cwd set to the tree.
@@ -36,11 +42,11 @@ const NEW_DIALECT = /search/.test(HELP);
 const SQL_VERB = /\bsense sql\b/.test(HELP) ? 'sql' : 'query';
 // Both rows must measure the same files, differing only in vector participation: two presets
 // over one glob, so there is no config edit between rows to force a rebuild.
-const TWO_SCOPES = JSON.stringify({
+const TWO_SCOPES = {
   version: 3,
   presets: { default: { include: ['**/*.md'] }, lexical: { include: ['**/*.md'], semantic: false } },
   queries: {},
-});
+};
 // find_ms: lexical ranked search (BM25 + link fusion, no vectors) -- old dialect is
 // already lexical-only, preset-era packages scope to the semantic:false preset above.
 const lexicalArgs = (terms, k = '10') => (NEW_DIALECT ? ['search', terms, '--preset', 'lexical', '--k', k] : ['find', terms, '--k', k]);
@@ -55,7 +61,7 @@ const largest = mdFiles.reduce((a, b) => (b.size > a.size ? b : a), { rel: null,
 const SEARCH = `SELECT f.path, content.title, snippet(content, -1, '«', '»', '…', 10) AS hit FROM frontmatter f JOIN content ON content.path = f.path WHERE content MATCH ? ORDER BY bm25(content, 10.0, 5.0, 1.0) LIMIT 10`;
 
 // --- wall-time (CLI) ---
-if (NEW_DIALECT) writeFileSync(join(tree, 'sense.config.json'), TWO_SCOPES);
+if (NEW_DIALECT) writeTreeConfig(tree, TWO_SCOPES, { store });
 rmSync(join(tree, '.sense'), { recursive: true, force: true });
 const cold = timed(['status'], 1); // first open = full crawl
 const warm = fail(timed([SQL_VERB, 'SELECT COUNT(*) AS n FROM frontmatter']));
@@ -90,7 +96,7 @@ try {
   const lib = await import(pathToFileURL(join(pkgRoot, 'dist', 'esm', 'index.js')).href);
   // open() takes an already-resolved config, not a file to migrate -- so the shape here has
   // to match this package's own dialect (v1 `scan` pre-rename, v3 `presets` since).
-  const cfg = NEW_DIALECT ? { presets: { default: { include: ['**/*.md'] } }, queries: {}, baseDir: tree, configPath: null } : { scan: { include: ['**/*.md'] }, queries: {}, baseDir: tree, configPath: null };
+  const cfg = NEW_DIALECT ? { presets: { default: { include: ['**/*.md'] } }, queries: {}, baseDir: tree, configPath: null, ...(store ? { store } : {}) } : { scan: { include: ['**/*.md'] }, queries: {}, baseDir: tree, configPath: null };
   // await tolerates a pre-rename package's synchronous open(); `store ?? db` picks whichever
   // dialect's result field this pkgRoot's build actually returns.
   const openClose = async () => {
@@ -153,6 +159,7 @@ console.log(
   JSON.stringify(
     {
       tree,
+      store: store ?? 'sqlite',
       notes: mdFiles.length,
       cold_crawl_ms: cold.status === 0 ? cold.ms : `FAILED(exit ${cold.status})`,
       warm_query_ms: warm?.ms ?? null,

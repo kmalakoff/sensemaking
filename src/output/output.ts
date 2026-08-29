@@ -37,6 +37,16 @@ function warnOversize(bytes: number, rowCount: number): void {
 // b's value under both headers. `columns` is the fallback that labels a 0-row result, and with
 // no rows and no statement (a bounded command that found nothing) csv writes nothing at all --
 // a bare newline would read to a csv parser as one empty record.
+// JSON.stringify throws on BigInt, and stores return int64 as BigInt (DuckDB does). A value
+// that fits a safe integer stays a number; a larger one becomes its decimal string, since a
+// JSON number cannot carry it losslessly.
+const MAX_SAFE = BigInt(Number.MAX_SAFE_INTEGER);
+const bigintSafe = (_key: string, value: unknown): unknown => (typeof value === 'bigint' ? (value >= -MAX_SAFE && value <= MAX_SAFE ? Number(value) : value.toString()) : value);
+
+export function stringifyJson(value: unknown, indent?: number): string {
+  return JSON.stringify(value, bigintSafe, indent);
+}
+
 export function printRows(rows: Row[], format: RowFormat, columns?: string[]): void {
   if (format === 'csv') {
     // Collapsed the same way a row object collapses them, so a statement naming a column
@@ -85,13 +95,8 @@ export async function printRowStream(rows: AsyncIterable<Row>, format: RowFormat
   if (format === 'json') {
     // Byte-identical to JSON.stringify(rows, null, 2) + newline: each row re-indented one
     // level, comma-joined, inside the array brackets written here.
-    // JSON.stringify throws on BigInt, so a row with an int64 past 2^53 (setReadBigInts) is
-    // converted via the replacer: a value that fits a safe integer stays a number, a larger one
-    // becomes its decimal string, since a JSON number cannot carry it losslessly.
-    const MAX_SAFE = BigInt(Number.MAX_SAFE_INTEGER);
-    const bigintSafe = (_key: string, value: unknown) => (typeof value === 'bigint' ? (value >= -MAX_SAFE && value <= MAX_SAFE ? Number(value) : value.toString()) : value);
     const indent = (row: Row) =>
-      JSON.stringify(row, bigintSafe, 2)
+      stringifyJson(row, 2)
         .split('\n')
         .map((line) => `  ${line}`)
         .join('\n');
@@ -142,7 +147,7 @@ function fitWidths(widths: number[], limit: number): number[] {
 }
 
 function renderRows(rows: Row[], format: Format, width = process.stdout.columns): string {
-  if (format === 'json') return JSON.stringify(rows, null, 2);
+  if (format === 'json') return stringifyJson(rows, 2);
   if (rows.length === 0) return '(0 rows)';
 
   const columns = Object.keys(rows[0]);
