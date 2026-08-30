@@ -14,6 +14,8 @@ node benchmark/eval.mjs nfcorpus                       # retrieval quality on a 
 node benchmark/bakeoff.mjs nfcorpus                     # storage-lever bake-off for one model
 node benchmark/weight-sweep.mjs nfcorpus                # per-signal RRF weight sweep
 node benchmark/oracle.mjs <corpus> <path>               # tags/links/chunk extents vs Obsidian's metadataCache
+node benchmark/store-dump.mjs capture <dir>             # every store's rows and ranked output, for an A/B against a refactor
+node benchmark/store-dump.mjs compare <dirA> <dirB>     # diffs two captures, non-zero on any difference
 ```
 
 The default run answers "did the working tree regress?" `local` is whatever is checked out. The working-tree column is labeled `local` until the release exists: regenerate the table at release time and the column gets its real number. Named corpora, dataset builds, and npm-installed comparison versions all cache through `benchmark/lib/cache.mjs` into `.tmp/cache/` (gitignored): fetched once, built atomically in a staging dir, safe to delete anytime. Corpus specs are pinned in `benchmark/lib/corpus.mjs`, the single source of truth. A directory path works in place of a corpus name.
@@ -21,6 +23,14 @@ The default run answers "did the working tree regress?" `local` is whatever is c
 `compare.mjs` installs each npm version into a temp dir (`local` = this working tree), gives every version an isolated copy of the tree with a v1 config (the lowest common denominator every version can read; copies keep cache formats and config auto-migration from cross-contaminating), runs `benchmark/run.mjs` per version, and prints the table. `run.mjs` can also run alone against any single package root + tree; it prints one JSON row.
 
 `bakeoff.mjs` and `weight-sweep.mjs` measure one specific model/dims/weight choice against a labeled corpus's qrels, decision-support for a config default, not a release gate. `oracle.mjs` is the correctness gate against Obsidian's own metadataCache (RELEASING.md step 3), needs Obsidian running, and stores nothing.
+
+`store-dump.mjs` is the refactor gate for anything touching the write path: capture before a change,
+capture after, compare. It records two things per store and both halves are required. Every logical
+table's rows in primary-key order, and the ordered results of a fixed query set with their scores.
+The ranking half is not redundant: a lexical index lives outside the logical tables, so dumps compare
+identical while search is silently unranked. Turso answers correctly with its FTS index dropped,
+since `fts_match` falls back to a scan, and only `fts_score` collapses to 0. A clean compare names
+every file it checked rather than passing in silence.
 
 Two kinds of metric per version:
 

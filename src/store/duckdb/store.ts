@@ -1,6 +1,7 @@
 import type { DuckDBConnection, DuckDBInstance } from '@duckdb/node-api';
 import type { Config } from '../../config/index.ts';
 import { STORE_DIMS } from '../../embed/types.ts';
+import { reconcile } from '../reconcile.ts';
 import { getColumns } from '../shared.ts';
 import { withTransaction } from '../transaction.ts';
 import type { Capability, Connection, Statement, Store } from '../types.ts';
@@ -8,7 +9,7 @@ import { hasVectorRow, pendingRows } from '../vectors.ts';
 import { storeRowToJs } from './connection.ts';
 import { fieldStats } from './fieldStats.ts';
 import { createLexicalIndex } from './lexical.ts';
-import { reconcile } from './reconcile.ts';
+import { duckdbDialect } from './reconcile.ts';
 import { scanCandidates, scanSimilar, writeVectorBatch } from './vectors.ts';
 
 // Portable surface, links/sections/tags/rank, raw sql passthrough, lexical (fts BM25 + contains(), lexical.ts), and vectors (native
@@ -35,7 +36,7 @@ export function createStore(instance: DuckDBInstance, duckdb: DuckDBConnection, 
       return withTransaction(conn, fn);
     },
     async reconcile() {
-      const result = await reconcile(conn, cfg, baseDir);
+      const result = await reconcile(conn, cfg, baseDir, duckdbDialect);
       // content may have changed; the fts index is rebuilt lazily, on the next lexical query
       // that needs it, not here (see lexical.ts's FtsIndexState).
       lex.markStale();

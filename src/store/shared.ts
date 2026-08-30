@@ -28,3 +28,13 @@ export async function setMeta(conn: Connection, key: string, value: string | nul
   const stmt = await conn.prepare('INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value');
   await stmt.run(key, value);
 }
+
+// Reconcile's own write-transaction duration, for open()'s derived busy_timeout: keep the
+// observed max so a big watcher reconcile's lock hold is what the next open bounds its wait against.
+export async function recordReconcileDuration(conn: Connection, ms: number): Promise<void> {
+  const prevRaw = await getMeta(conn, 'reconcile_max_ms');
+  // -1, not 0, so a genuinely 0ms first reconcile (sub-millisecond, common on a tiny tree)
+  // still gets recorded instead of losing to the "nothing recorded yet" default.
+  const prevMax = prevRaw === null ? -1 : Number(prevRaw);
+  if (ms > prevMax) await setMeta(conn, 'reconcile_max_ms', String(ms));
+}

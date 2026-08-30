@@ -8,11 +8,12 @@ import { STORE_DIMS } from '../../embed/types.ts';
 import { SenseError } from '../../errors.ts';
 import { activeFeatures, FEATURES } from '../../features/index.ts';
 import { clearCache } from '../cache.ts';
+import { reconcile } from '../reconcile.ts';
 import { getMeta, setMeta } from '../shared.ts';
 import type { Connection, Store } from '../types.ts';
 import { createConnection } from './connection.ts';
 import { TURSO_PACKAGE, tursoApi } from './native.ts';
-import { reconcile } from './reconcile.ts';
+import { tursoDialect } from './reconcile.ts';
 import { createStore } from './store.ts';
 
 export const DB_FILENAME = 'cache.turso.db';
@@ -118,7 +119,7 @@ async function connect(cfg: ResolvedConfig): Promise<ConnectResult> {
     const recordedMaxMs = Number((await getMeta(conn, 'reconcile_max_ms')) ?? '0');
     await conn.exec(`PRAGMA busy_timeout = ${Math.min(Math.max(30000, 3 * recordedMaxMs), 600_000)}`);
 
-    const { parsed, warnings } = await reconcile(conn, cfg, cfg.baseDir);
+    const { parsed, warnings } = await reconcile(conn, cfg, cfg.baseDir, tursoDialect);
 
     return { db, conn, cfg, dbPath, parsed, warnings };
   } catch (err) {
