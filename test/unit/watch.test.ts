@@ -1,6 +1,7 @@
-import { rmSync } from 'node:fs';
+import { existsSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
 import assert from 'assert';
-import type { ResolvedConfig } from '../../src/config/index.ts';
+import { type ResolvedConfig, STATE_DIR } from '../../src/config/index.ts';
 import { SenseError } from '../../src/errors.ts';
 import { getMeta, openStore, setMeta } from '../../src/store/index.ts';
 import type { WatchEvent, WatchOptions } from '../../src/watch.ts';
@@ -155,6 +156,19 @@ describe('runWatch', () => {
     await done;
 
     assert.equal(events.filter((e) => e.type === 'reconciled').length, 0);
+  });
+
+  it('a store without watch-concurrency errors before opening, naming the config fix', async () => {
+    const baseDir = tree();
+    writeNote(baseDir, 'a.md');
+    const cfg = { ...cfgFor(baseDir), store: 'duckdb' } as ResolvedConfig;
+    await assert.rejects(runWatch(cfg, {}), (err: unknown) => {
+      assert.ok(err instanceof SenseError);
+      assert.equal(err.code, 'STORE_CAPABILITY_MISSING');
+      assert.match(err.message, /"store" to "sqlite"/);
+      return true;
+    });
+    assert.equal(existsSync(join(baseDir, STATE_DIR)), false, 'the check runs before open, so no cache exists');
   });
 
   it('WATCH_ACTIVE throws when a fresh heartbeat exists; force overrides it', async () => {

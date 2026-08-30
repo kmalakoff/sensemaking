@@ -3,7 +3,7 @@ import type { ResolvedConfig } from './config/index.ts';
 import { STATE_DIR } from './config/index.ts';
 import { SenseError } from './errors.ts';
 import { guardedTick } from './lib/guarded-tick.ts';
-import { docCount, getMeta, openStore, setMeta } from './store/index.ts';
+import { docCount, getMeta, openStore, requireWatchConcurrency, setMeta } from './store/index.ts';
 
 // Watch is a cache pre-warmer, not a correctness mechanism: open() always reconciles anyway, so any fs event just triggers a debounced full reconcile.
 const DEBOUNCE_MS = 200;
@@ -23,6 +23,7 @@ export interface WatchOptions {
 
 // Runs in the foreground until SIGINT/SIGTERM/signal abort. Throws WATCH_ACTIVE if another watcher's heartbeat is still fresh and --force wasn't given.
 export async function runWatch(cfg: ResolvedConfig, opts: WatchOptions = {}): Promise<void> {
+  requireWatchConcurrency(cfg);
   const onEvent = opts.onEvent ?? (() => {});
   const debounceMs = opts.debounceMs ?? DEBOUNCE_MS;
   const heartbeatIntervalMs = opts.heartbeatIntervalMs ?? HEARTBEAT_INTERVAL_MS;

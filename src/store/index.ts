@@ -25,10 +25,15 @@ const REGISTRY: Record<StoreName, StoreEntry> = {
   duckdb: { capabilities: DUCKDB_CAPABILITIES, open: openDuckdb },
 };
 
-export async function openStore(cfg: ResolvedConfig): Promise<OpenResult> {
-  const name = storeName(cfg);
+function entryFor(name: StoreName): StoreEntry {
   const entry = REGISTRY[name];
   if (!entry) throw new SenseError('STORE_UNKNOWN', `unknown backing store "${name}"; available: ${Object.keys(REGISTRY).join(', ')}`);
+  return entry;
+}
+
+export async function openStore(cfg: ResolvedConfig): Promise<OpenResult> {
+  const name = storeName(cfg);
+  const entry = entryFor(name);
 
   // The one unambiguous, config-level capability need: an embed block some preset actually
   // uses for vectors. Word/lexical search has no equivalent unambiguous signal at this level
@@ -39,6 +44,15 @@ export async function openStore(cfg: ResolvedConfig): Promise<OpenResult> {
   }
 
   return entry.open(cfg);
+}
+
+// watch keeps its connection open for the run, so a file-locking store would fail every
+// other command on the tree; check before open, as openStore does for "vectors".
+export function requireWatchConcurrency(cfg: ResolvedConfig): void {
+  const name = storeName(cfg);
+  if (!entryFor(name).capabilities.has('watch-concurrency')) {
+    throw new SenseError('STORE_CAPABILITY_MISSING', `store "${name}" does not implement "watch-concurrency" in this build; sense watch holds the store open for its whole run, and this store locks the cache file, so every other command on this tree would fail to open; set "store" to "sqlite" in sense.config.json`);
+  }
 }
 
 export { getMeta, setMeta } from './meta.ts';

@@ -34,7 +34,7 @@ Two kinds of metric per version:
 - The performance tables regenerate every release; the retrieval-quality tables regenerate when retrieval itself changes: fusion, ranking, the default model, tokenizer, chunking. A quality report older than the current version is expected, and says the ranking has not moved since; a retrieval change shipped without a fresh report is the gap to catch.
 - To add a metric: one measured field in `run.mjs`, one row in the `ROWS` table in `compare.mjs`. Versions lacking a command report `—` automatically; a version that errors reports the error.
 - Corpus pins live in `benchmark/lib/corpus.mjs`. If a pin must move (repo disappears, need a bigger corpus), regenerate every column at the new pin.
-- Each sitting is a new file in `benchmark/reports/`, never an edit to a previous one. The directory is a history, not a rolling doc. Update "Numbers of record" below to point at it. Add a "Methodology changelog" entry only when the change is about HOW something is measured (a new guard, a new corpus, a harness bug fix, a discipline rule); a numbers-only regeneration gets a report file and nothing else.
+- Each sitting is a new file in `benchmark/reports/`, never an edit to a previous one, and the previous terminal report is deleted when the new one lands: the directory holds the current terminal report and the thematic reports, git is the history. Update "Numbers of record" below to point at it. Add a "Methodology changelog" entry only when the change is about HOW something is measured (a new guard, a new corpus, a harness bug fix, a discipline rule); a numbers-only regeneration gets a report file and nothing else.
 
 ## Interpreting
 
@@ -197,73 +197,21 @@ produced it. When a number here moves, replace the value and the link together.
 
 | metric | value | report |
 |---|---|---|
-| cold crawl, obsidian-hub (wall, local) | 10162 ms | [2026-08-28](benchmark/reports/2026-08-28-w8-release-gate-regeneration.md) |
-| warm query (`COUNT(*)`) | 121 ms | [2026-08-28](benchmark/reports/2026-08-28-w8-release-gate-regeneration.md) |
-| lexical `search` | 168 ms | [2026-08-28](benchmark/reports/2026-08-28-w8-release-gate-regeneration.md) |
-| `search` row size | ~71 tokens | [2026-08-28](benchmark/reports/2026-08-28-w8-release-gate-regeneration.md) |
-| `map` | 153 ms / ~496 tokens | [2026-08-28](benchmark/reports/2026-08-28-w8-release-gate-regeneration.md) |
-| `peek` largest note | 132 ms / ~581 tokens | [2026-08-28](benchmark/reports/2026-08-28-w8-release-gate-regeneration.md) |
-| in-process: cold index build | 5538 ms | [2026-08-28](benchmark/reports/2026-08-28-w8-release-gate-regeneration.md) |
-| in-process: freshness check, no change | 37.7 ms | [2026-08-28](benchmark/reports/2026-08-28-w8-release-gate-regeneration.md) |
-| `--version` canary | 20 ms | [2026-08-28](benchmark/reports/2026-08-28-w8-release-gate-regeneration.md) |
-| scale, 13k: cold crawl (wall) | 21.75 s | [2026-08-28](benchmark/reports/2026-08-28-w8-release-gate-regeneration.md) |
-| scale, 26k: cold crawl (wall) | 43.08 s | [2026-08-28](benchmark/reports/2026-08-28-w8-release-gate-regeneration.md) |
-| stress: lexical `search` | 333 ms | [2026-08-28](benchmark/reports/2026-08-28-w8-release-gate-regeneration.md) |
-| stress: semantic `search` | 941 ms | [2026-08-28](benchmark/reports/2026-08-28-w8-release-gate-regeneration.md) |
-| nfcorpus semantic nDCG@10 / hit@10 | 0.3427 / 0.7121 | [2026-08-28](benchmark/reports/2026-08-28-w8-release-gate-regeneration.md) |
-| fever semantic nDCG@10 / hit@10 | 0.9337 / 0.9965 | [2026-08-28](benchmark/reports/2026-08-28-w8-release-gate-regeneration.md) |
+| cold crawl, obsidian-hub (wall, local) | 5900 ms | [2026-08-29](benchmark/reports/2026-08-29-0.18.0-release-gate.md) |
+| warm query (`COUNT(*)`) | 124 ms | [2026-08-29](benchmark/reports/2026-08-29-0.18.0-release-gate.md) |
+| lexical `search` | 172 ms | [2026-08-29](benchmark/reports/2026-08-29-0.18.0-release-gate.md) |
+| `search` row size | ~71 tokens | [2026-08-29](benchmark/reports/2026-08-29-0.18.0-release-gate.md) |
+| `map` | 155 ms / ~496 tokens | [2026-08-29](benchmark/reports/2026-08-29-0.18.0-release-gate.md) |
+| `peek` largest note | 133 ms / ~581 tokens | [2026-08-29](benchmark/reports/2026-08-29-0.18.0-release-gate.md) |
+| in-process: cold index build | 5279 ms | [2026-08-29](benchmark/reports/2026-08-29-0.18.0-release-gate.md) |
+| in-process: freshness check, no change | 35.2 ms | [2026-08-29](benchmark/reports/2026-08-29-0.18.0-release-gate.md) |
+| `--version` canary | 20 ms | [2026-08-29](benchmark/reports/2026-08-29-0.18.0-release-gate.md) |
+| scale, 13k: cold crawl (wall) | 13.39 s | [2026-08-29](benchmark/reports/2026-08-29-0.18.0-release-gate.md) |
+| scale, 26k: cold crawl (wall) | 25.93 s | [2026-08-29](benchmark/reports/2026-08-29-0.18.0-release-gate.md) |
+| stress: lexical `search` | 348 ms | [2026-08-29](benchmark/reports/2026-08-29-0.18.0-release-gate.md) |
+| stress: semantic `search` | 960 ms | [2026-08-29](benchmark/reports/2026-08-29-0.18.0-release-gate.md) |
+| nfcorpus semantic nDCG@10 / hit@10 | 0.3427 / 0.7121 | [2026-08-29](benchmark/reports/2026-08-29-0.18.0-release-gate.md) |
+| fever semantic nDCG@10 / hit@10 | 0.9337 / 0.9965 | [2026-08-29](benchmark/reports/2026-08-29-0.18.0-release-gate.md) |
 | chunker grouping (D3/D4/D9) | pgc, no overlap, raw text | [2026-08-27 chunking sweep (W4)](benchmark/reports/2026-08-27-chunking-sweep-w4.md) |
 | default static model | `minishlab/potion-retrieval-32M` | [2026-08-27 embedding model selection](benchmark/reports/2026-08-27-embedding-model-selection.md) |
 | storage lever | int8 @ 256 dims | [2026-08-13 static-model bake-off](benchmark/reports/2026-08-13-static-model-bakeoff.md) |
-
-## Capabilities
-
-| | 0.2.1 | 0.3.0 | 0.6.0 | 0.7.2 | 0.8.0 | 0.9.5 | 0.10.0 | 0.12.1 |
-|---|---|---|---|---|---|---|---|---|
-| frontmatter filter + FTS5 search | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| links table, backlinks, dead links | — | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| sections table, outline with line ranges | — | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| PageRank (`_rank`), hub detection | — | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| fused retrieval (`find`, `via` column) | — | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| bounded orient/structure commands (`map`, `peek`) | — | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| lenient frontmatter (syntax errors → warnings, values kept) | — | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — |
-| config auto-migration | — | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| feature toggles | — | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `--version` | — | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| semantic expansion (`features.embed`, `find --semantic`, `via: vector`) | — | — | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| feature state reported by `map` and `status` | — | — | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| labeled-corpus retrieval eval (nDCG/MRR/hit, paired deltas) | — | — | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| saved-query assertions (`sense check`, `checks`) | — | — | — | ✓ | ✓ | ✓ | ✓ | — |
-| tree-declared find scope (`defaults.find.where`) | — | — | — | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `similarity` on semantic rows | — | — | — | ✓ | ✓ | ✓ | ✓ | ✓ |
-| scale corpora (13k / 26k) measured per release | — | — | — | ✓ | ✓ | ✓ | ✓ | ✓ |
-| saved finds (`queries` object form, `sense <name>` with baked-in settings) | — | — | — | — | ✓ | ✓ | ✓ | ✓ |
-| bounded excerpts + `lines` on every `find` row | — | — | — | — | ✓ | ✓ | ✓ | ✓ |
-| incremental link resolution; PageRank only on edge changes | — | — | — | — | ✓ | ✓ | ✓ | ✓ |
-| derived `busy_timeout` (from observed reconcile, in `status`) | — | — | — | — | ✓ | ✓ | ✓ | ✓ |
-| progress on stderr for long builds (TTY-aware, sparse when piped) | — | — | — | — | ✓ | ✓ | ✓ | ✓ |
-| column-limit fence (named error at SQLite's 2,000) | — | — | — | — | ✓ | ✓ | ✓ | ✓ |
-| stress corpus in the release gate | — | — | — | — | ✓ | ✓ | ✓ | ✓ |
-| presets (config v3: one bundle for scope + settings; indexing derived) | — | — | — | — | — | ✓ | ✓ | ✓ |
-| `search` verb (words + links + vectors fused by default) | — | — | — | — | — | ✓ | ✓ | ✓ |
-| per-preset derived embedding (semantic-off presets cost no vectors) | — | — | — | — | — | ✓ | ✓ | ✓ |
-| per-preset coverage in `status`/`map`; named rebuild notices | — | — | — | — | — | ✓ | ✓ | ✓ |
-| `sql` verb (ad-hoc SQL; `query` renamed, one release of a pointer) | — | — | — | — | — | — | ✓ | ✓ |
-| explicit `embed` block (config v4: model named in the file, no implicit default) | — | — | — | — | — | — | ✓ | ✓ |
-| `sense download` (nothing fetches the model implicitly; a missing model is an error) | — | — | — | — | — | — | ✓ | ✓ |
-| `queries` entries name their verb (`{ sql }` / `{ search }`, no bare-string shorthand) | — | — | — | — | — | — | ✓ | ✓ |
-| link-graph route between two notes (`sense path`, bounded SQL traversal) | — | — | — | — | — | — | ✓ | ✓ |
-| similar-but-unlinked (`sense related`, seed chunks sampled to bound the scan) | — | — | — | — | — | — | ✓ | ✓ |
-| scope vocabulary on `map`/`peek`/`path`/`related` (`--exclude`, `--no-exclude`) | — | — | — | — | — | — | ✓ | ✓ |
-| zero-dependency file walk (`node:fs` glob; POSIX paths on every platform) | — | — | — | — | — | — | ✓ | ✓ |
-| quarantined frontmatter (a refused parse writes no columns; `_parse_error` says why) | — | — | — | — | — | — | — | ✓ |
-| csv output; `sql` rows streamed, not materialized (`--format csv`, bigint-safe json) | — | — | — | — | — | — | — | ✓ |
-| `content.tokenize` (per-tree FTS5 tokenizer; a tokenize-only change keeps vectors, links, sections) | — | — | — | — | — | — | — | ✓ |
-| unspaced-script word search (grapheme sidecars, substring semantics, `segment()` SQL function) | — | — | — | — | — | — | — | ✓ |
-| reserved-character scalars accepted by policy (`aliases: [@handle]`, tested per shape) | — | — | — | — | — | — | — | ✓ |
-| unrendered-template detection (`created: {{date}}`, named with its path) | — | — | — | — | — | — | — | ✓ |
-| embeddings cover the body, not the frontmatter block | — | — | — | — | — | — | — | ✓ |
-| `similarity` clamped to a true cosine range | — | — | — | — | — | — | — | ✓ |
-| `related` names every unanswerable case (no model, semantic-off scope, empty seed) | — | — | — | — | — | — | — | ✓ |
-| `sql --preset` (binds a `scope` table to join; scopes FTS5 `MATCH` too) | — | — | — | — | — | — | — | ✓ |
-| `status` names every location and derived value (config, cache, model dir, api key state) | — | — | — | — | — | — | — | ✓ |

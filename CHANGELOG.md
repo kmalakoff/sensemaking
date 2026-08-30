@@ -2,6 +2,14 @@
 
 All notable changes to sensemaking are documented here.
 
+## [0.18.1] - 2026-08-29
+
+### Fixed
+
+- `sense watch` on a duckdb tree appeared to work and held the cache file lock against every other command for its lifetime; it now errors at start, naming the fix (`store` to `sqlite`).
+- `status` reported the SQLite cache schema version on duckdb trees; it now reports the version the cache was built with.
+- The SQL column-quoting hint (punctuated frontmatter keys) now fires on duckdb trees, whose binder error names the fragment differently.
+
 ## [0.18.0] - 2026-08-29
 
 ### Added

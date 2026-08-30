@@ -5,7 +5,7 @@ import { languageDistribution } from '../embed/distribution.ts';
 import { probeReachable } from '../embed/http.ts';
 import { isDownloadable, MODEL_FILENAMES, modelDir, modelPresent, readLanguages } from '../embed/store.ts';
 import { featuresLine, presetsLines, stringifyJson } from '../output/output.ts';
-import { docCount, getMeta, openStore, SCHEMA_VERSION } from '../store/index.ts';
+import { docCount, getMeta, openStore } from '../store/index.ts';
 import type { Store } from '../store/types.ts';
 import { USAGE } from './index.ts';
 import { CONFIG, FORMAT, formatOf, parse, printWarnings } from './shared.ts';
@@ -72,6 +72,9 @@ const status: Command = async (ctx) => {
   const declaredLanguages = staticLanguages && staticLanguages.length > 0 ? staticLanguages : null;
   const detectedLanguages = (await languageDistribution(store)) ?? null;
   const heartbeat = await getMeta(store, 'watch_heartbeat');
+  // Written by the store's open() on every open, so it is this cache's true version on either
+  // store (sqlite 18, duckdb 2); a version mismatch already triggered a rebuild before this read.
+  const cacheSchema = await getMeta(store, 'schema_version');
   // Derived at open() (F): 3x the largest reconcile this cache has ever held its write
   // transaction for, floored at 30s -- read back from the connection rather than
   // recomputed here, so this always reports what open() actually set. The pragma is
@@ -87,7 +90,7 @@ const status: Command = async (ctx) => {
     tree: cfg.baseDir,
     cache: dirname(dbPath),
     db: dbPath,
-    cacheSchema: SCHEMA_VERSION,
+    cacheSchema,
     docs: await docCount(store),
     unparseableFrontmatter: await parseErrorCount(store),
     features: features.on,
@@ -108,7 +111,7 @@ const status: Command = async (ctx) => {
     // A load-time stderr warning has scrolled away by the time anyone looks here.
     if (cfg.unknownKeys) console.log(`          unknown keys, ignored: ${cfg.unknownKeys.join(', ')}`);
     console.log(`tree:     ${result.tree}`);
-    console.log(`cache:    ${result.cache} (schema ${SCHEMA_VERSION}; delete this directory to reset)`);
+    console.log(`cache:    ${result.cache} (schema ${result.cacheSchema}; delete this directory to reset)`);
     console.log(`docs:     ${result.docs}${result.unparseableFrontmatter > 0 ? `  (${result.unparseableFrontmatter} with unparseable frontmatter: WHERE _parse_error IS NOT NULL)` : ''}`);
     console.log('');
     console.log(featuresLine(features));

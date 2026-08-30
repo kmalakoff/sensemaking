@@ -5,8 +5,8 @@ import { runCli } from '../../lib/cli.ts';
 import { tmpTree, writeNote } from '../../lib/tree.ts';
 
 // A frontmatter key with punctuation (`plugin-id`) is a real column, but unquoted in SQL it
-// parses as an expression: SQLite's "no such column" names a fragment the user never wrote.
-// These check the hint that maps the fragment back to the actual column.
+// parses as an expression; each engine names a fragment (or a table) the user never wrote.
+// These check the hint that maps it back to the actual column, on both stores.
 
 function writeConfig(baseDir: string): void {
   writeFileSync(join(baseDir, 'sense.config.json'), JSON.stringify({ version: 4, presets: { default: { include: ['**/*.md'] } }, queries: {} }));
@@ -40,6 +40,16 @@ describe('column-hint', () => {
     writeNote(baseDir, 'a.md', { frontmatter: { 'plugin-id': 'x' } });
     writeConfig(baseDir);
     const result = runCli(['map', '--where', 'f.plugin-id IS NOT NULL'], { cwd: baseDir });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /"plugin-id"/);
+    assert.match(result.stderr, /double.quot/i);
+  });
+
+  it('the duckdb store gets the same hint from its binder error text', () => {
+    const baseDir = tmpTree();
+    writeNote(baseDir, 'a.md', { frontmatter: { 'plugin-id': 'x' } });
+    writeFileSync(join(baseDir, 'sense.config.json'), JSON.stringify({ version: 4, store: 'duckdb', presets: { default: { include: ['**/*.md'] } }, queries: {} }));
+    const result = runCli(['sql', 'SELECT path FROM frontmatter WHERE plugin-id IS NOT NULL'], { cwd: baseDir });
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /"plugin-id"/);
     assert.match(result.stderr, /double.quot/i);
