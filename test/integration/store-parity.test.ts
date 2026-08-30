@@ -1,6 +1,8 @@
 import assert from 'node:assert';
+import type { SenseError } from 'sensemaking';
+import { search } from 'sensemaking';
 import { openTreeForStore, STORE_NAMES } from '../lib/stores.ts';
-import { tmpTree, writeNote } from '../lib/tree.ts';
+import { CHINESE_SENTENCES, tmpTree, writeNote } from '../lib/tree.ts';
 
 async function docCount(store: Awaited<ReturnType<typeof openTreeForStore>>['store']): Promise<number> {
   const stmt = await store.prepare('SELECT COUNT(*) AS n FROM frontmatter');
@@ -137,5 +139,105 @@ describe('store parity: portable surface (sqlite vs duckdb)', () => {
       await s.close();
     }
     assert.deepEqual(orders[0], orders[1]);
+  });
+});
+
+// DuckDB composes lexical search from fts BM25 (ranking) and contains() scans (exact
+// substring, phrase verification, unspaced scripts) rather than FTS5 -- sqlite stays the
+// reference implementation. Ordering is asserted identical only where
+// both engines' BM25 must agree (an unambiguous title-vs-body case); where the underlying BM25
+// formulas legitimately differ, this asserts set equality plus the top hit and says so inline.
+function lexicalFixtureTree(): string {
+  const baseDir = tmpTree();
+  writeNote(baseDir, 'apple.md', { frontmatter: { title: 'Apple Pie' }, body: 'A recipe for apple pie, using six apples in total.' });
+  writeNote(baseDir, 'banana.md', { frontmatter: { title: 'Banana Bread' }, body: 'Banana bread needs very ripe bananas.' });
+  writeNote(baseDir, 'both.md', { frontmatter: { title: 'Fruit Salad' }, body: 'This salad mixes apple and banana together with grapes.' });
+  writeNote(baseDir, 'phrase.md', { frontmatter: { title: 'Astronomy Notes' }, body: 'The stars and planets fill the night sky above us.' });
+  writeNote(baseDir, 'no-phrase.md', { frontmatter: { title: 'Space Facts' }, body: 'Distant planets orbit their stars for billions of years.' });
+  writeNote(baseDir, 'compound.md', { frontmatter: { title: 'Product Notes' }, body: 'Our new dashboard offers a customer-facing view of billing.' });
+  writeNote(baseDir, 'not-compound.md', { frontmatter: { title: 'Team Notes' }, body: 'A customer facing away from the team asked about billing.' });
+  // CHINESE_SENTENCES[0] ("...天气非常好...", weather) and [1] carry no shared vocabulary with
+  // [2]/[3], so a substring query into one half never spuriously matches the other.
+  writeNote(baseDir, 'zh-weather.md', { body: CHINESE_SENTENCES.slice(0, 2).join('\n\n') });
+  writeNote(baseDir, 'zh-other.md', { body: CHINESE_SENTENCES.slice(2, 4).join('\n\n') });
+  return baseDir;
+}
+
+async function searchPaths(store: 'sqlite' | 'duckdb', baseDir: string, terms: string): Promise<string[]> {
+  const { store: s, cfg } = await openTreeForStore(store, baseDir);
+  try {
+    const rows = await search(s, cfg, terms);
+    return rows.map((r) => r.path as string);
+  } finally {
+    await s.close();
+  }
+}
+
+describe('store parity: lexical search (sqlite vs duckdb, D1)', () => {
+  it('a plain term agrees on the top hit and the match set', async () => {
+    const baseDir = lexicalFixtureTree();
+    const [sqlitePaths, duckdbPaths] = await Promise.all(STORE_NAMES.map((store) => searchPaths(store, baseDir, 'apple')));
+    assert.deepEqual(sqlitePaths[0], 'apple.md', 'sqlite');
+    assert.deepEqual(duckdbPaths[0], 'apple.md', 'duckdb');
+    assert.deepEqual(new Set(sqlitePaths), new Set(duckdbPaths));
+  });
+
+  it('a bare multi-term query AND-joins identically: only the doc with every word matches', async () => {
+    const baseDir = lexicalFixtureTree();
+    const [sqlitePaths, duckdbPaths] = await Promise.all(STORE_NAMES.map((store) => searchPaths(store, baseDir, 'apple banana')));
+    assert.deepEqual(sqlitePaths, ['both.md'], 'sqlite');
+    assert.deepEqual(duckdbPaths, ['both.md'], 'duckdb');
+  });
+
+  // A documented divergence, not a bug: FTS5's tokenizer treats the hyphen as a separator, so
+  // its quoted-phrase query matches "customer facing" as two adjacent tokens regardless of the
+  // punctuation between them -- both docs qualify. DuckDB's contains() is a literal substring
+  // check (principle 1: String.prototype.includes is the cited spec), so only the doc whose raw
+  // text holds the hyphen matches. D1 chooses substring semantics deliberately over emulating
+  // FTS5's tokenization, so this is the expected shape, not a parity gap to close.
+  it('an exact substring (quoted, punctuated): duckdb is stricter than FTS5s token-adjacency', async () => {
+    const baseDir = lexicalFixtureTree();
+    const [sqlitePaths, duckdbPaths] = await Promise.all(STORE_NAMES.map((store) => searchPaths(store, baseDir, '"customer-facing"')));
+    assert.deepEqual(new Set(sqlitePaths), new Set(['compound.md', 'not-compound.md']), 'sqlite: FTS5 phrase-adjacency ignores the hyphen');
+    assert.deepEqual(duckdbPaths, ['compound.md'], 'duckdb: contains() requires the literal hyphen');
+  });
+
+  it('a quoted phrase requires adjacency identically: the reordered doc is excluded on both sides', async () => {
+    const baseDir = lexicalFixtureTree();
+    const [sqlitePaths, duckdbPaths] = await Promise.all(STORE_NAMES.map((store) => searchPaths(store, baseDir, '"stars and planets"')));
+    assert.deepEqual(sqlitePaths, ['phrase.md'], 'sqlite');
+    assert.deepEqual(duckdbPaths, ['phrase.md'], 'duckdb');
+  });
+
+  it('a CJK substring query finds the same note on both sides, without word spaces', async () => {
+    const baseDir = lexicalFixtureTree();
+    const [sqlitePaths, duckdbPaths] = await Promise.all(STORE_NAMES.map((store) => searchPaths(store, baseDir, '天气')));
+    assert.deepEqual(sqlitePaths, ['zh-weather.md'], 'sqlite');
+    assert.deepEqual(duckdbPaths, ['zh-weather.md'], 'duckdb');
+  });
+
+  // FTS5 query syntax duckdb does not interpret (prefix `*`, boolean OR/NOT): sqlite honors it,
+  // duckdb rejects it loudly (STORE_CAPABILITY_MISSING) rather than silently answering as a
+  // literal-term match -- a declared difference (PRINCIPLES.md #6), not a parity gap.
+  it('a prefix query: sqlite honors it, duckdb rejects it loudly instead of answering differently', async () => {
+    const baseDir = lexicalFixtureTree();
+    const sqlitePaths = await searchPaths('sqlite', baseDir, 'appl*');
+    assert.deepEqual(new Set(sqlitePaths), new Set(['apple.md', 'both.md']), 'sqlite');
+    await assert.rejects(searchPaths('duckdb', baseDir, 'appl*'), (err: SenseError) => {
+      assert.equal(err.code, 'STORE_CAPABILITY_MISSING');
+      assert.match(err.message, /prefix query/);
+      return true;
+    });
+  });
+
+  it('a boolean OR query: sqlite honors it, duckdb rejects it loudly instead of answering differently', async () => {
+    const baseDir = lexicalFixtureTree();
+    const sqlitePaths = await searchPaths('sqlite', baseDir, 'apple OR banana');
+    assert.deepEqual(new Set(sqlitePaths), new Set(['apple.md', 'banana.md', 'both.md']), 'sqlite');
+    await assert.rejects(searchPaths('duckdb', baseDir, 'apple OR banana'), (err: SenseError) => {
+      assert.equal(err.code, 'STORE_CAPABILITY_MISSING');
+      assert.match(err.message, /boolean operator/);
+      return true;
+    });
   });
 });

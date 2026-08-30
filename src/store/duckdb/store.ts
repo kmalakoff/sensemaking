@@ -4,22 +4,25 @@ import { SenseError } from '../../errors.ts';
 import { getColumns } from '../shared.ts';
 import { withTransaction } from '../transaction.ts';
 import type { Capability, Connection, Statement, Store, VectorWriteRow } from '../types.ts';
+import { createLexicalIndex } from './lexical.ts';
 import { reconcile } from './reconcile.ts';
 
-// This slice implements the portable surface only (frontmatter, links, sections, tags, rank,
-// meta, raw sql passthrough) -- no fts, no vector storage/scan yet, so 'lexical' and 'vectors'
-// are absent. openStore() gates the unambiguous case (an `embed` block requiring vectors)
-// before this store even opens; lexical.query()/vectors.* below throw loudly as a second line
-// of defense for any caller that reaches them anyway (principle 6: never silently return nothing).
-export const CAPABILITIES: ReadonlySet<Capability> = new Set([]);
+// Portable surface, links/sections/tags/rank, raw sql passthrough, and lexical (D1: fts BM25 +
+// contains(), see lexical.ts) are implemented -- 'vectors' (D2) is not yet, so it still throws.
+// 'snippets' is declined: no snippet()-equivalent exists, so every lexical hit relies on the
+// caller's JS excerpt fallback (commands/search.ts) rather than a bounded engine-native one.
+// 'phrases' means quoted-phrase matching only (types.ts): prefix/boolean/NEAR/column-filter
+// FTS5 syntax is not claimed here -- lexical.ts rejects it rather than answer it differently.
+export const CAPABILITIES: ReadonlySet<Capability> = new Set(['lexical', 'phrases']);
 
-function capabilityMissing(name: 'lexical' | 'vectors'): SenseError {
+function capabilityMissing(name: 'vectors'): SenseError {
   return new SenseError('STORE_CAPABILITY_MISSING', `store "duckdb" does not implement "${name}" in this build; switch "store" to "sqlite", or narrow the preset's signals to drop what needs it`);
 }
 
 // Shares one Connection instance (conn) with open()'s own reconcile call so transaction depth
 // (see transaction.ts) is tracked against the same object everywhere.
 export function createStore(duckdb: DuckDBConnection, conn: Connection, cfg: Config, baseDir: string): Store {
+  const lex = createLexicalIndex(conn);
   return {
     name: 'duckdb',
     capabilities: CAPABILITIES,
@@ -36,7 +39,11 @@ export function createStore(duckdb: DuckDBConnection, conn: Connection, cfg: Con
       return withTransaction(conn, fn);
     },
     async reconcile() {
-      return reconcile(conn, cfg, baseDir);
+      const result = await reconcile(conn, cfg, baseDir);
+      // content may have changed; the fts index is rebuilt lazily, on the next lexical query
+      // that needs it, not here (see lexical.ts's FtsIndexState).
+      lex.markStale();
+      return result;
     },
     docs: {
       async columns() {
@@ -44,9 +51,7 @@ export function createStore(duckdb: DuckDBConnection, conn: Connection, cfg: Con
       },
     },
     lexical: {
-      async query() {
-        throw capabilityMissing('lexical');
-      },
+      query: lex.query,
     },
     vectors: {
       async pending() {

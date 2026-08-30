@@ -1,13 +1,12 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ResolvedConfig } from '../config/index.ts';
-import { contentTokenize, embedConfig, featureEnabled, resolveSearch } from '../config/index.ts';
+import { embedConfig, featureEnabled, resolveSearch } from '../config/index.ts';
 import { localModelMissing, MODEL_FILENAMES } from '../embed/store.ts';
 import { SenseError } from '../errors.ts';
 import type { Row } from '../output/output.ts';
 import { searchError } from '../output/search-error.ts';
 import type { LexicalHit, Store } from '../store/types.ts';
-import { segmentMatch } from '../text/segment.ts';
 import { materializeScope, narrowByWhere, rawScope, scopeHasEmbeddings } from './scope.ts';
 import { linksCandidates, vectorsCandidates, wordsCandidates } from './signals.ts';
 
@@ -149,16 +148,8 @@ export async function search(store: Store, cfg: ResolvedConfig, terms: string, o
   }
   const semanticEnabled = wantsVectors && (await scopeHasEmbeddings(store, cfg, allowedPaths));
 
-  // Terms pass to MATCH as written, with one transform: a run of text whose language marks no
-  // word boundaries becomes a quoted grapheme phrase (and a title:/summary:/text: qualifier
-  // ahead of it retargets its _seg column), matching how it was indexed. Text that already
-  // carries boundaries comes through untouched, so this is a no-op for the languages that
-  // never needed it. Gated on the same predicate that decided whether the sidecars were
-  // populated (contentTokenize(cfg) === undefined), so index and query can't disagree. Invalid
-  // syntax still errors rather than being rewritten.
-  // --where
-  // applies inside the candidate query (a post-filter would drop matches ranked past the pool)
-  // and again on the final select, for link-derived rows.
+  // --where applies inside the candidate query (a post-filter would drop matches ranked past
+  // the pool) and again on the final select, for link-derived rows.
   const scope = effective.where;
   const whereJoin = scope ? `JOIN frontmatter f ON f."path" = content.path` : '';
   const whereCond = scope ? `AND (${scope})` : '';
@@ -168,15 +159,15 @@ export async function search(store: Store, cfg: ResolvedConfig, terms: string, o
   // thousands of paths, past SQLITE_MAX_VARIABLE_NUMBER on older builds.
   if (scopeActive) await materializeScope(store, '_search_scope', scopePaths);
   const scopeCond = scopeActive ? `AND content.path IN (SELECT "path" FROM _search_scope)` : '';
-  const query = contentTokenize(cfg) === undefined ? segmentMatch(terms) : terms;
 
   const candidates = new Map<string, { score: number; via: string }>();
   let matchRows: LexicalHit[] = [];
-  // A query that rewrites to nothing (e.g. only unspaced-script punctuation) has no
-  // searchable words: zero lexical rows, and the other signals still compose.
-  if (signals.words !== undefined && query.trim() !== '') {
+  // A query that is only whitespace has no searchable words: zero lexical rows, and the other
+  // signals still compose. Any store-specific rewrite of `terms` (sqlite's grapheme phrase for
+  // unspaced scripts, duckdb's word/substring split) happens inside store.lexical.query itself.
+  if (signals.words !== undefined && terms.trim() !== '') {
     try {
-      matchRows = await wordsCandidates(store, candidates, query, whereJoin, whereCond, scopeCond, fetch, signals.words);
+      matchRows = await wordsCandidates(store, candidates, terms, whereJoin, whereCond, scopeCond, fetch, signals.words);
     } catch (err) {
       throw searchError(err as Error, terms, scope);
     }

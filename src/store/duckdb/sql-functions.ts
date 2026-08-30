@@ -35,10 +35,9 @@ export async function registerFunctions(conn: DuckDBConnection): Promise<void> {
     })
   );
   // segment() rewrites unspaced-script runs into the grapheme phrase FTS5's `_seg` sidecars
-  // need (see src/text/segment.ts); this store has no lexical implementation yet, so nothing
-  // consumes it during reconcile/search, but hand-written raw SQL naming it gets the real
-  // implementation -- never a silent passthrough that would make an unspaced-script query
-  // return wrong results without saying so (principle 6).
+  // need (see src/text/segment.ts); this store's own lexical index uses contains() instead (D1)
+  // and never calls this, but hand-written raw SQL naming it still gets the real implementation
+  // rather than a silent passthrough (principle 6).
   conn.registerScalarFunction(
     DuckDBScalarFunction.create({
       name: 'segment',

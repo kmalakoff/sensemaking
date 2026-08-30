@@ -6,12 +6,12 @@ function duckdbTree(baseDir: string) {
 }
 
 describe('createStore (duckdb)', () => {
-  it('declares its name and an empty capability set (no lexical/vectors this slice)', async () => {
+  it('declares its name and D1-scoped capabilities (lexical, phrases; not vectors or snippets)', async () => {
     const baseDir = tmpTree();
     writeNote(baseDir, 'a.md', { frontmatter: { title: 'A' } });
     const { store } = await duckdbTree(baseDir);
     assert.equal(store.name, 'duckdb');
-    assert.deepEqual([...store.capabilities], []);
+    assert.deepEqual(new Set(store.capabilities), new Set(['lexical', 'phrases']));
     await store.close();
   });
 
@@ -67,13 +67,25 @@ describe('createStore (duckdb)', () => {
     await store.close();
   });
 
-  it('lexical.query() and vectors.* fail loudly rather than silently returning nothing', async () => {
+  it('vectors.* fail loudly rather than silently returning nothing (D2, not yet implemented)', async () => {
     const baseDir = tmpTree();
     writeNote(baseDir, 'a.md', { frontmatter: { title: 'A' } });
     const { store } = await duckdbTree(baseDir);
-    await assert.rejects(() => store.lexical.query('x', { whereJoin: '', whereCond: '', scopeCond: '', limit: 10 }), /STORE_CAPABILITY_MISSING|does not implement/);
     await assert.rejects(() => store.vectors.pending(), /STORE_CAPABILITY_MISSING|does not implement/);
     await assert.rejects(() => store.vectors.hasVector('a.md'), /STORE_CAPABILITY_MISSING|does not implement/);
+    await store.close();
+  });
+
+  it('lexical.query() finds a word match by path (D1)', async () => {
+    const baseDir = tmpTree();
+    writeNote(baseDir, 'a.md', { frontmatter: { title: 'A' } });
+    writeNote(baseDir, 'b.md', { frontmatter: { title: 'B' } });
+    const { store } = await duckdbTree(baseDir);
+    const hits = await store.lexical.query('body', { whereJoin: '', whereCond: '', scopeCond: '', limit: 10 });
+    assert.deepEqual(
+      hits.map((h) => h.path),
+      ['a.md', 'b.md']
+    );
     await store.close();
   });
 });
