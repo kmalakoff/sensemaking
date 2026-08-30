@@ -2,6 +2,16 @@
 
 All notable changes to sensemaking are documented here.
 
+## [0.18.2] - 2026-08-29
+
+### Changed
+
+- Cold builds parse in parallel on trees of 200 files or more, across a worker pool sized to the machine (capped at 8). On the 6,566-file benchmark corpus a cold crawl goes from 7102 ms to 2504 ms, and the in-process index build from 5985 ms to 2351 ms. Smaller trees are unchanged: below 200 files the serial path still runs, because the pool costs more than it saves there. A bulk sync crosses the same threshold, so re-indexing 500 changed files drops from 1094 ms to 648 ms. Output is unchanged: document order, warnings, frontmatter column order and search ranking are byte-identical to the serial path, and both retrieval-quality corpora score identically on bm25.
+
+### Fixed
+
+- `sense watch` could exit while a reconcile was still running, so the last set of changes went unreported. Shutdown now waits for an in-flight reconcile before closing the store.
+
 ## [0.18.1] - 2026-08-29
 
 ### Fixed

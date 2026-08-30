@@ -1,6 +1,7 @@
-import { existsSync, rmSync } from 'node:fs';
+import { existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import assert from 'assert';
+import { safeRmSync } from 'fs-remove-compat';
 import { type ResolvedConfig, STATE_DIR } from '../../src/config/index.ts';
 import { SenseError } from '../../src/errors.ts';
 import { getMeta, openStore, setMeta } from '../../src/store/index.ts';
@@ -63,7 +64,7 @@ function startWatch(cfg: ResolvedConfig, opts: WatchOptions = {}) {
 
 describe('runWatch', () => {
   afterEach(() => {
-    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+    for (const dir of dirs.splice(0)) safeRmSync(dir, { recursive: true, force: true });
   });
 
   it('clean shutdown via AbortSignal resolves the promise and clears watch_heartbeat/watch_pid', async () => {
@@ -147,15 +148,50 @@ describe('runWatch', () => {
     const baseDir = tree();
     const cfg = cfgFor(baseDir);
     const controller = new AbortController();
-    // A short heartbeat interval keeps writing into .sense/cache.db while the watcher runs,
-    // exercising the self-retrigger guard for real rather than only for the note files.
-    const { done, ready, events } = startWatch(cfg, { signal: controller.signal, debounceMs: 15, heartbeatIntervalMs: 15 });
+    // One write into the state dir, then quiet for longer than the debounce: unguarded, that
+    // single event schedules a reconcile which fires inside the window. A repeated heartbeat
+    // cannot show this, because writes at the debounce interval keep resetting the timer and
+    // nothing ever fires either way. The heartbeat is parked so it contributes no writes.
+    const { done, ready, events } = startWatch(cfg, { signal: controller.signal, debounceMs: 15, heartbeatIntervalMs: 10_000 });
     await ready;
-    await sleep(100);
+    const before = events.length;
+    writeFileSync(join(baseDir, STATE_DIR, 'probe.tmp'), 'x');
+    await sleep(120);
     controller.abort();
     await done;
 
-    assert.equal(events.filter((e) => e.type === 'reconciled').length, 0);
+    assert.deepEqual(
+      events.slice(before).filter((e) => e.type === 'reconciled'),
+      []
+    );
+  });
+
+  // The reconcile owns the store, and past the pooling threshold a live worker pool too.
+  // Shutting down underneath it used to close the connection its writes still needed, so the
+  // tree is large enough to make the reconcile a real pooled one rather than a single file.
+  it('shutdown drains a reconcile that is already in flight instead of closing the store underneath it', async () => {
+    const baseDir = tree();
+    const cfg = cfgFor(baseDir);
+    const controller = new AbortController();
+    const { done, ready, events } = startWatch(cfg, { signal: controller.signal, debounceMs: 15 });
+    await ready;
+
+    for (let i = 0; i < 300; i++) writeNote(baseDir, `n${i}.md`, { frontmatter: { [`k${i}`]: 1 } });
+    await sleep(40);
+    controller.abort();
+    await done;
+
+    // Shutdown must not resolve until that reconcile has reported: undrained, `done` settles
+    // while the reparse is still running and no reconciled event has been emitted yet.
+    assert.ok(
+      events.some((e) => e.type === 'reconciled'),
+      'shutdown resolved before the in-flight reconcile reported'
+    );
+    assert.deepEqual(
+      events.filter((e) => e.type === 'reconcile-error'),
+      []
+    );
+    assert.equal(await readMeta(cfg, 'watch_heartbeat'), null);
   });
 
   it('a store without watch-concurrency errors before opening, naming the config fix', async () => {

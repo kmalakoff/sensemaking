@@ -52,20 +52,31 @@ export async function runWatch(cfg: ResolvedConfig, opts: WatchOptions = {}): Pr
   await touchHeartbeat();
 
   let debounceTimer: NodeJS.Timeout | null = null;
+  // A reconcile that has already started owns the store, and on a bulk reparse a live worker
+  // pool as well. Shutdown waits on this rather than closing the connection underneath it.
+  let inFlight: Promise<void> | null = null;
   const scheduleReconcile = () => {
     if (debounceTimer) clearTimeout(debounceTimer);
-    debounceTimer = setTimeout(async () => {
+    debounceTimer = setTimeout(() => {
       debounceTimer = null;
-      try {
-        const { parsed, warnings } = await store.reconcile();
-        onEvent({ type: 'reconciled', parsed, total: await docCount(store), warnings });
-      } catch (err) {
-        onEvent({ type: 'reconcile-error', message: (err as Error).message });
-      }
+      inFlight = (async () => {
+        try {
+          const { parsed, warnings } = await store.reconcile();
+          onEvent({ type: 'reconciled', parsed, total: await docCount(store), warnings });
+        } catch (err) {
+          onEvent({ type: 'reconcile-error', message: (err as Error).message });
+        } finally {
+          inFlight = null;
+        }
+      })();
     }, debounceMs);
   };
 
-  // Ignore our own state dir, or the heartbeat write would retrigger itself forever.
+  // Ignore our own state dir, or the heartbeat write would retrigger itself forever. An event
+  // whose filename the platform could not resolve (null, which fs.watch does deliver under
+  // load) is attributed to nothing and so reconciles: one reconcile that parses nothing costs
+  // less than missing a real edit. That is why the guard cannot promise zero reconciles, only
+  // that an identified state-dir write is never one of them.
   const watcher = fsWatch(baseDir, { recursive: true }, (_event, filename) => {
     if (typeof filename === 'string' && filename.startsWith(STATE_DIR)) return;
     scheduleReconcile();
@@ -87,6 +98,7 @@ export async function runWatch(cfg: ResolvedConfig, opts: WatchOptions = {}): Pr
       clearInterval(heartbeatTimer);
       if (debounceTimer) clearTimeout(debounceTimer);
       watcher.close();
+      await inFlight;
       await setMeta(store, 'watch_heartbeat', null);
       await setMeta(store, 'watch_pid', null);
       await store.close();

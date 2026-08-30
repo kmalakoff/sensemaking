@@ -53,7 +53,7 @@ export async function reconcile(conn: Connection, cfg: Config, baseDir: string):
   const seenColumns = await getColumns(conn);
 
   const report = progress('reparsing files', toReparse.length);
-  const { docs: parsedDocs, warnings, newColumns } = reparseFiles(toReparse, features, cfg, seenColumns, report.tick);
+  const { docs: parsedDocs, warnings, newColumns } = await reparseFiles(toReparse, features, cfg, seenColumns, report.tick);
   report.finish();
   for (const col of newColumns) seenColumns.add(col);
 

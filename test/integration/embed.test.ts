@@ -1,7 +1,8 @@
 import assert from 'node:assert';
-import { readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { safeRmSync } from 'fs-remove-compat';
 import { createServer, type Server } from 'http';
 import type { Config } from 'sensemaking';
 import { peek, presetCoverage, type SenseError, search } from 'sensemaking';
@@ -527,7 +528,7 @@ describe('model cache location and naming', () => {
   // cache entry even if a test fails before removing its own.
   const seeded: string[] = [];
   after(() => {
-    for (const dir of seeded) rmSync(dir, { recursive: true, force: true });
+    for (const dir of seeded) safeRmSync(dir, { recursive: true, force: true });
   });
 
   it('an unresolved Hugging Face id names its (fileless) repo dir under ~/.sense/models', async () => {
@@ -623,7 +624,7 @@ describe('multilingual semantic mechanism', () => {
 describe('language fit check', () => {
   const seeded: string[] = [];
   after(() => {
-    for (const dir of seeded) rmSync(dir, { recursive: true, force: true });
+    for (const dir of seeded) safeRmSync(dir, { recursive: true, force: true });
   });
 
   // A fixture id per test, seeded with (or without) a hand-written languages.json; no network,

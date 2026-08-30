@@ -51,7 +51,7 @@ export async function reconcile(conn: Connection, cfg: Config, baseDir: string):
   // Bulk reparses (a sync, a cold build) are the long silences a query can hit; short
   // reconciles stay silent (progress() has a threshold).
   const report = progress('reparsing files', toReparse.length);
-  const { docs: parsedDocs, warnings, newColumns } = reparseFiles(toReparse, features, cfg, seenColumns, report.tick);
+  const { docs: parsedDocs, warnings, newColumns } = await reparseFiles(toReparse, features, cfg, seenColumns, report.tick);
   report.finish();
   for (const col of newColumns) seenColumns.add(col);
 
