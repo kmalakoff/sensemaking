@@ -198,6 +198,14 @@ function lexicalFixtureTree(): string {
   // [2]/[3], so a substring query into one half never spuriously matches the other.
   writeNote(baseDir, 'zh-weather.md', { body: CHINESE_SENTENCES.slice(0, 2).join('\n\n') });
   writeNote(baseDir, 'zh-other.md', { body: CHINESE_SENTENCES.slice(2, 4).join('\n\n') });
+  // One query spanning both scripts, plus a decoy holding only one half each. "telescope" and
+  // CHINESE_SENTENCES[4] (Beijing) appear in no other note here, so neither half of the query
+  // can match anything but these three. mixed.md doubles as the both-halves note for the
+  // word-plus-phrase case below: phrase.md already holds "night sky" without a telescope, and
+  // telescope-only.md holds the word without the phrase.
+  writeNote(baseDir, 'mixed.md', { body: `A telescope points at the night sky.\n\n${CHINESE_SENTENCES[4]}` });
+  writeNote(baseDir, 'telescope-only.md', { body: 'A telescope points upward.' });
+  writeNote(baseDir, 'zh-beijing.md', { body: CHINESE_SENTENCES[4] });
   return baseDir;
 }
 
@@ -307,6 +315,33 @@ describe('store parity: lexical search (sqlite reference, D1)', () => {
       'lexical',
       async (store) => assert.deepEqual(await searchPaths(store, baseDir, '天气'), sqlitePaths, store),
       (store) => assertCapabilityMissing(store, searchPaths(store, baseDir, '天气'), /lexical/)
+    );
+  });
+
+  // A mixed-script query is where a store composing two engine mechanisms (sqlite: FTS5 terms
+  // plus `_seg` grapheme phrases; duckdb: BM25 plus contains(); turso: two FTS indexes) has to
+  // AND them together. Getting the two halves individually right and their conjunction wrong is
+  // silent -- the result set can stay correct while ranking goes flat -- so this asserts both
+  // halves narrow to the one note that holds them.
+  it('a mixed ascii + CJK query ANDs both halves: only the note holding both matches', async () => {
+    const baseDir = lexicalFixtureTree();
+    const sqlitePaths = await searchPaths('sqlite', baseDir, 'telescope 北京');
+    assert.deepEqual(sqlitePaths, ['mixed.md'], 'sqlite');
+    await forEachOtherStoreByCapability(
+      'lexical',
+      async (store) => assert.deepEqual(await searchPaths(store, baseDir, 'telescope 北京'), sqlitePaths, store),
+      (store) => assertCapabilityMissing(store, searchPaths(store, baseDir, 'telescope 北京'), /lexical/)
+    );
+  });
+
+  it('a bare word plus a quoted phrase ANDs both: the note holding only the phrase is excluded', async () => {
+    const baseDir = lexicalFixtureTree();
+    const sqlitePaths = await searchPaths('sqlite', baseDir, 'telescope "night sky"');
+    assert.deepEqual(sqlitePaths, ['mixed.md'], 'sqlite');
+    await forEachOtherStoreByCapability(
+      'lexical',
+      async (store) => assert.deepEqual(await searchPaths(store, baseDir, 'telescope "night sky"'), sqlitePaths, store),
+      (store) => assertCapabilityMissing(store, searchPaths(store, baseDir, 'telescope "night sky"'), /lexical/)
     );
   });
 

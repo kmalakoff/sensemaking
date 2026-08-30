@@ -2,6 +2,12 @@
 
 All notable changes to sensemaking are documented here.
 
+## [0.18.4] - 2026-08-30
+
+### Fixed
+
+- Under duckdb, a search combining a bare word with a quoted phrase or an unspaced-script (CJK) run bound its query parameters one position out of step, so `telescope 北京` returned no rows and `apple "fruit salad"` returned notes without "apple". Each half of such a query was already correct on its own.
+
 ## [0.18.3] - 2026-08-30
 
 ### Changed

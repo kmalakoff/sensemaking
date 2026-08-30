@@ -78,33 +78,39 @@ async function ensureFtsFresh(conn: Connection, state: FtsIndexState): Promise<v
 
 // Per-word-term and per-substring-term SQL fragments, field-weighted the same way for both
 // (title 10 / summary 5 / text 1), plus the params in the exact left-to-right order they are
-// emitted -- positional `?` binding requires that order to match the assembled SQL text.
+// emitted -- positional `?` binding requires that order to match the assembled SQL text. Score
+// and gate params are collected apart and joined at the end because the assembled SQL puts
+// every score part ahead of every gate part: appending to one array term by term matches that
+// text only while the query has words or substrings, never both, and silently shifts each `?`
+// by one as soon as it has both (PRINCIPLES: no-silent-modes -- a shifted bind answers a
+// different question rather than failing).
 function buildScoreAndGate(words: string[], substrings: string[]): { scoreSql: string; gateSql: string; params: unknown[] } {
   const scoreParts: string[] = [];
   const gateParts: string[] = [];
-  const params: unknown[] = [];
+  const scoreParams: unknown[] = [];
+  const gateParams: unknown[] = [];
 
   if (words.length > 0) {
     const wordQuery = words.join(' ');
     for (const field of FIELDS) {
       scoreParts.push(`${FIELD_WEIGHT[field]}.0 * COALESCE(fts_main_content.match_bm25(content."path", ?, fields := '${field}', conjunctive := false), 0)`);
-      params.push(wordQuery);
+      scoreParams.push(wordQuery);
     }
     gateParts.push(`fts_main_content.match_bm25(content."path", ?, conjunctive := true) IS NOT NULL`);
-    params.push(wordQuery);
+    gateParams.push(wordQuery);
   }
 
   for (const raw of substrings) {
     const needle = raw.toLowerCase();
     for (const field of FIELDS) {
       scoreParts.push(`${FIELD_WEIGHT[field]}.0 * CAST(contains(lower(content.${field}), ?) AS INTEGER)`);
-      params.push(needle);
+      scoreParams.push(needle);
     }
     gateParts.push(`contains(lower(content.title) || ' ' || lower(content.summary) || ' ' || lower(content.text), ?)`);
-    params.push(needle);
+    gateParams.push(needle);
   }
 
-  return { scoreSql: scoreParts.join(' + '), gateSql: gateParts.join(' AND '), params };
+  return { scoreSql: scoreParts.join(' + '), gateSql: gateParts.join(' AND '), params: [...scoreParams, ...gateParams] };
 }
 
 // Ranked word-match query, scoped by the caller-built SQL fragments (same fragments sqlite's
