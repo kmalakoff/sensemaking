@@ -8,11 +8,12 @@ import { STORE_DIMS } from '../../embed/types.ts';
 import { SenseError } from '../../errors.ts';
 import { activeFeatures, FEATURES } from '../../features/index.ts';
 import { clearCache } from '../cache.ts';
+import { reconcile } from '../reconcile.ts';
 import { getMeta, setMeta } from '../shared.ts';
 import type { Connection, Store } from '../types.ts';
 import { createConnection } from './connection.ts';
 import { DUCKDB_PACKAGE, duckdbApi } from './native.ts';
-import { reconcile } from './reconcile.ts';
+import { duckdbDialect } from './reconcile.ts';
 import { registerFunctions } from './sql-functions.ts';
 import { createStore } from './store.ts';
 
@@ -103,7 +104,7 @@ async function connect(cfg: ResolvedConfig): Promise<{ instance: DuckDBInstance;
 
     await ensureSchema(conn, cfg);
 
-    const { parsed, warnings } = await reconcile(conn, cfg, cfg.baseDir);
+    const { parsed, warnings } = await reconcile(conn, cfg, cfg.baseDir, duckdbDialect);
     return { instance, duckdb, conn, cfg, dbPath, parsed, warnings };
   } catch (err) {
     if (!closed) {

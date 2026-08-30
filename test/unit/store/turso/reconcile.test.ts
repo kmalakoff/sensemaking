@@ -2,6 +2,7 @@ import assert from 'node:assert';
 import { rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { SenseError } from 'sensemaking';
+import { FTS_REBUILD_THRESHOLD } from '../../../../src/store/turso/reconcile.ts';
 import { openConfig, tmpTree, writeNote } from '../../../lib/tree.ts';
 
 function tursoTree(baseDir: string) {
@@ -132,5 +133,45 @@ describe('reconcile (turso)', () => {
       assert.match((err as Error).message, /presets.+include/);
       return true;
     });
+  });
+});
+
+describe('FTS_REBUILD_THRESHOLD', () => {
+  // Measured 2026-08-30: changed-file counts and their incremental vs. full-rebuild durations,
+  // at two corpus sizes. Pins the constant against real numbers instead of a comment.
+  const MEASUREMENTS = [
+    { corpus: 6566, changed: 100, incrementalMs: 895, rebuildMs: 3350 },
+    { corpus: 6566, changed: 300, incrementalMs: 4074, rebuildMs: 3350 },
+    { corpus: 6566, changed: 1300, incrementalMs: 45486, rebuildMs: 3350 },
+    { corpus: 13132, changed: 250, incrementalMs: 5200, rebuildMs: 6700 },
+    { corpus: 13132, changed: 400, incrementalMs: 10000, rebuildMs: 6700 },
+  ];
+
+  // The code's own comparison is `churn > FTS_REBUILD_THRESHOLD`, so a changed-file count equal
+  // to the threshold still takes the incremental path -- the bound is >=, not a strict >.
+  it('the largest measured changed-file count where incremental still wins is at or below the threshold', () => {
+    const incrementalWins = MEASUREMENTS.filter((m) => m.incrementalMs < m.rebuildMs).map((m) => m.changed);
+    const largestWin = Math.max(...incrementalWins);
+    assert.ok(FTS_REBUILD_THRESHOLD >= largestWin, `threshold ${FTS_REBUILD_THRESHOLD} is below ${largestWin} changed files, which measured faster incremental`);
+  });
+
+  it('the smallest measured changed-file count where rebuilding clearly wins is above the threshold', () => {
+    const rebuildWins = MEASUREMENTS.filter((m) => m.incrementalMs > m.rebuildMs).map((m) => m.changed);
+    const smallestLoss = Math.min(...rebuildWins);
+    assert.ok(FTS_REBUILD_THRESHOLD < smallestLoss, `threshold ${FTS_REBUILD_THRESHOLD} is not below ${smallestLoss} changed files, which measured faster rebuilding`);
+  });
+
+  // Doubling the corpus (6,566 -> 13,132) moved the crossover from ~250 to ~295 changed files,
+  // not to ~500: one constant fits both sizes; a fixed percentage of the corpus would not.
+  it('one constant satisfies both measured corpus sizes', () => {
+    const bySize = new Map<number, typeof MEASUREMENTS>();
+    for (const m of MEASUREMENTS) bySize.set(m.corpus, [...(bySize.get(m.corpus) ?? []), m]);
+    for (const [corpus, rows] of bySize) {
+      for (const row of rows) {
+        const wantsRebuild = row.incrementalMs > row.rebuildMs;
+        const codeRebuilds = row.changed > FTS_REBUILD_THRESHOLD;
+        assert.equal(codeRebuilds, wantsRebuild, `corpus ${corpus}, ${row.changed} changed files: measured ${wantsRebuild ? 'rebuild' : 'incremental'} faster, threshold picks ${codeRebuilds ? 'rebuild' : 'incremental'}`);
+      }
+    }
   });
 });

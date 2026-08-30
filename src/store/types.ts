@@ -1,7 +1,9 @@
 // The backing-store interface: a minimal portable statement surface (exec/prepare), plus
 // dedicated interfaces exactly where engines diverge (lexical index, vector scan, raw sql).
 
-import type { StoreName } from '../config/index.ts';
+import type { Config, StoreName } from '../config/index.ts';
+import type { ReconcileDelta } from '../features/types.ts';
+import type { ParsedDoc } from '../scan/index.ts';
 
 // 'lexical'/'vectors': the store's LexicalIndex/VectorStore is functionally implemented, not
 // present-but-inert. 'sql-functions': the engine can register has/basename/segment as UDFs at all,
@@ -32,6 +34,25 @@ export interface Connection {
   exec(sql: string): Promise<void>;
   prepare(sql: string): Promise<Statement>;
   runBatch(sql: string, paramRows: unknown[][]): Promise<void>;
+}
+
+// One reconcile algorithm (src/store/reconcile.ts), parameterised per engine. reconcileContent is
+// the load-bearing member: it lands every content-table change and owns its own multi-step
+// strategy (sqlite FTS5 incremental, duckdb combined delete/insert, turso incremental-or-rebuild).
+export interface ReconcileDialect {
+  // BEGIN mode for the whole reconcile: sqlite/turso 'BEGIN IMMEDIATE', duckdb 'BEGIN'.
+  beginMode(): string;
+  // Throws SenseError('COLUMN_LIMIT', ...) past this store's own column ceiling and reasoning.
+  checkColumnLimit(count: number): void;
+  // Type suffix for ALTER TABLE ADD COLUMN: '' for sqlite/turso, ' VARIANT' for duckdb.
+  columnTypeSuffix(): string;
+  // Deletes content rows for `touched`, inserts rows for `docs`; `delta` carries the tree state a
+  // strategy may need. Must not open its own transaction, and must not return before its own
+  // multi-step strategy (e.g. turso's DROP/rebuild) completes.
+  reconcileContent(conn: Connection, touched: string[], docs: ParsedDoc[], delta: ReconcileDelta, cfg: Config): Promise<void>;
+  // Records this reconcile's write-transaction duration. sqlite/turso use it for open()'s derived
+  // busy_timeout; duckdb has no such PRAGMA and omits it.
+  recordDuration?(conn: Connection, ms: number): Promise<void>;
 }
 
 export interface FieldStat {

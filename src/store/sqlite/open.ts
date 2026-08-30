@@ -9,11 +9,13 @@ import { rekeyChunkText } from '../../embed/handoff.ts';
 import { SenseError } from '../../errors.ts';
 import { activeFeatures, FEATURES } from '../../features/index.ts';
 import { clearCache } from '../cache.ts';
+import { reconcile } from '../reconcile.ts';
 import { getMeta, setMeta } from '../shared.ts';
 import { BEGIN_WRITE, withTransaction } from '../transaction.ts';
 import type { Connection, Store } from '../types.ts';
 import { createConnection } from './connection.ts';
-import { changedSignatureKeys, embedIdentityAdopted, rebuildContentTable, reconcile, signatureDiff } from './reconcile.ts';
+import { sqliteDialect } from './reconcile.ts';
+import { changedSignatureKeys, embedIdentityAdopted, rebuildContentTable, signatureDiff } from './signature.ts';
 import { registerFunctions } from './sql-functions.ts';
 import { createStore } from './store.ts';
 
@@ -203,7 +205,7 @@ async function connect(cfg: ResolvedConfig): Promise<ConnectResult> {
     const recordedMaxMs = Number((await getMeta(conn, 'reconcile_max_ms')) ?? '0');
     db.exec(`PRAGMA busy_timeout = ${Math.min(Math.max(30000, 3 * recordedMaxMs), 600_000)}`);
 
-    const { parsed, warnings } = await reconcile(conn, cfg, cfg.baseDir);
+    const { parsed, warnings } = await reconcile(conn, cfg, cfg.baseDir, sqliteDialect);
 
     return { db, conn, cfg, dbPath, parsed, warnings: [...rebuildWarnings, ...warnings] };
   } catch (err) {

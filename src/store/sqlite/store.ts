@@ -1,13 +1,14 @@
 import type { DatabaseSync } from 'node:sqlite';
 import type { Config } from '../../config/index.ts';
 import { contentTokenize } from '../../config/index.ts';
+import { reconcile } from '../reconcile.ts';
 import { getColumns } from '../shared.ts';
 import { withTransaction } from '../transaction.ts';
 import type { Capability, Connection, Statement, Store, VectorWriteRow } from '../types.ts';
 import { hasVectorRow, pendingRows } from '../vectors.ts';
 import { fieldStats } from './fieldStats.ts';
 import { queryLexical } from './lexical.ts';
-import { reconcile } from './reconcile.ts';
+import { sqliteDialect } from './reconcile.ts';
 import { scanCandidates, scanSimilar, writeVectorBatch } from './vectors.ts';
 
 export const CAPABILITIES: ReadonlySet<Capability> = new Set(['phrases', 'snippets', 'watch-concurrency', 'lexical', 'vectors', 'sql-functions']);
@@ -31,7 +32,7 @@ export function createStore(db: DatabaseSync, conn: Connection, cfg: Config, bas
       return withTransaction(conn, fn);
     },
     async reconcile() {
-      return reconcile(conn, cfg, baseDir);
+      return reconcile(conn, cfg, baseDir, sqliteDialect);
     },
     docs: {
       async columns() {
