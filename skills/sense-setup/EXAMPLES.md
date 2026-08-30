@@ -62,7 +62,7 @@ sense search "prefers terse commit messages" --k 5
   → memory/acme-app/2026-06-11-style.md     via: vector  similarity: 0.71   # near-duplicate → merge candidate
 sense steers acme-app                           # oldest first: does a new steer override an old one?
 sense retirement                                # old + uncited → move to archive/
-sense unfiled                                   # rows are notes missing a project — file them
+sense unfiled                                   # rows are notes missing a project. File them
 ```
 
 Presets are structural (live vs archived); per-project filtering is metadata (`project = ?`). One tree serves every project. Semantic search over the memory preset is the near-duplicate detector: search a new note's own summary and read `similarity` within the results. Whether an old steer was overridden is a question for the human, found by search, never decided by it.

@@ -43,8 +43,8 @@ sense peek notes/architecture-decisions.md
 notes/architecture-decisions.md  (~4400 tokens)
   title: Architecture decisions
 sections:
-  ## Storage layer — why SQLite  [L41-88, ~610t]
-  ## Queue — rejected options  [L89-120, ~380t]
+  ## Storage layer: why SQLite  [L41-88, ~610t]
+  ## Queue: rejected options  [L89-120, ~380t]
   ...
 links out (7): notes/pricing-model.md, ...
 backlinks (2): notes/_index.md, notes/roadmap.md
@@ -65,7 +65,7 @@ sense sql "SELECT path, round(_rank*100,2) r FROM frontmatter ORDER BY _rank DES
 ## E. Cold start on an unknown notes tree
 
 ```
-sense map                          # fields, hubs, recent — read this first
+sense map                          # fields, hubs, recent. Read this first
 sense --list                       # named queries someone already saved
 sense sql "SELECT DISTINCT type FROM frontmatter"    # what a field's values are
 ```

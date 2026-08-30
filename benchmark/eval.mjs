@@ -1,5 +1,5 @@
 // Retrieval quality in three passes (bm25-only, fused, semantic) plus a hidden guard pass: a
-// semantic:false preset must be row-identical to `fused`. Paired deltas with a sign-test z.
+// vectors-free preset must be row-identical to `fused`. Paired deltas with a sign-test z.
 // usage: node benchmark/eval.mjs [corpus] [--queries N] [--k N] [--split test|dev]
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -30,7 +30,7 @@ const lib = await import(pathToFileURL(join(ROOT, 'dist', 'esm', 'index.js')).hr
 const { queries, qrels } = readLabels(labelsDir, SPLIT);
 const qids = [...qrels.keys()].sort().slice(0, MAX_QUERIES === Infinity ? undefined : MAX_QUERIES);
 
-// embed false -> preset semantic:false, vectors never built. embed true -> the config names
+// embed false -> a vectors-free signals map, vectors never built. embed true -> the config names
 // the model (nothing implicit turns vectors on since the explicit-embed change; without the
 // block, anyPresetEmbeds is false and the semantic pass silently measures lexical) and
 // vectors build lazily on the first participating call.
