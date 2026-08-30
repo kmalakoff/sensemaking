@@ -197,18 +197,18 @@ produced it. When a number here moves, replace the value and the link together.
 
 | metric | value | report |
 |---|---|---|
-| cold crawl, obsidian-hub (wall, local) | 5900 ms | [2026-08-29](benchmark/reports/2026-08-29-0.18.0-release-gate.md) |
-| warm query (`COUNT(*)`) | 124 ms | [2026-08-29](benchmark/reports/2026-08-29-0.18.0-release-gate.md) |
-| lexical `search` | 172 ms | [2026-08-29](benchmark/reports/2026-08-29-0.18.0-release-gate.md) |
+| cold crawl, obsidian-hub (wall, local) | 2504 ms | [2026-08-29](benchmark/reports/2026-08-29-0.18.2-parallel-parse.md) |
+| warm query (`COUNT(*)`) | 139 ms | [2026-08-29](benchmark/reports/2026-08-29-0.18.2-parallel-parse.md) |
+| lexical `search` | 193 ms | [2026-08-29](benchmark/reports/2026-08-29-0.18.2-parallel-parse.md) |
 | `search` row size | ~71 tokens | [2026-08-29](benchmark/reports/2026-08-29-0.18.0-release-gate.md) |
 | `map` | 155 ms / ~496 tokens | [2026-08-29](benchmark/reports/2026-08-29-0.18.0-release-gate.md) |
 | `peek` largest note | 133 ms / ~581 tokens | [2026-08-29](benchmark/reports/2026-08-29-0.18.0-release-gate.md) |
-| in-process: cold index build | 5279 ms | [2026-08-29](benchmark/reports/2026-08-29-0.18.0-release-gate.md) |
-| in-process: freshness check, no change | 35.2 ms | [2026-08-29](benchmark/reports/2026-08-29-0.18.0-release-gate.md) |
+| in-process: cold index build | 2351 ms | [2026-08-29](benchmark/reports/2026-08-29-0.18.2-parallel-parse.md) |
+| in-process: freshness check, no change | 46.5 ms | [2026-08-29](benchmark/reports/2026-08-29-0.18.2-parallel-parse.md) |
 | `--version` canary | 20 ms | [2026-08-29](benchmark/reports/2026-08-29-0.18.0-release-gate.md) |
-| scale, 13k: cold crawl (wall) | 13.39 s | [2026-08-29](benchmark/reports/2026-08-29-0.18.0-release-gate.md) |
-| scale, 26k: cold crawl (wall) | 25.93 s | [2026-08-29](benchmark/reports/2026-08-29-0.18.0-release-gate.md) |
-| stress: lexical `search` | 348 ms | [2026-08-29](benchmark/reports/2026-08-29-0.18.0-release-gate.md) |
+| scale, 13k: cold crawl (wall) | 6.16 s | [2026-08-29](benchmark/reports/2026-08-29-0.18.2-parallel-parse.md) |
+| scale, 26k: cold crawl (wall) | 8.40 s | [2026-08-29](benchmark/reports/2026-08-29-0.18.2-parallel-parse.md) |
+| stress: lexical `search` | 362 ms | [2026-08-29](benchmark/reports/2026-08-29-0.18.2-parallel-parse.md) |
 | stress: semantic `search` | 960 ms | [2026-08-29](benchmark/reports/2026-08-29-0.18.0-release-gate.md) |
 | nfcorpus semantic nDCG@10 / hit@10 | 0.3427 / 0.7121 | [2026-08-29](benchmark/reports/2026-08-29-0.18.0-release-gate.md) |
 | fever semantic nDCG@10 / hit@10 | 0.9337 / 0.9965 | [2026-08-29](benchmark/reports/2026-08-29-0.18.0-release-gate.md) |
