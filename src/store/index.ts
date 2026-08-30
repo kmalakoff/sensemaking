@@ -59,3 +59,4 @@ export { getMeta, setMeta } from './shared.ts';
 export type { OpenResult } from './sqlite/open.ts';
 export { DB_FILENAME, docCount, SCHEMA_VERSION } from './sqlite/open.ts';
 export type { Capability, Connection, DocumentStore, LexicalHit, LexicalIndex, LexicalQueryOptions, RawStatement, RunResult, SqlSession, Statement, Store, VectorCandidate, VectorSimilar, VectorStore, VectorWriteRow } from './types.ts';
+export { CAPABILITY_NAMES } from './types.ts';

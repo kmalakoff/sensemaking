@@ -13,7 +13,7 @@ import { scanCandidates, scanSimilar, writeVectorBatch } from './vectors.ts';
 
 // Portable surface, links/sections/tags/rank, raw sql passthrough, lexical (fts BM25 + contains(), lexical.ts), and vectors (native
 // FLOAT[N] + array_cosine_similarity, vectors.ts) are implemented. 'snippets' is declined (JS excerpt fallback handles it); 'phrases' means quoted-phrase only -- FTS5 operator syntax is rejected, not answered differently.
-export const CAPABILITIES: ReadonlySet<Capability> = new Set(['lexical', 'phrases', 'vectors']);
+export const CAPABILITIES: ReadonlySet<Capability> = new Set(['lexical', 'phrases', 'vectors', 'sql-functions']);
 
 // Shares one Connection instance (conn) with open()'s own reconcile call so transaction depth (transaction.ts) is tracked against the same object everywhere.
 // The instance is the native handle that owns the WAL: close() must close it, not just disconnect, or DuckDB never checkpoints and the next open reads a mismatched WAL.
