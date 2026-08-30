@@ -1,13 +1,14 @@
 import type { Capability, Config, ResolvedConfig, SenseError } from 'sensemaking';
+import { STORE_NAMES, type StoreName } from '../../src/config/types.ts';
 import { CAPABILITIES as DUCKDB_CAPABILITIES } from '../../src/store/duckdb/store.ts';
 import { CAPABILITIES as SQLITE_CAPABILITIES } from '../../src/store/sqlite/store.ts';
 import { CAPABILITIES as TURSO_CAPABILITIES } from '../../src/store/turso/store.ts';
 import { openConfig } from './tree.ts';
 
 // Store-parameterization helpers for cross-store parity tests: the same tree opened under each engine. sqlite is the reference (PRINCIPLES: proven-or-verified); every other store is diffed against it.
-// Adding a store is one array entry: it flows into every STORE_NAMES/OTHER_STORE_NAMES loop below.
-export const STORE_NAMES = ['sqlite', 'duckdb', 'turso'] as const;
-export type ParityStoreName = (typeof STORE_NAMES)[number];
+// STORE_NAMES comes from src rather than a second list here, so adding a store is one entry there.
+export { STORE_NAMES };
+export type ParityStoreName = StoreName;
 
 // Every store but the reference.
 export const OTHER_STORE_NAMES = STORE_NAMES.filter((store) => store !== 'sqlite') as Exclude<ParityStoreName, 'sqlite'>[];

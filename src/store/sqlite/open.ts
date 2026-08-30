@@ -10,7 +10,7 @@ import { SenseError } from '../../errors.ts';
 import { activeFeatures, FEATURES } from '../../features/index.ts';
 import { clearCache } from '../cache.ts';
 import { getMeta, setMeta } from '../shared.ts';
-import { withTransaction } from '../transaction.ts';
+import { BEGIN_WRITE, withTransaction } from '../transaction.ts';
 import type { Connection, Store } from '../types.ts';
 import { createConnection } from './connection.ts';
 import { changedSignatureKeys, embedIdentityAdopted, rebuildContentTable, reconcile, signatureDiff } from './reconcile.ts';
@@ -90,6 +90,21 @@ async function ensureSchema(conn: Connection, cfg: Config, tokenize: string): Pr
   if ((await getMeta(conn, 'features')) === null) await setMeta(conn, 'features', featureSignature(cfg, FEATURES));
 }
 
+// Two processes opening the same fresh tree both try to convert it, and the loser gets SQLITE_BUSY
+// with no busy handler behind it. Bounded because a lock held past this is a real problem, not a race.
+function setJournalWal(db: DatabaseSync): void {
+  const deadline = Date.now() + 5000;
+  for (;;) {
+    try {
+      db.exec('PRAGMA journal_mode = WAL');
+      return;
+    } catch (err) {
+      if (Date.now() >= deadline || !/database is locked|busy/i.test((err as Error).message)) throw err;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+    }
+  }
+}
+
 async function connect(cfg: ResolvedConfig): Promise<ConnectResult> {
   const stateDir = join(cfg.baseDir, STATE_DIR);
   mkdirSync(stateDir, { recursive: true });
@@ -100,10 +115,12 @@ async function connect(cfg: ResolvedConfig): Promise<ConnectResult> {
   // scratch cleanup fails with EPERM/EBUSY. `closed` keeps the catch from double-closing.
   let closed = false;
   try {
-    db.exec('PRAGMA journal_mode = WAL');
-    // Covers a concurrent watcher's bulk reconcile (~5s for 500 files at 26k notes). A query
-    // that outwaits it still fails loudly.
+    // Before journal_mode, not after: converting a fresh database to WAL takes a brief exclusive
+    // lock, and with no timeout set yet a second process opening the same tree fails in 1ms.
     db.exec('PRAGMA busy_timeout = 30000');
+    // busy_timeout does not cover the WAL conversion itself: SQLite does not invoke the busy
+    // handler for it, so a concurrent cold open needs its own bounded wait.
+    setJournalWal(db);
     registerFunctions(db, contentTokenize(cfg) === undefined);
     const conn = createConnection(db);
 
@@ -136,10 +153,14 @@ async function connect(cfg: ResolvedConfig): Promise<ConnectResult> {
         console.error('sense: config change (content tokenizer) rebuilds the text index; vectors, links, and sections are kept');
         // One transaction, so a crash before COMMIT rolls back to the old tokenizer's table rather
         // than to no table. IF EXISTS makes a retry after such a crash a no-op, not a raw error.
-        await withTransaction(conn, async () => {
-          await conn.exec('DROP TABLE IF EXISTS content');
-          await createContentTable(conn, tokenize);
-        });
+        await withTransaction(
+          conn,
+          async () => {
+            await conn.exec('DROP TABLE IF EXISTS content');
+            await createContentTable(conn, tokenize);
+          },
+          BEGIN_WRITE
+        );
         tokenizeOnlyRebuild = true;
       } else if (changedKeys.size === 1 && changedKeys.has('embed') && embedIdentityAdopted(features ?? '', wantFeatures)) {
         // First sight of a resolved weight identity: the model itself hasn't changed, so
@@ -167,7 +188,9 @@ async function connect(cfg: ResolvedConfig): Promise<ConnectResult> {
       return connect(cfg);
     }
 
-    await ensureSchema(conn, cfg, tokenize);
+    // One writer at a time: the feature hooks check a column then add it, so two cold opens racing
+    // here both see it missing and the second ALTER fails with a duplicate column.
+    await withTransaction(conn, () => ensureSchema(conn, cfg, tokenize), BEGIN_WRITE);
 
     let rebuildWarnings: string[] = [];
     if (tokenizeOnlyRebuild) {

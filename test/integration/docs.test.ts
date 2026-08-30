@@ -6,7 +6,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import cr from 'cr';
 import { SUPPORTED_CONFIG_VERSION } from 'sensemaking';
 import { parse } from 'yaml';
-import { KNOWN_EMBED_KEYS } from '../../src/config/index.ts';
+import { KNOWN_EMBED_KEYS, STORE_NAMES } from '../../src/config/index.ts';
 import { packageRoot } from '../lib/scratch.ts';
 
 // Published surfaces drift silently: nothing fails when the README stops describing what
@@ -61,6 +61,15 @@ describe('schema.json embed properties match validate.ts', () => {
     for (const key of KNOWN_EMBED_KEYS) {
       assert.ok(declared.has(key), `embed.${key} validates but has no schema.json property, so an editor with additionalProperties:false flags it`);
     }
+  });
+});
+
+// STORE_NAMES is the source of truth; schema.json's enum is the editor-facing copy, and
+// benchmark/release.mjs reads that enum to decide which stores its battery covers.
+describe('schema.json store enum matches STORE_NAMES', () => {
+  it('the enum is exactly the declared store list, in order', () => {
+    const schema = JSON.parse(readFileSync(join(packageRoot, 'schema.json'), 'utf8')) as { properties: { store: { enum: string[] } } };
+    assert.deepEqual(schema.properties.store.enum, [...STORE_NAMES], 'a store that validates but is missing from the enum is one the benchmark battery never runs');
   });
 });
 

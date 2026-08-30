@@ -1,5 +1,5 @@
 import type { DatabaseSync, StatementSync } from 'node:sqlite';
-import { withTransaction } from '../transaction.ts';
+import { BEGIN_WRITE, withTransaction } from '../transaction.ts';
 import type { Connection, RunResult, Statement } from '../types.ts';
 
 // Wraps node:sqlite's synchronous DatabaseSync in the async Connection/Statement shape every store presents. Every method does its real
@@ -48,10 +48,14 @@ export function createConnection(db: DatabaseSync): Connection {
     // Connection contract with DuckDB. Joins the caller's transaction when there is one (reconcile); otherwise opens its own, so a standalone batch stays atomic and commits once, not per row.
     async runBatch(sql: string, paramRows: unknown[][]): Promise<void> {
       if (paramRows.length === 0) return;
-      await withTransaction(conn, async () => {
-        const stmt = db.prepare(sql);
-        for (const row of paramRows) stmt.run(...(row as Parameters<StatementSync['run']>));
-      });
+      await withTransaction(
+        conn,
+        async () => {
+          const stmt = db.prepare(sql);
+          for (const row of paramRows) stmt.run(...(row as Parameters<StatementSync['run']>));
+        },
+        BEGIN_WRITE
+      );
     },
   };
   return conn;

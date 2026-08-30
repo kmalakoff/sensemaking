@@ -1,5 +1,5 @@
 import type { Database } from '@tursodatabase/database';
-import { withTransaction } from '../transaction.ts';
+import { BEGIN_WRITE, withTransaction } from '../transaction.ts';
 import type { Connection, RunResult, Statement } from '../types.ts';
 
 // The client's own Statement class isn't re-exported by name from '@tursodatabase/database',
@@ -52,9 +52,13 @@ export function createConnection(db: Database): Connection {
     // no bind-variable ceiling to chunk around. A literal nested BEGIN hard-errors, so withTransaction's join-not-savepoint helper makes this safe inside reconcile's own transaction too.
     async runBatch(sql: string, paramRows: unknown[][]): Promise<void> {
       if (paramRows.length === 0) return;
-      await withTransaction(conn, async () => {
-        await db.batch(paramRows.map((args) => ({ sql, args })));
-      });
+      await withTransaction(
+        conn,
+        async () => {
+          await db.batch(paramRows.map((args) => ({ sql, args })));
+        },
+        BEGIN_WRITE
+      );
     },
   };
   return conn;

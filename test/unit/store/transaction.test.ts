@@ -1,7 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import assert from 'assert';
 import { createConnection } from '../../../src/store/sqlite/connection.ts';
-import { withTransaction } from '../../../src/store/transaction.ts';
+import { BEGIN_WRITE, withTransaction } from '../../../src/store/transaction.ts';
 import type { Connection } from '../../../src/store/types.ts';
 
 function makeConn(): { db: DatabaseSync; conn: Connection } {
@@ -66,6 +66,20 @@ describe('withTransaction', () => {
       /rolled back/
     );
     assert.deepEqual(rows(db), []);
+  });
+
+  // A writer must take its lock at BEGIN: SQLite will not retry a deferred transaction that read
+  // first and then upgrades, so busy_timeout never applies and a second command fails outright.
+  it('a write scope opens IMMEDIATE and a read scope does not', async () => {
+    const issued: string[] = [];
+    const spy = { exec: async (sql: string) => void issued.push(sql) };
+
+    await withTransaction(spy, async () => {}, BEGIN_WRITE);
+    assert.deepEqual(issued, ['BEGIN IMMEDIATE', 'COMMIT']);
+
+    issued.length = 0;
+    await withTransaction(spy, async () => {});
+    assert.deepEqual(issued, ['BEGIN', 'COMMIT'], 'reads stay deferred, or every map/peek snapshot serializes against writers');
   });
 
   it('two connections do not share depth state', async () => {

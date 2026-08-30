@@ -233,6 +233,34 @@ async function assertCapabilityMissing(store: ParityStoreName, promise: Promise<
 
 // The Store contract every engine owes, asserted once per store: a new store gets this coverage
 // by joining STORE_NAMES, and its unit twin keeps only what that engine alone does.
+// A bulk build crosses turso's FTS_REBUILD_THRESHOLD, so reconcile drops the index, inserts, and
+// rebuilds it. Ranking is what detects a failed rebuild: turso's fts_match still returns the right
+// rows by scanning when no index exists, and fts_score then returns 0 for every one, so a search
+// answers correctly in meaningless order. Asserting matches alone cannot see that.
+describe('store parity: a bulk build keeps its ranking (every store)', () => {
+  it('a title hit outranks a body-only hit across a tree large enough to rebuild the index', async () => {
+    const baseDir = tmpTree();
+    for (let i = 0; i < 300; i++) writeNote(baseDir, `filler${i}.md`, { frontmatter: { title: `Filler ${i}` }, body: `unrelated padding ${i}` });
+    writeNote(baseDir, 'title-hit.md', { frontmatter: { title: 'Sarsaparilla' }, body: 'nothing else relevant here' });
+    writeNote(baseDir, 'body-hit.md', { frontmatter: { title: 'Unrelated' }, body: 'a sarsaparilla is mentioned only in passing here' });
+
+    await forEachStoreByCapability(
+      'lexical',
+      async (name) => {
+        const { store, cfg } = await openTreeForStore(name, baseDir);
+        const hits = await store.lexical.query('sarsaparilla', { whereJoin: '', whereCond: '', scopeCond: '', limit: 10 });
+        assert.deepEqual(
+          hits.map((h) => h.path),
+          ['title-hit.md', 'body-hit.md'],
+          `${name}: field weighting must survive a bulk build; equal ordering means scoring collapsed`
+        );
+        await store.close();
+      },
+      async () => {}
+    );
+  });
+});
+
 describe('store parity: the Store contract (every store)', () => {
   it("name matches the registry key, and capabilities match the store module's own declaration", async () => {
     const baseDir = tmpTree();

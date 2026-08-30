@@ -2,6 +2,13 @@
 
 All notable changes to sensemaking are documented here.
 
+## [0.19.1] - 2026-08-30
+
+### Fixed
+
+- A turso tree took 945 seconds to index the 6,566-note benchmark corpus and could not finish a 13k one at all. Turso maintains its full-text index on every inserted row, doing work proportional to what is already indexed, so a cold build was quadratic in note count. A bulk build now writes the rows first and builds the index once afterwards, inside the same transaction: the same corpus indexes in 3.3 seconds and the index on disk drops from 61.5 MB to 27 MB. Incremental edits are unchanged, keeping the index in place below a measured threshold of 250 changed files, above which rebuilding is cheaper than maintaining.
+- Two `sense` commands starting at the same moment on a tree with no index yet could fail with `database is locked` or `duplicate column name`. The busy timeout was applied after the WAL conversion it needed to cover, and both schema setup and the frontmatter column discovery read the column list before the write transaction they then altered inside. Commands on an existing index were unaffected.
+
 ## [0.19.0] - 2026-08-30
 
 ### Added

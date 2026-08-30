@@ -8,8 +8,9 @@ import { listFiles, RESERVED_COLUMNS } from '../../scan/index.ts';
 import { reparseFiles } from '../../scan/reparse.ts';
 import { hasUnspacedRun } from '../../text/segment.ts';
 import { getColumns, getMeta, quoteIdent, setMeta } from '../shared.ts';
-import { withTransaction } from '../transaction.ts';
+import { BEGIN_WRITE, withTransaction } from '../transaction.ts';
 import type { Connection } from '../types.ts';
+import { CONTENT_FTS_DDL, CONTENT_FTS_NAMES } from './open.ts';
 
 // Fork of sqlite/reconcile.ts, not duckdb's, so this store keeps reconcile_max_ms bookkeeping
 // (open.ts's busy timeout derives from it). content is a plain table with "_ngram" sidecars for lexical.ts.
@@ -24,6 +25,9 @@ function ngramSidecar(text: string): string {
 // Not a compile-time cap on ALTER TABLE ADD COLUMN (spike-measured: turso accepts 10,000 with
 // no error); the real fence is a SELECT projecting more than this many result columns, which fails to prepare.
 const MAX_FRONTMATTER_COLUMNS = 2000;
+
+// Changed files above which rebuilding the FTS index beats maintaining it per row (see reconcile).
+const FTS_REBUILD_THRESHOLD = 250;
 
 // No rowid coupling (unlike sqlite's FTS5 content): `path` is content's own primary key.
 const INSERT_CONTENT_SQL = `INSERT INTO content ("path", title, summary, text, title_ngram, summary_ngram, text_ngram) VALUES (?, ?, ?, ?, ?, ?, ?)`;
@@ -81,60 +85,76 @@ export async function reconcile(conn: Connection, cfg: Config, baseDir: string):
   const reparsedExisting = parsedDocs.map((d) => d.relPath).filter((p) => !addedSet.has(p));
 
   const txStart = Date.now();
-  await withTransaction(conn, async () => {
-    for (const col of newColumns) await conn.exec(`ALTER TABLE frontmatter ADD COLUMN ${quoteIdent(col)}`);
+  await withTransaction(
+    conn,
+    async () => {
+      for (const col of newColumns) await conn.exec(`ALTER TABLE frontmatter ADD COLUMN ${quoteIdent(col)}`);
 
-    if (parsedDocs.length > 0) {
-      const rows = parsedDocs.map((doc) =>
-        writableColumns.map((col) => {
-          if (col === 'path') return doc.relPath;
-          if (col === '_mtime') return doc.mtimeMs;
-          if (col === '_ctime') return doc.ctimeMs;
-          if (col === '_size') return doc.size;
-          // Written per parse, unlike _rank, which a feature pass owns and the upsert skips.
-          if (col === '_parse_error') return doc.parseError;
-          return doc.data[col] ?? null;
-        })
-      );
-      await conn.runBatch(insertSql, rows);
-    }
+      if (parsedDocs.length > 0) {
+        const rows = parsedDocs.map((doc) =>
+          writableColumns.map((col) => {
+            if (col === 'path') return doc.relPath;
+            if (col === '_mtime') return doc.mtimeMs;
+            if (col === '_ctime') return doc.ctimeMs;
+            if (col === '_size') return doc.size;
+            // Written per parse, unlike _rank, which a feature pass owns and the upsert skips.
+            if (col === '_parse_error') return doc.parseError;
+            return doc.data[col] ?? null;
+          })
+        );
+        await conn.runBatch(insertSql, rows);
+      }
 
-    // content is a plain table keyed by its own path (no rowid subquery, unlike sqlite's FTS5
-    // content), so vanished and reparsed docs delete in one pass.
-    const contentTouched = [...vanished, ...reparsedExisting];
-    if (contentTouched.length > 0)
-      await conn.runBatch(
-        'DELETE FROM content WHERE "path" = ?',
-        contentTouched.map((p) => [p])
-      );
-    if (parsedDocs.length > 0) await conn.runBatch(INSERT_CONTENT_SQL, parsedDocs.map(contentRow));
+      // Tantivy maintains the FTS index per inserted row and the cost grows with the batch, so a
+      // large insert is superlinear: 6,566 notes took 945s with the index live, 3.3s built after.
+      // Measured crossover against a full rebuild, in changed files: ~250 on a 6,566-note tree
+      // (100 -> 895ms, 300 -> 4.1s, 1,300 -> 45.5s, rebuild 3.35s), ~295 on 13,132 (250 -> 5.2s,
+      // 400 -> 10.0s, rebuild 6.7s). Doubling the corpus moved it 250 to 295, so a constant fits
+      // where a ratio does not: 20% would allow 1,313 files here, costing 45s to save 3.3s.
+      // Erring low is the cheap direction, since a needless rebuild is linear and predictable.
+      const churn = delta.reparsed.length + delta.vanished.length;
+      const bulk = delta.files.length === 0 || churn > FTS_REBUILD_THRESHOLD;
+      if (bulk) for (const name of CONTENT_FTS_NAMES) await conn.exec(`DROP INDEX IF EXISTS ${name}`);
 
-    if (vanished.length > 0)
-      await conn.runBatch(
-        'DELETE FROM frontmatter WHERE "path" = ?',
-        vanished.map((p) => [p])
-      );
+      // content is a plain table keyed by its own path (no rowid subquery, unlike sqlite's FTS5
+      // content), so vanished and reparsed docs delete in one pass.
+      const contentTouched = [...vanished, ...reparsedExisting];
+      if (contentTouched.length > 0)
+        await conn.runBatch(
+          'DELETE FROM content WHERE "path" = ?',
+          contentTouched.map((p) => [p])
+        );
+      if (parsedDocs.length > 0) await conn.runBatch(INSERT_CONTENT_SQL, parsedDocs.map(contentRow));
+      if (bulk) for (const ddl of CONTENT_FTS_DDL) await conn.exec(ddl);
 
-    // A preset edit forces a full rebuild, so an unchanged doc's coverage is already correct;
-    // new docs have nothing to clear, which keeps cold builds linear.
-    const presetTouched = [...vanished, ...reparsedExisting];
-    if (presetTouched.length > 0)
-      await conn.runBatch(
-        'DELETE FROM preset_files WHERE "path" = ?',
-        presetTouched.map((p) => [p])
-      );
-    const presetRows: unknown[][] = [];
-    for (const doc of parsedDocs) for (const presetName of doc.presets) presetRows.push([doc.relPath, presetName]);
-    if (presetRows.length > 0) await conn.runBatch('INSERT INTO preset_files ("path", preset) VALUES (?, ?)', presetRows);
+      if (vanished.length > 0)
+        await conn.runBatch(
+          'DELETE FROM frontmatter WHERE "path" = ?',
+          vanished.map((p) => [p])
+        );
 
-    const removedPaths = [...vanished, ...reparsedExisting];
-    if (removedPaths.length > 0) for (const feature of features) await feature.remove?.(conn, removedPaths, delta);
-    for (const feature of features) {
-      const docsForFeature: ExtractedDoc[] = parsedDocs.map((doc) => ({ path: doc.relPath, extracted: doc.extracted[feature.name] }));
-      await feature.store?.(conn, docsForFeature, delta);
-    }
-    for (const feature of features) await feature.afterReconcile?.(conn, delta);
-  });
+      // A preset edit forces a full rebuild, so an unchanged doc's coverage is already correct;
+      // new docs have nothing to clear, which keeps cold builds linear.
+      const presetTouched = [...vanished, ...reparsedExisting];
+      if (presetTouched.length > 0)
+        await conn.runBatch(
+          'DELETE FROM preset_files WHERE "path" = ?',
+          presetTouched.map((p) => [p])
+        );
+      const presetRows: unknown[][] = [];
+      for (const doc of parsedDocs) for (const presetName of doc.presets) presetRows.push([doc.relPath, presetName]);
+      if (presetRows.length > 0) await conn.runBatch('INSERT INTO preset_files ("path", preset) VALUES (?, ?)', presetRows);
+
+      const removedPaths = [...vanished, ...reparsedExisting];
+      if (removedPaths.length > 0) for (const feature of features) await feature.remove?.(conn, removedPaths, delta);
+      for (const feature of features) {
+        const docsForFeature: ExtractedDoc[] = parsedDocs.map((doc) => ({ path: doc.relPath, extracted: doc.extracted[feature.name] }));
+        await feature.store?.(conn, docsForFeature, delta);
+      }
+      for (const feature of features) await feature.afterReconcile?.(conn, delta);
+    },
+    BEGIN_WRITE
+  );
 
   // Reconcile's own write-transaction duration, for open()'s derived busy_timeout: the observed
   // max is what the next open bounds its wait against.

@@ -53,6 +53,10 @@ The mechanical facts are tested in `test/integration/docs.test.ts`; the rest is 
 
 8. Maintainer picks the version, then: `npm version <chosen>` → `npm publish` → `git push --follow-tags`. Confirm the tag reached the remote (`git ls-remote --tags origin`): a skipped push leaves a version on npm with no commit or tag behind it, and nothing downstream notices.
 
+Run the three as separate commands, never chained with `&&`: a chain publishes with no point to stop and read what is about to ship.
+
+`npm version` owns the version commit. Never hand-write one, and never fold the bump into the work commit: the bump is subject-only (the bare version number) and touches `package.json` and `package-lock.json` and nothing else, which is what every release in `git log` looks like. Squashing the work into minimal commits happens in step 7, before the bump, because the message is cheap to fix then and expensive after: rewriting anything below a published tag means deleting and recreating that tag.
+
 `npm version` leaves HEAD on the release commit, which reads like any other commit in `git log`. Never `--amend` from there, and check `git log -1` before amending at all: rewriting it diverges from the tag and from what npm already shipped. A follow-up fix is a new commit, and the next `npm version` carries it.
 
 9. Tell consumers what changed: dependent trees get their note, and the git tag's release notes carry the consumer-visible changes (new config keys, changed output shapes, bug fixes), the same list the maintainer used to pick the version. Commit messages and release notes are short and factual, and never carry a Co-Authored-By trailer. Consumers are on the previous version until they upgrade, so guidance written for unreleased behaviour is guidance that fails.

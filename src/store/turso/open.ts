@@ -30,11 +30,18 @@ export interface OpenResult {
 
 // The ngram index is scoped to disjoint "_ngram" sidecar columns: a second index over the same
 // columns makes a bare substring match a whole word, defeating the prefix-query rejection.
+// The two FTS indexes, named here because reconcile drops and rebuilds them around a bulk load:
+// Tantivy maintains them per inserted row, which is quadratic in what is already indexed.
+export const CONTENT_FTS_DDL = [
+  `CREATE INDEX IF NOT EXISTS content_fts ON content USING fts (title, summary, text) WITH (weights = 'title=10.0,summary=5.0,text=1.0')`,
+  `CREATE INDEX IF NOT EXISTS content_fts_ngram ON content USING fts (title_ngram, summary_ngram, text_ngram) WITH (tokenizer='ngram', weights='title_ngram=10.0,summary_ngram=5.0,text_ngram=1.0')`,
+] as const;
+export const CONTENT_FTS_NAMES = ['content_fts', 'content_fts_ngram'] as const;
+
 async function ensureSchema(conn: Connection, cfg: Config): Promise<void> {
   await conn.exec(`CREATE TABLE IF NOT EXISTS frontmatter ("path" TEXT PRIMARY KEY, "_mtime" REAL, "_ctime" REAL, "_size" INTEGER, "_parse_error" TEXT)`);
   await conn.exec(`CREATE TABLE IF NOT EXISTS content ("path" TEXT PRIMARY KEY, title TEXT, summary TEXT, text TEXT, title_ngram TEXT, summary_ngram TEXT, text_ngram TEXT)`);
-  await conn.exec(`CREATE INDEX IF NOT EXISTS content_fts ON content USING fts (title, summary, text) WITH (weights = 'title=10.0,summary=5.0,text=1.0')`);
-  await conn.exec(`CREATE INDEX IF NOT EXISTS content_fts_ngram ON content USING fts (title_ngram, summary_ngram, text_ngram) WITH (tokenizer='ngram', weights='title_ngram=10.0,summary_ngram=5.0,text_ngram=1.0')`);
+  for (const ddl of CONTENT_FTS_DDL) await conn.exec(ddl);
   await conn.exec(`CREATE TABLE IF NOT EXISTS preset_files ("path" TEXT, preset TEXT, PRIMARY KEY ("path", preset))`);
   await conn.exec('CREATE INDEX IF NOT EXISTS preset_files_preset ON preset_files(preset)');
   for (const feature of activeFeatures(cfg)) {

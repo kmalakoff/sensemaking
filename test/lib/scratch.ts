@@ -9,7 +9,15 @@ export const packageRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '
 const SCRATCH_ROOT = join(packageRoot, '.tmp', 'test');
 const dirs: string[] = [];
 after(() => {
-  for (const d of dirs) safeRmSync(d, { recursive: true, force: true });
+  // Per-dir try/catch: one wedged directory (a Windows handle not yet released) would otherwise
+  // abort the loop and leave every later dir behind, hiding the leak behind one failure.
+  for (const d of dirs) {
+    try {
+      safeRmSync(d, { recursive: true, force: true });
+    } catch (err) {
+      console.error(`scratch cleanup failed for ${d}: ${(err as Error).message}`);
+    }
+  }
 });
 
 export function scratchDir(prefix: string): string {

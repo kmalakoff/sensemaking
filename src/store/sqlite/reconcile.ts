@@ -9,7 +9,7 @@ import { listFiles, parseFile, RESERVED_COLUMNS } from '../../scan/index.ts';
 import { reparseFiles } from '../../scan/reparse.ts';
 import { segmentField } from '../../text/segment.ts';
 import { getColumns, getMeta, quoteIdent, setMeta } from '../shared.ts';
-import { withTransaction } from '../transaction.ts';
+import { BEGIN_WRITE, withTransaction } from '../transaction.ts';
 import type { Connection } from '../types.ts';
 
 // Feature-owned columns (`_rank`) must stay out of the upsert: a reparse would null the last
@@ -80,75 +80,82 @@ export async function reconcile(conn: Connection, cfg: Config, baseDir: string):
   const reparsedExisting = parsedDocs.map((d) => d.relPath).filter((p) => !addedSet.has(p));
 
   const txStart = Date.now();
-  await withTransaction(conn, async () => {
-    for (const col of newColumns) await conn.exec(`ALTER TABLE frontmatter ADD COLUMN ${quoteIdent(col)}`);
+  await withTransaction(
+    conn,
+    async () => {
+      // Re-read inside the write transaction: newColumns came from a read taken before it opened, so a
+      // concurrent reconcile may have added some of them since. ALTER has no IF NOT EXISTS.
+      const present = await getColumns(conn);
+      for (const col of newColumns) if (!present.has(col)) await conn.exec(`ALTER TABLE frontmatter ADD COLUMN ${quoteIdent(col)}`);
 
-    // content's rowid lookup depends on its coupled frontmatter row, so the content
-    // deletes/inserts run while every path still has one -- the vanished frontmatter delete comes last.
-    if (vanished.length > 0) {
-      await conn.runBatch(
-        'DELETE FROM content WHERE rowid = (SELECT rowid FROM frontmatter WHERE "path" = ?)',
-        vanished.map((p) => [p])
-      );
-    }
-    if (reparsedExisting.length > 0) {
-      // FTS5 has no upsert, so delete-before-insert, coupled to the frontmatter rowid (indexed via
-      // its PRIMARY KEY) rather than the UNINDEXED `path` column, which a per-row DELETE would scan to find.
-      await conn.runBatch(
-        'DELETE FROM content WHERE rowid = (SELECT rowid FROM frontmatter WHERE "path" = ?)',
-        reparsedExisting.map((p) => [p])
-      );
-    }
+      // content's rowid lookup depends on its coupled frontmatter row, so the content
+      // deletes/inserts run while every path still has one -- the vanished frontmatter delete comes last.
+      if (vanished.length > 0) {
+        await conn.runBatch(
+          'DELETE FROM content WHERE rowid = (SELECT rowid FROM frontmatter WHERE "path" = ?)',
+          vanished.map((p) => [p])
+        );
+      }
+      if (reparsedExisting.length > 0) {
+        // FTS5 has no upsert, so delete-before-insert, coupled to the frontmatter rowid (indexed via
+        // its PRIMARY KEY) rather than the UNINDEXED `path` column, which a per-row DELETE would scan to find.
+        await conn.runBatch(
+          'DELETE FROM content WHERE rowid = (SELECT rowid FROM frontmatter WHERE "path" = ?)',
+          reparsedExisting.map((p) => [p])
+        );
+      }
 
-    if (parsedDocs.length > 0) {
-      const rows = parsedDocs.map((doc) =>
-        writableColumns.map((col) => {
-          if (col === 'path') return doc.relPath;
-          if (col === '_mtime') return doc.mtimeMs;
-          if (col === '_ctime') return doc.ctimeMs;
-          if (col === '_size') return doc.size;
-          // Written per parse, unlike _rank, which a feature pass owns and the upsert skips.
-          if (col === '_parse_error') return doc.parseError;
-          return doc.data[col] ?? null;
-        })
-      );
-      await conn.runBatch(insertSql, rows);
+      if (parsedDocs.length > 0) {
+        const rows = parsedDocs.map((doc) =>
+          writableColumns.map((col) => {
+            if (col === 'path') return doc.relPath;
+            if (col === '_mtime') return doc.mtimeMs;
+            if (col === '_ctime') return doc.ctimeMs;
+            if (col === '_size') return doc.size;
+            // Written per parse, unlike _rank, which a feature pass owns and the upsert skips.
+            if (col === '_parse_error') return doc.parseError;
+            return doc.data[col] ?? null;
+          })
+        );
+        await conn.runBatch(insertSql, rows);
 
-      // A non-default tokenizer means the tree has chosen its own scheme; a phrase query over
-      // grapheme runs would be nonsense against trigram, so the sidecars stay empty.
-      const segmenting = contentTokenize(cfg) === undefined;
-      await conn.runBatch(
-        INSERT_CONTENT_SQL,
-        parsedDocs.map((doc) => contentRow(doc, segmenting))
-      );
-    }
+        // A non-default tokenizer means the tree has chosen its own scheme; a phrase query over
+        // grapheme runs would be nonsense against trigram, so the sidecars stay empty.
+        const segmenting = contentTokenize(cfg) === undefined;
+        await conn.runBatch(
+          INSERT_CONTENT_SQL,
+          parsedDocs.map((doc) => contentRow(doc, segmenting))
+        );
+      }
 
-    if (vanished.length > 0)
-      await conn.runBatch(
-        'DELETE FROM frontmatter WHERE "path" = ?',
-        vanished.map((p) => [p])
-      );
+      if (vanished.length > 0)
+        await conn.runBatch(
+          'DELETE FROM frontmatter WHERE "path" = ?',
+          vanished.map((p) => [p])
+        );
 
-    // A preset edit forces a full rebuild, so an unchanged doc's coverage is already correct;
-    // new docs have nothing to clear, which keeps cold builds linear.
-    const presetTouched = [...vanished, ...reparsedExisting];
-    if (presetTouched.length > 0)
-      await conn.runBatch(
-        'DELETE FROM preset_files WHERE "path" = ?',
-        presetTouched.map((p) => [p])
-      );
-    const presetRows: unknown[][] = [];
-    for (const doc of parsedDocs) for (const presetName of doc.presets) presetRows.push([doc.relPath, presetName]);
-    if (presetRows.length > 0) await conn.runBatch('INSERT INTO preset_files ("path", preset) VALUES (?, ?)', presetRows);
+      // A preset edit forces a full rebuild, so an unchanged doc's coverage is already correct;
+      // new docs have nothing to clear, which keeps cold builds linear.
+      const presetTouched = [...vanished, ...reparsedExisting];
+      if (presetTouched.length > 0)
+        await conn.runBatch(
+          'DELETE FROM preset_files WHERE "path" = ?',
+          presetTouched.map((p) => [p])
+        );
+      const presetRows: unknown[][] = [];
+      for (const doc of parsedDocs) for (const presetName of doc.presets) presetRows.push([doc.relPath, presetName]);
+      if (presetRows.length > 0) await conn.runBatch('INSERT INTO preset_files ("path", preset) VALUES (?, ?)', presetRows);
 
-    const removedPaths = [...vanished, ...reparsedExisting];
-    if (removedPaths.length > 0) for (const feature of features) await feature.remove?.(conn, removedPaths, delta);
-    for (const feature of features) {
-      const docsForFeature: ExtractedDoc[] = parsedDocs.map((doc) => ({ path: doc.relPath, extracted: doc.extracted[feature.name] }));
-      await feature.store?.(conn, docsForFeature, delta);
-    }
-    for (const feature of features) await feature.afterReconcile?.(conn, delta);
-  });
+      const removedPaths = [...vanished, ...reparsedExisting];
+      if (removedPaths.length > 0) for (const feature of features) await feature.remove?.(conn, removedPaths, delta);
+      for (const feature of features) {
+        const docsForFeature: ExtractedDoc[] = parsedDocs.map((doc) => ({ path: doc.relPath, extracted: doc.extracted[feature.name] }));
+        await feature.store?.(conn, docsForFeature, delta);
+      }
+      for (const feature of features) await feature.afterReconcile?.(conn, delta);
+    },
+    BEGIN_WRITE
+  );
 
   // Reconcile's own write-transaction duration, for open()'s derived busy_timeout (F):
   // keep the observed max so a big watcher reconcile's lock hold is what the next open bounds its wait against.
@@ -207,8 +214,12 @@ export async function rebuildContentTable(conn: Connection, cfg: Config, baseDir
     warnings.push(...fileWarnings);
     rows.push(contentRow(doc, segmenting));
   }
-  await withTransaction(conn, async () => {
-    if (rows.length > 0) await conn.runBatch(INSERT_CONTENT_SQL, rows);
-  });
+  await withTransaction(
+    conn,
+    async () => {
+      if (rows.length > 0) await conn.runBatch(INSERT_CONTENT_SQL, rows);
+    },
+    BEGIN_WRITE
+  );
   return warnings;
 }

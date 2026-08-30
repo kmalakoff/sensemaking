@@ -22,9 +22,9 @@ function stateFor(conn: ExecConnection): TxState {
   return state;
 }
 
-async function enter(conn: ExecConnection, state: TxState): Promise<void> {
+async function enter(conn: ExecConnection, state: TxState, begin: string): Promise<void> {
   if (state.depth === 0) {
-    await conn.exec('BEGIN');
+    await conn.exec(begin);
     state.rollbackOnly = false;
   }
   state.depth++;
@@ -48,11 +48,17 @@ async function leaveErr(conn: ExecConnection, state: TxState): Promise<void> {
   if (state.depth === 0) await conn.exec('ROLLBACK');
 }
 
-// Depth-0 opens BEGIN; a nested call joins it and issues no SQL of its own. The outermost call
-// owns COMMIT/ROLLBACK; every store and internal write loop goes through this one helper, so join semantics never differ by call site.
-export async function withTransaction<T>(conn: ExecConnection, fn: () => Promise<T>): Promise<T> {
+// A writer takes its lock at BEGIN rather than on first write: SQLite will not retry a deferred
+// transaction that read first and then upgrades, so busy_timeout never applies and the second
+// concurrent command fails outright instead of queueing. Reads keep plain BEGIN, or every snapshot
+// read (map, peek) would serialize against writers. DuckDB has no IMMEDIATE and passes nothing.
+export const BEGIN_WRITE = 'BEGIN IMMEDIATE';
+
+// Depth-0 opens the transaction; a nested call joins it and issues no SQL of its own. The outermost
+// call owns COMMIT/ROLLBACK, so join semantics never differ by call site.
+export async function withTransaction<T>(conn: ExecConnection, fn: () => Promise<T>, begin = 'BEGIN'): Promise<T> {
   const state = stateFor(conn);
-  await enter(conn, state);
+  await enter(conn, state, begin);
   let result: T;
   try {
     result = await fn();

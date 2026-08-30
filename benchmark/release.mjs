@@ -1,24 +1,40 @@
 // Release benchmark gate: node benchmark/release.mjs [--store <name>]. Runs every measurement
 // RELEASING.md reads and exits nonzero if any step does; fetches cache via benchmark/lib/cache.mjs.
 import { spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 const ROOT = join(new URL('.', import.meta.url).pathname, '..');
 const argv = process.argv.slice(2);
 const storeIdx = argv.indexOf('--store');
 const store = storeIdx >= 0 ? argv[storeIdx + 1] : null;
-const storeArgs = store ? ['--store', store] : [];
+const _storeArgs = store ? ['--store', store] : [];
 
 const MINUTES = 60_000;
-// [title, args, timeoutMs], cheapest first. A named store has no npm baseline and quality evals
-// are store-independent, so its gate is the tree battery alone: hub + scale + stress.
+
+// Every store schema.json offers, read from the schema rather than listed here: a store a tree can
+// name is a store this gate runs, and the two cannot drift apart. sqlite is the default the
+// baseline-bearing steps use, so the others are gated on the tree battery below.
+const OFFERED = JSON.parse(readFileSync(join(ROOT, 'schema.json'), 'utf8')).properties.store.enum;
+const DEFAULT_STORE = 'sqlite';
+
+// The tree battery, per store: the corpora at the sizes a real tree reaches. A store that only
+// ever ran against fixture trees can be quadratic and look fine, which is how turso shipped in
+// 0.19.0 unable to index the 6.5k hub corpus.
+const treeBattery = (name) => {
+  const args = name ? ['--store', name] : [];
+  return [
+    ['hub battery', ['benchmark/run.mjs', '.', 'obsidian-hub', ...args], 20 * MINUTES],
+    ['scale: 13k', ['benchmark/run.mjs', '.', '.tmp/cache/obsidian-hub-x2-x2-hub-1', ...args], 30 * MINUTES],
+    ['scale: 26k', ['benchmark/run.mjs', '.', '.tmp/cache/obsidian-hub-x4-x4-hub-1', ...args], 45 * MINUTES],
+    ['stress: shape-cliff guard', ['benchmark/run.mjs', '.', '.tmp/cache/stress-stress-1', ...args], 30 * MINUTES],
+  ].map(([title, a, t]) => [name ? `${title} (${name})` : title, a, t]);
+};
+
+// A named store runs its own battery alone. Otherwise: the default store's full gate, which owns
+// the npm baseline and the quality evals, then every other offered store's tree battery.
 const STEPS = store
-  ? [
-      ['hub battery', ['benchmark/run.mjs', '.', 'obsidian-hub', ...storeArgs], 20 * MINUTES],
-      ['scale: 13k', ['benchmark/run.mjs', '.', '.tmp/cache/obsidian-hub-x2-x2-hub-1', ...storeArgs], 30 * MINUTES],
-      ['scale: 26k', ['benchmark/run.mjs', '.', '.tmp/cache/obsidian-hub-x4-x4-hub-1', ...storeArgs], 45 * MINUTES],
-      ['stress: shape-cliff guard', ['benchmark/run.mjs', '.', '.tmp/cache/stress-stress-1', ...storeArgs], 30 * MINUTES],
-    ]
+  ? treeBattery(store)
   : [
       ['compare: last release vs working tree', ['benchmark/compare.mjs'], 30 * MINUTES],
       ['scale: 13k', ['benchmark/run.mjs', '.', '.tmp/cache/obsidian-hub-x2-x2-hub-1'], 30 * MINUTES],
@@ -26,6 +42,7 @@ const STEPS = store
       ['stress: shape-cliff guard', ['benchmark/run.mjs', '.', '.tmp/cache/stress-stress-1'], 30 * MINUTES],
       ['quality: nfcorpus', ['benchmark/eval.mjs', 'nfcorpus'], 20 * MINUTES],
       ['quality: fever', ['benchmark/eval.mjs', 'fever'], 45 * MINUTES],
+      ...OFFERED.filter((name) => name !== DEFAULT_STORE).flatMap(treeBattery),
     ];
 
 let failed = 0;
