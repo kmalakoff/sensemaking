@@ -2,13 +2,11 @@ import type { DuckDBConnection, DuckDBInstance } from '@duckdb/node-api';
 import type { Config } from '../../config/index.ts';
 import { STORE_DIMS } from '../../embed/types.ts';
 import { getColumns } from '../shared.ts';
-// pending()/hasVector() are IS NULL/IS NOT NULL checks the portable Connection already
-// answers identically regardless of the vector column's type, so this store reuses sqlite's
-// (engine-neutral despite the module name) instead of duplicating them.
-import { hasVectorRow, pendingRows } from '../sqlite/vectors.ts';
 import { withTransaction } from '../transaction.ts';
 import type { Capability, Connection, Statement, Store } from '../types.ts';
+import { hasVectorRow, pendingRows } from '../vectors.ts';
 import { storeRowToJs } from './connection.ts';
+import { fieldStats } from './fieldStats.ts';
 import { createLexicalIndex } from './lexical.ts';
 import { reconcile } from './reconcile.ts';
 import { scanCandidates, scanSimilar, writeVectorBatch } from './vectors.ts';
@@ -54,6 +52,7 @@ export function createStore(instance: DuckDBInstance, duckdb: DuckDBConnection, 
       async columns() {
         return [...(await getColumns(conn))];
       },
+      fieldStats: (columns, scopeWhere) => fieldStats(conn, columns, scopeWhere),
     },
     lexical: {
       query: lex.query,
@@ -67,6 +66,10 @@ export function createStore(instance: DuckDBInstance, duckdb: DuckDBConnection, 
       candidates: (qv, _storeDims, fetch, allowed) => scanCandidates(duckdb, qv, STORE_DIMS, fetch, allowed),
       similar: (path, opts) => scanSimilar(duckdb, conn, STORE_DIMS, path, opts),
       hasVector: (path) => hasVectorRow(conn, path),
+    },
+    // No comparable setting to report yet.
+    async engineStatus() {
+      return {};
     },
     raw: {
       async prepare(sql: string) {

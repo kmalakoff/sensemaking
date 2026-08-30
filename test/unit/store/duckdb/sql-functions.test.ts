@@ -38,9 +38,9 @@ describe('registerFunctions (duckdb)', () => {
     }
   });
 
-  // Principle 6: segment() is registered against the real src/text/segment.ts implementation,
-  // not a passthrough -- an unspaced-script run comes back rewritten into its grapheme phrase,
-  // not returned unchanged.
+  // PRINCIPLES: no-silent-modes. segment() is registered against the real src/text/segment.ts
+  // implementation, not a passthrough -- an unspaced-script run comes back rewritten into its
+  // grapheme phrase, not returned unchanged.
   it('segment() runs the real grapheme-phrase rewrite, not an identity passthrough', async () => {
     const conn = await openConn();
     try {

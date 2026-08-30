@@ -105,7 +105,9 @@ describe('no references to local planning files', () => {
     const self = relative(packageRoot, fileURLToPath(import.meta.url))
       .split(sep)
       .join('/');
-    const tracked = execFileSync('git', ['ls-files', '-z'], { cwd: packageRoot, encoding: 'utf8' }).split('\0').filter(Boolean);
+    // --others --exclude-standard so a not-yet-committed file is scanned too: tracked-only
+    // passes a new file's violation locally and fails only once it is committed.
+    const tracked = execFileSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], { cwd: packageRoot, encoding: 'utf8' }).split('\0').filter(Boolean);
     // git ls-files reports the index, which still names a file staged-but-not-yet-committed as
     // deleted in a working tree (a mid-flight rename/removal); skip what isn't actually there
     // rather than let readFileSync throw on a path this check never meant to police.

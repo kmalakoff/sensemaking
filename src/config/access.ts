@@ -1,13 +1,13 @@
 import type { Feature } from '../features/types.ts';
 import type { SignalName, SignalWeights } from './signals.ts';
-import { type Config, type EmbedConfig, FEATURE_NAMES, type FeatureName } from './types.ts';
+import { type Config, type EmbedConfig, FEATURE_NAMES, type FeatureName, type StoreName } from './types.ts';
 
 export function presetNames(cfg: Config): string[] {
   return Object.keys(cfg.presets);
 }
 
 // The backing store engine this tree uses; absent means the default.
-export function storeName(cfg: Config): 'sqlite' | 'duckdb' {
+export function storeName(cfg: Config): StoreName {
   return cfg.store ?? 'sqlite';
 }
 

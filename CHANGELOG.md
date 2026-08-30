@@ -2,6 +2,17 @@
 
 All notable changes to sensemaking are documented here.
 
+## [0.18.3] - 2026-08-30
+
+### Changed
+
+- `sense status` prints engine settings as a per-store block rather than a hard-coded sqlite line; in JSON, `busyTimeoutMs` is replaced by an `engine` object keyed by whatever that store reports. On sqlite the same `busy_timeout` value still appears, now as `engine.busy_timeout`.
+- `sense.config.json` is written stage-then-swap, so an interrupted `sense init` or config migration leaves the existing file intact instead of truncated.
+
+### Fixed
+
+- `sense map` reported `VARIANT` as the observed type of every frontmatter field under duckdb, since duckdb boxes those columns; it now reports the same `integer`/`real`/`text` vocabulary sqlite does. On both stores a multi-type field's types now print in a stable sorted order.
+
 ## [0.18.2] - 2026-08-29
 
 ### Changed

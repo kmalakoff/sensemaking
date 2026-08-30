@@ -8,6 +8,7 @@ import { contentTokenize, featureSignature, STATE_DIR } from '../../config/index
 import { SenseError } from '../../errors.ts';
 import { activeFeatures, FEATURES } from '../../features/index.ts';
 import { getMeta, setMeta } from '../shared.ts';
+import { withTransaction } from '../transaction.ts';
 import type { Connection, Store } from '../types.ts';
 import { createConnection } from './connection.ts';
 import { changedSignatureKeys, embedIdentityAdopted, rebuildContentTable, reconcile, signatureDiff } from './reconcile.ts';
@@ -70,17 +71,22 @@ function storedTokenize(db: DatabaseSync): string | null {
   return m ? m[1] : null;
 }
 
+// The three `_seg` sidecars are appended after path, never inserted: bm25(content, ...) and
+// snippet(content, 2, ...) are documented against the first three columns and keep working
+// (FTS5 defaults the weights it was not given). Each carries its field's exploded unspaced
+// runs for text that needs it, and an empty string for text that does not. Shared by
+// ensureSchema and the tokenize-only rebuild in connect(), so both create identical DDL.
+async function createContentTable(conn: Connection, tokenize: string): Promise<void> {
+  await conn.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS content USING fts5(title, summary, text, path UNINDEXED, title_seg, summary_seg, text_seg, tokenize = '${tokenize}')`);
+}
+
 // Content is a separate table (not a column on frontmatter) so `SELECT * FROM frontmatter`
 // can't dump file text into context. Features add their own tables after the core ones.
 async function ensureSchema(conn: Connection, cfg: Config, tokenize: string): Promise<void> {
   await conn.exec(`CREATE TABLE IF NOT EXISTS frontmatter ("path" TEXT PRIMARY KEY, "_mtime" REAL, "_ctime" REAL, "_size" INTEGER, "_parse_error" TEXT)`);
   // IF NOT EXISTS is safe against a tokenizer change: open() compares the table's own DDL
   // against the resolved tokenizer before this runs, so a stale table is already gone by now.
-  // The three `_seg` sidecars are appended after path, never inserted: bm25(content, ...) and
-  // snippet(content, 2, ...) are documented against the first three columns and keep working
-  // (FTS5 defaults the weights it was not given). Each carries its field's exploded unspaced
-  // runs for text that needs it, and an empty string for text that does not.
-  await conn.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS content USING fts5(title, summary, text, path UNINDEXED, title_seg, summary_seg, text_seg, tokenize = '${tokenize}')`);
+  await createContentTable(conn, tokenize);
   // Coverage, not ownership: a path can appear under several presets. path leads the PK so the
   // per-doc delete is an index hit -- keyed the other way, cold builds went quadratic.
   await conn.exec(`CREATE TABLE IF NOT EXISTS preset_files ("path" TEXT, preset TEXT, PRIMARY KEY ("path", preset))`);
@@ -136,7 +142,15 @@ async function connect(cfg: ResolvedConfig): Promise<ConnectResult> {
       // edit, an embed model change -- still takes the full clear/reopen below.
       if (changedKeys.size === 1 && changedKeys.has('tokenize')) {
         console.error('sense: config change (content tokenizer) rebuilds the text index; vectors, links, and sections are kept');
-        db.exec('DROP TABLE content');
+        // Drop and recreate as one transaction: a crash before COMMIT rolls back to the table
+        // that was there before (old tokenizer, still queryable), never to no table at all.
+        // IF EXISTS also makes a retry after such a crash a no-op instead of a raw SQLite error --
+        // meta.features is only updated once rebuildContentTable (below) finishes, so a retry
+        // re-enters this branch and repopulates from scratch either way.
+        await withTransaction(conn, async () => {
+          await conn.exec('DROP TABLE IF EXISTS content');
+          await createContentTable(conn, tokenize);
+        });
         tokenizeOnlyRebuild = true;
       } else if (changedKeys.size === 1 && changedKeys.has('embed') && embedIdentityAdopted(features ?? '', wantFeatures)) {
         // First sight of a resolved weight identity: the model itself hasn't changed, so
@@ -155,8 +169,8 @@ async function connect(cfg: ResolvedConfig): Promise<ConnectResult> {
 
     // Meta can lie after a crash between table creation and the signature write; the table's
     // own DDL cannot. A mismatch here rebuilds no matter what meta says. A tokenize-only rebuild
-    // just dropped content above, so storedTokenize sees no table and this guard is skipped
-    // naturally rather than needing its own case.
+    // already recreated content with this tokenize above, so stored already matches and this
+    // guard is skipped naturally rather than needing its own case.
     const stored = storedTokenize(db);
     if (stored !== null && stored !== tokenize) {
       console.error('sense: cache was built with a different content tokenizer; rebuilding the index');

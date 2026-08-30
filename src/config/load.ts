@@ -1,6 +1,7 @@
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { SenseError } from '../errors.ts';
+import { writeFileAtomic } from '../lib/atomic-write.ts';
 import type { Config, ResolvedConfig } from './types.ts';
 import { CONFIG_FILENAME, DEFAULT_EMBED_MODEL, SUPPORTED_CONFIG_VERSION } from './types.ts';
 import { unknownConfigKeys, validateConfig, validateLegacyScan } from './validate.ts';
@@ -189,7 +190,7 @@ export function initConfig(dir: string, overrides?: InitOverrides): string {
   }
   const cfg = starterConfig(overrides);
   validateConfig(cfg, configPath);
-  writeFileSync(configPath, `${JSON.stringify(cfg, null, 2)}\n`);
+  writeFileAtomic(configPath, `${JSON.stringify(cfg, null, 2)}\n`);
   return configPath;
 }
 
@@ -243,7 +244,7 @@ export function loadConfig(explicitPath?: string): ResolvedConfig {
     const result = migrateConfig(parsed as unknown as Config);
     cfg = validateConfig(result.cfg, configPath);
     migratedFrom = result.from;
-    writeFileSync(configPath, `${JSON.stringify(cfg, null, 2)}\n`);
+    writeFileAtomic(configPath, `${JSON.stringify(cfg, null, 2)}\n`);
   } else {
     cfg = validateConfig(parsed, configPath);
   }

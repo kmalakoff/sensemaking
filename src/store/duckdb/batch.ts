@@ -4,8 +4,9 @@
 // not just the async crossing to reach them, so this recognizes the three statement shapes the
 // store issues (INSERT ... VALUES (...), UPDATE ... SET ... WHERE ..., DELETE ... WHERE ...) and
 // rewrites each into a multi-row form, verified against a live DuckDB connection at
-// implementation time (principle 8). Unrecognized SQL returns null; connection.ts's runBatch
-// falls back to a prepare-once, bind-and-run loop -- still one call from outside the store.
+// implementation time (PRINCIPLES: documented-means-tested). Unrecognized SQL returns null;
+// connection.ts's runBatch falls back to a prepare-once, bind-and-run loop -- still one call
+// from outside the store.
 //
 // This only ever runs against sense's own SQL literals (reconcile, the feature hooks), never
 // arbitrary user SQL (`sense sql` is a separate, unrewritten passthrough), so the shapes below

@@ -180,6 +180,26 @@ describe('content.tokenize: a tokenize-only change rebuilds text only', () => {
     assert.deepEqual(match(dir, '全文搜'), ['cjk.md']); // content was actually rebuilt, with trigram
   });
 
+  it('self-heals a crash between the DROP and the recreate: content missing, meta still pointing at the old tokenizer', () => {
+    const dir = makeTree();
+    assert.equal(runCli(dir, ['sql', 'SELECT 1']).status, 0); // cold build, default tokenize
+
+    setTokenize(dir, 'trigram'); // config now wants trigram; meta.features still says the old one
+
+    // Simulate a crash between the DROP and the recreate: content gone from the persisted
+    // file, and (as in the real crash) meta was never touched, since that only happens once
+    // rebuildContentTable finishes.
+    const cachePath = join(dir, '.sense', 'cache.db');
+    const crashed = new DatabaseSync(cachePath);
+    crashed.exec('DROP TABLE content');
+    crashed.close();
+
+    const result = runCli(dir, ['sql', 'SELECT 1']);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stderr, /text index; vectors, links, and sections are kept/);
+    assert.deepEqual(match(dir, '全文搜'), ['cjk.md']); // content rebuilt with trigram, not wedged
+  });
+
   it('a preset include change still takes the full rebuild, not the text-index-only path', () => {
     const dir = makeTree();
     assert.equal(runCli(dir, ['sql', 'SELECT 1']).status, 0);

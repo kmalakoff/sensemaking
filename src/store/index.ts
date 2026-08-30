@@ -1,7 +1,7 @@
 // Rows -> a backing store: registry + openStore(cfg). Parsing lives in scan.ts; everything
 // beyond frontmatter + content lives in src/features/.
 
-import type { ResolvedConfig } from '../config/index.ts';
+import type { ResolvedConfig, StoreName } from '../config/index.ts';
 import { anyPresetEmbeds, storeName } from '../config/index.ts';
 import { SenseError } from '../errors.ts';
 import { openDuckdb } from './duckdb/open.ts';
@@ -9,9 +9,9 @@ import { CAPABILITIES as DUCKDB_CAPABILITIES } from './duckdb/store.ts';
 import type { OpenResult } from './sqlite/open.ts';
 import { openSqlite } from './sqlite/open.ts';
 import { CAPABILITIES as SQLITE_CAPABILITIES } from './sqlite/store.ts';
+import { openTurso } from './turso/open.ts';
+import { CAPABILITIES as TURSO_CAPABILITIES } from './turso/store.ts';
 import type { Capability } from './types.ts';
-
-type StoreName = 'sqlite' | 'duckdb';
 
 interface StoreEntry {
   capabilities: ReadonlySet<Capability>;
@@ -23,6 +23,7 @@ interface StoreEntry {
 const REGISTRY: Record<StoreName, StoreEntry> = {
   sqlite: { capabilities: SQLITE_CAPABILITIES, open: openSqlite },
   duckdb: { capabilities: DUCKDB_CAPABILITIES, open: openDuckdb },
+  turso: { capabilities: TURSO_CAPABILITIES, open: openTurso },
 };
 
 function entryFor(name: StoreName): StoreEntry {

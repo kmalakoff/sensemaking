@@ -47,6 +47,9 @@ function validateContentBlock(value: unknown, configPath: string): void {
   }
 }
 
+// "turso" is implemented but not offered: it has no lexical or vector search yet, so a tree
+// naming it could not search. Registered in the store registry and exercised by the parity
+// suite; re-add here and in schema.json's enum when those land.
 function validateStoreKey(value: unknown, configPath: string): void {
   if (value !== 'sqlite' && value !== 'duckdb') {
     throw new SenseError('CONFIG_INVALID', `${configPath}: store must be "sqlite" or "duckdb"`);

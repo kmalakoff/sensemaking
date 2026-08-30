@@ -134,8 +134,8 @@ describe('queryLexical (duckdb)', () => {
 });
 
 // FTS5 interprets these as operators; duckdb's word/substring split does not, so a bare query
-// containing one is rejected loudly (PRINCIPLES.md #6) instead of silently answering as a
-// literal-term match.
+// containing one is rejected loudly (PRINCIPLES: no-silent-modes) instead of silently
+// answering as a literal-term match.
 describe('queryLexical (duckdb): rejected FTS5 operators', () => {
   const cases: Array<{ name: string; terms: string; token: string }> = [
     { name: 'prefix query ("foo*")', terms: 'foo*', token: 'foo*' },

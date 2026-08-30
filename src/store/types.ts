@@ -2,6 +2,8 @@
 // by feature-owned tables and ad hoc queries) plus dedicated interfaces exactly where engines
 // diverge (lexical index, vector scan, raw sql passthrough).
 
+import type { StoreName } from '../config/index.ts';
+
 // 'lexical'/'vectors' mean the store's LexicalIndex/VectorStore are functionally implemented
 // (rather than present-but-inert); 'phrases'/'snippets'/'watch-concurrency' are the finer
 // behaviors sqlite's FTS5 path carries. A tree whose config needs a capability the chosen
@@ -39,9 +41,21 @@ export interface Connection {
   runBatch(sql: string, paramRows: unknown[][]): Promise<void>;
 }
 
+export interface FieldStat {
+  field: string;
+  coverage: number;
+  type: string;
+}
+
 export interface DocumentStore {
   // Frontmatter column names (including internal ones; callers filter).
   columns(): Promise<string[]>;
+  // Per-column coverage (non-null count) and observed type set, aggregated in SQL -- one query
+  // per call, never one row per note. `columns` is one chunk (caller owns the chunk size, a
+  // result-row column limit); `scopeWhere` is a caller-built WHERE fragment, same convention as
+  // LexicalQueryOptions. Each store expresses "observed type" through its own engine mechanism
+  // (native-not-emulated) but returns the shared integer/real/text vocabulary.
+  fieldStats(columns: string[], scopeWhere: string): Promise<FieldStat[]>;
 }
 
 export interface LexicalHit {
@@ -103,7 +117,7 @@ export interface SqlSession {
 }
 
 export interface Store {
-  readonly name: 'sqlite' | 'duckdb';
+  readonly name: StoreName;
   readonly capabilities: ReadonlySet<Capability>;
   exec(sql: string): Promise<void>;
   prepare(sql: string): Promise<Statement>;
@@ -122,5 +136,9 @@ export interface Store {
   lexical: LexicalIndex;
   vectors: VectorStore;
   raw: SqlSession;
+  // Engine-level facts for `sense status` (e.g. a derived busy_timeout PRAGMA reading), each
+  // store owning what it reports and how it is worded; the command prints entries generically,
+  // one line per fact, without knowing any store's name. Empty when there is nothing to report.
+  engineStatus(): Promise<Record<string, string>>;
   close(): Promise<void>;
 }

@@ -97,6 +97,7 @@
   },
   "devDependencies": {
     "@duckdb/node-api": "*",
+    "@tursodatabase/database": "*",
     "@types/mdast": "^4.0.4",
     "@types/mocha": "*",
     "@types/node": "*",

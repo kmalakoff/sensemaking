@@ -1,6 +1,7 @@
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { writeFileAtomic } from '../lib/atomic-write.ts';
 
 // HF cache layout, no network: ~/.sense/models/models--<org>--<name>/{refs/main,
 // snapshots/<sha>/<files>}, files stored directly (hf_hub's blobs/symlinks layer skipped).
@@ -38,7 +39,7 @@ export function readRef(model: string): string | undefined {
 // A recorded ref pins until its snapshot directory is removed; nothing here re-resolves it.
 export function writeRef(model: string, sha: string): void {
   mkdirSync(join(repoDir(model), 'refs'), { recursive: true });
-  writeFileSync(refsMainPath(model), sha);
+  writeFileAtomic(refsMainPath(model), sha);
 }
 
 export function snapshotDir(model: string, sha: string): string {
@@ -65,7 +66,7 @@ export function readLanguages(model: string): string[] | undefined {
 
 export function writeLanguages(model: string, languages: string[]): void {
   mkdirSync(repoDir(model), { recursive: true });
-  writeFileSync(languagesPath(model), JSON.stringify(languages));
+  writeFileAtomic(languagesPath(model), JSON.stringify(languages));
 }
 
 // A local directory the caller manages, or the resolved snapshot once `main` is pinned; an HF

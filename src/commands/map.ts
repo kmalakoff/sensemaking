@@ -1,7 +1,7 @@
 import type { FeatureName, ResolvedConfig, SearchOverrides } from '../config/index.ts';
 import { featureEnabled, featureStates } from '../config/index.ts';
 import type { Row } from '../output/output.ts';
-import type { Store } from '../store/types.ts';
+import type { FieldStat, Store } from '../store/types.ts';
 import { INTERNAL_COLUMNS, scopedPaths, setupMapScope } from './scope.ts';
 import type { PresetCoverage } from './status.ts';
 import { presetCoverage } from './status.ts';
@@ -17,8 +17,8 @@ export interface TreeMap {
   recentCaveat: string | null;
 }
 
-// A result row is capped at SQLITE_MAX_COLUMN (2000, default); two aggregate expressions
-// per field keeps a chunk's row safely under that regardless of how many fields the tree has.
+// A result row is capped at SQLITE_MAX_COLUMN (2000, default); two aggregate expressions per
+// field keeps a chunk's row width safely under that regardless of how many fields the tree has.
 const MAP_COLUMN_CHUNK = 300;
 
 // "YYYY-MM-DD HH:MM:SS" UTC, the exact shape sqlite's datetime(ms / 1000, 'unixepoch') prints;
@@ -44,19 +44,14 @@ export async function mapTree(store: Store, cfg: ResolvedConfig, overrides: Sear
     const docs = (await (await store.prepare(`SELECT COUNT(*) AS count, COALESCE(SUM("_size"), 0) AS bytes FROM frontmatter ${scopeWhere}`)).get()) as { count: number; bytes: number };
 
     const columns = (await store.docs.columns()).filter((name) => !INTERNAL_COLUMNS.has(name));
-    // Observed types, not declared: SQLite types per value, so a field can be text in most notes
-    // and numeric in a few. One aggregate scan per chunk of columns; FILTER matches COUNT's nulls.
-    const allFields: Row[] = [];
-    for (const group of chunk(columns, MAP_COLUMN_CHUNK)) {
-      const exprs = group.map((name, i) => {
-        const quoted = `"${name.split('"').join('""')}"`;
-        return `COUNT(${quoted}) AS n${i}, GROUP_CONCAT(DISTINCT typeof(${quoted})) FILTER (WHERE ${quoted} IS NOT NULL) AS t${i}`;
-      });
-      const result = (await (await store.prepare(`SELECT ${exprs.join(', ')} FROM frontmatter ${scopeWhere}`)).get()) as Record<string, number | string | null>;
-      group.forEach((name, i) => allFields.push({ field: name, coverage: result[`n${i}`] as number, type: (result[`t${i}`] as string) ?? '' }));
-    }
-    allFields.sort((a, b) => (b.coverage as number) - (a.coverage as number));
-    const fields = allFields.slice(0, 20);
+    // Observed types, not declared: a field can be text in most notes and numeric in a few, so
+    // every distinct type observed across the scope is reported, not just the first. Aggregated
+    // in SQL, one query per chunk of columns (native-not-emulated: each store's fieldStats()
+    // classifies through its own engine mechanism but returns the same vocabulary).
+    const allFields: FieldStat[] = [];
+    for (const group of chunk(columns, MAP_COLUMN_CHUNK)) allFields.push(...(await store.docs.fieldStats(group, scopeWhere)));
+    allFields.sort((a, b) => b.coverage - a.coverage);
+    const fields = allFields.slice(0, 20) as unknown as Row[];
 
     const hubs = featureEnabled(cfg, 'rank') ? ((await (await store.prepare(`SELECT f."path" AS path, round(f."_rank" * 100, 2) AS rank, content.title FROM frontmatter f JOIN content ON content.path = f."path" WHERE f."_rank" IS NOT NULL ${scopeAnd} ORDER BY f."_rank" DESC LIMIT 8`)).all()) as Row[]) : [];
 

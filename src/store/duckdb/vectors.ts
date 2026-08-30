@@ -1,6 +1,7 @@
 import type { DuckDBConnection, DuckDBType, DuckDBValue } from '@duckdb/node-api';
 import { withTransaction } from '../transaction.ts';
 import type { Connection, VectorCandidate, VectorSimilar, VectorWriteRow } from '../types.ts';
+import { asCosine, sampleEvenly } from '../vectors.ts';
 import { rewriteUpdate } from './batch.ts';
 import { duckdbApi } from './native.ts';
 
@@ -20,18 +21,6 @@ import { duckdbApi } from './native.ts';
 // A bind position whose type is left to auto-inference (safe for plain strings/numbers; only
 // the vector ARRAY positions below need an explicit type -- see writeVectorBatch's comment).
 const untyped = undefined as unknown as DuckDBType;
-
-// Seed chunks that participate in a `related` scan; must match sqlite/vectors.ts's
-// TARGET_CHUNK_CAP for identical sampling behavior (see that file for the measurement it's
-// based on -- 12.7s at 201 chunks/note without sampling).
-const TARGET_CHUNK_CAP = 16;
-
-// array_cosine_similarity is already a true cosine (no int8 accumulation to push slightly
-// outside [-1, 1]), but rounded the same way sqlite's scores are so both stores print the
-// same bounded number rather than one having more decimal noise than the other.
-function asCosine(score: number): number {
-  return Math.round(Math.min(1, Math.max(-1, score)) * 1000) / 1000;
-}
 
 // The DDL-fixed array width can exceed a vector's actual length (a hypothetical model sliced
 // under the column's width); zero-padding leaves cosine scores unchanged since the added
@@ -124,8 +113,7 @@ export async function scanSimilar(duckdb: DuckDBConnection, conn: Connection, di
   const targetStmt = await conn.prepare('SELECT vector FROM embeddings WHERE "path" = ? AND vector IS NOT NULL ORDER BY chunk');
   const targetRows = (await targetStmt.all(path)) as Array<{ vector: number[] }>;
   if (targetRows.length === 0) return [];
-  const step = Math.max(1, Math.ceil(targetRows.length / TARGET_CHUNK_CAP));
-  const targets = targetRows.filter((_, i) => i % step === 0).map((row) => row.vector);
+  const targets = sampleEvenly(targetRows).map((row) => row.vector);
 
   const { arrayValue, ARRAY, DOUBLE } = await duckdbApi();
   const excludeList = [...opts.exclude];

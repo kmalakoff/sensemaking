@@ -25,6 +25,11 @@ export interface EmbedConfig {
 
 export const DEFAULT_EMBED_MODEL = 'minishlab/potion-retrieval-32M';
 
+// The single declaration every other store-name union derives from (Store.name in
+// store/types.ts, the registry in store/index.ts): one store gets added here, not in four
+// hand-maintained copies.
+export type StoreName = 'sqlite' | 'duckdb' | 'turso';
+
 // A named, self-contained file-selection scope. include/exclude are globby patterns resolved
 // relative to the config file. No inheritance between presets -- every field a preset wants
 // it declares itself. Presets may overlap freely; they are views, not partitions.
@@ -71,9 +76,10 @@ export interface Config {
   // Settings for the `content` FTS5 table. `tokenize` decides which languages the tree can be
   // word-searched in at all; changing it rebuilds the index.
   content?: { tokenize?: string };
-  // Backing store engine for this tree: "sqlite" (default, zero-dependency) or "duckdb"
-  // (an optional dependency, installed on first use). Both implement the same commands.
-  store?: 'sqlite' | 'duckdb';
+  // Backing store engine for this tree: "sqlite" (default, zero-dependency), "duckdb", or
+  // "turso" (each an optional dependency, installed on first use). All three implement the same
+  // commands; "turso" implements only the portable surface so far (no lexical, no vectors).
+  store?: StoreName;
   queries: Record<string, SavedQuery>;
 }
 

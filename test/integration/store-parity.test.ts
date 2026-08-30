@@ -4,7 +4,7 @@ import { search } from 'sensemaking';
 import { mapTree, relatedNotes } from '../../src/commands/index.ts';
 import { findPath } from '../../src/graph/traverse.ts';
 import { writeModel } from '../lib/model.ts';
-import { openTreeForStore, STORE_NAMES } from '../lib/stores.ts';
+import { forEachOfStores, forEachOtherStore, forEachOtherStoreByCapability, forEachStore, forEachStoreByCapability, isMissingDependency, openTreeForStore, type ParityStoreName } from '../lib/stores.ts';
 import { CHINESE_SENTENCES, tmpTree, writeNote } from '../lib/tree.ts';
 
 async function docCount(store: Awaited<ReturnType<typeof openTreeForStore>>['store']): Promise<number> {
@@ -12,8 +12,17 @@ async function docCount(store: Awaited<ReturnType<typeof openTreeForStore>>['sto
   return Number(((await stmt.get()) as { n: number | bigint }).n);
 }
 
-// The same fixture tree indexed by both stores; sqlite is the reference implementation
-// (principle 1), duckdb is diffed against it.
+async function rankOrder(store: Awaited<ReturnType<typeof openTreeForStore>>['store'], label: string): Promise<string[]> {
+  const rows = (await (await store.prepare('SELECT "path", "_rank" FROM frontmatter ORDER BY "_rank" DESC, "path"')).all()) as Array<{ path: string; _rank: number }>;
+  assert.ok(
+    rows.every((r) => typeof r._rank === 'number'),
+    label
+  );
+  return rows.map((r) => r.path);
+}
+
+// The same fixture tree indexed by every store; sqlite is the reference implementation
+// (PRINCIPLES: proven-or-verified), every other store is diffed against it.
 
 function fixtureTree(): string {
   const baseDir = tmpTree();
@@ -32,18 +41,23 @@ function fixtureTree(): string {
   return baseDir;
 }
 
-describe('store parity: portable surface (sqlite vs duckdb)', () => {
+describe('store parity: portable surface (sqlite reference)', () => {
   it('docCount agrees', async () => {
     const baseDir = fixtureTree();
-    const results = await Promise.all(STORE_NAMES.map((store) => openTreeForStore(store, baseDir)));
-    const counts = await Promise.all(results.map((r) => docCount(r.store)));
-    assert.deepEqual(counts, [3, 3]);
-    await Promise.all(results.map((r) => r.store.close()));
+    const { store: sqliteStore } = await openTreeForStore('sqlite', baseDir);
+    const sqliteCount = await docCount(sqliteStore);
+    assert.equal(sqliteCount, 3, 'sqlite');
+    await sqliteStore.close();
+    await forEachOtherStore(async (store) => {
+      const { store: s } = await openTreeForStore(store, baseDir);
+      assert.equal(await docCount(s), sqliteCount, store);
+      await s.close();
+    });
   });
 
-  it('frontmatter values agree, including mixed-type dynamic columns and has()', async () => {
+  it('frontmatter values agree, including mixed-type dynamic columns', async () => {
     const baseDir = fixtureTree();
-    for (const store of STORE_NAMES) {
+    await forEachStore(async (store) => {
       const { store: s } = await openTreeForStore(store, baseDir);
       const rows = (await (await s.prepare('SELECT "path", title, priority FROM frontmatter ORDER BY "path"')).all()) as Array<{ path: string; title: string; priority: unknown }>;
       assert.deepEqual(
@@ -55,26 +69,23 @@ describe('store parity: portable surface (sqlite vs duckdb)', () => {
         ],
         store
       );
-      const hasRow = (await (await s.prepare(`SELECT has(tags, 'x') AS hx, has(tags, 'z') AS hz FROM frontmatter WHERE "path" = ?`)).get('a.md')) as { hx: unknown; hz: unknown };
-      assert.equal(Number(hasRow.hx), 1, store);
-      assert.equal(Number(hasRow.hz), 0, store);
       await s.close();
-    }
+    });
   });
 
   it('docs.columns() agrees on the discovered frontmatter keys', async () => {
     const baseDir = fixtureTree();
-    for (const store of STORE_NAMES) {
+    await forEachStore(async (store) => {
       const { store: s } = await openTreeForStore(store, baseDir);
       const columns = new Set(await s.docs.columns());
       for (const expected of ['path', 'title', 'priority', 'tags', 'active']) assert.ok(columns.has(expected), `${store} missing column ${expected}`);
       await s.close();
-    }
+    });
   });
 
   it('links and backlinks agree (wikilink + embed grain, dedup on second identical link)', async () => {
     const baseDir = fixtureTree();
-    for (const store of STORE_NAMES) {
+    await forEachStore(async (store) => {
       const { store: s } = await openTreeForStore(store, baseDir);
       const outbound = (await (await s.prepare('SELECT dst, embed FROM links WHERE src = ? ORDER BY embed')).all('a.md')) as Array<{ dst: string; embed: number }>;
       assert.deepEqual(
@@ -92,12 +103,12 @@ describe('store parity: portable surface (sqlite vs duckdb)', () => {
         store
       );
       await s.close();
-    }
+    });
   });
 
   it('sections agree', async () => {
     const baseDir = fixtureTree();
-    for (const store of STORE_NAMES) {
+    await forEachStore(async (store) => {
       const { store: s } = await openTreeForStore(store, baseDir);
       const sections = (await (await s.prepare('SELECT heading, level FROM sections WHERE "path" = ? ORDER BY idx')).all('a.md')) as Array<{ heading: string; level: number }>;
       assert.deepEqual(
@@ -109,12 +120,12 @@ describe('store parity: portable surface (sqlite vs duckdb)', () => {
         store
       );
       await s.close();
-    }
+    });
   });
 
   it('tags agree (frontmatter list + inline #tag)', async () => {
     const baseDir = fixtureTree();
-    for (const store of STORE_NAMES) {
+    await forEachStore(async (store) => {
       const { store: s } = await openTreeForStore(store, baseDir);
       const tags = (await (await s.prepare('SELECT tag FROM tags WHERE "path" = ? ORDER BY tag')).all('a.md')) as Array<{ tag: string }>;
       assert.deepEqual(
@@ -123,23 +134,49 @@ describe('store parity: portable surface (sqlite vs duckdb)', () => {
         store
       );
       await s.close();
-    }
+    });
   });
 
   it('rank (_rank) agrees on sign and ordering across the tree', async () => {
     const baseDir = fixtureTree();
-    const orders: string[][] = [];
-    for (const store of STORE_NAMES) {
+    const { store: sqliteStore } = await openTreeForStore('sqlite', baseDir);
+    const sqliteOrder = await rankOrder(sqliteStore, 'sqlite');
+    await sqliteStore.close();
+    await forEachOtherStore(async (store) => {
       const { store: s } = await openTreeForStore(store, baseDir);
-      const rows = (await (await s.prepare('SELECT "path", "_rank" FROM frontmatter ORDER BY "_rank" DESC, "path"')).all()) as Array<{ path: string; _rank: number }>;
-      assert.ok(
-        rows.every((r) => typeof r._rank === 'number'),
-        store
-      );
-      orders.push(rows.map((r) => r.path));
+      assert.deepEqual(await rankOrder(s, store), sqliteOrder, store);
       await s.close();
-    }
-    assert.deepEqual(orders[0], orders[1]);
+    });
+  });
+});
+
+// has()/basename()/segment() are sense-registered SQL functions (UDFs), not portable contract
+// (decision T6: shrunk to the store-agnostic intersection -- tables, `?` binds, scope). sqlite
+// and duckdb both register them; turso's client cannot register UDFs at all, so the
+// store-agnostic tests above never call has(), and its coverage lives here instead, scoped to
+// the stores that actually register it, plus turso's rejection as a declared difference
+// (PRINCIPLES: no-silent-modes).
+const SQL_FUNCTION_STORE_NAMES: Exclude<ParityStoreName, 'turso'>[] = ['sqlite', 'duckdb'];
+
+describe('store parity: has() (SQL function extra, not portable -- T6)', () => {
+  it('agrees on sqlite and duckdb, the stores that register it', async () => {
+    const baseDir = fixtureTree();
+    await forEachOfStores(SQL_FUNCTION_STORE_NAMES, async (store) => {
+      const { store: s } = await openTreeForStore(store, baseDir);
+      const hasRow = (await (await s.prepare(`SELECT has(tags, 'x') AS hx, has(tags, 'z') AS hz FROM frontmatter WHERE "path" = ?`)).get('a.md')) as { hx: unknown; hz: unknown };
+      assert.equal(Number(hasRow.hx), 1, store);
+      assert.equal(Number(hasRow.hz), 0, store);
+      await s.close();
+    });
+  });
+
+  it('turso rejects it: no UDF registration in this client, a declared difference not a gap', async () => {
+    const baseDir = fixtureTree();
+    await forEachOfStores(['turso'], async (store) => {
+      const { store: s } = await openTreeForStore(store, baseDir);
+      await assert.rejects(s.prepare(`SELECT has(tags, 'x') AS hx FROM frontmatter WHERE "path" = ?`), /no such function: has/, store);
+      await s.close();
+    });
   });
 });
 
@@ -164,7 +201,7 @@ function lexicalFixtureTree(): string {
   return baseDir;
 }
 
-async function searchPaths(store: 'sqlite' | 'duckdb', baseDir: string, terms: string): Promise<string[]> {
+async function searchPaths(store: ParityStoreName, baseDir: string, terms: string): Promise<string[]> {
   const { store: s, cfg } = await openTreeForStore(store, baseDir);
   try {
     const rows = await search(s, cfg, terms);
@@ -174,72 +211,131 @@ async function searchPaths(store: 'sqlite' | 'duckdb', baseDir: string, terms: s
   }
 }
 
-describe('store parity: lexical search (sqlite vs duckdb, D1)', () => {
+// Declared lexical divergences, keyed by case then store: a store not listed for a case must
+// match sqlite's result exactly. A listed store states its own expected result instead of
+// inheriting sqlite's by position, with the reason recorded alongside it -- a new store's
+// gaps become a tested table entry, not prose in a plan.
+const LEXICAL_DIVERGENCES: Partial<Record<string, Partial<Record<ParityStoreName, { paths: string[]; reason: string }>>>> = {
+  'exact substring (quoted, punctuated)': {
+    duckdb: { paths: ['compound.md'], reason: 'contains() requires the literal hyphen; FTS5 phrase-adjacency ignores it' },
+  },
+};
+
+// A store lacking a capability must fail loudly with STORE_CAPABILITY_MISSING naming it
+// (PRINCIPLES: no-silent-modes) -- this is that assertion, shared by every capability-gated
+// case below.
+// A missing-dependency error surfaces as an ordinary rejection too; a store that cannot even be
+// opened cannot be asked to reject a query, so it is left to propagate to the loop's own skip
+// (forEachStoreByCapability/forEachOtherStoreByCapability), not asserted as "rejected the query".
+async function assertCapabilityMissing(store: ParityStoreName, promise: Promise<unknown>, messagePattern: RegExp): Promise<void> {
+  try {
+    await promise;
+  } catch (err) {
+    if (isMissingDependency(err)) throw err;
+    assert.equal((err as SenseError).code, 'STORE_CAPABILITY_MISSING', store);
+    assert.match((err as SenseError).message, messagePattern);
+    return;
+  }
+  assert.fail(`${store} should reject this query`);
+}
+
+describe('store parity: lexical search (sqlite reference, D1)', () => {
   it('a plain term agrees on the top hit and the match set', async () => {
     const baseDir = lexicalFixtureTree();
-    const [sqlitePaths, duckdbPaths] = await Promise.all(STORE_NAMES.map((store) => searchPaths(store, baseDir, 'apple')));
+    const sqlitePaths = await searchPaths('sqlite', baseDir, 'apple');
     assert.deepEqual(sqlitePaths[0], 'apple.md', 'sqlite');
-    assert.deepEqual(duckdbPaths[0], 'apple.md', 'duckdb');
-    assert.deepEqual(new Set(sqlitePaths), new Set(duckdbPaths));
+    await forEachOtherStoreByCapability(
+      'lexical',
+      async (store) => {
+        const paths = await searchPaths(store, baseDir, 'apple');
+        assert.deepEqual(paths[0], sqlitePaths[0], store);
+        assert.deepEqual(new Set(paths), new Set(sqlitePaths), store);
+      },
+      (store) => assertCapabilityMissing(store, searchPaths(store, baseDir, 'apple'), /lexical/)
+    );
   });
 
   it('a bare multi-term query AND-joins identically: only the doc with every word matches', async () => {
     const baseDir = lexicalFixtureTree();
-    const [sqlitePaths, duckdbPaths] = await Promise.all(STORE_NAMES.map((store) => searchPaths(store, baseDir, 'apple banana')));
+    const sqlitePaths = await searchPaths('sqlite', baseDir, 'apple banana');
     assert.deepEqual(sqlitePaths, ['both.md'], 'sqlite');
-    assert.deepEqual(duckdbPaths, ['both.md'], 'duckdb');
+    await forEachOtherStoreByCapability(
+      'lexical',
+      async (store) => assert.deepEqual(await searchPaths(store, baseDir, 'apple banana'), sqlitePaths, store),
+      (store) => assertCapabilityMissing(store, searchPaths(store, baseDir, 'apple banana'), /lexical/)
+    );
   });
 
   // A documented divergence, not a bug: FTS5's tokenizer treats the hyphen as a separator, so
   // its quoted-phrase query matches "customer facing" as two adjacent tokens regardless of the
   // punctuation between them -- both docs qualify. DuckDB's contains() is a literal substring
-  // check (principle 1: String.prototype.includes is the cited spec), so only the doc whose raw
-  // text holds the hyphen matches. D1 chooses substring semantics deliberately over emulating
-  // FTS5's tokenization, so this is the expected shape, not a parity gap to close.
-  it('an exact substring (quoted, punctuated): duckdb is stricter than FTS5s token-adjacency', async () => {
+  // check (PRINCIPLES: proven-or-verified, where String.prototype.includes is the cited spec),
+  // so only the doc whose raw text holds the hyphen matches -- recorded in LEXICAL_DIVERGENCES
+  // above, not inline.
+  it('an exact substring (quoted, punctuated): a declared divergence, not a parity gap', async () => {
     const baseDir = lexicalFixtureTree();
-    const [sqlitePaths, duckdbPaths] = await Promise.all(STORE_NAMES.map((store) => searchPaths(store, baseDir, '"customer-facing"')));
+    const sqlitePaths = await searchPaths('sqlite', baseDir, '"customer-facing"');
     assert.deepEqual(new Set(sqlitePaths), new Set(['compound.md', 'not-compound.md']), 'sqlite: FTS5 phrase-adjacency ignores the hyphen');
-    assert.deepEqual(duckdbPaths, ['compound.md'], 'duckdb: contains() requires the literal hyphen');
+    await forEachOtherStoreByCapability(
+      'lexical',
+      async (store) => {
+        const paths = await searchPaths(store, baseDir, '"customer-facing"');
+        const divergence = LEXICAL_DIVERGENCES['exact substring (quoted, punctuated)']?.[store];
+        if (divergence) assert.deepEqual(paths, divergence.paths, `${store}: ${divergence.reason}`);
+        else assert.deepEqual(new Set(paths), new Set(sqlitePaths), store);
+      },
+      (store) => assertCapabilityMissing(store, searchPaths(store, baseDir, '"customer-facing"'), /lexical/)
+    );
   });
 
   it('a quoted phrase requires adjacency identically: the reordered doc is excluded on both sides', async () => {
     const baseDir = lexicalFixtureTree();
-    const [sqlitePaths, duckdbPaths] = await Promise.all(STORE_NAMES.map((store) => searchPaths(store, baseDir, '"stars and planets"')));
+    const sqlitePaths = await searchPaths('sqlite', baseDir, '"stars and planets"');
     assert.deepEqual(sqlitePaths, ['phrase.md'], 'sqlite');
-    assert.deepEqual(duckdbPaths, ['phrase.md'], 'duckdb');
+    await forEachOtherStoreByCapability(
+      'lexical',
+      async (store) => assert.deepEqual(await searchPaths(store, baseDir, '"stars and planets"'), sqlitePaths, store),
+      (store) => assertCapabilityMissing(store, searchPaths(store, baseDir, '"stars and planets"'), /lexical/)
+    );
   });
 
   it('a CJK substring query finds the same note on both sides, without word spaces', async () => {
     const baseDir = lexicalFixtureTree();
-    const [sqlitePaths, duckdbPaths] = await Promise.all(STORE_NAMES.map((store) => searchPaths(store, baseDir, '天气')));
+    const sqlitePaths = await searchPaths('sqlite', baseDir, '天气');
     assert.deepEqual(sqlitePaths, ['zh-weather.md'], 'sqlite');
-    assert.deepEqual(duckdbPaths, ['zh-weather.md'], 'duckdb');
+    await forEachOtherStoreByCapability(
+      'lexical',
+      async (store) => assert.deepEqual(await searchPaths(store, baseDir, '天气'), sqlitePaths, store),
+      (store) => assertCapabilityMissing(store, searchPaths(store, baseDir, '天气'), /lexical/)
+    );
   });
 
-  // FTS5 query syntax duckdb does not interpret (prefix `*`, boolean OR/NOT): sqlite honors it,
-  // duckdb rejects it loudly (STORE_CAPABILITY_MISSING) rather than silently answering as a
-  // literal-term match -- a declared difference (PRINCIPLES.md #6), not a parity gap.
-  it('a prefix query: sqlite honors it, duckdb rejects it loudly instead of answering differently', async () => {
+  // FTS5 query syntax other stores do not interpret (prefix `*`, boolean OR/NOT): sqlite honors
+  // it. Every other store rejects it loudly (STORE_CAPABILITY_MISSING) rather than silently
+  // answering as a literal-term match (PRINCIPLES: no-silent-modes), but the two ways to lack
+  // that grammar are both legitimate and name different things: duckdb has "lexical" but not
+  // FTS5 syntax, so it names the operator (T5: reject FTS5-only operators loudly); turso has no
+  // "lexical" at all, so it names the missing capability instead.
+  it('a prefix query: sqlite honors it, every other store rejects it loudly instead of answering differently', async () => {
     const baseDir = lexicalFixtureTree();
     const sqlitePaths = await searchPaths('sqlite', baseDir, 'appl*');
     assert.deepEqual(new Set(sqlitePaths), new Set(['apple.md', 'both.md']), 'sqlite');
-    await assert.rejects(searchPaths('duckdb', baseDir, 'appl*'), (err: SenseError) => {
-      assert.equal(err.code, 'STORE_CAPABILITY_MISSING');
-      assert.match(err.message, /prefix query/);
-      return true;
-    });
+    await forEachOtherStoreByCapability(
+      'lexical',
+      (store) => assertCapabilityMissing(store, searchPaths(store, baseDir, 'appl*'), /prefix query/),
+      (store) => assertCapabilityMissing(store, searchPaths(store, baseDir, 'appl*'), /lexical/)
+    );
   });
 
-  it('a boolean OR query: sqlite honors it, duckdb rejects it loudly instead of answering differently', async () => {
+  it('a boolean OR query: sqlite honors it, every other store rejects it loudly instead of answering differently', async () => {
     const baseDir = lexicalFixtureTree();
     const sqlitePaths = await searchPaths('sqlite', baseDir, 'apple OR banana');
     assert.deepEqual(new Set(sqlitePaths), new Set(['apple.md', 'banana.md', 'both.md']), 'sqlite');
-    await assert.rejects(searchPaths('duckdb', baseDir, 'apple OR banana'), (err: SenseError) => {
-      assert.equal(err.code, 'STORE_CAPABILITY_MISSING');
-      assert.match(err.message, /boolean operator/);
-      return true;
-    });
+    await forEachOtherStoreByCapability(
+      'lexical',
+      (store) => assertCapabilityMissing(store, searchPaths(store, baseDir, 'apple OR banana'), /boolean operator/),
+      (store) => assertCapabilityMissing(store, searchPaths(store, baseDir, 'apple OR banana'), /lexical/)
+    );
   });
 });
 
@@ -267,53 +363,71 @@ function relatedFixtureTree(): string {
   return baseDir;
 }
 
-describe('store parity: semantic search (sqlite vs duckdb, D2)', () => {
+async function semanticPaths(store: ParityStoreName, baseDir: string, embed: { model: string; provider: 'static' }, terms: string): Promise<Array<{ path: string; via: string }>> {
+  const { store: s, cfg } = await openTreeForStore(store, baseDir, { embed });
+  try {
+    return (await search(s, cfg, terms)) as Array<{ path: string; via: string }>;
+  } finally {
+    await s.close();
+  }
+}
+
+describe('store parity: semantic search (sqlite reference, D2)', () => {
   it('a vector-only query (zero lexical matches) agrees on the top hit and the match set', async () => {
     const baseDir = semanticFixtureTree();
     const embed = { model: writeModel(), provider: 'static' as const };
-    const [sqliteRows, duckdbRows] = await Promise.all(
-      STORE_NAMES.map(async (store) => {
-        const { store: s, cfg } = await openTreeForStore(store, baseDir, { embed });
-        const rows = (await search(s, cfg, 'pomme')) as Array<{ path: string; via: string }>;
-        await s.close();
-        return rows;
-      })
-    );
+    const sqliteRows = await semanticPaths('sqlite', baseDir, embed, 'pomme');
     assert.equal(sqliteRows[0]?.path, 'a.md', JSON.stringify(sqliteRows));
-    assert.equal(duckdbRows[0]?.path, 'a.md', JSON.stringify(duckdbRows));
     assert.ok(
       sqliteRows.every((r) => r.via === 'vector'),
       JSON.stringify(sqliteRows)
     );
-    assert.ok(
-      duckdbRows.every((r) => r.via === 'vector'),
-      JSON.stringify(duckdbRows)
+    await forEachOtherStoreByCapability(
+      'vectors',
+      async (store) => {
+        const rows = await semanticPaths(store, baseDir, embed, 'pomme');
+        assert.equal(rows[0]?.path, 'a.md', JSON.stringify(rows));
+        assert.ok(
+          rows.every((r) => r.via === 'vector'),
+          JSON.stringify(rows)
+        );
+        assert.deepEqual(new Set(rows.map((r) => r.path)), new Set(sqliteRows.map((r) => r.path)), store);
+      },
+      (store) => assertCapabilityMissing(store, semanticPaths(store, baseDir, embed, 'pomme'), /vectors/)
     );
-    assert.deepEqual(new Set(sqliteRows.map((r) => r.path)), new Set(duckdbRows.map((r) => r.path)));
   });
 });
 
-describe('store parity: related (sqlite vs duckdb, D2)', () => {
+async function relatedPaths(store: ParityStoreName, baseDir: string, embed: { model: string; provider: 'static' }, target: string) {
+  const { store: s, cfg } = await openTreeForStore(store, baseDir, { embed });
+  try {
+    return await relatedNotes(s, cfg, target, {}, 10);
+  } finally {
+    await s.close();
+  }
+}
+
+describe('store parity: related (sqlite reference, D2)', () => {
   // The worst-case path (cost is target_chunks x stored_chunks): rank agreement is asserted as
   // the top hit plus set equality, not full order, since a tie the int8/float noise can flip
   // either way is a legitimate divergence, not a bug (see the file-level comment above).
   it('agrees on the top hit and the candidate set, excluding linked notes on both sides', async () => {
     const baseDir = relatedFixtureTree();
     const embed = { model: writeModel(), provider: 'static' as const };
-    const [sqliteRows, duckdbRows] = await Promise.all(
-      STORE_NAMES.map(async (store) => {
-        const { store: s, cfg } = await openTreeForStore(store, baseDir, { embed });
-        const rows = await relatedNotes(s, cfg, 'target.md', {}, 10);
-        await s.close();
-        return rows;
-      })
-    );
+    const sqliteRows = await relatedPaths('sqlite', baseDir, embed, 'target.md');
     assert.ok(sqliteRows.length > 0, JSON.stringify(sqliteRows));
-    assert.equal(sqliteRows[0]?.path, duckdbRows[0]?.path, `top hit disagrees: ${JSON.stringify({ sqliteRows, duckdbRows })}`);
-    assert.deepEqual(new Set(sqliteRows.map((r) => r.path)), new Set(duckdbRows.map((r) => r.path)));
     assert.ok(
       sqliteRows.every((r) => r.path !== 'linked.md' && r.path !== 'backlinker.md'),
       JSON.stringify(sqliteRows)
+    );
+    await forEachOtherStoreByCapability(
+      'vectors',
+      async (store) => {
+        const rows = await relatedPaths(store, baseDir, embed, 'target.md');
+        assert.equal(rows[0]?.path, sqliteRows[0]?.path, `top hit disagrees: ${JSON.stringify({ sqliteRows, rows })}`);
+        assert.deepEqual(new Set(rows.map((r) => r.path)), new Set(sqliteRows.map((r) => r.path)), store);
+      },
+      (store) => assertCapabilityMissing(store, relatedPaths(store, baseDir, embed, 'target.md'), /vectors/)
     );
   });
 });
@@ -321,34 +435,47 @@ describe('store parity: related (sqlite vs duckdb, D2)', () => {
 // map, scoped search, and findPath each materialize a path set into a temp table and filter
 // against it; a whole-tree scope must change nothing and a narrowed scope must narrow
 // identically on both stores.
-describe('store parity: scoped commands (sqlite vs duckdb)', () => {
+describe('store parity: scoped commands (sqlite reference)', () => {
   it('mapTree agrees with a whole-tree scope and with a narrowed include', async () => {
     const baseDir = fixtureTree();
-    for (const store of STORE_NAMES) {
+    await forEachStore(async (store) => {
       const { store: s, cfg } = await openTreeForStore(store, baseDir);
       const whole = await mapTree(s, cfg);
       assert.equal(whole.docs.count, 3, store);
       assert.equal(whole.hubs.length, 3, store);
       assert.equal(whole.recent.length, 3, store);
+      // Field types are classified from decoded values, not engine typeof(), so the label is
+      // identical on every store: text-only, mixed (priority is a number in a.md, a string in
+      // b.md, absent in c.md), a JSON-stringified array, and a boolean stored as an integer.
+      const fieldTypes = Object.fromEntries(whole.fields.map((f) => [f.field, f.type]));
+      assert.deepEqual(fieldTypes, { title: 'text', priority: 'integer,text', tags: 'text', active: 'integer' }, store);
       const narrowed = await mapTree(s, cfg, { include: ['a.md', 'b.md'] });
       assert.equal(narrowed.docs.count, 2, store);
       assert.equal(narrowed.hubs.length, 2, store);
       assert.equal(narrowed.recent.length, 2, store);
       await s.close();
-    }
+    });
   });
 
   it('search agrees when the scope is narrowed with an include override', async () => {
     const baseDir = fixtureTree();
-    for (const store of STORE_NAMES) {
-      const { store: s, cfg } = await openTreeForStore(store, baseDir);
-      // a.md matches only via the link signal (b.md, a word hit, links back to it).
-      const full = (await search(s, cfg, 'note')).map((r) => r.path as string);
-      assert.deepEqual(new Set(full), new Set(['a.md', 'b.md', 'c.md']), store);
-      const scoped = (await search(s, cfg, 'note', { include: ['c.md'] })).map((r) => r.path as string);
-      assert.deepEqual(scoped, ['c.md'], store);
-      await s.close();
-    }
+    await forEachStoreByCapability(
+      'lexical',
+      async (store) => {
+        const { store: s, cfg } = await openTreeForStore(store, baseDir);
+        // a.md matches only via the link signal (b.md, a word hit, links back to it).
+        const full = (await search(s, cfg, 'note')).map((r) => r.path as string);
+        assert.deepEqual(new Set(full), new Set(['a.md', 'b.md', 'c.md']), store);
+        const scoped = (await search(s, cfg, 'note', { include: ['c.md'] })).map((r) => r.path as string);
+        assert.deepEqual(scoped, ['c.md'], store);
+        await s.close();
+      },
+      async (store) => {
+        const { store: s, cfg } = await openTreeForStore(store, baseDir);
+        await assertCapabilityMissing(store, search(s, cfg, 'note'), /lexical/);
+        await s.close();
+      }
+    );
   });
 
   it('findPath agrees, with and without an allowed scope', async () => {
@@ -356,12 +483,12 @@ describe('store parity: scoped commands (sqlite vs duckdb)', () => {
     writeNote(baseDir, 'a.md', { body: '[[b]]' });
     writeNote(baseDir, 'b.md', { body: '[[c]]' });
     writeNote(baseDir, 'c.md', { body: 'end.' });
-    for (const store of STORE_NAMES) {
+    await forEachStore(async (store) => {
       const { store: s } = await openTreeForStore(store, baseDir);
       assert.deepEqual(await findPath(s, 'a.md', 'c.md'), ['a.md', 'b.md', 'c.md'], store);
       assert.deepEqual(await findPath(s, 'a.md', 'c.md', { allowed: new Set(['a.md', 'b.md', 'c.md']) }), ['a.md', 'b.md', 'c.md'], store);
       assert.equal(await findPath(s, 'a.md', 'c.md', { allowed: new Set(['a.md', 'c.md']) }), null, store);
       await s.close();
-    }
+    });
   });
 });

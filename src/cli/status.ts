@@ -75,11 +75,9 @@ const status: Command = async (ctx) => {
   // Written by the store's open() on every open, so it is this cache's true version on either
   // store (sqlite 18, duckdb 2); a version mismatch already triggered a rebuild before this read.
   const cacheSchema = await getMeta(store, 'schema_version');
-  // Derived at open() (F): 3x the largest reconcile this cache has ever held its write
-  // transaction for, floored at 30s -- read back from the connection rather than
-  // recomputed here, so this always reports what open() actually set. The pragma is
-  // sqlite-engine-specific; other stores have no such setting and report null.
-  const busyTimeoutMs = store.name === 'sqlite' ? ((await (await store.prepare('PRAGMA busy_timeout')).get()) as { timeout: number }).timeout : null;
+  // Each store owns what it reports and how it is worded (Store.engineStatus); this command
+  // prints entries generically, without branching on any store's name.
+  const engine = await store.engineStatus();
   // The env var holds the token; only its name and whether it is set are ever reported.
   const keyEnv = e?.key ? { name: e.key, set: (process.env[e.key] ?? '') !== '' } : null;
   const result = {
@@ -100,7 +98,7 @@ const status: Command = async (ctx) => {
     queries: Object.keys(cfg.queries ?? {}).length,
     watcherPid: await getMeta(store, 'watch_pid'),
     watcherHeartbeatSecondsAgo: heartbeat ? Math.round((Date.now() - Date.parse(heartbeat)) / 1000) : null,
-    busyTimeoutMs,
+    engine,
   };
 
   if (format === 'json') {
@@ -146,7 +144,7 @@ const status: Command = async (ctx) => {
     console.log(`queries:  ${result.queries} saved (${ctx.name} --list)`);
     const pid = result.watcherPid ? `pid ${result.watcherPid}, ` : '';
     console.log(result.watcherHeartbeatSecondsAgo === null ? 'watcher:  none' : `watcher:  ${pid}last heartbeat ${result.watcherHeartbeatSecondsAgo}s ago`);
-    if (result.busyTimeoutMs !== null) console.log(`sqlite:   busy_timeout ${result.busyTimeoutMs}ms (derived: 3x the largest reconcile this cache has recorded, floored at 30000ms)`);
+    for (const [key, value] of Object.entries(result.engine)) console.log(`${`${store.name}:`.padEnd(10)}${key} ${value}`);
   }
   await store.close();
 };

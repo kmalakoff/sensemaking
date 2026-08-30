@@ -4,9 +4,11 @@ import { contentTokenize } from '../../config/index.ts';
 import { getColumns } from '../shared.ts';
 import { withTransaction } from '../transaction.ts';
 import type { Capability, Connection, Statement, Store, VectorWriteRow } from '../types.ts';
+import { hasVectorRow, pendingRows } from '../vectors.ts';
+import { fieldStats } from './fieldStats.ts';
 import { queryLexical } from './lexical.ts';
 import { reconcile } from './reconcile.ts';
-import { hasVectorRow, pendingRows, scanCandidates, scanSimilar, writeVectorBatch } from './vectors.ts';
+import { scanCandidates, scanSimilar, writeVectorBatch } from './vectors.ts';
 
 export const CAPABILITIES: ReadonlySet<Capability> = new Set(['phrases', 'snippets', 'watch-concurrency', 'lexical', 'vectors']);
 
@@ -36,6 +38,9 @@ export function createStore(db: DatabaseSync, conn: Connection, cfg: Config, bas
       async columns() {
         return [...(await getColumns(conn))];
       },
+      async fieldStats(columns, scopeWhere) {
+        return fieldStats(conn, columns, scopeWhere);
+      },
     },
     lexical: {
       async query(terms, opts) {
@@ -58,6 +63,12 @@ export function createStore(db: DatabaseSync, conn: Connection, cfg: Config, bas
       async hasVector(path) {
         return hasVectorRow(conn, path);
       },
+    },
+    async engineStatus() {
+      // Read back rather than recomputed: this is what open() actually set (3x the largest
+      // recorded reconcile, floored at 30s, capped at 10min), not a value re-derived here.
+      const row = db.prepare('PRAGMA busy_timeout').get() as { timeout: number };
+      return { busy_timeout: `${row.timeout}ms (derived: 3x the largest reconcile this cache has recorded, floored at 30000ms)` };
     },
     raw: {
       async prepare(sql: string) {

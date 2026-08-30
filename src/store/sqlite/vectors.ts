@@ -1,18 +1,5 @@
 import type { Connection, VectorCandidate, VectorSimilar, VectorWriteRow } from '../types.ts';
-
-// Seed chunks that participate in a `related` scan; see similar() for the measurement.
-const TARGET_CHUNK_CAP = 16;
-
-// Dequantised int8 dot products land a little either side of a true cosine, so an identical
-// pair prints 1.001 and undermines a column whose whole job is being a bounded number.
-function asCosine(score: number): number {
-  return Math.round(Math.min(1, Math.max(-1, score)) * 1000) / 1000;
-}
-
-export async function pendingRows(conn: Connection): Promise<Array<{ path: string; chunk: number }>> {
-  const stmt = await conn.prepare('SELECT "path", chunk FROM embeddings WHERE vector IS NULL ORDER BY "path", chunk');
-  return (await stmt.all()) as Array<{ path: string; chunk: number }>;
-}
+import { asCosine, sampleEvenly } from '../vectors.ts';
 
 // One runBatch call per provider batch: the caller (embed/query.ts) already batches by the
 // provider's batchCap, so this is one crossing per batch, never per row.
@@ -55,13 +42,10 @@ export async function scanCandidates(conn: Connection, qv: Float32Array, storeDi
 // Note-to-note similarity is the max cosine over (target chunk, other chunk) pairs, one linear
 // scan of stored vectors.
 export async function scanSimilar(conn: Connection, path: string, opts: { exclude: Set<string>; allowed?: Set<string>; k: number }): Promise<VectorSimilar[]> {
-  // Cost is target_chunks x stored_chunks, so a heading-dense seed multiplies a full-corpus
-  // scan (12.7s at 201 chunks/note). Sample evenly, so late sections still get a vote.
   const targetStmt = await conn.prepare('SELECT scale, vector FROM embeddings WHERE "path" = ? AND vector IS NOT NULL ORDER BY chunk');
   const targetRows = (await targetStmt.all(path)) as Array<{ scale: number; vector: Uint8Array }>;
   if (targetRows.length === 0) return [];
-  const step = Math.max(1, Math.ceil(targetRows.length / TARGET_CHUNK_CAP));
-  const target = targetRows.filter((_, i) => i % step === 0).map((row) => ({ v: new Int8Array(row.vector.buffer, row.vector.byteOffset, row.vector.byteLength), scale: row.scale }));
+  const target = sampleEvenly(targetRows).map((row) => ({ v: new Int8Array(row.vector.buffer, row.vector.byteOffset, row.vector.byteLength), scale: row.scale }));
 
   const stmt = await conn.prepare('SELECT "path", scale, vector FROM embeddings WHERE vector IS NOT NULL');
   const rows = (await stmt.all()) as Array<{ path: string; scale: number; vector: Uint8Array }>;
@@ -83,12 +67,4 @@ export async function scanSimilar(conn: Connection, path: string, opts: { exclud
     .sort((a, b) => b[1] - a[1])
     .slice(0, opts.k)
     .map(([p, score]) => ({ path: p, similarity: asCosine(score) }));
-}
-
-// Whether a note has any chunk with a vector. Distinguishes "nothing is near this note" from
-// "this note has no text", which look the same in an empty result.
-export async function hasVectorRow(conn: Connection, path: string): Promise<boolean> {
-  const stmt = await conn.prepare('SELECT 1 AS ok FROM embeddings WHERE "path" = ? AND vector IS NOT NULL LIMIT 1');
-  const row = (await stmt.get(path)) as { ok: number } | undefined;
-  return row !== undefined;
 }

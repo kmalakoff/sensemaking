@@ -2,8 +2,9 @@ import { DatabaseSync } from 'node:sqlite';
 import assert from 'assert';
 import { toStore } from '../../../../src/embed/query.ts';
 import { createConnection } from '../../../../src/store/sqlite/connection.ts';
-import { hasVectorRow, pendingRows, scanCandidates, scanSimilar, writeVectorBatch } from '../../../../src/store/sqlite/vectors.ts';
+import { scanCandidates, scanSimilar, writeVectorBatch } from '../../../../src/store/sqlite/vectors.ts';
 import type { Connection } from '../../../../src/store/types.ts';
+import { pendingRows } from '../../../../src/store/vectors.ts';
 
 const DIMS = 8;
 
@@ -189,36 +190,6 @@ describe('scanSimilar', () => {
     // 0.1 = sampled chunk 0's score (10 * 0.01 * 1). Chunk 1's score (127 * 100 * 1 = 12700,
     // clamped to 1) would win here if the cap did not limit seeding to the sampled subset.
     assert.equal(result[0].similarity, 0.1, 'an unsampled chunk (index 1) must not affect the score');
-  });
-});
-
-describe('pendingRows', () => {
-  it('returns only rows whose vector is NULL, ordered by path then chunk', async () => {
-    const { db, conn } = makeDb();
-    insertPending(db, 'b.md', 1);
-    insertPending(db, 'a.md', 0);
-    insertPending(db, 'a.md', 1);
-    await writeVectorBatch(conn, [{ path: 'a.md', chunk: 0, scale: 1, vector: int8([1]) }]);
-
-    assert.deepEqual(await pendingRows(conn), [
-      { path: 'a.md', chunk: 1 },
-      { path: 'b.md', chunk: 1 },
-    ]);
-  });
-});
-
-describe('hasVectorRow', () => {
-  it('distinguishes no rows, rows still pending, and at least one embedded chunk', async () => {
-    const { db, conn } = makeDb();
-    assert.equal(await hasVectorRow(conn, 'missing.md'), false);
-
-    insertPending(db, 'pending.md', 0);
-    assert.equal(await hasVectorRow(conn, 'pending.md'), false);
-
-    insertPending(db, 'partial.md', 0);
-    insertPending(db, 'partial.md', 1);
-    await writeVectorBatch(conn, [{ path: 'partial.md', chunk: 1, scale: 1, vector: int8([1]) }]);
-    assert.equal(await hasVectorRow(conn, 'partial.md'), true);
   });
 });
 

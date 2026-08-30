@@ -1,8 +1,9 @@
-import { existsSync, mkdirSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Config } from '../config/index.ts';
 import { embedConfig } from '../config/index.ts';
 import { SenseError } from '../errors.ts';
+import { writeFileAtomic } from '../lib/atomic-write.ts';
 import { fetchWithRetry } from './http.ts';
 import { hasModelFiles, isDownloadable, languagesPath, MODEL_FILES, readRef, snapshotDir, writeLanguages, writeRef } from './identity.ts';
 import { isKnownLanguageTag, MEASURED_MODEL_LANGUAGES } from './languages.ts';
@@ -99,8 +100,7 @@ async function fetchToFile(url: string, dest: string): Promise<void> {
     throw new SenseError('EMBED_MODEL', `could not reach ${url}: ${(err as Error).message}`);
   }
   if (!res.ok) throw new SenseError('EMBED_MODEL', `${url} -> HTTP ${res.status}`);
-  writeFileSync(`${dest}.part`, Buffer.from(await res.arrayBuffer()));
-  renameSync(`${dest}.part`, dest);
+  writeFileAtomic(dest, Buffer.from(await res.arrayBuffer()));
 }
 
 // Fetches an already-known sha straight into its snapshot dir, without touching refs/main --

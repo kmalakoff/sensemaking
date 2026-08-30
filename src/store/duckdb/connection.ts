@@ -16,6 +16,18 @@ export function storeRowToJs(row: Record<string, unknown>): Record<string, unkno
   return out;
 }
 
+// @duckdb/node-api tracks every prepared statement itself and destroys any survivor when the
+// connection closes, but sense's stores stay open for a whole `sense watch` session -- nothing
+// destroys one before then. The portable Statement interface has no dispose (sqlite's node:sqlite
+// statements need none, and callers like graph/traverse.ts's ring loop reuse one Statement across
+// several run/get/all calls, so a per-call destroy would be wrong), so cleanup happens here,
+// locally, once nothing references the wrapper any more. destroySync() is safe to call more than
+// once -- runBatch below and vectors.ts already call it explicitly while the same connection-close
+// sweep can also reach a statement that outlives its wrapper, with no reported issue.
+const preparedFinalizer = new FinalizationRegistry<DuckDBPreparedStatement>((prepared) => {
+  prepared.destroySync();
+});
+
 // Wraps one already-prepared DuckDB statement: prepare() is the only async step (Store.prepare
 // already crosses the async boundary once), so columns() reads back synchronously from it and
 // run/get/all rebind and re-execute the same native statement, matching how a caller (e.g.
@@ -25,6 +37,7 @@ class DuckdbStatement implements Statement {
 
   constructor(prepared: DuckDBPreparedStatement) {
     this.prepared = prepared;
+    preparedFinalizer.register(this, prepared);
   }
 
   async run(...params: unknown[]): Promise<RunResult> {

@@ -15,8 +15,9 @@ const FIELD_WEIGHT: Record<Field, number> = { title: 10, summary: 5, text: 1 };
 const UNSPACED_RUN = new RegExp(`[${UNSPACED_SCRIPTS}]`, 'u');
 
 // FTS5 operator syntax (sqlite.org/fts5.html sec. 3) that words/substrings below would
-// otherwise silently treat as literal terms instead of honoring (PRINCIPLES.md #6). Checked
-// against terms with quoted spans blanked -- those go through contains() and are supported.
+// otherwise silently treat as literal terms instead of honoring (PRINCIPLES: no-silent-modes).
+// Checked against terms with quoted spans blanked -- those go through contains() and are
+// supported.
 const FTS5_OPERATORS: Array<{ label: string; re: RegExp }> = [
   { label: 'prefix query', re: /[\p{L}\p{N}_]+\*(?=\s|$)/u },
   { label: 'boolean operator', re: /(?:^|\s)(?:AND|OR|NOT)(?=\s|$)/ },
