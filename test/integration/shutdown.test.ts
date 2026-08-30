@@ -2,6 +2,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import assert from 'assert';
+import { STORE_NAMES } from '../../src/config/index.ts';
 import { packageRoot } from '../lib/scratch.ts';
 import { tmpTree, writeNote } from '../lib/tree.ts';
 
@@ -12,9 +13,10 @@ import { tmpTree, writeNote } from '../lib/tree.ts';
 // a live process's cwd, and duckdb's install children outlive the signaled process and would strand it.
 describe('interrupting a pooled cold build', () => {
   const cli = join(packageRoot, 'bin', 'cli.js');
-  // Both stores, because the signal kills the process before `store.close()` can run: what is
-  // left behind is a WAL the engine recovers on its own, and duckdb's is a native handle, not Node's built-in SQLite.
-  const stores = ['sqlite', 'duckdb'];
+  // Every store, read from STORE_NAMES rather than listed here: the signal kills the process before
+  // `store.close()` can run, and what each engine leaves behind is its own (a WAL it recovers, a
+  // native handle, a Tantivy index mid-write), so a new store owes this proof too.
+  const stores = STORE_NAMES;
 
   // Past the 200-file pooling threshold, with bodies big enough that the reparse stage lasts
   // long enough to be interrupted rather than finishing before the signal arrives.

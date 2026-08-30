@@ -4,7 +4,7 @@ import { search } from 'sensemaking';
 import { mapTree, relatedNotes } from '../../src/commands/index.ts';
 import { findPath } from '../../src/graph/traverse.ts';
 import { writeModel } from '../lib/model.ts';
-import { declaredCapabilities, forEachOfStores, forEachOtherStore, forEachOtherStoreByCapability, forEachStore, forEachStoreByCapability, isMissingDependency, openTreeForStore, type ParityStoreName } from '../lib/stores.ts';
+import { declaredCapabilities, forEachOfStores, forEachOtherStore, forEachOtherStoreByCapability, forEachStore, forEachStoreByCapability, hasCapability, isMissingDependency, openTreeForStore, type ParityStoreName, STORE_NAMES } from '../lib/stores.ts';
 import { CHINESE_SENTENCES, tmpTree, writeNote } from '../lib/tree.ts';
 
 async function docCount(store: Awaited<ReturnType<typeof openTreeForStore>>['store']): Promise<number> {
@@ -152,7 +152,7 @@ describe('store parity: portable surface (sqlite reference)', () => {
 
 // has()/basename()/segment() are sense-registered SQL functions (UDFs), not portable contract.
 // sqlite and duckdb register them; turso's client cannot register UDFs, so its rejection is asserted as a declared difference (PRINCIPLES: no-silent-modes).
-const SQL_FUNCTION_STORE_NAMES: Exclude<ParityStoreName, 'turso'>[] = ['sqlite', 'duckdb'];
+const SQL_FUNCTION_STORE_NAMES = STORE_NAMES.filter((store) => hasCapability(store, 'sql-functions'));
 
 describe('store parity: has() (SQL function extra, not portable -- T6)', () => {
   it('agrees on sqlite and duckdb, the stores that register it', async () => {
@@ -247,7 +247,7 @@ describe('store parity: a bulk build keeps its ranking (every store)', () => {
     await forEachStoreByCapability(
       'lexical',
       async (name) => {
-        const { store, cfg } = await openTreeForStore(name, baseDir);
+        const { store } = await openTreeForStore(name, baseDir);
         const hits = await store.lexical.query('sarsaparilla', { whereJoin: '', whereCond: '', scopeCond: '', limit: 10 });
         assert.deepEqual(
           hits.map((h) => h.path),
@@ -257,6 +257,98 @@ describe('store parity: a bulk build keeps its ranking (every store)', () => {
         await store.close();
       },
       async () => {}
+    );
+  });
+});
+
+// Every capability is enforced in code or asserted here. 'sql-functions' dispatches the has()
+// cases below; this is its negative half, so a store that stops declaring it cannot pass silently.
+// 'snippets' and 'phrases' were declared by every store and read by nothing, in any commit since the
+// interface was extracted: accurate claims nothing verified. These are their assertions, so a store
+// cannot declare either without meeting it.
+describe('store parity: snippets and phrases are declared honestly (every store)', () => {
+  const tree = () => {
+    const baseDir = tmpTree();
+    writeNote(baseDir, 'phrase.md', { frontmatter: { title: 'Astronomy' }, body: 'the stars and planets fill the night sky above us' });
+    writeNote(baseDir, 'reordered.md', { frontmatter: { title: 'Reordered' }, body: 'planets and stars, in the other order entirely' });
+    return baseDir;
+  };
+  const opts = { whereJoin: '', whereCond: '', scopeCond: '', limit: 10 };
+
+  it('a store declaring snippets returns an excerpt, and one that does not returns null for every row', async () => {
+    const baseDir = tree();
+    await forEachStoreByCapability(
+      'snippets',
+      async (name) => {
+        const { store } = await openTreeForStore(name, baseDir);
+        const hits = await store.lexical.query('planets', opts);
+        assert.ok(hits.length > 0, `${name}: the fixture must match, or this asserts nothing`);
+        assert.ok(
+          hits.some((h) => h.hit !== null),
+          `${name} declares snippets, so at least one row must carry an excerpt`
+        );
+        await store.close();
+      },
+      async (name) => {
+        const { store } = await openTreeForStore(name, baseDir);
+        const hits = await store.lexical.query('planets', opts);
+        assert.ok(hits.length > 0, `${name}: the fixture must match, or this asserts nothing`);
+        assert.ok(
+          hits.every((h) => h.hit === null),
+          `${name} declares no snippets, so every row must return null rather than a partial excerpt`
+        );
+        await store.close();
+      }
+    );
+  });
+
+  it('a store declaring phrases requires adjacency, so a reordered doc is excluded', async () => {
+    const baseDir = tree();
+    await forEachStoreByCapability(
+      'phrases',
+      async (name) => {
+        const { store } = await openTreeForStore(name, baseDir);
+        const hits = await store.lexical.query('"stars and planets"', opts);
+        assert.deepEqual(
+          hits.map((h) => h.path),
+          ['phrase.md'],
+          `${name} declares phrases, so a quoted run must match adjacency and not a bag of words`
+        );
+        await store.close();
+      },
+      async (name) => {
+        const { store } = await openTreeForStore(name, baseDir);
+        await assert.rejects(() => store.lexical.query('"stars and planets"', opts), `${name} declares no phrases, so a quoted run must be refused rather than answered as loose terms`);
+        await store.close();
+      }
+    );
+  });
+});
+
+describe('store parity: sql-functions is declared honestly (every store)', () => {
+  it('a store declaring it resolves has(), and one that does not rejects the query', async () => {
+    const baseDir = tmpTree();
+    writeNote(baseDir, 'a.md', { frontmatter: { title: 'A', tags: ['x'] } });
+    const sql = `SELECT "path" FROM frontmatter WHERE has(tags, 'x')`;
+
+    await forEachStoreByCapability(
+      'sql-functions',
+      async (name) => {
+        const { store } = await openTreeForStore(name, baseDir);
+        const rows: unknown[] = [];
+        for await (const row of (await store.raw.prepare(sql)).iterate()) rows.push(row);
+        assert.deepEqual(rows, [{ path: 'a.md' }], name);
+        await store.close();
+      },
+      async (name) => {
+        const { store } = await openTreeForStore(name, baseDir);
+        // The message is the engine's own ("no such function: has"), not a named error naming the
+        // fix. Pinned as a rejection only, so this does not break when that is improved.
+        await assert.rejects(async () => {
+          for await (const _ of (await store.raw.prepare(sql)).iterate());
+        }, `${name} declares no sql-functions, so has() must not silently resolve`);
+        await store.close();
+      }
     );
   });
 });
