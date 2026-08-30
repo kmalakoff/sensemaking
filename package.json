@@ -80,6 +80,7 @@
   "dependencies": {
     "@huggingface/tokenizers": "^0.1.3",
     "franc-min": "^6.2.0",
+    "install-module-linked": "^1.6.5",
     "mdast-util-from-markdown": "^2.0.3",
     "mdast-util-gfm-autolink-literal": "^2.0.0",
     "mdast-util-gfm-footnote": "^2.0.0",
@@ -94,6 +95,7 @@
     "yaml": "^2.9.0"
   },
   "devDependencies": {
+    "@duckdb/node-api": "*",
     "@types/mdast": "^4.0.4",
     "@types/mocha": "*",
     "@types/node": "*",
@@ -101,9 +103,6 @@
     "node-version-use": "*",
     "ts-dev-stack": "*",
     "tsds-config": "*"
-  },
-  "optionalDependencies": {
-    "@duckdb/node-api": "^1.5.5-r.4"
   },
   "engines": {
     "node": ">=22.20"

@@ -1,4 +1,4 @@
-import type { DuckDBConnection } from '@duckdb/node-api';
+import type { DuckDBConnection, DuckDBInstance } from '@duckdb/node-api';
 import type { Config } from '../../config/index.ts';
 import { STORE_DIMS } from '../../embed/types.ts';
 import { getColumns } from '../shared.ts';
@@ -8,6 +8,7 @@ import { getColumns } from '../shared.ts';
 import { hasVectorRow, pendingRows } from '../sqlite/vectors.ts';
 import { withTransaction } from '../transaction.ts';
 import type { Capability, Connection, Statement, Store } from '../types.ts';
+import { storeRowToJs } from './connection.ts';
 import { createLexicalIndex } from './lexical.ts';
 import { reconcile } from './reconcile.ts';
 import { scanCandidates, scanSimilar, writeVectorBatch } from './vectors.ts';
@@ -22,8 +23,10 @@ import { scanCandidates, scanSimilar, writeVectorBatch } from './vectors.ts';
 export const CAPABILITIES: ReadonlySet<Capability> = new Set(['lexical', 'phrases', 'vectors']);
 
 // Shares one Connection instance (conn) with open()'s own reconcile call so transaction depth
-// (see transaction.ts) is tracked against the same object everywhere.
-export function createStore(duckdb: DuckDBConnection, conn: Connection, cfg: Config, baseDir: string): Store {
+// (see transaction.ts) is tracked against the same object everywhere. The instance is the
+// native database handle that owns the WAL: close() must close it, not just disconnect the
+// connection, or DuckDB never checkpoints and the next open reads a mismatched WAL.
+export function createStore(instance: DuckDBInstance, duckdb: DuckDBConnection, conn: Connection, cfg: Config, baseDir: string): Store {
   const lex = createLexicalIndex(conn);
   return {
     name: 'duckdb',
@@ -82,15 +85,17 @@ export function createStore(duckdb: DuckDBConnection, conn: Connection, cfg: Con
             let yielded = 0;
             do {
               await reader.readUntil(reader.currentRowCount + 2048);
-              const rows = reader.getRowObjectsJS();
-              for (; yielded < rows.length; yielded++) yield rows[yielded];
+              const rows = reader.getRowObjectsJS() as Array<Record<string, unknown>>;
+              for (; yielded < rows.length; yielded++) yield storeRowToJs(rows[yielded]);
             } while (!reader.done);
           },
         };
       },
     },
     async close() {
+      // Order matters: the connection must be gone before the instance closes the WAL.
       duckdb.disconnectSync();
+      instance.closeSync();
     },
   };
 }

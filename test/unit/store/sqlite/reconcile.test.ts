@@ -31,6 +31,7 @@ describe('reconcile', () => {
       ['a.md', 'b.md']
     );
     assert.equal(result.parsed, 2);
+    await result.store.close();
   });
 
   it('unchanged files are not reparsed on a second open', async () => {

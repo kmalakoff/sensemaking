@@ -1,5 +1,5 @@
 import { peek } from '../commands/peek.ts';
-import { renderPeek } from '../output/output.ts';
+import { renderPeek, stringifyJson } from '../output/output.ts';
 import { USAGE } from './index.ts';
 import { CONFIG, FORMAT, formatOf, parse, SCOPE, scopeOf, withDb } from './shared.ts';
 import type { Command } from './types.ts';
@@ -13,7 +13,7 @@ const peekCmd: Command = (ctx) => {
   return withDb(ctx, values.config as string | undefined, async (store, cfg) => {
     const overrides = scopeOf(values);
     const result = await peek(store, cfg, pathArg, overrides);
-    console.log(format === 'json' ? JSON.stringify(result, null, 2) : renderPeek(result));
+    console.log(format === 'json' ? stringifyJson(result, 2) : renderPeek(result));
   });
 };
 export default peekCmd;

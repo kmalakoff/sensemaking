@@ -64,12 +64,13 @@ export async function scopedPaths(store: Store, cfg: ResolvedConfig, overrides: 
 
 // Materializes a path set into a named temp table (same shape as traverse.ts's allowed_nodes)
 // so a query can join/filter against it cheaply instead of binding a parameter per path.
-// json_each is SQLite dialect (phase 3 concern for a portable store).
 export async function materializeScope(store: Store, table: string, paths: Set<string>): Promise<void> {
   await store.exec(`DROP TABLE IF EXISTS ${table}`);
   await store.exec(`CREATE TEMP TABLE ${table} ("path" TEXT PRIMARY KEY)`);
-  const insert = await store.prepare(`INSERT INTO ${table} SELECT DISTINCT value FROM json_each(?1)`);
-  await insert.run(JSON.stringify([...paths]));
+  await store.runBatch(
+    `INSERT INTO ${table} ("path") VALUES (?)`,
+    [...paths].map((p) => [p])
+  );
 }
 
 export async function setupMapScope(store: Store, paths: Set<string>): Promise<void> {

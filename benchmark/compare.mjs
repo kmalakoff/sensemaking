@@ -1,12 +1,12 @@
 // Run run.mjs per version against its own copy of the tree, print a pasteable table. The
 // baseline is package.json's version, so a bare run answers "did the working tree regress?".
-// usage: node benchmark/compare.mjs [corpus-or-dir] [version...]
+// usage: node benchmark/compare.mjs [corpus-or-dir] [version...] [--store <name>]
 import { spawnSync } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { cached } from './lib/cache.mjs';
-import { corpusPath } from './lib/corpus.mjs';
+import { corpusPath, writeTreeConfig } from './lib/corpus.mjs';
 
 const benchDir = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(benchDir, '..');
@@ -20,7 +20,12 @@ function releasedBaseline() {
   return pkg.version;
 }
 
-const [corpusArg, ...versionArgs] = process.argv.slice(2);
+const argv = process.argv.slice(2);
+const storeIdx = argv.indexOf('--store');
+const store = storeIdx >= 0 ? argv[storeIdx + 1] : null;
+// With no flag storeIdx is -1, and filtering on storeIdx + 1 (0) would drop the first positional.
+const positional = storeIdx >= 0 ? argv.filter((_a, i) => i !== storeIdx && i !== storeIdx + 1) : argv;
+const [corpusArg, ...versionArgs] = positional;
 const treeDir = corpusArg ? (corpusPath(corpusArg) ?? resolve(corpusArg)) : corpusPath('obsidian-hub');
 if (!existsSync(treeDir)) {
   console.error(`not a corpus name or directory: ${corpusArg}`);
@@ -46,14 +51,16 @@ function rootFor(version) {
 function treeCopyFor(version) {
   const copy = join(work, `tree-${version}`);
   cpSync(treeDir, copy, { recursive: true, filter: (src) => !/\/(\.sense|\.git|node_modules)(\/|$)/.test(src) });
-  writeFileSync(join(copy, 'sense.config.json'), '{"version":1,"scan":{"include":["**/*.md"]},"queries":{}}');
+  // No store key here: run.mjs rewrites the config for every new-dialect column (adding the
+  // store when one is named), and old-dialect columns read the v1 shape as-is.
+  writeTreeConfig(copy, { version: 1, scan: { include: ['**/*.md'] }, queries: {} });
   return copy;
 }
 
 const results = new Map();
 for (const version of versions) {
   process.stderr.write(`benchmarking ${version}...\n`);
-  const out = spawnSync(process.execPath, [join(benchDir, 'run.mjs'), rootFor(version), treeCopyFor(version)], { encoding: 'utf8', maxBuffer: 16e6 });
+  const out = spawnSync(process.execPath, [join(benchDir, 'run.mjs'), rootFor(version), treeCopyFor(version), ...(store ? ['--store', store] : [])], { encoding: 'utf8', maxBuffer: 16e6 });
   if (out.status !== 0) {
     console.error(`run.mjs failed for ${version}:\n${out.stderr}`);
     process.exit(1);

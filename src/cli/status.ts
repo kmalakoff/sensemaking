@@ -4,7 +4,7 @@ import { embedConfig, featureStates, SUPPORTED_CONFIG_VERSION } from '../config/
 import { languageDistribution } from '../embed/distribution.ts';
 import { probeReachable } from '../embed/http.ts';
 import { isDownloadable, MODEL_FILENAMES, modelDir, modelPresent, readLanguages } from '../embed/store.ts';
-import { featuresLine, presetsLines } from '../output/output.ts';
+import { featuresLine, presetsLines, stringifyJson } from '../output/output.ts';
 import { docCount, getMeta, openStore, SCHEMA_VERSION } from '../store/index.ts';
 import type { Store } from '../store/types.ts';
 import { USAGE } from './index.ts';
@@ -74,8 +74,9 @@ const status: Command = async (ctx) => {
   const heartbeat = await getMeta(store, 'watch_heartbeat');
   // Derived at open() (F): 3x the largest reconcile this cache has ever held its write
   // transaction for, floored at 30s -- read back from the connection rather than
-  // recomputed here, so this always reports what open() actually set.
-  const busyTimeoutMs = ((await (await store.prepare('PRAGMA busy_timeout')).get()) as { timeout: number }).timeout;
+  // recomputed here, so this always reports what open() actually set. The pragma is
+  // sqlite-engine-specific; other stores have no such setting and report null.
+  const busyTimeoutMs = store.name === 'sqlite' ? ((await (await store.prepare('PRAGMA busy_timeout')).get()) as { timeout: number }).timeout : null;
   // The env var holds the token; only its name and whether it is set are ever reported.
   const keyEnv = e?.key ? { name: e.key, set: (process.env[e.key] ?? '') !== '' } : null;
   const result = {
@@ -100,7 +101,7 @@ const status: Command = async (ctx) => {
   };
 
   if (format === 'json') {
-    console.log(JSON.stringify(result, null, 2));
+    console.log(stringifyJson(result, 2));
   } else {
     const migrated = cfg.migratedFrom !== undefined ? `, migrated from v${cfg.migratedFrom} on this run` : '';
     console.log(`config:   ${result.config} (v${SUPPORTED_CONFIG_VERSION}${migrated})`);
@@ -142,7 +143,7 @@ const status: Command = async (ctx) => {
     console.log(`queries:  ${result.queries} saved (${ctx.name} --list)`);
     const pid = result.watcherPid ? `pid ${result.watcherPid}, ` : '';
     console.log(result.watcherHeartbeatSecondsAgo === null ? 'watcher:  none' : `watcher:  ${pid}last heartbeat ${result.watcherHeartbeatSecondsAgo}s ago`);
-    console.log(`sqlite:   busy_timeout ${result.busyTimeoutMs}ms (derived: 3x the largest reconcile this cache has recorded, floored at 30000ms)`);
+    if (result.busyTimeoutMs !== null) console.log(`sqlite:   busy_timeout ${result.busyTimeoutMs}ms (derived: 3x the largest reconcile this cache has recorded, floored at 30000ms)`);
   }
   await store.close();
 };

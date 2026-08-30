@@ -1,7 +1,8 @@
 import assert from 'node:assert';
 import type { SenseError } from 'sensemaking';
 import { search } from 'sensemaking';
-import { relatedNotes } from '../../src/commands/index.ts';
+import { mapTree, relatedNotes } from '../../src/commands/index.ts';
+import { findPath } from '../../src/graph/traverse.ts';
 import { writeModel } from '../lib/model.ts';
 import { openTreeForStore, STORE_NAMES } from '../lib/stores.ts';
 import { CHINESE_SENTENCES, tmpTree, writeNote } from '../lib/tree.ts';
@@ -12,9 +13,7 @@ async function docCount(store: Awaited<ReturnType<typeof openTreeForStore>>['sto
 }
 
 // The same fixture tree indexed by both stores; sqlite is the reference implementation
-// (principle 1). This slice's duckdb store covers the portable surface only (frontmatter,
-// links/backlinks, sections, tags, docCount) -- no lexical/vector search yet, so this file
-// asserts parity on exactly that surface.
+// (principle 1), duckdb is diffed against it.
 
 function fixtureTree(): string {
   const baseDir = tmpTree();
@@ -316,5 +315,53 @@ describe('store parity: related (sqlite vs duckdb, D2)', () => {
       sqliteRows.every((r) => r.path !== 'linked.md' && r.path !== 'backlinker.md'),
       JSON.stringify(sqliteRows)
     );
+  });
+});
+
+// map, scoped search, and findPath each materialize a path set into a temp table and filter
+// against it; a whole-tree scope must change nothing and a narrowed scope must narrow
+// identically on both stores.
+describe('store parity: scoped commands (sqlite vs duckdb)', () => {
+  it('mapTree agrees with a whole-tree scope and with a narrowed include', async () => {
+    const baseDir = fixtureTree();
+    for (const store of STORE_NAMES) {
+      const { store: s, cfg } = await openTreeForStore(store, baseDir);
+      const whole = await mapTree(s, cfg);
+      assert.equal(whole.docs.count, 3, store);
+      assert.equal(whole.hubs.length, 3, store);
+      assert.equal(whole.recent.length, 3, store);
+      const narrowed = await mapTree(s, cfg, { include: ['a.md', 'b.md'] });
+      assert.equal(narrowed.docs.count, 2, store);
+      assert.equal(narrowed.hubs.length, 2, store);
+      assert.equal(narrowed.recent.length, 2, store);
+      await s.close();
+    }
+  });
+
+  it('search agrees when the scope is narrowed with an include override', async () => {
+    const baseDir = fixtureTree();
+    for (const store of STORE_NAMES) {
+      const { store: s, cfg } = await openTreeForStore(store, baseDir);
+      // a.md matches only via the link signal (b.md, a word hit, links back to it).
+      const full = (await search(s, cfg, 'note')).map((r) => r.path as string);
+      assert.deepEqual(new Set(full), new Set(['a.md', 'b.md', 'c.md']), store);
+      const scoped = (await search(s, cfg, 'note', { include: ['c.md'] })).map((r) => r.path as string);
+      assert.deepEqual(scoped, ['c.md'], store);
+      await s.close();
+    }
+  });
+
+  it('findPath agrees, with and without an allowed scope', async () => {
+    const baseDir = tmpTree();
+    writeNote(baseDir, 'a.md', { body: '[[b]]' });
+    writeNote(baseDir, 'b.md', { body: '[[c]]' });
+    writeNote(baseDir, 'c.md', { body: 'end.' });
+    for (const store of STORE_NAMES) {
+      const { store: s } = await openTreeForStore(store, baseDir);
+      assert.deepEqual(await findPath(s, 'a.md', 'c.md'), ['a.md', 'b.md', 'c.md'], store);
+      assert.deepEqual(await findPath(s, 'a.md', 'c.md', { allowed: new Set(['a.md', 'b.md', 'c.md']) }), ['a.md', 'b.md', 'c.md'], store);
+      assert.equal(await findPath(s, 'a.md', 'c.md', { allowed: new Set(['a.md', 'c.md']) }), null, store);
+      await s.close();
+    }
   });
 });

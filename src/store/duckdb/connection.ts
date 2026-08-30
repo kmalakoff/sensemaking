@@ -3,6 +3,19 @@ import { withTransaction } from '../transaction.ts';
 import type { Connection, RunResult, Statement } from '../types.ts';
 import { rewriteBatch } from './batch.ts';
 
+// getRowObjectsJS returns INT64 columns as BigInt regardless of magnitude, while sqlite's
+// small ints are numbers and consumers assume number. Beyond the safe range stays BigInt (the
+// setReadBigInts contract); stringifyJson keeps JSON output safe.
+const MAX_SAFE = BigInt(Number.MAX_SAFE_INTEGER);
+export function storeValueToJs(value: unknown): unknown {
+  return typeof value === 'bigint' && value >= -MAX_SAFE && value <= MAX_SAFE ? Number(value) : value;
+}
+export function storeRowToJs(row: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(row)) out[key] = storeValueToJs(value);
+  return out;
+}
+
 // Wraps one already-prepared DuckDB statement: prepare() is the only async step (Store.prepare
 // already crosses the async boundary once), so columns() reads back synchronously from it and
 // run/get/all rebind and re-execute the same native statement, matching how a caller (e.g.
@@ -28,7 +41,7 @@ class DuckdbStatement implements Statement {
   async all(...params: unknown[]): Promise<unknown[]> {
     if (params.length > 0) this.prepared.bind(params as DuckDBValue[]);
     const reader = await this.prepared.runAndReadAll();
-    return reader.getRowObjectsJS();
+    return (reader.getRowObjectsJS() as Array<Record<string, unknown>>).map(storeRowToJs);
   }
 
   async *iterate(...params: unknown[]): AsyncIterable<unknown> {
@@ -44,8 +57,8 @@ class DuckdbStatement implements Statement {
   }
 
   setReadBigInts(_enabled: boolean): void {
-    // No-op: DuckDB always returns bigint for values outside the JS safe-integer range (see
-    // getRowObjectsJS), unlike node:sqlite where this flag is what avoids throwing at step time.
+    // No-op: in-range ints are already numbers here (storeRowToJs converts what getRowObjectsJS
+    // hands back as BigInt), so the node:sqlite throw-at-step-time problem does not exist.
   }
 }
 
