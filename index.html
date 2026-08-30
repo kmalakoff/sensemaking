@@ -39,7 +39,7 @@
 </tr>
 <tr>
 <td><code>content</code></td>
-<td><code>title</code>, <code>summary</code>, <code>text</code>, <code>path</code>; on the default <code>sqlite</code> store an FTS5 index with machine-written <code>title_seg</code>/<code>summary_seg</code>/<code>text_seg</code> sidecars for matching in Chinese, Japanese, Thai, Khmer, Lao, and Burmese, on <code>duckdb</code> a plain table that matches those scripts as substrings</td>
+<td><code>title</code>, <code>summary</code>, <code>text</code>, <code>path</code>; on the default <code>sqlite</code> store an FTS5 index with machine-written <code>title_seg</code>/<code>summary_seg</code>/<code>text_seg</code> sidecars for matching in Chinese, Japanese, Thai, Khmer, Lao, and Burmese, on <code>duckdb</code> a plain table that matches those scripts as substrings, on <code>turso</code> a Tantivy index with <code>_ngram</code> sidecars serving the same scripts</td>
 <td>search and ranking</td>
 </tr>
 <tr>
@@ -124,7 +124,7 @@
 </tr>
 </tbody>
 </table>
-<p><code>search</code> runs one text through every engine its scope has: FTS5 word match (BM25-ranked, bare words AND-join, operators are yours on <code>sqlite</code>; on <code>duckdb</code> the FTS5 operators are a named error, see Config), a personalized-PageRank walk over the link graph, and vector similarity, fused into one list. <code>via</code> labels each row's evidence (<code>match</code>, <code>link</code>, <code>vector</code>, combinations); <code>similarity</code> is the cosine against the best-matching chunk; <code>lines</code> points at the section that earned the row (a direct read range). A <code>vector</code>-only row means the search words don't appear in that note; it showed up because the model judged it semantically related. <code>--preset</code> picks a named settings bundle from the config, <code>--where</code> filters on frontmatter. <code>--format json</code> on any reporting command returns structured output, and <code>--format csv</code> writes the row-returning commands one row per line, for redirecting a large result to a file instead of into context; <code>--version</code> and <code>--help</code> do what they say.</p>
+<p><code>search</code> runs one text through every engine its scope has: FTS5 word match (BM25-ranked, bare words AND-join, operators are yours on <code>sqlite</code>; on <code>duckdb</code> and <code>turso</code> the FTS5 operators are a named error, see Config), a personalized-PageRank walk over the link graph, and vector similarity, fused into one list. <code>via</code> labels each row's evidence (<code>match</code>, <code>link</code>, <code>vector</code>, combinations); <code>similarity</code> is the cosine against the best-matching chunk; <code>lines</code> points at the section that earned the row (a direct read range). A <code>vector</code>-only row means the search words don't appear in that note; it showed up because the model judged it semantically related. <code>--preset</code> picks a named settings bundle from the config, <code>--where</code> filters on frontmatter. <code>--format json</code> on any reporting command returns structured output, and <code>--format csv</code> writes the row-returning commands one row per line, for redirecting a large result to a file instead of into context; <code>--version</code> and <code>--help</code> do what they say.</p>
 <h2 id="config" class="tsd-anchor-link">Config<a href="#config" aria-label="Permalink" class="tsd-anchor-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="assets/icons.svg#icon-anchor"></use></svg></a></h2>
 <p><code>sense init</code> writes <code>sense.config.json</code>; discovery walks up from cwd like git (<code>--config &lt;path&gt;</code> overrides).</p>
 <pre><code class="json"><span class="hl-1">{</span><br/><span class="hl-1">  </span><span class="hl-6">&quot;$schema&quot;</span><span class="hl-1">: </span><span class="hl-2">&quot;https://unpkg.com/sensemaking/schema.json&quot;</span><span class="hl-1">,</span><br/><span class="hl-1">  </span><span class="hl-6">&quot;version&quot;</span><span class="hl-1">: </span><span class="hl-5">5</span><span class="hl-1">,</span><br/><span class="hl-1">  </span><span class="hl-6">&quot;presets&quot;</span><span class="hl-1">: {</span><br/><span class="hl-1">    </span><span class="hl-6">&quot;default&quot;</span><span class="hl-1">: { </span><span class="hl-6">&quot;include&quot;</span><span class="hl-1">: [</span><span class="hl-2">&quot;**/*.md&quot;</span><span class="hl-1">], </span><span class="hl-6">&quot;k&quot;</span><span class="hl-1">: </span><span class="hl-5">10</span><span class="hl-1"> },</span><br/><span class="hl-1">    </span><span class="hl-6">&quot;raw&quot;</span><span class="hl-1">:     { </span><span class="hl-6">&quot;include&quot;</span><span class="hl-1">: [</span><span class="hl-2">&quot;raw/**/*.md&quot;</span><span class="hl-1">], </span><span class="hl-6">&quot;k&quot;</span><span class="hl-1">: </span><span class="hl-5">5</span><span class="hl-1"> }</span><br/><span class="hl-1">  },</span><br/><span class="hl-1">  </span><span class="hl-6">&quot;embed&quot;</span><span class="hl-1">: { </span><span class="hl-6">&quot;model&quot;</span><span class="hl-1">: </span><span class="hl-2">&quot;minishlab/potion-retrieval-32M&quot;</span><span class="hl-1">, </span><span class="hl-6">&quot;provider&quot;</span><span class="hl-1">: </span><span class="hl-2">&quot;static&quot;</span><span class="hl-1"> },</span><br/><span class="hl-1">  </span><span class="hl-6">&quot;queries&quot;</span><span class="hl-1">: {</span><br/><span class="hl-1">    </span><span class="hl-6">&quot;dead-links&quot;</span><span class="hl-1">: { </span><span class="hl-6">&quot;sql&quot;</span><span class="hl-1">: </span><span class="hl-2">&quot;SELECT src, target FROM links WHERE dst IS NULL&quot;</span><span class="hl-1"> },</span><br/><span class="hl-1">    </span><span class="hl-6">&quot;by-tag&quot;</span><span class="hl-1">:     { </span><span class="hl-6">&quot;sql&quot;</span><span class="hl-1">: </span><span class="hl-2">&quot;SELECT path, title FROM frontmatter WHERE has(tags, ?) ORDER BY path&quot;</span><span class="hl-1"> },</span><br/><span class="hl-1">    </span><span class="hl-6">&quot;hot&quot;</span><span class="hl-1">:        { </span><span class="hl-6">&quot;search&quot;</span><span class="hl-1">: </span><span class="hl-2">&quot;pricing OR billing&quot;</span><span class="hl-1">, </span><span class="hl-6">&quot;preset&quot;</span><span class="hl-1">: </span><span class="hl-2">&quot;raw&quot;</span><span class="hl-1"> }</span><br/><span class="hl-1">  }</span><br/><span class="hl-1">}</span>
@@ -152,7 +152,7 @@
 </tr>
 <tr>
 <td><code>store</code></td>
-<td>backing store engine: <code>sqlite</code> (default, zero-dependency, Node's built-in SQLite) or <code>duckdb</code> (experimental). The first command that opens a <code>duckdb</code> tree installs <code>@duckdb/node-api</code> on its own (a one-time native download, ~110 MB). The same commands and table names run on both; what does not port is FTS5 syntax. Under <code>duckdb</code>, <code>search</code> text and raw <code>MATCH</code> reject FTS5's prefix (<code>foo*</code>), boolean (<code>AND</code>/<code>OR</code>/<code>NOT</code>), <code>NEAR</code>, initial-token (<code>^</code>), and column-filter (<code>title:foo</code>) operators with a named error that says how to rephrase or set <code>store</code> to <code>sqlite</code>; bare words and quoted phrases work on both. Raw <code>sql</code> is a per-store dialect: the tables and <code>has</code>/<code>basename</code>/<code>segment</code> are portable, but sqlite's FTS5 <code>MATCH</code>/<code>snippet()</code>/<code>bm25()</code> do not run under <code>duckdb</code>, so saved queries written in FTS5 syntax are sqlite dialect. Each store keeps its own cache file (<code>.sense/cache.db</code>, <code>.sense/cache.duckdb</code>); switching stores is a rebuild, not a migration.</td>
+<td>backing store engine: <code>sqlite</code> (default, zero-dependency, Node's built-in SQLite), or the experimental <code>duckdb</code> and <code>turso</code>. The first command that opens such a tree installs that engine's package on its own (<code>@duckdb/node-api</code>, a one-time native download of ~110 MB; <code>@tursodatabase/database</code>, much smaller). The same commands and table names run on all three; what does not port is FTS5 syntax. Under <code>duckdb</code> and <code>turso</code>, <code>search</code> text and raw <code>MATCH</code> reject FTS5's prefix (<code>foo*</code>), boolean (<code>AND</code>/<code>OR</code>/<code>NOT</code>), <code>NEAR</code>, initial-token (<code>^</code>), and column-filter (<code>title:foo</code>) operators with a named error that says how to rephrase or set <code>store</code> to <code>sqlite</code>; bare words and quoted phrases work on all three. Raw <code>sql</code> is a per-store dialect: the tables are portable, but sqlite's FTS5 <code>MATCH</code>/<code>snippet()</code>/<code>bm25()</code> do not run under <code>duckdb</code> or <code>turso</code>, so saved queries written in FTS5 syntax are sqlite dialect, and <code>has</code>/<code>basename</code>/<code>segment</code> are registered on <code>sqlite</code> and <code>duckdb</code> but not <code>turso</code>, whose client cannot register SQL functions. <code>sense watch</code> requires <code>sqlite</code>; on the other two it errors at start naming the fix. Each store keeps its own cache file (<code>.sense/cache.db</code>, <code>.sense/cache.duckdb</code>, <code>.sense/cache.turso.db</code>); switching stores is a rebuild, not a migration.</td>
 </tr>
 <tr>
 <td><code>queries</code></td>
@@ -213,7 +213,53 @@
 <li><strong>RAG / vector stores:</strong> similarity can't express <code>WHERE status = 'active'</code>. Here vectors are one signal inside <code>search</code>: same database file, filters compose, every row labels its evidence (<code>via</code>), and a preset turns vectors off per layer of the tree. No second store, no daemon, no native builds on the default store.</li>
 <li><strong>Document-OS apps (Anytype, Logseq, SilverBullet, Capacities):</strong> full applications with their own UI and storage. <code>sense</code> is headless: your files stay files, there's no app to run.</li>
 </ul>
-<p>Dependencies: <a href="https://github.com/eemeli/yaml">yaml</a>, <a href="https://github.com/huggingface/tokenizers.js">@huggingface/tokenizers</a>, <a href="https://github.com/wooorm/franc">franc-min</a>, <a href="https://github.com/tinylibs/tinypool">tinypool</a> (worker pool for parallel parsing on large trees), <a href="https://github.com/syntax-tree/mdast-util-from-markdown">mdast-util-from-markdown</a>, and the five GFM extensions it needs (not the full gfm/tagfilter bundle): <a href="https://github.com/micromark/micromark-extension-gfm-autolink-literal">micromark-extension-gfm-autolink-literal</a>, <a href="https://github.com/micromark/micromark-extension-gfm-footnote">micromark-extension-gfm-footnote</a>, <a href="https://github.com/micromark/micromark-extension-gfm-strikethrough">micromark-extension-gfm-strikethrough</a>, <a href="https://github.com/micromark/micromark-extension-gfm-table">micromark-extension-gfm-table</a>, <a href="https://github.com/micromark/micromark-extension-gfm-task-list-item">micromark-extension-gfm-task-list-item</a>, and their mdast counterparts <a href="https://github.com/syntax-tree/mdast-util-gfm-autolink-literal">mdast-util-gfm-autolink-literal</a>, <a href="https://github.com/syntax-tree/mdast-util-gfm-footnote">mdast-util-gfm-footnote</a>, <a href="https://github.com/syntax-tree/mdast-util-gfm-strikethrough">mdast-util-gfm-strikethrough</a>, <a href="https://github.com/syntax-tree/mdast-util-gfm-table">mdast-util-gfm-table</a>, <a href="https://github.com/syntax-tree/mdast-util-gfm-task-list-item">mdast-util-gfm-task-list-item</a> (all pure JS), Node's built-in SQLite, and <a href="https://github.com/kmalakoff/install-module-linked">install-module-linked</a>, which installs the optional <code>duckdb</code> store's <code>@duckdb/node-api</code> native binding on first use instead of shipping it to every install. No native builds by default.</p>
+<p>Dependencies, all pure JS. No native builds by default.</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><a href="https://github.com/eemeli/yaml">yaml</a></td>
+<td>frontmatter</td>
+</tr>
+<tr>
+<td><a href="https://github.com/syntax-tree/mdast-util-from-markdown">mdast-util-from-markdown</a></td>
+<td>markdown parsing</td>
+</tr>
+<tr>
+<td><a href="https://github.com/huggingface/tokenizers.js">@huggingface/tokenizers</a></td>
+<td>chunking</td>
+</tr>
+<tr>
+<td><a href="https://github.com/wooorm/franc">franc-min</a></td>
+<td>language detection</td>
+</tr>
+<tr>
+<td><a href="https://github.com/tinylibs/tinypool">tinypool</a></td>
+<td>worker pool for parallel parsing on large trees</td>
+</tr>
+<tr>
+<td><a href="https://github.com/kmalakoff/install-module-linked">install-module-linked</a></td>
+<td>installs the optional <code>duckdb</code> and <code>turso</code> bindings on first use, instead of shipping them to every install</td>
+</tr>
+<tr>
+<td>Node's built-in SQLite</td>
+<td>the default store</td>
+</tr>
+</tbody>
+</table>
+<p>Plus the five GFM extensions <code>mdast-util-from-markdown</code> needs and their mdast counterparts, not the full gfm/tagfilter bundle:</p>
+<ul>
+<li><a href="https://github.com/micromark/micromark-extension-gfm-autolink-literal">micromark-extension-gfm-autolink-literal</a> / <a href="https://github.com/syntax-tree/mdast-util-gfm-autolink-literal">mdast-util-gfm-autolink-literal</a></li>
+<li><a href="https://github.com/micromark/micromark-extension-gfm-footnote">micromark-extension-gfm-footnote</a> / <a href="https://github.com/syntax-tree/mdast-util-gfm-footnote">mdast-util-gfm-footnote</a></li>
+<li><a href="https://github.com/micromark/micromark-extension-gfm-strikethrough">micromark-extension-gfm-strikethrough</a> / <a href="https://github.com/syntax-tree/mdast-util-gfm-strikethrough">mdast-util-gfm-strikethrough</a></li>
+<li><a href="https://github.com/micromark/micromark-extension-gfm-table">micromark-extension-gfm-table</a> / <a href="https://github.com/syntax-tree/mdast-util-gfm-table">mdast-util-gfm-table</a></li>
+<li><a href="https://github.com/micromark/micromark-extension-gfm-task-list-item">micromark-extension-gfm-task-list-item</a> / <a href="https://github.com/syntax-tree/mdast-util-gfm-task-list-item">mdast-util-gfm-task-list-item</a></li>
+</ul>
 <h2 id="license" class="tsd-anchor-link">License<a href="#license" aria-label="Permalink" class="tsd-anchor-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="assets/icons.svg#icon-anchor"></use></svg></a></h2>
 <p>MIT © Kevin Malakoff</p>
 </div></div>
