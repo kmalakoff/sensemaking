@@ -1,17 +1,18 @@
 import assert from 'node:assert';
+import { writeModel } from '../../../lib/model.ts';
 import { openConfig, tmpTree, writeNote } from '../../../lib/tree.ts';
 
-function duckdbTree(baseDir: string) {
-  return openConfig({ store: 'duckdb', presets: { default: { include: ['**/*.md'] } }, queries: {}, baseDir, configPath: null } as Parameters<typeof openConfig>[0]);
+function duckdbTree(baseDir: string, embed?: Parameters<typeof openConfig>[0]['embed']) {
+  return openConfig({ store: 'duckdb', presets: { default: { include: ['**/*.md'] } }, embed, queries: {}, baseDir, configPath: null } as Parameters<typeof openConfig>[0]);
 }
 
 describe('createStore (duckdb)', () => {
-  it('declares its name and D1-scoped capabilities (lexical, phrases; not vectors or snippets)', async () => {
+  it('declares its name and capabilities (lexical, phrases, vectors; not snippets)', async () => {
     const baseDir = tmpTree();
     writeNote(baseDir, 'a.md', { frontmatter: { title: 'A' } });
     const { store } = await duckdbTree(baseDir);
     assert.equal(store.name, 'duckdb');
-    assert.deepEqual(new Set(store.capabilities), new Set(['lexical', 'phrases']));
+    assert.deepEqual(new Set(store.capabilities), new Set(['lexical', 'phrases', 'vectors']));
     await store.close();
   });
 
@@ -67,12 +68,17 @@ describe('createStore (duckdb)', () => {
     await store.close();
   });
 
-  it('vectors.* fail loudly rather than silently returning nothing (D2, not yet implemented)', async () => {
+  it('vectors.pending()/hasVector()/writeVectors() work end to end through reconcile-created rows (D2)', async () => {
     const baseDir = tmpTree();
-    writeNote(baseDir, 'a.md', { frontmatter: { title: 'A' } });
-    const { store } = await duckdbTree(baseDir);
-    await assert.rejects(() => store.vectors.pending(), /STORE_CAPABILITY_MISSING|does not implement/);
-    await assert.rejects(() => store.vectors.hasVector('a.md'), /STORE_CAPABILITY_MISSING|does not implement/);
+    writeNote(baseDir, 'a.md', { frontmatter: { title: 'A' }, body: 'apple' });
+    const { store } = await duckdbTree(baseDir, { model: writeModel(), provider: 'static' });
+    const pending = await store.vectors.pending();
+    assert.deepEqual(pending, [{ path: 'a.md', chunk: 0 }]);
+    assert.equal(await store.vectors.hasVector('a.md'), false);
+
+    await store.vectors.writeVectors([{ path: 'a.md', chunk: 0, scale: 1, vector: Buffer.from(Int8Array.from([100, 0, 0, 0, 0, 0, 0, 0]).buffer) }]);
+    assert.equal(await store.vectors.hasVector('a.md'), true);
+    assert.deepEqual(await store.vectors.pending(), []);
     await store.close();
   });
 

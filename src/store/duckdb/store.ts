@@ -1,23 +1,25 @@
 import type { DuckDBConnection } from '@duckdb/node-api';
 import type { Config } from '../../config/index.ts';
-import { SenseError } from '../../errors.ts';
+import { STORE_DIMS } from '../../embed/types.ts';
 import { getColumns } from '../shared.ts';
+// pending()/hasVector() are IS NULL/IS NOT NULL checks the portable Connection already
+// answers identically regardless of the vector column's type, so this store reuses sqlite's
+// (engine-neutral despite the module name) instead of duplicating them.
+import { hasVectorRow, pendingRows } from '../sqlite/vectors.ts';
 import { withTransaction } from '../transaction.ts';
-import type { Capability, Connection, Statement, Store, VectorWriteRow } from '../types.ts';
+import type { Capability, Connection, Statement, Store } from '../types.ts';
 import { createLexicalIndex } from './lexical.ts';
 import { reconcile } from './reconcile.ts';
+import { scanCandidates, scanSimilar, writeVectorBatch } from './vectors.ts';
 
-// Portable surface, links/sections/tags/rank, raw sql passthrough, and lexical (D1: fts BM25 +
-// contains(), see lexical.ts) are implemented -- 'vectors' (D2) is not yet, so it still throws.
-// 'snippets' is declined: no snippet()-equivalent exists, so every lexical hit relies on the
-// caller's JS excerpt fallback (commands/search.ts) rather than a bounded engine-native one.
-// 'phrases' means quoted-phrase matching only (types.ts): prefix/boolean/NEAR/column-filter
-// FTS5 syntax is not claimed here -- lexical.ts rejects it rather than answer it differently.
-export const CAPABILITIES: ReadonlySet<Capability> = new Set(['lexical', 'phrases']);
-
-function capabilityMissing(name: 'vectors'): SenseError {
-  return new SenseError('STORE_CAPABILITY_MISSING', `store "duckdb" does not implement "${name}" in this build; switch "store" to "sqlite", or narrow the preset's signals to drop what needs it`);
-}
+// Portable surface, links/sections/tags/rank, raw sql passthrough, lexical (D1: fts BM25 +
+// contains(), see lexical.ts), and vectors (D2: native FLOAT[N] + array_cosine_similarity, see
+// vectors.ts) are implemented. 'snippets' is declined: no snippet()-equivalent exists, so every
+// lexical hit relies on the caller's JS excerpt fallback (commands/search.ts) rather than a
+// bounded engine-native one. 'phrases' means quoted-phrase matching only (types.ts):
+// prefix/boolean/NEAR/column-filter FTS5 syntax is not claimed here -- lexical.ts rejects it
+// rather than answer it differently.
+export const CAPABILITIES: ReadonlySet<Capability> = new Set(['lexical', 'phrases', 'vectors']);
 
 // Shares one Connection instance (conn) with open()'s own reconcile call so transaction depth
 // (see transaction.ts) is tracked against the same object everywhere.
@@ -53,22 +55,15 @@ export function createStore(duckdb: DuckDBConnection, conn: Connection, cfg: Con
     lexical: {
       query: lex.query,
     },
+    // The column's fixed DDL width (STORE_DIMS) is what every scan binds against, not the
+    // interface's per-call storeDims -- see vectors.ts's padded() for why a shorter vector is
+    // still correct against a wider column.
     vectors: {
-      async pending() {
-        throw capabilityMissing('vectors');
-      },
-      async writeVectors(_rows: VectorWriteRow[]) {
-        throw capabilityMissing('vectors');
-      },
-      async candidates() {
-        throw capabilityMissing('vectors');
-      },
-      async similar() {
-        throw capabilityMissing('vectors');
-      },
-      async hasVector() {
-        throw capabilityMissing('vectors');
-      },
+      pending: () => pendingRows(conn),
+      writeVectors: (rows) => writeVectorBatch(duckdb, conn, STORE_DIMS, rows),
+      candidates: (qv, _storeDims, fetch, allowed) => scanCandidates(duckdb, qv, STORE_DIMS, fetch, allowed),
+      similar: (path, opts) => scanSimilar(duckdb, conn, STORE_DIMS, path, opts),
+      hasVector: (path) => hasVectorRow(conn, path),
     },
     raw: {
       async prepare(sql: string) {

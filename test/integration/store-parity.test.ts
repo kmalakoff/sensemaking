@@ -1,6 +1,8 @@
 import assert from 'node:assert';
 import type { SenseError } from 'sensemaking';
 import { search } from 'sensemaking';
+import { relatedNotes } from '../../src/commands/index.ts';
+import { writeModel } from '../lib/model.ts';
 import { openTreeForStore, STORE_NAMES } from '../lib/stores.ts';
 import { CHINESE_SENTENCES, tmpTree, writeNote } from '../lib/tree.ts';
 
@@ -239,5 +241,80 @@ describe('store parity: lexical search (sqlite vs duckdb, D1)', () => {
       assert.match(err.message, /boolean operator/);
       return true;
     });
+  });
+});
+
+// D2: sqlite scans int8+scale BLOBs in a JS loop; duckdb scans native FLOAT[N] arrays with
+// array_cosine_similarity in SQL. Both are handed the same vectors (see embed/query.ts's
+// toStore), so scores agree up to int8 quantization noise -- rank agreement, not float
+// equality. writeModel() is the offline Model2Vec fixture every embed test uses; no network,
+// no download.
+function semanticFixtureTree(): string {
+  const baseDir = tmpTree();
+  writeNote(baseDir, 'a.md', { frontmatter: { title: 'Fruit' }, body: 'An apple every day' });
+  writeNote(baseDir, 'b.md', { frontmatter: { title: 'Walls' }, body: 'stone walls' });
+  return baseDir;
+}
+
+// linked.md/backlinker.md are apple-similar AND linked (related excludes them); similar.md is
+// apple-similar and unlinked, the case related exists for; unrelated.md shares nothing.
+function relatedFixtureTree(): string {
+  const baseDir = tmpTree();
+  writeNote(baseDir, 'target.md', { frontmatter: { title: 'Target' }, body: 'An apple every day. See [[linked]].' });
+  writeNote(baseDir, 'linked.md', { frontmatter: { title: 'Linked' }, body: 'An apple every day.' });
+  writeNote(baseDir, 'backlinker.md', { frontmatter: { title: 'Backlinker' }, body: 'An apple every day. See [[target]].' });
+  writeNote(baseDir, 'similar.md', { frontmatter: { title: 'Similar' }, body: 'pomme reference here.' });
+  writeNote(baseDir, 'unrelated.md', { frontmatter: { title: 'Unrelated' }, body: 'stone walls only.' });
+  return baseDir;
+}
+
+describe('store parity: semantic search (sqlite vs duckdb, D2)', () => {
+  it('a vector-only query (zero lexical matches) agrees on the top hit and the match set', async () => {
+    const baseDir = semanticFixtureTree();
+    const embed = { model: writeModel(), provider: 'static' as const };
+    const [sqliteRows, duckdbRows] = await Promise.all(
+      STORE_NAMES.map(async (store) => {
+        const { store: s, cfg } = await openTreeForStore(store, baseDir, { embed });
+        const rows = (await search(s, cfg, 'pomme')) as Array<{ path: string; via: string }>;
+        await s.close();
+        return rows;
+      })
+    );
+    assert.equal(sqliteRows[0]?.path, 'a.md', JSON.stringify(sqliteRows));
+    assert.equal(duckdbRows[0]?.path, 'a.md', JSON.stringify(duckdbRows));
+    assert.ok(
+      sqliteRows.every((r) => r.via === 'vector'),
+      JSON.stringify(sqliteRows)
+    );
+    assert.ok(
+      duckdbRows.every((r) => r.via === 'vector'),
+      JSON.stringify(duckdbRows)
+    );
+    assert.deepEqual(new Set(sqliteRows.map((r) => r.path)), new Set(duckdbRows.map((r) => r.path)));
+  });
+});
+
+describe('store parity: related (sqlite vs duckdb, D2)', () => {
+  // The worst-case path (cost is target_chunks x stored_chunks): rank agreement is asserted as
+  // the top hit plus set equality, not full order, since a tie the int8/float noise can flip
+  // either way is a legitimate divergence, not a bug (see the file-level comment above).
+  it('agrees on the top hit and the candidate set, excluding linked notes on both sides', async () => {
+    const baseDir = relatedFixtureTree();
+    const embed = { model: writeModel(), provider: 'static' as const };
+    const [sqliteRows, duckdbRows] = await Promise.all(
+      STORE_NAMES.map(async (store) => {
+        const { store: s, cfg } = await openTreeForStore(store, baseDir, { embed });
+        const rows = await relatedNotes(s, cfg, 'target.md', {}, 10);
+        await s.close();
+        return rows;
+      })
+    );
+    assert.ok(sqliteRows.length > 0, JSON.stringify(sqliteRows));
+    assert.equal(sqliteRows[0]?.path, duckdbRows[0]?.path, `top hit disagrees: ${JSON.stringify({ sqliteRows, duckdbRows })}`);
+    assert.deepEqual(new Set(sqliteRows.map((r) => r.path)), new Set(duckdbRows.map((r) => r.path)));
+    assert.ok(
+      sqliteRows.every((r) => r.path !== 'linked.md' && r.path !== 'backlinker.md'),
+      JSON.stringify(sqliteRows)
+    );
   });
 });

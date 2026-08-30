@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import type { DuckDBConnection } from '@duckdb/node-api';
 import type { Config, ResolvedConfig } from '../../config/index.ts';
 import { featureSignature, STATE_DIR } from '../../config/index.ts';
+import { STORE_DIMS } from '../../embed/types.ts';
 import { SenseError } from '../../errors.ts';
 import { activeFeatures, FEATURES } from '../../features/index.ts';
 import { getMeta, setMeta } from '../shared.ts';
@@ -38,7 +39,16 @@ async function ensureSchema(conn: Connection, cfg: Config): Promise<void> {
   await conn.exec(`CREATE TABLE IF NOT EXISTS content ("path" TEXT PRIMARY KEY, title TEXT, summary TEXT, text TEXT)`);
   await conn.exec(`CREATE TABLE IF NOT EXISTS preset_files ("path" TEXT, preset TEXT, PRIMARY KEY ("path", preset))`);
   await conn.exec('CREATE INDEX IF NOT EXISTS preset_files_preset ON preset_files(preset)');
-  for (const feature of activeFeatures(cfg)) await feature.schema(conn);
+  for (const feature of activeFeatures(cfg)) {
+    // Native FLOAT[STORE_DIMS] instead of the embed feature's engine-neutral BLOB+scale DDL
+    // (see duckdb/vectors.ts). `scale` is kept, unused, so the feature's shared reconcile-time
+    // INSERT/DELETE (src/features/embed.ts) still names a column that exists on both stores.
+    if (feature.name === 'embed') {
+      await conn.exec(`CREATE TABLE IF NOT EXISTS embeddings ("path" TEXT, chunk INTEGER, start_line INTEGER, end_line INTEGER, scale REAL, vector FLOAT[${STORE_DIMS}], PRIMARY KEY ("path", chunk))`);
+      continue;
+    }
+    await feature.schema(conn);
+  }
   if ((await getMeta(conn, 'schema_version')) === null) await setMeta(conn, 'schema_version', SCHEMA_VERSION);
   if ((await getMeta(conn, 'features')) === null) await setMeta(conn, 'features', featureSignature(cfg, FEATURES));
 }
