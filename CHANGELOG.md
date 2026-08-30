@@ -2,6 +2,16 @@
 
 All notable changes to sensemaking are documented here.
 
+## [0.19.2] - 2026-08-30
+
+### Added
+
+- `CAPABILITY_NAMES` joins the exported `Capability` type, so a consumer can enumerate the capabilities a store may declare instead of hard-coding them. It gains a sixth member, `sql-functions`, naming whether an engine can register `has`/`basename`/`segment` as SQL functions at all, which turso's client cannot. The gap itself is unchanged and was already declared in 0.19.0; it is now a named capability rather than a hand-written store list, and no store's behaviour changes.
+
+### Fixed
+
+- `sense map` on a duckdb tree with many frontmatter fields was slow out of proportion to the tree. The field-type scan issued one query carrying a `string_agg(DISTINCT variant_typeof(...))` aggregate per column, and duckdb degrades superlinearly in the number of such aggregates in a single projection rather than in the column count: at 301 columns that query cost 1148 ms, against 10 ms for `COUNT` over the same columns. The scan now runs in chunks of 16 aggregates, taking those 301 columns to 81 ms and the whole command from 1773 ms to 116 ms. A 31-column tree improves too, 17 ms to 11 ms. sqlite and turso were never affected: `GROUP_CONCAT` over 300 columns runs in 7 ms.
+
 ## [0.19.1] - 2026-08-30
 
 ### Fixed
