@@ -14,6 +14,8 @@ node benchmark/eval.mjs nfcorpus                       # retrieval quality on a 
 node benchmark/bakeoff.mjs nfcorpus                     # storage-lever bake-off for one model
 node benchmark/weight-sweep.mjs nfcorpus                # per-signal RRF weight sweep
 node benchmark/oracle.mjs <corpus> <path>               # tags/links/chunk extents vs Obsidian's metadataCache
+node benchmark/store-dump.mjs capture <dir>             # every store's rows and ranked output, for an A/B against a refactor
+node benchmark/store-dump.mjs compare <dirA> <dirB>     # diffs two captures, non-zero on any difference
 ```
 
 The default run answers "did the working tree regress?" `local` is whatever is checked out. The working-tree column is labeled `local` until the release exists: regenerate the table at release time and the column gets its real number. Named corpora, dataset builds, and npm-installed comparison versions all cache through `benchmark/lib/cache.mjs` into `.tmp/cache/` (gitignored): fetched once, built atomically in a staging dir, safe to delete anytime. Corpus specs are pinned in `benchmark/lib/corpus.mjs`, the single source of truth. A directory path works in place of a corpus name.
@@ -21,6 +23,14 @@ The default run answers "did the working tree regress?" `local` is whatever is c
 `compare.mjs` installs each npm version into a temp dir (`local` = this working tree), gives every version an isolated copy of the tree with a v1 config (the lowest common denominator every version can read; copies keep cache formats and config auto-migration from cross-contaminating), runs `benchmark/run.mjs` per version, and prints the table. `run.mjs` can also run alone against any single package root + tree; it prints one JSON row.
 
 `bakeoff.mjs` and `weight-sweep.mjs` measure one specific model/dims/weight choice against a labeled corpus's qrels, decision-support for a config default, not a release gate. `oracle.mjs` is the correctness gate against Obsidian's own metadataCache (RELEASING.md step 3), needs Obsidian running, and stores nothing.
+
+`store-dump.mjs` is the refactor gate for anything touching the write path: capture before a change,
+capture after, compare. It records two things per store and both halves are required. Every logical
+table's rows in primary-key order, and the ordered results of a fixed query set with their scores.
+The ranking half is not redundant: a lexical index lives outside the logical tables, so dumps compare
+identical while search is silently unranked. Turso answers correctly with its FTS index dropped,
+since `fts_match` falls back to a scan, and only `fts_score` collapses to 0. A clean compare names
+every file it checked rather than passing in silence.
 
 Two kinds of metric per version:
 
@@ -197,21 +207,25 @@ produced it. When a number here moves, replace the value and the link together.
 
 | metric | value | report |
 |---|---|---|
-| cold crawl, obsidian-hub (wall, local) | 2540 ms | [2026-08-30](benchmark/reports/2026-08-30-0.19.0-release-gate.md) |
-| warm query (`COUNT(*)`) | 134 ms | [2026-08-30](benchmark/reports/2026-08-30-0.19.0-release-gate.md) |
-| lexical `search` | 181 ms | [2026-08-30](benchmark/reports/2026-08-30-0.19.0-release-gate.md) |
+| cold crawl, obsidian-hub (wall, local) | 2445 ms | [2026-08-30](benchmark/reports/2026-08-30-0.19.2-release-gate.md) |
+| warm query (`COUNT(*)`) | 138 ms | [2026-08-30](benchmark/reports/2026-08-30-0.19.2-release-gate.md) |
+| lexical `search` | 192 ms | [2026-08-30](benchmark/reports/2026-08-30-0.19.2-release-gate.md) |
 | `search` row size | ~71 tokens | [2026-08-29](benchmark/reports/2026-08-29-0.18.0-release-gate.md) |
-| `map` | 174 ms / ~496 tokens | [2026-08-30](benchmark/reports/2026-08-30-0.19.0-release-gate.md) |
-| `peek` largest note | 153 ms / ~581 tokens | [2026-08-30](benchmark/reports/2026-08-30-0.19.0-release-gate.md) |
-| in-process: cold index build | 2210 ms | [2026-08-30](benchmark/reports/2026-08-30-0.19.0-release-gate.md) |
-| in-process: freshness check, no change | 37.1 ms | [2026-08-30](benchmark/reports/2026-08-30-0.19.0-release-gate.md) |
+| `map` | 173 ms / ~496 tokens | [2026-08-30](benchmark/reports/2026-08-30-0.19.2-release-gate.md) |
+| `peek` largest note | 155 ms / ~581 tokens | [2026-08-30](benchmark/reports/2026-08-30-0.19.2-release-gate.md) |
+| in-process: cold index build | 2971 ms | [2026-08-30](benchmark/reports/2026-08-30-0.19.2-release-gate.md) |
+| in-process: freshness check, no change | 36.6 ms | [2026-08-30](benchmark/reports/2026-08-30-0.19.2-release-gate.md) |
 | `--version` canary | 20 ms | [2026-08-29](benchmark/reports/2026-08-29-0.18.0-release-gate.md) |
-| scale, 13k: cold crawl (wall) | 5.02 s | [2026-08-30](benchmark/reports/2026-08-30-0.19.0-release-gate.md) |
-| scale, 26k: cold crawl (wall) | 10.02 s | [2026-08-30](benchmark/reports/2026-08-30-0.19.0-release-gate.md) |
-| stress: lexical `search` | 350 ms | [2026-08-30](benchmark/reports/2026-08-30-0.19.0-release-gate.md) |
-| stress: semantic `search` | 980 ms | [2026-08-30](benchmark/reports/2026-08-30-0.19.0-release-gate.md) |
+| scale, 13k: cold crawl (wall) | 5.13 s | [2026-08-30](benchmark/reports/2026-08-30-0.19.2-release-gate.md) |
+| scale, 26k: cold crawl (wall) | 9.64 s | [2026-08-30](benchmark/reports/2026-08-30-0.19.2-release-gate.md) |
+| stress: lexical `search` | 356 ms | [2026-08-30](benchmark/reports/2026-08-30-0.19.2-release-gate.md) |
+| stress: semantic `search` | 1029 ms | [2026-08-30](benchmark/reports/2026-08-30-0.19.2-release-gate.md) |
 | nfcorpus semantic nDCG@10 / hit@10 | 0.3427 / 0.7121 | [2026-08-29](benchmark/reports/2026-08-29-0.18.0-release-gate.md) |
 | fever semantic nDCG@10 / hit@10 | 0.9337 / 0.9965 | [2026-08-29](benchmark/reports/2026-08-29-0.18.0-release-gate.md) |
 | chunker grouping (D3/D4/D9) | pgc, no overlap, raw text | [2026-08-27 chunking sweep (W4)](benchmark/reports/2026-08-27-chunking-sweep-w4.md) |
 | default static model | `minishlab/potion-retrieval-32M` | [2026-08-27 embedding model selection](benchmark/reports/2026-08-27-embedding-model-selection.md) |
 | storage lever | int8 @ 256 dims | [2026-08-13 static-model bake-off](benchmark/reports/2026-08-13-static-model-bakeoff.md) |
+| turso: hub battery (total wall) | 49.3 s | [2026-08-30](benchmark/reports/2026-08-30-0.19.2-release-gate.md) |
+| duckdb: hub battery (total wall) | 76.4 s | [2026-08-30](benchmark/reports/2026-08-30-0.19.2-release-gate.md) |
+| turso: 13k tree battery (total wall) | 88.5 s | [2026-08-30](benchmark/reports/2026-08-30-0.19.2-release-gate.md) |
+| duckdb: 13k tree battery (total wall) | 130.7 s | [2026-08-30](benchmark/reports/2026-08-30-0.19.2-release-gate.md) |
