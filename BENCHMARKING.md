@@ -197,21 +197,25 @@ produced it. When a number here moves, replace the value and the link together.
 
 | metric | value | report |
 |---|---|---|
-| cold crawl, obsidian-hub (wall, local) | 2540 ms | [2026-08-30](benchmark/reports/2026-08-30-0.19.0-release-gate.md) |
-| warm query (`COUNT(*)`) | 134 ms | [2026-08-30](benchmark/reports/2026-08-30-0.19.0-release-gate.md) |
-| lexical `search` | 181 ms | [2026-08-30](benchmark/reports/2026-08-30-0.19.0-release-gate.md) |
+| cold crawl, obsidian-hub (wall, local) | 2103 ms | [2026-08-30](benchmark/reports/2026-08-30-0.19.1-release-gate.md) |
+| warm query (`COUNT(*)`) | 129 ms | [2026-08-30](benchmark/reports/2026-08-30-0.19.1-release-gate.md) |
+| lexical `search` | 178 ms | [2026-08-30](benchmark/reports/2026-08-30-0.19.1-release-gate.md) |
 | `search` row size | ~71 tokens | [2026-08-29](benchmark/reports/2026-08-29-0.18.0-release-gate.md) |
-| `map` | 174 ms / ~496 tokens | [2026-08-30](benchmark/reports/2026-08-30-0.19.0-release-gate.md) |
-| `peek` largest note | 153 ms / ~581 tokens | [2026-08-30](benchmark/reports/2026-08-30-0.19.0-release-gate.md) |
-| in-process: cold index build | 2210 ms | [2026-08-30](benchmark/reports/2026-08-30-0.19.0-release-gate.md) |
-| in-process: freshness check, no change | 37.1 ms | [2026-08-30](benchmark/reports/2026-08-30-0.19.0-release-gate.md) |
+| `map` | 158 ms / ~496 tokens | [2026-08-30](benchmark/reports/2026-08-30-0.19.1-release-gate.md) |
+| `peek` largest note | 136 ms / ~581 tokens | [2026-08-30](benchmark/reports/2026-08-30-0.19.1-release-gate.md) |
+| in-process: cold index build | 1642 ms | [2026-08-30](benchmark/reports/2026-08-30-0.19.1-release-gate.md) |
+| in-process: freshness check, no change | 36.2 ms | [2026-08-30](benchmark/reports/2026-08-30-0.19.1-release-gate.md) |
 | `--version` canary | 20 ms | [2026-08-29](benchmark/reports/2026-08-29-0.18.0-release-gate.md) |
-| scale, 13k: cold crawl (wall) | 5.02 s | [2026-08-30](benchmark/reports/2026-08-30-0.19.0-release-gate.md) |
-| scale, 26k: cold crawl (wall) | 10.02 s | [2026-08-30](benchmark/reports/2026-08-30-0.19.0-release-gate.md) |
-| stress: lexical `search` | 350 ms | [2026-08-30](benchmark/reports/2026-08-30-0.19.0-release-gate.md) |
-| stress: semantic `search` | 980 ms | [2026-08-30](benchmark/reports/2026-08-30-0.19.0-release-gate.md) |
+| scale, 13k: cold crawl (wall) | 3.91 s | [2026-08-30](benchmark/reports/2026-08-30-0.19.1-release-gate.md) |
+| scale, 26k: cold crawl (wall) | 7.27 s | [2026-08-30](benchmark/reports/2026-08-30-0.19.1-release-gate.md) |
+| stress: lexical `search` | 354 ms | [2026-08-30](benchmark/reports/2026-08-30-0.19.1-release-gate.md) |
+| stress: semantic `search` | 977 ms | [2026-08-30](benchmark/reports/2026-08-30-0.19.1-release-gate.md) |
 | nfcorpus semantic nDCG@10 / hit@10 | 0.3427 / 0.7121 | [2026-08-29](benchmark/reports/2026-08-29-0.18.0-release-gate.md) |
 | fever semantic nDCG@10 / hit@10 | 0.9337 / 0.9965 | [2026-08-29](benchmark/reports/2026-08-29-0.18.0-release-gate.md) |
 | chunker grouping (D3/D4/D9) | pgc, no overlap, raw text | [2026-08-27 chunking sweep (W4)](benchmark/reports/2026-08-27-chunking-sweep-w4.md) |
 | default static model | `minishlab/potion-retrieval-32M` | [2026-08-27 embedding model selection](benchmark/reports/2026-08-27-embedding-model-selection.md) |
 | storage lever | int8 @ 256 dims | [2026-08-13 static-model bake-off](benchmark/reports/2026-08-13-static-model-bakeoff.md) |
+| turso: hub battery (total wall) | 48.1 s | [2026-08-30](benchmark/reports/2026-08-30-0.19.1-release-gate.md) |
+| duckdb: hub battery (total wall) | 67.0 s | [2026-08-30](benchmark/reports/2026-08-30-0.19.1-release-gate.md) |
+| turso: 13k tree battery (total wall) | 87.6 s | [2026-08-30](benchmark/reports/2026-08-30-0.19.1-release-gate.md) |
+| duckdb: 13k tree battery (total wall) | 115.8 s | [2026-08-30](benchmark/reports/2026-08-30-0.19.1-release-gate.md) |
