@@ -38,8 +38,7 @@ function candidateSelect(direction: Direction): string {
 }
 
 // One ring: candidates adjacent to the previous ring's frontier (?1), anti-joined against
-// everything already visited, optionally filtered to the allowed set, and inserted at the
-// new depth (?2). RETURNING hands back exactly what this ring newly reached.
+// everything already visited, optionally filtered to the allowed set, inserted at the new depth (?2); RETURNING gives what this ring newly reached.
 function ringSql(direction: Direction, hasAllowed: boolean): string {
   return `
 INSERT INTO visited (path, depth, pred)

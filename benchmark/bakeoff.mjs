@@ -1,5 +1,4 @@
-// Offline model bake-off: embed a labeled corpus at each lever (f32 / dims / int8), score
-// cosine-only and bm25+vector RRF against the qrels, using src/commands.ts's pool and constant.
+// Embeds a labeled corpus at each lever (f32 / dims / int8), scores cosine-only and bm25+vector RRF against the qrels, using src/commands.ts's pool and constant.
 // usage: node benchmark/bakeoff.mjs [corpus] [--queries N] [--k N] [--model <hf id>]
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -49,9 +48,8 @@ if (!tree || !labelsDir) {
 const now = () => Number(process.hrtime.bigint()) / 1e6;
 
 const { embedFull, dims: nativeDims, loadMs, id, sha } = await loadModel(MODEL_ID);
-// A lever wider than the model's native output would read past the vector (garbage norm,
-// noise ranking) -- cap to what this model actually produces; potion-base-8M is 256-dim
-// native, so its widest lever is f32-256/int8-256, not the 512 the 32M model ships.
+// A lever wider than the model's native output reads past the vector (garbage norm, noise ranking) - capped to what this model produces.
+// e.g. potion-base-8M is 256-dim native, so its widest lever is f32-256/int8-256, not the 512 the 32M model ships.
 const ACTIVE_LEVERS = LEVERS.filter((l) => l.dims <= nativeDims);
 
 // --- corpus: embed every doc once at full dims (title + body, the future chunk text) ---
@@ -131,9 +129,7 @@ for (const r of rows) {
   console.log(`| bm25+vec ${r.lever} | ${f(r.fused.ndcg)} | ${f(r.fused.rr)} | ${f(r.fused.hit)} | ${f(r.fused.ndcg - bm25Base.ndcg)} | ${f(r.fused.hit - bm25Base.hit)} | ${r.fusedMs.toFixed(1)} | ${r.bytes.toFixed(1)} |`);
 }
 
-// Original silent-fusion thresholds, superseded 2026-08-13 by the explicit-expansion
-// reframe — kept for continuity with
-// recorded results; the current bar is recall-when-invoked.
+// Silent-fusion thresholds, printed for reference only; explicit-expansion gates fusion today, judged against recall-when-invoked.
 console.log('\nsuperseded silent-fusion thresholds (nfcorpus: ΔnDCG ≥ +0.02, Δhit ≥ +0.03; latency ≤ 2× links-fused ms/query):');
 for (const r of rows) {
   const q = r.fused.ndcg - bm25Base.ndcg >= 0.02 && r.fused.hit - bm25Base.hit >= 0.03;

@@ -11,9 +11,7 @@ const RRF_K = 60;
 export type Candidates = Map<string, { score: number; via: string }>;
 
 // BM25 match rows (store.lexical.query), folded into `candidates` by reciprocal rank scaled by
-// the preset's declared weight for this signal (default 1, bit-identical to the unweighted
-// score). Every other signal is seeded from its output, so search() runs this one first when
-// "words" is declared.
+// the preset's declared weight for this signal. Every other signal is seeded from its output.
 export async function wordsCandidates(store: Store, candidates: Candidates, query: string, whereJoin: string, whereCond: string, scopeCond: string, fetch: number, weight: number): Promise<LexicalHit[]> {
   const matchRows = await store.lexical.query(query, { whereJoin, whereCond, scopeCond, limit: fetch });
   matchRows.forEach((r, i) => {
@@ -23,8 +21,7 @@ export async function wordsCandidates(store: Store, candidates: Candidates, quer
 }
 
 // Personalized-PageRank expansion from the word-match seeds, folded into `candidates` at this
-// signal's weight. A no-op when there is nothing to seed from (matchRows empty), same as before
-// this was a signal.
+// signal's weight. A no-op when there is nothing to seed from (matchRows empty).
 export async function linksCandidates(store: Store, candidates: Candidates, matchRows: LexicalHit[], allPaths: string[], allowedPaths: Set<string>, fetch: number, weight: number): Promise<void> {
   if (matchRows.length === 0) return;
   const stmt = await store.prepare(LINK_EDGES_SQL);
@@ -50,8 +47,7 @@ export async function linksCandidates(store: Store, candidates: Candidates, matc
 }
 
 // Vector expansion at the swept flat-region constants (pool = fetch), folded into `candidates`
-// at this signal's weight. Each row also carries its best chunk's line range and similarity,
-// for the caller.
+// at this signal's weight; each row also carries its best chunk's line range and similarity.
 export async function vectorsCandidates(store: Store, cfg: ResolvedConfig, candidates: Candidates, terms: string, fetch: number, allowedPaths: Set<string>, weight: number): Promise<{ chunkLines: Map<string, string>; chunkSimilarity: Map<string, number> }> {
   const chunkLines = new Map<string, string>();
   const chunkSimilarity = new Map<string, number>();

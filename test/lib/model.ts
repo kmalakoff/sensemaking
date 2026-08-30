@@ -5,9 +5,8 @@ import { scratchDir } from './scratch.ts';
 
 const DIMS = 8;
 
-// Default fixture: apple ≡ pomme (identical rows), stone its own -- a vector match exists
-// exactly where FTS5 has zero term overlap. Callers pass their own groups (e.g. other scripts)
-// the same way: tokens within a group share a vector, different groups get orthogonal ones.
+// apple ≡ pomme, stone its own: a vector match exists exactly where FTS5 has zero term overlap.
+// Tokens within a group share a vector, different groups get orthogonal ones.
 const DEFAULT_GROUPS: string[][] = [['apple', 'pomme'], ['stone']];
 
 // Local Model2Vec fixture: WordLevel vocab, 8-dim f32 matrix.
@@ -49,14 +48,22 @@ export function writeModel(groups?: string[][]): string {
   return dir;
 }
 
-// Seeds a real, disposable HF-style cache entry for a probe model id: the fixture's
-// files at snapshots/<sha>, refs/main pointing at it, and (optionally) a hand-written
-// languages.json beside it. Returns the repo dir for cleanup.
+// One HF-cache-shaped root for every suite in this run, disposable with the rest of .tmp/test:
+// fixture model ids resolve here instead of the real ~/.sense/models.
+let modelsRoot: string | undefined;
+export function testModelsRoot(): string {
+  if (!modelsRoot) modelsRoot = scratchDir('models-root');
+  return modelsRoot;
+}
+
+// A disposable HF-style cache entry under testModelsRoot(), never the machine cache: fixture files
+// at snapshots/<sha>, refs/main pointing at it, optionally a languages.json. Returns the repo dir.
 export function seedModelCache(model: string, sha: string, opts: { groups?: string[][]; languages?: string[] } = {}): string {
-  const dir = snapshotDir(model, sha);
+  const root = testModelsRoot();
+  const dir = snapshotDir(model, sha, root);
   mkdirSync(dir, { recursive: true });
   writeModelFiles(dir, opts.groups);
-  writeRef(model, sha);
-  if (opts.languages) writeLanguages(model, opts.languages);
-  return dirname(dirname(refsMainPath(model)));
+  writeRef(model, sha, root);
+  if (opts.languages) writeLanguages(model, opts.languages, root);
+  return dirname(dirname(refsMainPath(model, root)));
 }

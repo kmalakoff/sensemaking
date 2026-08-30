@@ -2,7 +2,6 @@ import assert from 'node:assert';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { safeRmSync } from 'fs-remove-compat';
 import { createServer, type Server } from 'http';
 import type { Config } from 'sensemaking';
 import { peek, presetCoverage, type SenseError, search } from 'sensemaking';
@@ -14,7 +13,7 @@ import type { Chunk } from '../../src/features/embed.ts';
 import { embed } from '../../src/features/embed.ts';
 import { parseFile } from '../../src/scan/index.ts';
 import { runCli } from '../lib/cli.ts';
-import { seedModelCache, writeModel } from '../lib/model.ts';
+import { seedModelCache, testModelsRoot, writeModel } from '../lib/model.ts';
 import { listen } from '../lib/server.ts';
 import { chineseTree, openConfig, tmpTree, writeNote } from '../lib/tree.ts';
 
@@ -153,9 +152,8 @@ describe('declared signals', () => {
       rows.some((r) => r.path === 'floor.md' && r.via.includes('match')),
       JSON.stringify(rows)
     );
-    // context.md may still surface through the declared vectors signal (nearest-neighbour
-    // search always returns a neighbour); it must never carry via=link, since link expansion
-    // was never declared.
+    // context.md may surface via the declared vectors signal (nearest-neighbour search always
+    // returns a neighbour), but must never carry via=link since link expansion isn't declared.
     assert.ok(!rows.some((r) => r.via.includes('link')), JSON.stringify(rows));
   });
 
@@ -266,9 +264,8 @@ describe('chunking covers the body, not the raw file', () => {
     assert.equal(n, 0, 'an empty body embeds to nothing, rather than to a vector of its own YAML');
   });
 
-  // W0 finding: ~29% of hub-corpus blocks become YAML noise if chunk() ever sees the raw file
-  // instead of the frontmatter-stripped body. List-valued keys are the case that spans several
-  // raw lines, so a wrong offset would put a chunk extent, or its text, inside the YAML block.
+  // W0 finding: ~29% of hub-corpus blocks become YAML noise if chunk() sees the raw file instead of the frontmatter-stripped body.
+  // List-valued keys span several raw lines, so a wrong offset puts a chunk extent, or its text, inside the YAML block.
   it('list-valued frontmatter (aliases, tags) never leaks into chunk text, and extents map to real body lines', async () => {
     const baseDir = tmpTree();
     const fm = 'title: A\naliases:\n  - Alpha\n  - A1\ntags:\n  - x\n  - y';
@@ -506,8 +503,7 @@ describe('similarNotes (unit)', () => {
 
   it('returns [] when the target note has no stored vectors, even though the embeddings table exists', async () => {
     // default covers everything but opts target.md out of vectors; preset "b" embeds only
-    // unrelated.md, so the embeddings table exists (unlike the table-absent case above) but
-    // carries no row at all for target.md.
+    // unrelated.md, so the embeddings table exists but carries no row at all for target.md.
     const { store: db, cfg } = await openConfig({
       presets: { default: { include: ['**/*.md'] }, b: { include: ['unrelated.md'] } },
       embed: { model: writeModel(), provider: 'static' },
@@ -524,13 +520,6 @@ describe('similarNotes (unit)', () => {
 // The model cache is machine-wide, keyed by model id; anything that is not a Hugging
 // Face repo id is a path the caller controls.
 describe('model cache location and naming', () => {
-  // Every seeded probe id lives under this prefix, so cleanup can't reach into a real model's
-  // cache entry even if a test fails before removing its own.
-  const seeded: string[] = [];
-  after(() => {
-    for (const dir of seeded) safeRmSync(dir, { recursive: true, force: true });
-  });
-
   it('an unresolved Hugging Face id names its (fileless) repo dir under ~/.sense/models', async () => {
     // Fixture ids, never real ones: a real id resolves on any machine whose owner has
     // actually downloaded it, and this test is about the unresolved shape.
@@ -556,17 +545,19 @@ describe('model cache location and naming', () => {
   });
 
   it('a recorded refs/main resolves the snapshot dir and is reused without a network request', async () => {
-    const model = `sense-test-fixture/probe-${process.pid}-${Date.now()}`;
+    const model = 'sense-test-fixture/probe';
     const sha = 'f'.repeat(40);
-    const repoDir = seedModelCache(model, sha);
-    seeded.push(repoDir);
+    const root = testModelsRoot();
+    // languages.json seeded too: without it, downloadModel's ensureLanguages step finds no
+    // recorded verdict and reaches for the (fabricated) model's card over the real network.
+    seedModelCache(model, sha, { languages: [] });
 
-    assert.match(modelDir(model), new RegExp(`snapshots[/\\\\]${sha}$`));
-    assert.equal(hasModelFiles(model), true);
-    // Both files are already present at the recorded sha, so this must resolve nothing over
-    // the network -- if it tried, a sandboxed/offline run would hang or throw here instead.
-    const dir = await downloadModel(model);
-    assert.equal(dir, modelDir(model));
+    assert.match(modelDir(model, root), new RegExp(`snapshots[/\\\\]${sha}$`));
+    assert.equal(hasModelFiles(model, root), true);
+    // Both files and the language verdict are already present at the recorded sha, so this must
+    // resolve nothing over the network -- if it tried, a sandboxed/offline run would hang here.
+    const dir = await downloadModel(model, undefined, root);
+    assert.equal(dir, modelDir(model, root));
   });
 
   it('~/.sense/models is the one cache root; the old XDG-relocatable cache is orphaned', async () => {
@@ -591,10 +582,8 @@ describe('related on a heading-dense note', () => {
   });
 });
 
-// Mirrors 'semantic expansion surfaces a note FTS5 cannot reach' (embed feature, above) in three
-// more scripts: same mechanism (chunk -> vector -> nearest -> via=vector), not model quality. A
-// writeModel local path has no languages.json, so the language-fit check stays off throughout --
-// none of these trip EMBED_MODEL_MISMATCH.
+// Same mechanism as 'semantic expansion surfaces a note FTS5 cannot reach' above (chunk -> vector -> nearest -> via=vector), not model quality.
+// A writeModel local path has no languages.json, so the language-fit check stays off and none of these trip EMBED_MODEL_MISMATCH.
 describe('multilingual semantic mechanism', () => {
   const cases: Array<{ name: string; near: [string, string]; far: string }> = [
     { name: 'Japanese', near: ['りんご', 'みかん'], far: '壁' },
@@ -619,25 +608,11 @@ describe('multilingual semantic mechanism', () => {
   }
 });
 
-// The fit check: franc-min classifies the chunk texts embedPending is about to embed, and
-// a seeded languages.json (no network) drives the decision.
+// franc-min classifies the chunk texts embedPending is about to embed, against embed.languages:
+// a local fixture has no card, and config languages hit the same path without touching the cache.
 describe('language fit check', () => {
-  const seeded: string[] = [];
-  after(() => {
-    for (const dir of seeded) safeRmSync(dir, { recursive: true, force: true });
-  });
-
-  // A fixture id per test, seeded with (or without) a hand-written languages.json; no network,
-  // since seedModelCache already writes the files, refs/main, and (optionally) languages.json.
-  function chineseModel(languages?: string[]): string {
-    if (languages === undefined) return writeModel();
-    const model = `sense-test-fixture/langfit-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    seeded.push(seedModelCache(model, 'a'.repeat(40), { languages }));
-    return model;
-  }
-
   it('a majority-Chinese tree under a model declaring only English throws EMBED_MODEL_MISMATCH naming the model, its languages, the majority, and the fix', async () => {
-    const { store: db, cfg } = await openSemantic(chineseTree(), { model: chineseModel(['en']), provider: 'static' });
+    const { store: db, cfg } = await openSemantic(chineseTree(), { model: writeModel(), provider: 'static', languages: ['en'] });
     await assert.rejects(
       () => search(db, cfg, 'anything'),
       (err: SenseError) => {
@@ -653,14 +628,14 @@ describe('language fit check', () => {
   });
 
   it('the same tree passes when the model also declares zh', async () => {
-    const { store: db, cfg } = await openSemantic(chineseTree(), { model: chineseModel(['en', 'zh']), provider: 'static' });
+    const { store: db, cfg } = await openSemantic(chineseTree(), { model: writeModel(), provider: 'static', languages: ['en', 'zh'] });
     const rows = await search(db, cfg, 'anything');
     await db.close();
     assert.ok(Array.isArray(rows));
   });
 
-  it('no languages.json at all: the check stays off regardless of majority', async () => {
-    const { store: db, cfg } = await openSemantic(chineseTree(), { model: chineseModel(undefined), provider: 'static' });
+  it('no declared languages at all: the check stays off regardless of majority', async () => {
+    const { store: db, cfg } = await openSemantic(chineseTree(), { model: writeModel(), provider: 'static' });
     const rows = await search(db, cfg, 'anything');
     await db.close();
     assert.ok(Array.isArray(rows));
@@ -678,7 +653,7 @@ describe('language fit check', () => {
     ] as const) {
       writeNote(baseDir, `${lang}.md`, { body: sentences.map((s, i) => `## S${i}\n\n${s}`).join('\n\n') });
     }
-    const { store: db, cfg } = await openSemantic(baseDir, { model: chineseModel(['en']), provider: 'static' });
+    const { store: db, cfg } = await openSemantic(baseDir, { model: writeModel(), provider: 'static', languages: ['en'] });
     const rows = await search(db, cfg, 'anything');
     const dist = await languageDistribution(db);
     await db.close();
@@ -691,20 +666,23 @@ describe('language fit check', () => {
     }
   });
 
+  // Config-declared languages, not a model card: status.ts's "declared in embed.languages"
+  // state, the one branch a full CLI round trip can exercise without touching the real cache.
   it('sense status prints the declared languages and the detected distribution', async () => {
     const baseDir = chineseTree();
-    const model = chineseModel(['en', 'zh']);
-    writeFileSync(join(baseDir, 'sense.config.json'), JSON.stringify({ version: 4, presets: { default: { include: ['**/*.md'] } }, embed: { model, provider: 'static' }, queries: {} }));
+    const model = writeModel();
+    writeFileSync(join(baseDir, 'sense.config.json'), JSON.stringify({ version: 4, presets: { default: { include: ['**/*.md'] } }, embed: { model, provider: 'static', languages: ['en', 'zh'] }, queries: {} }));
     const searched = runCli(['search', 'anything'], { cwd: baseDir });
     assert.equal(searched.status, 0, searched.stderr);
     const result = runCli(['status', '--format=json'], { cwd: baseDir });
     assert.equal(result.status, 0, result.stderr);
-    const parsed = JSON.parse(result.stdout) as { embed: { languages: string[]; detectedLanguages: Record<string, number> } };
+    const parsed = JSON.parse(result.stdout) as { embed: { languages: string[]; languagesState: string; detectedLanguages: Record<string, number> } };
     assert.deepEqual(parsed.embed.languages, ['en', 'zh']);
+    assert.equal(parsed.embed.languagesState, 'declared');
     assert.ok(parsed.embed.detectedLanguages.cmn > 0, JSON.stringify(parsed.embed.detectedLanguages));
 
     const text = runCli(['status'], { cwd: baseDir });
-    assert.match(text.stdout, /languages: en, zh \(declared by the model card\)/);
+    assert.match(text.stdout, /languages: en, zh \(declared in embed\.languages\)/);
     assert.match(text.stdout, /detected: cmn \d+% \(\d+ chunks classified\)/);
   });
 });
@@ -717,5 +695,49 @@ describe('query that rewrites to nothing', () => {
     const rows = await search(db, cfg, '。');
     await db.close();
     assert.deepEqual(rows, []);
+  });
+});
+
+// Both paths to a chunk's text must give the same vectors: handed over in memory, or re-derived.
+// Drives through `search` so the store and the handoff map share one module graph.
+describe('chunk text from reconcile to embedding', () => {
+  async function vectors(store: Awaited<ReturnType<typeof openSemantic>>['store']) {
+    const rows = (await (await store.prepare('SELECT "path", chunk, scale, vector FROM embeddings ORDER BY "path", chunk')).all()) as Array<{ chunk: number; scale: number; vector: unknown }>;
+    return rows.map((r) => ({ chunk: r.chunk, scale: r.scale, vector: Buffer.from(r.vector as Uint8Array).toString('base64') }));
+  }
+
+  it('embeds in the same process as the reconcile that produced the chunks', async () => {
+    const { store, cfg } = await openSemantic(fruitTree(), { model: writeModel(), provider: 'static' });
+    await search(store, cfg, 'apple');
+    const rows = await vectors(store);
+    assert.ok(rows.length > 0, 'the fixture must produce chunks, or this asserts nothing');
+    assert.ok(
+      rows.every((r) => r.vector.length > 0),
+      'every chunk embedded'
+    );
+    await store.close();
+  });
+
+  it('embeds rows a previous command left pending, and gets identical vectors', async () => {
+    const model = writeModel();
+    const baseDir = fruitTree();
+
+    // Reconcile, then close without embedding: the in-memory text dies with this store, exactly
+    // as it does when `sense map` indexes and `sense search` embeds later.
+    const first = await openSemantic(baseDir, { model, provider: 'static' });
+    await first.store.close();
+
+    const reopened = await openSemantic(baseDir, { model, provider: 'static' });
+    await search(reopened.store, reopened.cfg, 'apple');
+    const reparsed = await vectors(reopened.store);
+    await reopened.store.close();
+
+    const fresh = await openSemantic(fruitTree(), { model, provider: 'static' });
+    await search(fresh.store, fresh.cfg, 'apple');
+    const handedOver = await vectors(fresh.store);
+    await fresh.store.close();
+
+    assert.ok(reparsed.length > 0, 'the pending set must be non-empty, or this asserts nothing');
+    assert.deepEqual(reparsed, handedOver);
   });
 });

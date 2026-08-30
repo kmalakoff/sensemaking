@@ -72,9 +72,8 @@ function bestWindowStart(occ: Array<{ start: number; end: number; term: string }
 function computeExcerpt(text: string, terms: string[]): { excerpt: string; offset: number } {
   const occ = findOccurrences(text.toLowerCase(), terms);
   if (occ.length === 0) {
-    // This is a raw substring scan, not porter-stemmed: a doc matched only through a
-    // stemmed variant (query "negotiate" vs doc "negotiating") finds no occurrence here.
-    // Fall back to the doc's start, unmarked, rather than claim a match that isn't there.
+    // Raw substring scan, not porter-stemmed: a doc matched only through a stemmed variant
+    // finds no occurrence here, so fall back to the doc's start, unmarked.
     const end = Math.min(text.length, EXCERPT_WINDOW);
     return { excerpt: `${text.slice(0, end).replace(/\s+/g, ' ').trim()}${end < text.length ? '…' : ''}`, offset: 0 };
   }
@@ -127,8 +126,7 @@ export async function search(store: Store, cfg: ResolvedConfig, terms: string, o
   const scopePaths = await rawScope(store, cfg, opts, allPaths);
   const scopeActive = scopePaths.size < allPaths.length;
   // The set every candidate pool must be filtered to before truncation: scope narrowed by
-  // --where, the same composition scopedPaths() gives the other commands. Runs the same where
-  // fragment matchSql does, so a bad column gets the same attributed error either way.
+  // --where, the same composition scopedPaths() gives the other commands.
   let allowedPaths: Set<string>;
   try {
     allowedPaths = await narrowByWhere(store, scopePaths, effective.where);
@@ -153,18 +151,15 @@ export async function search(store: Store, cfg: ResolvedConfig, terms: string, o
   const scope = effective.where;
   const whereJoin = scope ? `JOIN frontmatter f ON f."path" = content.path` : '';
   const whereCond = scope ? `AND (${scope})` : '';
-  // A scope narrower than the whole index must filter the candidate pool before LIMIT, not
-  // after -- otherwise scoped notes ranking below the global top-`fetch` never reach the
-  // filter. A join against a temp table, not a bound parameter list: real scopes run to
-  // thousands of paths, past SQLITE_MAX_VARIABLE_NUMBER on older builds.
+  // Filtered before LIMIT, not after, or scoped notes ranking below the global top-`fetch`
+  // never reach the filter; joined against a temp table since real scopes exceed SQLITE_MAX_VARIABLE_NUMBER.
   if (scopeActive) await materializeScope(store, '_search_scope', scopePaths);
   const scopeCond = scopeActive ? `AND content.path IN (SELECT "path" FROM _search_scope)` : '';
 
   const candidates = new Map<string, { score: number; via: string }>();
   let matchRows: LexicalHit[] = [];
   // A query that is only whitespace has no searchable words: zero lexical rows, and the other
-  // signals still compose. Any store-specific rewrite of `terms` (sqlite's grapheme phrase for
-  // unspaced scripts, duckdb's word/substring split) happens inside store.lexical.query itself.
+  // signals compose normally.
   if (signals.words !== undefined && terms.trim() !== '') {
     try {
       matchRows = await wordsCandidates(store, candidates, terms, whereJoin, whereCond, scopeCond, fetch, signals.words);
@@ -196,12 +191,11 @@ export async function search(store: Store, cfg: ResolvedConfig, terms: string, o
     );
   }
 
-  // All three candidate paths (match, link, vector) already filtered to scope+where before
-  // reaching _search; this reapplies --where anyway since the join to frontmatter is already
-  // needed for the path column.
+  // Reapplies --where even though _search is already scope+where filtered, since the join to
+  // frontmatter is already needed for the path column.
   const where = scope ? `WHERE (${scope})` : '';
-  // lines is always present now: semantic rows carry their chunk's range, oversized-doc
-  // lexical rows gain one below, everything else stays null. similarity stays semantic-only.
+  // lines: semantic rows carry their chunk's range, oversized-doc lexical rows gain one
+  // below, everything else stays null; similarity stays semantic-only.
   const similarityCol = semanticEnabled ? ', _search.similarity' : '';
   const selectStmt = await store.prepare(
     `SELECT f."path" AS path, content.title, content.summary, _search.hit, _search.via, round(_search.score, 4) AS score, _search.lines${similarityCol}

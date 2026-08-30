@@ -4,9 +4,8 @@ import { join } from 'node:path';
 import { toPosixPath } from '../../../src/scan/index.ts';
 import { openConfig, tmpTree, writeNote } from '../../lib/tree.ts';
 
-// Preset coverage: a file is indexed iff any preset's include/exclude covers it (union).
-// Presets overlap freely -- no disjointness error, unlike the old layer model. semantic is
-// pinned off throughout via each preset -- these tests only care about file selection.
+// Preset coverage: a file is indexed iff any preset's include/exclude covers it (union); presets
+// overlap freely, no disjointness error. semantic is pinned off throughout -- these tests only care about file selection.
 
 describe('presets: file coverage', () => {
   it('a two-preset tree indexes the union of both, and preset_files records each assignment', async () => {
@@ -112,8 +111,8 @@ describe('presets: file coverage', () => {
     ]);
   });
 
-  // node:fs glob replaced fast-glob (0.9.6). It matches directories and dangling symlinks,
-  // and does not walk symlinked directories, none of which was true of fast-glob.
+  // node:fs glob matches directories and dangling symlinks, and does not walk symlinked
+  // directories.
   it('a directory whose name matches the glob is not indexed', async () => {
     const baseDir = tmpTree();
     writeNote(baseDir, 'real.md', { frontmatter: { title: 'Real' } });

@@ -7,7 +7,7 @@ node: '26.7.0'
 corpora:
   - nfcorpus
   - fever
-superseded_by: 2026-08-28-w8-release-gate-regeneration.md
+superseded_by: 2026-08-29-0.18.0-release-gate.md
 ---
 
 ### 2026-08-27: release gates

@@ -11,18 +11,13 @@ export interface NativeDescriptor {
   sizeHint: string;
 }
 
-// install-module-linked itself is small, but a target native package can be large (@duckdb/node-
-// api's ~110MB is the current instance): deferred the same way embed/static.ts defers
-// @huggingface/tokenizers, so requiring it stays inside the already-gated branch below rather
-// than running for every store/index.ts load.
+// install-module-linked is small, but a target native package can be large (@duckdb/node-api's
+// ~110MB), so it is required lazily inside the gated branch below, not for every store/index.ts load.
 const _require = typeof require === 'undefined' ? Module.createRequire(import.meta.url) : require;
 const _dirname = dirname(typeof __filename !== 'undefined' ? __filename : fileURLToPath(import.meta.url));
 
-// Walks up from this file's own directory to find the real package.json, rather than a fixed
-// dot-count from __dirname (xz-compat's `../../node_modules`): this file sits at a different
-// depth under src/ during `tsds test:node` than under the built dist/{cjs,esm}/store output, so a
-// hardcoded depth is right for one and wrong for the other. Works the same way for a
-// globally-installed `sense`, whose node_modules this resolves to -- never the caller's cwd.
+// Walks up from this file's own directory rather than a fixed dot-count: it sits at a
+// different depth under src/ than under built dist/{cjs,esm}/store output.
 export function packageNodeModules(): string {
   let dir = _dirname;
   for (;;) {
@@ -39,12 +34,8 @@ export function packageNodeModules(): string {
 
 const installing = new Map<string, Promise<void>>();
 
-// De-dupes concurrent installs within this process (see spawn-term's loadInk for the shape).
-// The install here is async -- the load site already awaits a dynamic import -- so a bare
-// attempted flag (xz-compat's `installationAttempted`, enough for its synchronous single-target
-// install) isn't enough on its own; concurrent callers instead await the same in-flight promise,
-// keyed by specifier and target so tests exercising several installs in one process don't share
-// one slot. A failed install is not cached, so a later call retries.
+// De-dupes concurrent installs: since the install is async, concurrent callers await the same
+// in-flight promise, keyed by specifier and target. A failed install is not cached, so a later call retries.
 function installOnce(specifier: string, nodeModulesPath: string): Promise<void> {
   const key = `${specifier}\n${nodeModulesPath}`;
   let promise = installing.get(key);
@@ -62,12 +53,8 @@ function installOnce(specifier: string, nodeModulesPath: string): Promise<void> 
   return promise;
 }
 
-// Node caches a bare specifier's package resolution -- including a "not found" miss -- for the
-// life of the process, so retrying `import(importName)` right after installing sees the same
-// stale miss and falls through to a bogus index.js guess instead of the package's real entry
-// (verified against a real global install: the plain-specifier retry failed there, this did
-// not). Reading the freshly-installed package's own package.json and importing its entry file
-// by an absolute file: URL sidesteps that stale cache instead of re-resolving the bare name.
+// Node caches a bare specifier's resolution, including a "not found" miss, for the process
+// lifetime; importing the entry by an absolute file: URL instead of the bare name sidesteps that.
 function resolveEntryUrl(importName: string, nodeModulesPath: string): string {
   const pkgDir = join(nodeModulesPath, ...importName.split('/'));
   const pkg = JSON.parse(readFileSync(join(pkgDir, 'package.json'), 'utf8')) as { main?: string; exports?: string };
@@ -75,10 +62,8 @@ function resolveEntryUrl(importName: string, nodeModulesPath: string): string {
   return pathToFileURL(join(pkgDir, entry)).href;
 }
 
-// Import-then-install-then-retry, over an injectable importName so the failure path (import AND
-// install both fail) can be exercised for real in tests without downloading a real store's native
-// binding. importName defaults to descriptor.pkg, which is what production always wants; the
-// thrown errors name descriptor.pkg regardless, since that is what a real user needs to install.
+// Import-then-install-then-retry, over an injectable importName so the failure path can be
+// exercised in tests without a real native binding. Thrown errors always name descriptor.pkg.
 export async function loadOrInstall<T>(descriptor: NativeDescriptor, nodeModulesPath: string, importName: string = descriptor.pkg): Promise<T> {
   try {
     return (await import(importName)) as T;

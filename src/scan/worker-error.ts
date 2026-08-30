@@ -1,9 +1,7 @@
 import { SenseError, type SenseErrorCode } from '../errors.ts';
 
-// Structured clone across a worker_threads boundary drops a subclass and its custom
-// properties, so a SenseError arrives as a plain Error with `code` undefined -- and `code`
-// drives caller behavior. The worker serializes explicitly (computed on its side, where
-// `instanceof SenseError` is still meaningful) and the main thread rebuilds by hand.
+// Structured clone across a worker_threads boundary drops a subclass and its custom properties, so
+// a SenseError arrives as a plain Error with `code` undefined (and `code` drives caller behavior): the worker serializes explicitly and the main thread rebuilds by hand.
 export interface WorkerErrorPayload {
   name: string;
   code?: SenseErrorCode;

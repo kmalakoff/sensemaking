@@ -4,17 +4,11 @@ import type { Connection } from '../store/types.ts';
 import { maskRegions } from './fences.ts';
 import type { ExtractedDoc, Feature, ReconcileDelta } from './types.ts';
 
-// links(src, target, target_base, dst, embed): target as written, target_base its baseKey
-// (indexed, for the incremental resolve below), dst the resolved path or NULL (a
-// queryable dead link), embed whether it's `![[x]]`/`![](x.md)` rather than `[[x]]`/`[](x.md)`
-// -- Obsidian's grain: a target both linked and embedded in the same note is two rows.
+// links(src, target, target_base, dst, embed): target as written, target_base its indexed baseKey, dst the resolved path or NULL (a queryable dead link).
+// embed distinguishes `![[x]]`/`![](x.md)` from `[[x]]`/`[](x.md)` -- Obsidian's grain: a target both linked and embedded in one note is two rows.
 
-// Wikilinks ([[target]], [[target#anchor|alias]], embeds), internal markdown links, and
-// frontmatter values that are exactly a wikilink ("[[X]]"; mid-string and ![[...]] forms are
-// not links there -- Obsidian's rule, probe-verified).
-// One rule for [[inner]] text wherever it appears: alias stripped after |, a leading #
-// keeps the anchor as the target (a same-note self-link needs a heading name), otherwise
-// the anchor splits off. Null = not a link.
+// Alias stripped after |; a leading # keeps the anchor as the target (self-link needs a
+// heading name), else the anchor splits off. Null = not a link.
 function parseWikilinkInner(inner: string): string | null {
   const beforeAlias = inner.split('|')[0].trim();
   if (beforeAlias.startsWith('#')) return beforeAlias.length > 1 ? beforeAlias : null;
@@ -22,6 +16,8 @@ function parseWikilinkInner(inner: string): string | null {
   return target || null;
 }
 
+// A frontmatter value counts only when it is exactly a wikilink ("[[X]]") -- mid-string and
+// ![[...]] forms don't count there, per Obsidian's rule (probe-verified).
 function extract(_raw: string, rawBody: string, _search?: { title: string; summary: string }, data?: Record<string, unknown>): Array<{ target: string; embed: boolean }> {
   const body = /\[\[|\]\(/.test(rawBody) ? maskRegions(rawBody) : rawBody;
   const seen = new Set<string>();
@@ -38,12 +34,8 @@ function extract(_raw: string, rawBody: string, _search?: { title: string; summa
     const target = parseWikilinkInner(m[1]);
     if (target) add(target, body[(m.index ?? 0) - 1] === '!');
   }
-  // Any internal destination, not only .md-suffixed: Obsidian gives markdown links full
-  // linkpath resolution, so \](Zektor) resolves like [[Zektor]] and \](#anchor) is a
-  // self-edge. External URLs (a scheme anywhere survives the malformed double-paren case)
-  // and titled links (dest stops at whitespace) are skipped.
-  // A space in the destination is only valid ahead of a quoted title; a domain-shaped first
-  // segment (www.example.com/...) is external even without a scheme.
+  // Any internal destination, not only .md-suffixed: \](Zektor) resolves like [[Zektor]] and
+  // \](#anchor) is a self-edge. External URLs and titled links (dest stops at whitespace) skip.
   for (const m of body.matchAll(/(!)?\[[^\]]*\]\(((?:[^()\s]|\([^()\s]*\))+)(?:\s+(?:"[^)]*"|'[^)]*'))?\)/g)) {
     const dest = m[2].trim();
     // External: a URI scheme prefix (mailto:, tel:, data:, https:...), protocol-relative
@@ -73,9 +65,8 @@ function baseKey(path: string): string {
   return posix.basename(path).replace(/\.md$/i, '').toLowerCase();
 }
 
-// Obsidian-style: exact relative path (with/without .md), path relative to the linking
-// note's directory, then basename match (shortest path wins on ties -- verified against a
-// cold-loaded Obsidian vault on 6+ real collision pairs; byBase's lists are pre-sorted that way).
+// Obsidian-style: exact relative path (with/without .md), path relative to the linking note's
+// directory, then basename match (shortest path wins ties, verified against a cold-loaded vault).
 function resolveTarget(src: string, target: string, pathSet: Set<string>, byBase: Map<string, string[]>): string | null {
   // [[#Heading]]: a same-note anchor, always the note itself -- never depends on other files.
   if (target.startsWith('#')) return src;
@@ -112,9 +103,8 @@ interface LinkRow {
   embed: number;
 }
 
-// resolveTarget applied to `rows`, returning just the rows whose dst actually changed -- the
-// caller writes those in one runBatch call, keyed on (src, target) so a link/embed sibling
-// pair sharing one resolution rewrites both.
+// resolveTarget applied to `rows`, returning only the rows whose dst changed, so the caller
+// can write them in one runBatch call.
 function resolveRows(rows: LinkRow[], pathSet: Set<string>, byBase: Map<string, string[]>): LinkRow[] {
   const changed: LinkRow[] = [];
   for (const row of rows) {
@@ -156,9 +146,8 @@ async function selectIn(db: Connection, column: string, keys: string[]): Promise
   return rows;
 }
 
-// Re-resolve only what this reconcile could have touched: re-stored sources, links whose
-// target basename matches an added/vanished file, and links whose dst just vanished. All
-// three are indexed lookups, so this never reads the whole table.
+// Re-resolves only what this reconcile could have touched: re-stored sources, links whose
+// target basename matches an added/vanished file, and links whose dst vanished -- all indexed.
 async function resolveIncremental(db: Connection, delta: ReconcileDelta): Promise<boolean> {
   const pathSet = new Set(delta.files.map((f) => f.relPath));
   const byBase = buildByBase(delta.files);
@@ -181,15 +170,8 @@ async function resolveIncremental(db: Connection, delta: ReconcileDelta): Promis
   return changed.length > 0;
 }
 
-// One edge per row, as 0.12's grain always had it -- two written targets resolving to one
-// dst stay two edges (a weight the fusion evals were gated on). The only exclusion is an
-// embed whose exact (src, target) also exists as a link: that second row is new with the
-// embed grain and would double an edge that used to be one row. The NOT EXISTS probes the
-// primary key and fires only for embed rows; both branches still scan the table.
-// Self-edges (same-note anchors) are excluded here so PageRank mass is not self-recycled --
-// Obsidian's own graph view hides self-loops too. The rows themselves stay in the table for
-// backlinks/peek. Exported (not just linkEdges below) so commands/signals.ts's async caller,
-// which only has the Store's prepare(), can run the identical statement itself.
+// One edge per (src, target); an embed row is excluded only when the same pair also exists as
+// a link. Self-edges are dropped so PageRank mass is not self-recycled.
 export const LINK_EDGES_SQL = `SELECT src, dst FROM links WHERE dst IS NOT NULL AND embed = 0 AND src != dst
     UNION ALL
     SELECT src, dst FROM links l WHERE dst IS NOT NULL AND embed = 1 AND src != dst
@@ -205,10 +187,8 @@ export async function linkEdges(db: Connection): Promise<[string, string][]> {
   return toEdges((await stmt.all()) as Array<{ src: string; dst: string }>);
 }
 
-// remove()/store() have already deleted rows by the time afterReconcile runs, so this records
-// whether any reconcile pass deleted at least one link row -- whether a file vanished, or a
-// reparse's stale rows shrank. dstChanged alone misses the reparsed-to-zero-links case (no
-// surviving rows to re-resolve). Keyed on the delta object, so the state dies with the reconcile.
+// Records whether remove()/store() deleted any link row, since afterReconcile runs after both
+// and dstChanged alone misses the reparsed-to-zero-links case. Keyed on delta so state dies with it.
 const removedWithLinks = new WeakMap<ReconcileDelta, boolean>();
 
 export const links: Feature = {
@@ -219,10 +199,8 @@ export const links: Feature = {
     await db.exec('CREATE INDEX IF NOT EXISTS links_target_base ON links(target_base)');
   },
   extract,
-  // Reparsed docs are diffed in store() below instead of wiped here: deleting and re-inserting
-  // resets dst to NULL, which made every touch-only reparse read as an edge change and
-  // recompute PageRank -- measured as most of the remaining update cost. Only genuinely
-  // vanished files clear here.
+  // Reparsed docs are diffed in store() instead of wiped here: delete-and-reinsert resets dst
+  // to NULL, making every touch-only reparse look like an edge change and recompute PageRank.
   async remove(db, paths, delta) {
     const vanishedSet = new Set(delta.vanished);
     const vanished = paths.filter((p) => vanishedSet.has(p));
@@ -239,9 +217,8 @@ export const links: Feature = {
     const addedSet = new Set(delta.added);
     const reparsedExisting = docs.map((d) => d.path).filter((p) => !addedSet.has(p));
 
-    // Stale rows (existing target/embed pairs the new parse no longer contains) are real edge
-    // removals; diffed in JS from one bulk SELECT rather than a per-file NOT IN statement, so
-    // this whole pass costs one query plus one batched DELETE regardless of file count.
+    // Stale rows (target/embed pairs missing from the new parse) are diffed in JS from one
+    // bulk SELECT, so this pass costs one query plus one batched DELETE regardless of file count.
     const existingRows = await selectIn(db, 'src', reparsedExisting);
     const staleRows = existingRows.filter((row) => {
       const targets = byPath.get(row.src) ?? [];
@@ -255,10 +232,8 @@ export const links: Feature = {
       removedWithLinks.set(delta, true);
     }
 
-    // Upsert preserves dst on surviving rows, so an unchanged link resolves to the same value
-    // and reports no change; only genuinely new rows start at NULL. A same-note anchor's dst is
-    // always its own src, never another file's basename, so it gets no target_base -- SQL's
-    // `IN` never matches NULL, keeping it out of resolveIncremental's target_base lookup.
+    // Upsert preserves dst on surviving rows; only new rows start at NULL. A same-note anchor
+    // gets no target_base, so SQL's `IN` excludes it from resolveIncremental's lookup.
     const upsertRows: unknown[][] = [];
     for (const [path, targets] of byPath) {
       for (const { target, embed } of targets) upsertRows.push([path, target, target.startsWith('#') ? null : baseKey(cleanTarget(target)), embed ? 1 : 0]);

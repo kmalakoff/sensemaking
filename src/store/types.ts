@@ -1,16 +1,10 @@
-// The backing-store interface: a minimal portable statement surface (exec/prepare, used as-is
-// by feature-owned tables and ad hoc queries) plus dedicated interfaces exactly where engines
-// diverge (lexical index, vector scan, raw sql passthrough).
+// The backing-store interface: a minimal portable statement surface (exec/prepare), plus
+// dedicated interfaces exactly where engines diverge (lexical index, vector scan, raw sql).
 
 import type { StoreName } from '../config/index.ts';
 
-// 'lexical'/'vectors' mean the store's LexicalIndex/VectorStore are functionally implemented
-// (rather than present-but-inert); 'phrases'/'snippets'/'watch-concurrency' are the finer
-// behaviors sqlite's FTS5 path carries. A tree whose config needs a capability the chosen
-// store lacks fails at open (or at first use for a lazily-detected need), named.
-// 'phrases' means quoted-phrase (`"..."`) matching only -- not FTS5's wider query grammar
-// (prefix `*`, boolean AND/OR/NOT, NEAR, `^`, column filters), which duckdb's lexical path
-// rejects loudly rather than interpret (see store/duckdb/lexical.ts).
+// 'lexical'/'vectors': the store's LexicalIndex/VectorStore is functionally implemented, not
+// present-but-inert. The rest are finer FTS5-only behaviors; a missing one fails at open or first use.
 export type Capability = 'phrases' | 'snippets' | 'watch-concurrency' | 'lexical' | 'vectors';
 
 export interface RunResult {
@@ -18,9 +12,8 @@ export interface RunResult {
   lastInsertRowid: number | bigint;
 }
 
-// A prepared statement's async surface: every engine this store supports has to cross a real
-// async boundary for a query (DuckDB has no synchronous client at all), so run/get/all return
-// Promises. iterate() stays an async iterable for the same reason `sense sql` streams.
+// A prepared statement's async surface: every supported engine crosses a real async boundary
+// for a query (DuckDB has no synchronous client), so run/get/all return Promises.
 export interface Statement {
   run(...params: unknown[]): Promise<RunResult>;
   get(...params: unknown[]): Promise<unknown>;
@@ -30,11 +23,8 @@ export interface Statement {
   setReadBigInts(enabled: boolean): void;
 }
 
-// Connection surface feature-owned SQL runs against inside a store's own hot loops (schema,
-// reconcile). Portable so a feature never imports an engine-specific client type. `runBatch`
-// is the one call a write loop goes through instead of preparing once and calling `run()` per
-// row itself: one crossing per loop, the engine's own bulk idiom underneath (see each store's
-// implementation for what that idiom is).
+// Connection surface feature-owned SQL runs against inside a store's hot loops (schema,
+// reconcile), portable so a feature never imports an engine-specific client type.
 export interface Connection {
   exec(sql: string): Promise<void>;
   prepare(sql: string): Promise<Statement>;
@@ -50,11 +40,8 @@ export interface FieldStat {
 export interface DocumentStore {
   // Frontmatter column names (including internal ones; callers filter).
   columns(): Promise<string[]>;
-  // Per-column coverage (non-null count) and observed type set, aggregated in SQL -- one query
-  // per call, never one row per note. `columns` is one chunk (caller owns the chunk size, a
-  // result-row column limit); `scopeWhere` is a caller-built WHERE fragment, same convention as
-  // LexicalQueryOptions. Each store expresses "observed type" through its own engine mechanism
-  // (native-not-emulated) but returns the shared integer/real/text vocabulary.
+  // Per-column coverage (non-null count) and observed type set, aggregated in one SQL query,
+  // never one row per note. `scopeWhere` is a caller-built WHERE fragment, per LexicalQueryOptions.
   fieldStats(columns: string[], scopeWhere: string): Promise<FieldStat[]>;
 }
 
@@ -95,7 +82,7 @@ export interface VectorWriteRow {
 }
 
 export interface VectorStore {
-  // Rows whose vector is still NULL (never embedded, or added since).
+  // Rows whose vector is NULL: never embedded, or added since.
   pending(): Promise<Array<{ path: string; chunk: number }>>;
   // One batch write per call (never per row) so a provider's embedding batch stays inside a
   // single store method.
@@ -121,13 +108,11 @@ export interface Store {
   readonly capabilities: ReadonlySet<Capability>;
   exec(sql: string): Promise<void>;
   prepare(sql: string): Promise<Statement>;
-  // One crossing, N rows: every external write loop (search's candidate insert, the graph
-  // ring's temp-table writes, etc.) goes through this instead of looping over `run()` itself.
-  // See Connection.runBatch -- same contract, same per-store implementation.
+  // One crossing, N rows: every external write loop (search's candidate insert, graph ring's
+  // temp-table writes) goes through this instead of looping over `run()`. Same contract as Connection.runBatch.
   runBatch(sql: string, paramRows: unknown[][]): Promise<void>;
-  // Pins one snapshot across multi-statement reads; `map` and `peek` use it. A command whose
-  // scope holds a network-bound write (search's embedding top-up) must stay outside it.
-  // Nesting joins the enclosing transaction rather than opening a second one.
+  // Pins one snapshot across multi-statement reads; `map` and `peek` use it. A network-bound
+  // write (search's embedding top-up) must stay outside it. Nesting joins the enclosing transaction.
   transaction<T>(fn: () => Promise<T>): Promise<T>;
   // The whole file-sync pass (parse changed files, run every feature hook, resolve links,
   // recompute rank) behind one method: per-file iteration never crosses the async boundary.
@@ -136,9 +121,8 @@ export interface Store {
   lexical: LexicalIndex;
   vectors: VectorStore;
   raw: SqlSession;
-  // Engine-level facts for `sense status` (e.g. a derived busy_timeout PRAGMA reading), each
-  // store owning what it reports and how it is worded; the command prints entries generically,
-  // one line per fact, without knowing any store's name. Empty when there is nothing to report.
+  // Engine-level facts for `sense status` (e.g. a derived busy_timeout PRAGMA reading); each
+  // store owns what it reports and how it is worded. Empty when there is nothing to report.
   engineStatus(): Promise<Record<string, string>>;
   close(): Promise<void>;
 }

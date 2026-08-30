@@ -2,9 +2,8 @@ import type { Database } from '@tursodatabase/database';
 import { withTransaction } from '../transaction.ts';
 import type { Connection, RunResult, Statement } from '../types.ts';
 
-// The client's own Statement class isn't re-exported by name from '@tursodatabase/database'
-// (it lives on @tursodatabase/database-common, a transitive dependency), so its type is derived
-// structurally from Database.prepare()'s return type rather than imported by name.
+// The client's own Statement class isn't re-exported by name from '@tursodatabase/database',
+// so its type is derived structurally from Database.prepare()'s return type instead.
 type TursoStatement = Awaited<ReturnType<Database['prepare']>>;
 
 // Turso's client is async end to end (no synchronous escape hatch like node:sqlite's), so this
@@ -49,12 +48,8 @@ export function createConnection(db: Database): Connection {
     async prepare(sql: string): Promise<Statement> {
       return new TursoStatementWrapper(await db.prepare(sql));
     },
-    // db.batch() is the engine's own bulk idiom: one crossing, N rows, each row its own
-    // statement (no 32k bind-variable ceiling to chunk around, unlike a single giant statement).
-    // Spike-confirmed: batch() joins an already-open exec-level BEGIN rather than erroring, and a
-    // literal nested BEGIN hard-errors ("cannot start a transaction within a transaction"), so
-    // the shared withTransaction join-not-savepoint helper is what makes this safe to call both
-    // standalone and inside reconcile's own transaction.
+    // db.batch() is the engine's own bulk idiom: one crossing, N rows, each its own statement,
+    // no bind-variable ceiling to chunk around. A literal nested BEGIN hard-errors, so withTransaction's join-not-savepoint helper makes this safe inside reconcile's own transaction too.
     async runBatch(sql: string, paramRows: unknown[][]): Promise<void> {
       if (paramRows.length === 0) return;
       await withTransaction(conn, async () => {

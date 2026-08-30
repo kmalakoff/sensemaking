@@ -619,9 +619,8 @@ describe('mapTree many fields', () => {
   });
 });
 
-// peek's `nearby` (a 2-hop ring) was removed: peek's contract is token cost, and it was
-// 21% of the output for a question `search`'s ranked link expansion and the documented
-// WITH RECURSIVE recipe already answer.
+// peek has no `nearby` (2-hop ring): peek's contract is token cost, and that ring costs 21% of
+// the output for a question `search`'s ranked link expansion and the documented WITH RECURSIVE recipe already answer.
 describe('peek stays bounded (sections)', () => {
   function headingsTree(n: number): string {
     const baseDir = tmpTree();
@@ -922,8 +921,7 @@ describe('per-command flag parsing', () => {
 });
 
 // An omitted string flag has to read as absent, not as an empty string, and a flag passed
-// once has to read as a list -- `?? saved.field` and --include depend on those two shapes.
-// Both survived a parser swap and back, so each is pinned here rather than assumed.
+// once has to read as a list -- `?? saved.field` and --include depend on those two shapes, so each is pinned here rather than assumed.
 describe('flag value shapes', () => {
   it('an omitted --k is absent, not an empty string that reads as 0', async () => {
     const base = makeTree();

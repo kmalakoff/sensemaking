@@ -125,9 +125,8 @@ describe('group: oversize fallback (rule 5)', () => {
   // source line, not a duplicate of the whole line re-sliced by group()'s raw pass.
   it('a single heading over 2x working size splits in raw mode too, each piece its own slice of the line', () => {
     const targetTokens = 50;
-    // Indexed, not repeated: a uniformly repeated word can legitimately produce byte-identical
-    // pieces at different offsets, which would defeat the distinctness check below for reasons
-    // unrelated to the bug it exists to catch.
+    // Indexed, not repeated: a uniformly repeated word can produce byte-identical pieces at
+    // different offsets, defeating the distinctness check for reasons unrelated to the split bug.
     const headingLine = `# ${Array.from({ length: 2000 }, (_, i) => `word${i}`).join(' ')}`;
     const chunks = chunk(headingLine, { targetTokens }); // raw is the default
     assert.ok(chunks.length > 1, 'one oversize heading must still split into more than one chunk');
@@ -231,10 +230,8 @@ describe('group: oversize fallback (rule 5)', () => {
   });
 
   it('a Chinese single-line paragraph splits at sentence boundaries in raw mode too, every piece distinct and covering the line', () => {
-    // Indexed, not repeated: an identical sentence repeated verbatim can legitimately produce
-    // byte-identical pieces at different offsets, which would defeat the distinctness check
-    // below for reasons unrelated to the bug it exists to catch. The index (ASCII digits) does
-    // not change the sentence's dense-script density or its '。' terminator.
+    // Indexed, not repeated: byte-identical pieces at different offsets would defeat the
+    // distinctness check; ASCII digits don't affect dense-script density or the '。' terminator.
     let body = '';
     let i = 0;
     while (estimateTokens(body) < 1200) {

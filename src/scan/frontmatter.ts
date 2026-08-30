@@ -4,12 +4,8 @@ import { isCollection, parseDocument, visit } from 'yaml';
 // a feature-owned column (`_rank`) from a parsed one and leave it alone on reparse.
 export const RESERVED_COLUMNS = new Set(['path', '_mtime', '_ctime', '_size', '_rank', '_parse_error', 'content', 'links', 'sections']);
 
-// YAML error codes whose recovery is unambiguous, so the parse is accepted rather than
-// quarantined. Only one qualifies: YAML 1.2 reserves `@` and `` ` `` at the start of a plain
-// scalar for future use, so they can never be valid and the text can only be what was typed
-// (`aliases: [@handle]` -> ["@handle"]). Every other code has a second reading -- an unquoted
-// `:` swallows the keys after it, an unquoted `[..](..)` drops the URL, a duplicate key picks
-// one value in silence -- so it writes values nobody wrote.
+// Only BAD_SCALAR_START qualifies: YAML 1.2 reserves `@` and `` ` `` at the start of a plain scalar, so `aliases: [@handle]` can only mean ["@handle"].
+// Every other code has a second reading (a swallowed key, a dropped URL, a silently overwritten duplicate) that would write values nobody wrote.
 const ACCEPTED_YAML_CODES = new Set(['BAD_SCALAR_START']);
 
 export function normalizeText(value: unknown): string {
@@ -51,6 +47,14 @@ export function mapValue(value: unknown): string | number | bigint | null {
   return JSON.stringify(value);
 }
 
+// Exactly `s.split('\n').length` without allocating the array: callers that need only the count
+// run it per file per feature on the parse hot path.
+export function countLines(s: string): number {
+  let n = 1;
+  for (let i = 0; i < s.length; i++) if (s.charCodeAt(i) === 10) n++;
+  return n;
+}
+
 // The delimiter split is all this package used gray-matter for.
 export function splitFrontmatter(raw: string): { fm: string | null; body: string } {
   const open = raw.match(/^---\r?\n/);
@@ -61,11 +65,8 @@ export function splitFrontmatter(raw: string): { fm: string | null; body: string
   return { fm: rest.slice(0, close.index), body: rest.slice(close.index + close[0].length) };
 }
 
-// A well-formed document can still hold a value nobody meant: `created: {{date}}` is valid
-// YAML for a flow map used as a mapping key, so it raises no error and stores
-// {"{ date }": null}. No error code can catch that, but yaml notices the stringified key, so
-// this reports it with the path instead (yaml's own warning has none, fires once per document,
-// and is what trains readers to discard stderr).
+// A well-formed document can hold a value nobody meant: `created: {{date}}` is valid YAML for a flow map used as a mapping key, so it raises no error and stores {"{ date }": null}.
+// No error code catches that; yaml's own warning lacks a path and fires once per document, so this reports it here instead, with the path.
 function warnStringifiedKeys(relPath: string, doc: ReturnType<typeof parseDocument>, warnings: string[]): void {
   let found = false;
   // Nested, not top level: `created: {{date}}` puts the collection key one level down, inside
@@ -81,13 +82,8 @@ function warnStringifiedKeys(relPath: string, doc: ReturnType<typeof parseDocume
   if (found) warnings.push(`warning: ${relPath} frontmatter has a key that is itself a list or mapping, stored as text; this is usually an unrendered template placeholder like {{date}}`);
 }
 
-// Accept a clean parse, and one whose every error is unambiguous (ACCEPTED_YAML_CODES).
-// Anything else is quarantined: no frontmatter columns at all, and `_parse_error` carries the
-// reason. Recovering it would write values nobody wrote, which is worse than absence because
-// no query can see it. The file is still indexed -- content, links and sections never touch
-// frontmatter -- so a broken note stays searchable while it is being hunted for.
-// yaml's message continues onto a source excerpt, so the first line is the sentence -- minus
-// the colon that introduced the part being dropped.
+// Anything past ACCEPTED_YAML_CODES is quarantined: no frontmatter columns, `_parse_error` carries the reason. Recovering it would write values nobody wrote, worse than absence since no query can see it; content, links and sections never touch frontmatter, so a broken note stays searchable.
+// yaml's message continues onto a source excerpt, so the first line is the sentence, minus the colon that introduced the part being dropped.
 function firstLine(message: string): string {
   return message.split('\n')[0].replace(/:\s*$/, '');
 }

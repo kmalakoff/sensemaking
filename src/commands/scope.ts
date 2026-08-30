@@ -6,9 +6,8 @@ import type { Store } from '../store/types.ts';
 
 export const INTERNAL_COLUMNS = new Set(['path', '_mtime', '_ctime', '_size', '_rank', '_parse_error']);
 
-// node:path's matchesGlob is experimental (stable behind an unstable-API flag) as of the
-// engines floor (Node >=22.20); scope filtering only ever needs single-pattern matching, so
-// it's used here in JS rather than running a directory walk in the query path.
+// node:path's matchesGlob is experimental (stable behind an unstable-API flag) at the
+// Node >=22.20 engines floor; used here in JS rather than a directory walk in the query path.
 export function inScope(path: string, include: string[], exclude?: string[]): boolean {
   if (!include.some((g) => matchesGlob(path, g))) return false;
   if (exclude?.some((g) => matchesGlob(path, g))) return false;
@@ -23,8 +22,7 @@ export async function scopeHasEmbeddings(store: Store, cfg: ResolvedConfig, scop
 }
 
 // Scope only (no --where): preset_files for a named preset, JS glob matching for an ad hoc
-// include/exclude override. Shared by scopedPaths() and search(), which also needs the
-// pre-where set to size the candidate-pool filter.
+// include/exclude override. Shared by scopedPaths() and search()'s candidate-pool sizing.
 export async function rawScope(store: Store, cfg: ResolvedConfig, overrides: SearchOverrides, allPaths?: string[]): Promise<Set<string>> {
   const effective = resolveSearch(cfg, overrides);
   const { include, exclude } = effective;

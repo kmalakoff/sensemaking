@@ -7,8 +7,7 @@ export const STATE_DIR = '.sense';
 export const SUPPORTED_CONFIG_VERSION = 5;
 
 // Each feature owns its tables, parse-time extraction, and reconcile step; commands degrade when one is off.
-// links/sections/tags/rank are opt-out toggles in the top-level `features` block; embed is not a
-// member of that block -- it is on exactly when an `embed` block names a model.
+// links/sections/tags/rank are opt-out toggles in `features`; embed is on exactly when an `embed` block names a model.
 export const FEATURE_NAMES = ['links', 'sections', 'tags', 'rank', 'embed'] as const;
 export type FeatureName = (typeof FEATURE_NAMES)[number];
 
@@ -25,23 +24,19 @@ export interface EmbedConfig {
 
 export const DEFAULT_EMBED_MODEL = 'minishlab/potion-retrieval-32M';
 
-// The single declaration every other store-name union derives from (Store.name in
-// store/types.ts, the registry in store/index.ts): one store gets added here, not in four
-// hand-maintained copies.
-export type StoreName = 'sqlite' | 'duckdb' | 'turso';
+// The single declaration every other store name derives from (Store.name, the store/index.ts
+// registry, validate.ts's accepted set). An array, not a bare union, so runtime checks read the same list.
+export const STORE_NAMES = ['sqlite', 'duckdb', 'turso'] as const;
+export type StoreName = (typeof STORE_NAMES)[number];
 
-// A named, self-contained file-selection scope. include/exclude are globby patterns resolved
-// relative to the config file. No inheritance between presets -- every field a preset wants
-// it declares itself. Presets may overlap freely; they are views, not partitions.
+// A named, self-contained file-selection scope: include/exclude are globby patterns resolved
+// relative to the config file. No inheritance between presets; they may overlap freely (views, not partitions).
 export interface Preset {
   include: string[];
   exclude?: string[];
   k?: number; // result count for `search` scoped to this preset; default 10
-  // Exhaustive when present: every signal this preset's searches compose, each mapped to
-  // its RRF weight (a finite number > 0; presence is enablement). Absent means every signal
-  // whose prerequisite holds, each at weight 1 -- words always, links when the feature is on,
-  // vectors when the tree names a model. A layer searched for exact wording (ingested sources,
-  // archives, generated output) declares {"words":1,"links":1} and costs no embedding at all.
+  // Exhaustive when present: every signal this preset's searches compose, each mapped to its RRF
+  // weight (finite > 0; presence is enablement). Absent = every signal whose prerequisite holds, at weight 1 (words always, links when on, vectors when a model is named).
   signals?: SignalWeights;
   where?: string; // standing SQL condition against frontmatter alias `f`
 }
@@ -76,9 +71,8 @@ export interface Config {
   // Settings for the `content` FTS5 table. `tokenize` decides which languages the tree can be
   // word-searched in at all; changing it rebuilds the index.
   content?: { tokenize?: string };
-  // Backing store engine for this tree: "sqlite" (default, zero-dependency), "duckdb", or
-  // "turso" (each an optional dependency, installed on first use). All three implement the same
-  // commands; "turso" implements only the portable surface so far (no lexical, no vectors).
+  // Backing store engine: "sqlite" (default, zero-dependency), "duckdb", or "turso" (optional
+  // dependency, installed on first use). What differs per store is declared through CAPABILITIES (store/types.ts).
   store?: StoreName;
   queries: Record<string, SavedQuery>;
 }

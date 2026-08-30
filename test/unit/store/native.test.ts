@@ -23,11 +23,8 @@ function makeUnwritable(dir: string): () => void {
   return () => chmodSync(dir, 0o755);
 }
 
-// Real failures, not simulated: a genuinely nonexistent package (both the dynamic import and
-// the npm install fail for real) and a genuinely unwritable target directory (the install
-// caches fine but the symlink-into-place step fails for real), never a mocked installer. Both
-// exercise the exact mechanics a real store's own install path uses, over a substitute
-// descriptor and importName so neither test downloads a real (potentially large) native binding.
+// Real failures, not simulated: a genuinely nonexistent package (import and npm install both fail)
+// and a genuinely unwritable directory (cache succeeds, symlink-into-place fails); a substitute descriptor/importName avoids downloading a real native binding.
 describe('loadOrInstall', () => {
   it('names the install failure and the manual escape hatch when the package cannot be found at all', async () => {
     const nodeModulesPath = scratchDir('native-install-missing');
@@ -52,10 +49,8 @@ describe('loadOrInstall', () => {
     try {
       // The denial must actually bind, or the scenario below never triggers.
       assert.throws(() => mkdirSync(join(nodeModulesPath, 'probe')));
-      // A real, tiny, already-published package this project never resolves on its own (so the
-      // first import genuinely fails): proves the cache/download half succeeds and the failure
-      // is genuinely the read-only symlink-into-place step, same as a root-owned node_modules
-      // under a global install would produce.
+      // A real, tiny, already-published package this project never resolves on its own (so the first
+      // import genuinely fails), isolating the failure to the read-only symlink-into-place step.
       await assert.rejects(
         () => loadOrInstall(DESCRIPTOR, nodeModulesPath, 'is-natural-number'),
         (err: unknown) => {

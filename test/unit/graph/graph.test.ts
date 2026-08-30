@@ -50,8 +50,7 @@ describe('pagerank: hand-computable 3-node case', () => {
 describe('pagerank: dangling-mass redistribution', () => {
   it("a dangling node's rank is redistributed across all nodes by the base distribution, not lost", () => {
     // a -> b, a -> c; b and c are dangling (no outbound edges). Their rank is redistributed
-    // uniformly (the uniform base) each iteration, so the total stays normalized to ~1 and a
-    // node with no inbound edges (a) still ends up with nonzero rank purely from that redistribution.
+    // uniformly each iteration, so the total stays ~1 and a (no inbound edges) still gets nonzero rank purely from that redistribution.
     const nodes = ['a', 'b', 'c'];
     const edges: Edge[] = [
       ['a', 'b'],

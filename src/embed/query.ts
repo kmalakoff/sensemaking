@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Config, ResolvedConfig } from '../config/index.ts';
 import { SenseError } from '../errors.ts';
@@ -6,6 +7,7 @@ import { embed } from '../features/embed.ts';
 import { progress } from '../output/progress.ts';
 import { parseFile } from '../scan/index.ts';
 import type { Store, VectorCandidate, VectorSimilar } from '../store/types.ts';
+import { takeChunkText } from './handoff.ts';
 import { checkLanguageFit } from './langfit.ts';
 import { getProvider } from './registry.ts';
 import { STORE_DIMS } from './types.ts';
@@ -24,8 +26,8 @@ export function toStore(full: Float32Array, dims: number, int8: boolean): { v: F
   return { v, scale: max / 127 || 1 };
 }
 
-// Embed rows whose vector is NULL, re-deriving chunk text from the files through the
-// same parse + chunker that stored the rows.
+// Embed rows whose vector is NULL. Reconcile hands its chunk text over in memory when it ran in
+// this process (handoff.ts); a row left pending by an earlier command re-derives from the file.
 export async function embedPending(store: Store, cfg: Config, baseDir: string): Promise<void> {
   const provider = await getProvider(cfg); // throws EMBED_DISABLED before touching the table
   const dirty = await store.vectors.pending();
@@ -39,12 +41,22 @@ export async function embedPending(store: Store, cfg: Config, baseDir: string): 
     byPath.set(row.path, list);
   }
 
+  const textByPath = takeChunkText(store) ?? new Map<string, string[]>();
+
   const jobs: Array<{ path: string; chunk: number; text: string }> = [];
   for (const [path, chunkIdxs] of byPath) {
+    const texts = textByPath.get(path);
+    if (texts && chunkIdxs.every((idx) => idx < texts.length)) {
+      // A stat, not a parse: a file that vanished since reconcile is skipped here even though its
+      // text comes from memory, and the next reconcile removes its rows.
+      if (!existsSync(join(baseDir, path))) continue;
+      for (const idx of chunkIdxs) jobs.push({ path, chunk: idx, text: texts[idx] });
+      continue;
+    }
+    // Reconcile ran in another process (`sense map` earlier, or a background `sense watch`), so
+    // its chunk text is gone: re-derive this one file.
     let chunks: Chunk[];
     try {
-      // presets/embed are irrelevant here -- re-deriving chunk text for a doc that already
-      // has embeddings rows means the tree had an embedding model at reconcile time.
       chunks = parseFile({ relPath: path, absPath: join(baseDir, path), mtimeMs: 0, ctimeMs: 0, size: 0, presets: [], embed: true }, [embed], cfg).doc.extracted.embed as Chunk[];
     } catch {
       continue; // vanished since reconcile; the next reconcile removes its rows
@@ -80,8 +92,7 @@ export async function embedPending(store: Store, cfg: Config, baseDir: string): 
 }
 
 // Best chunk per file by cosine, its line range riding along; FTS5 operators are stripped as
-// lexical syntax. Similarity comes back because the fused score cannot express match quality,
-// and nearest-neighbour search always returns a neighbour however far away.
+// lexical syntax. Similarity comes back because the fused score cannot express match quality.
 export async function semanticCandidates(store: Store, cfg: Config, terms: string, fetch: number, allowed?: Set<string>): Promise<VectorCandidate[]> {
   const baseDir = (cfg as Partial<ResolvedConfig>).baseDir;
   if (!baseDir) throw new SenseError('EMBED_MODEL', 'semantic expansion needs a config with baseDir (use loadConfig/open)');

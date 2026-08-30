@@ -3,9 +3,8 @@ import { withTransaction } from '../transaction.ts';
 import type { Connection, RunResult, Statement } from '../types.ts';
 import { rewriteBatch } from './batch.ts';
 
-// getRowObjectsJS returns INT64 columns as BigInt regardless of magnitude, while sqlite's
-// small ints are numbers and consumers assume number. Beyond the safe range stays BigInt (the
-// setReadBigInts contract); stringifyJson keeps JSON output safe.
+// getRowObjectsJS returns INT64 columns as BigInt regardless of magnitude, while sqlite's small
+// ints are numbers and consumers assume number; in-range values convert here, out-of-range stays BigInt.
 const MAX_SAFE = BigInt(Number.MAX_SAFE_INTEGER);
 export function storeValueToJs(value: unknown): unknown {
   return typeof value === 'bigint' && value >= -MAX_SAFE && value <= MAX_SAFE ? Number(value) : value;
@@ -16,22 +15,14 @@ export function storeRowToJs(row: Record<string, unknown>): Record<string, unkno
   return out;
 }
 
-// @duckdb/node-api tracks every prepared statement itself and destroys any survivor when the
-// connection closes, but sense's stores stay open for a whole `sense watch` session -- nothing
-// destroys one before then. The portable Statement interface has no dispose (sqlite's node:sqlite
-// statements need none, and callers like graph/traverse.ts's ring loop reuse one Statement across
-// several run/get/all calls, so a per-call destroy would be wrong), so cleanup happens here,
-// locally, once nothing references the wrapper any more. destroySync() is safe to call more than
-// once -- runBatch below and vectors.ts already call it explicitly while the same connection-close
-// sweep can also reach a statement that outlives its wrapper, with no reported issue.
+// @duckdb/node-api only destroys a prepared statement when its connection closes, but a connection can stay open for a whole `sense watch` session.
+// Statement has no dispose (callers reuse one instance across several calls), so this FinalizationRegistry reclaims it once nothing references the wrapper.
 const preparedFinalizer = new FinalizationRegistry<DuckDBPreparedStatement>((prepared) => {
   prepared.destroySync();
 });
 
-// Wraps one already-prepared DuckDB statement: prepare() is the only async step (Store.prepare
-// already crosses the async boundary once), so columns() reads back synchronously from it and
-// run/get/all rebind and re-execute the same native statement, matching how a caller (e.g.
-// graph/traverse.ts's ring loop) reuses one Statement across several calls.
+// Wraps one already-prepared DuckDB statement: prepare() is the only async step, so run/get/all rebind and
+// re-execute the same native statement, matching how callers like graph/traverse.ts's ring loop reuse one Statement across several calls.
 class DuckdbStatement implements Statement {
   private prepared: DuckDBPreparedStatement;
 
@@ -83,11 +74,8 @@ export function createConnection(duckdb: DuckDBConnection): Connection {
     async prepare(sql: string): Promise<Statement> {
       return new DuckdbStatement(await duckdb.prepare(sql));
     },
-    // One crossing regardless of row count: rewriteBatch turns the caller's single-row SQL into
-    // one multi-row statement when it recognizes the shape (see batch.ts); anything else falls
-    // back to a bind-and-run loop over one prepared statement, still a single call to the caller.
-    // Joins the caller's transaction when there is one (reconcile); otherwise opens its own, so
-    // a standalone batch stays atomic.
+    // One crossing regardless of row count: rewriteBatch folds recognized shapes into a multi-row statement (batch.ts),
+    // else falls back to a bind-and-run loop, one call either way. Joins the caller's transaction when there is one, else opens its own.
     async runBatch(sql: string, paramRows: unknown[][]): Promise<void> {
       if (paramRows.length === 0) return;
       await withTransaction(conn, async () => {

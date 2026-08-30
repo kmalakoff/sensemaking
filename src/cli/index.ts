@@ -1,8 +1,7 @@
 import type { Command } from './types.ts';
 
-// Each command's usage line, minus the leading "usage: <name> " -- shared by cli.ts's
-// top-level usage() and the command's own parse() error/--help output, so there is one
-// copy of each line, not two that can drift.
+// Each command's usage line, minus the leading "usage: <name> ": shared by cli.ts's
+// usage() and the command's own parse() error/--help output so there is one copy, not two.
 export const USAGE = {
   init: 'init [--model id-or-path] [--provider static|openai|cohere] [--url url]',
   watch: 'watch [--force] [--config path]',
@@ -17,8 +16,7 @@ export const USAGE = {
 } as const;
 
 // Lazy registry: a command's imports load only when it runs, so a heavy dependency in one
-// command never taxes the others (or --version/--help). These names are reserved: a saved
-// entry in config can never shadow them.
+// command never taxes the others (or --version/--help). These names are reserved from saved queries.
 export const COMMANDS: Record<string, () => Promise<{ default: Command }>> = {
   init: () => import('./init.ts'),
   watch: () => import('./watch.ts'),

@@ -13,8 +13,7 @@ import { scanCandidates, scanSimilar, writeVectorBatch } from './vectors.ts';
 export const CAPABILITIES: ReadonlySet<Capability> = new Set(['phrases', 'snippets', 'watch-concurrency', 'lexical', 'vectors']);
 
 // Wraps the synchronous DatabaseSync connection in the async Store interface, sharing one
-// Connection instance (conn) with open()'s own reconcile call so transaction depth (see
-// transaction.ts) is tracked against the same object everywhere.
+// Connection instance (conn) with open()'s own reconcile call so transaction depth is tracked against the same object everywhere.
 export function createStore(db: DatabaseSync, conn: Connection, cfg: Config, baseDir: string): Store {
   return {
     name: 'sqlite',

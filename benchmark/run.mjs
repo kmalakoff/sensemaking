@@ -1,5 +1,4 @@
-// Benchmark one package against one tree; prints a JSON row for BENCHMARKING.md. Wall-time
-// metrics spawn the CLI (what an agent pays); in-process ones time the engine alone.
+// Benchmark one package against one tree; prints a JSON row for BENCHMARKING.md. Wall-time metrics spawn the CLI (what an agent pays); in-process ones time the engine alone.
 // usage: node benchmark/run.mjs <package-root> <notes-dir|corpus-name> [--store <name>]
 import { spawn, spawnSync } from 'node:child_process';
 import { appendFileSync, rmSync, statSync, utimesSync } from 'node:fs';
@@ -9,9 +8,8 @@ import { CORPUS_NAMES, corpusPath, writeTreeConfig } from './lib/corpus.mjs';
 import { futureDate, medianAsync, timedCli, walkMd } from './lib/measure.mjs';
 
 const argv = process.argv.slice(2);
-// The store is a config fact the harness writes into the tree. Pre-store packages have no
-// `search` verb and read the config as-is, so they ignore the flag and every old column of
-// a compare run stays a valid sqlite measurement.
+// The store is a config fact the harness writes into the tree. Pre-store packages have no `search` verb and read the config as-is, ignoring the flag.
+// Every old column of a compare run stays a valid sqlite measurement.
 const storeIdx = argv.indexOf('--store');
 const store = storeIdx >= 0 ? argv[storeIdx + 1] : null;
 // With no flag storeIdx is -1, and filtering on storeIdx + 1 (0) would drop the first positional.
@@ -33,9 +31,8 @@ const timed = (args, runs = 5) => timedCli(() => run(args), runs);
 
 const fail = (r) => (r.status === 0 ? r : null);
 
-// Dialect detection: pre-rename packages have no `search` verb, so their --help never
-// mentions it. Runs once; every row-mapping choice below reads off this one flag so old and
-// new packages still land in the same JSON shape for compare.mjs.
+// Dialect detection: pre-rename packages have no `search` verb, so their --help never mentions it. Runs once.
+// Every row-mapping choice below reads off this one flag, so old and new packages land in the same JSON shape for compare.mjs.
 const HELP = spawnSync(process.execPath, [cli, '--help'], { encoding: 'utf8' }).stdout ?? '';
 const NEW_DIALECT = /search/.test(HELP);
 // Ad-hoc SQL was `query` until it became `sql`, which took the name back from the search
@@ -72,9 +69,8 @@ const findR = fail(timed(lexicalArgs('the'), 3));
 // vs find_ms is what vector participation pays per invocation: model load + query embed + scan.
 const semanticR = fail(timed(vectorArgs('the'), 3));
 const mapR = fail(timed(['map'], 3));
-// A `find` row is an output contract like the map/peek token counts: a row is a reference,
-// and its cost must not grow with the tree. Measured in json (the shape an agent parses),
-// per row actually returned.
+// A `find` row is an output contract like the map/peek token counts: a row is a reference, and its cost must not grow with the tree.
+// Measured in json (the shape an agent parses), per row actually returned.
 const findRowTokens = (() => {
   const out = run([...lexicalArgs('the'), '--format', 'json']);
   if (out.status !== 0) return null;
@@ -86,9 +82,8 @@ const findRowTokens = (() => {
   }
 })();
 const peekR = fail(timed(['peek', largest.rel], 3));
-// related_ms: the similar-but-unlinked command. It scans every embedding chunk in the tree
-// per call (semantic-search cost class), unlike peek's cheap local queries. Runs after the
-// semantic search above, which has warmed the embeddings this scan reads.
+// related_ms: the similar-but-unlinked command. Scans every embedding chunk in the tree per call (semantic-search cost class), unlike peek's cheap local queries.
+// Runs after the semantic search above, which has warmed the embeddings this scan reads.
 const relatedR = fail(timed(['related', largest.rel], 3));
 
 // --- in-process (library) ---

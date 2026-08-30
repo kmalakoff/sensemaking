@@ -1,6 +1,5 @@
-// Retrieval quality in three passes (bm25-only, fused, semantic) plus a hidden guard pass: a
-// vectors-free preset must be row-identical to `fused`. Paired deltas with a sign-test z.
-// usage: node benchmark/eval.mjs [corpus] [--queries N] [--k N] [--split test|dev]
+// Retrieval quality in three passes (bm25-only, fused, semantic) plus a hidden guard pass: a vectors-free preset must be row-identical to `fused`. Paired deltas with a sign-test z.
+// usage: node benchmark/eval.mjs [corpus] [--queries N] [--k N] [--split test|dev] [--store name]
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { corpusLabels, corpusPath } from './lib/corpus.mjs';
@@ -16,6 +15,9 @@ const flag = (name, dflt) => {
 const K = Number(flag('k', 10));
 const MAX_QUERIES = Number(flag('queries', Infinity));
 const SPLIT = flag('split', 'test');
+// Retrieval quality is per-store once a store has its own lexical layer: each engine ranks with its own BM25, so scores are comparable only against the same store on the same corpus.
+// Omitted, this measures the default store, matching every recorded baseline in benchmark/reports.
+const STORE = flag('store', undefined);
 
 const tree = corpusPath(corpus);
 const labelsDir = corpusLabels(corpus);
@@ -30,16 +32,11 @@ const lib = await import(pathToFileURL(join(ROOT, 'dist', 'esm', 'index.js')).hr
 const { queries, qrels } = readLabels(labelsDir, SPLIT);
 const qids = [...qrels.keys()].sort().slice(0, MAX_QUERIES === Infinity ? undefined : MAX_QUERIES);
 
-// embed false -> a vectors-free signals map, vectors never built. embed true -> the config names
-// the model (nothing implicit turns vectors on since the explicit-embed change; without the
-// block, anyPresetEmbeds is false and the semantic pass silently measures lexical) and
-// vectors build lazily on the first participating call.
-// --model/--provider/--url let a non-default corpus (e.g. an HTTP encoder over Ollama) reuse
-// this same real search()-through-chunk() path instead of bakeoff's whole-document scoring.
+// embed false -> vectors-free signals map (vectors never built); embed true -> config names the model and vectors build lazily on the first participating call. Without an embed block, the semantic pass silently measures lexical.
+// --model/--provider/--url let a non-default corpus (e.g. an HTTP encoder over Ollama) reuse this real search()-through-chunk() path instead of bakeoff's whole-document scoring.
 const EMBED = { model: flag('model', 'minishlab/potion-retrieval-32M'), provider: flag('provider', 'static'), url: flag('url', undefined) };
-// There is no per-call semantic option: the preset decides. `semanticOff` writes a
-// vectors-free `signals` weight map into the preset, which is the one lever the
-// no-silent-change contract is about.
+// There is no per-call semantic option: the preset decides. `semanticOff` writes a vectors-free `signals` weight map into the preset.
+// That's the one lever the no-silent-change contract is about.
 const VARIANTS = [
   { name: 'bm25-only', features: { links: false, rank: false }, embed: false, semanticOff: true },
   { name: 'fused', features: undefined, embed: false, semanticOff: true },
@@ -56,6 +53,7 @@ for (const variant of VARIANTS) {
     queries: {},
     baseDir: tree,
     configPath: null,
+    ...(STORE ? { store: STORE } : {}),
   };
   const { store } = await lib.open(cfg);
   const perQuery = new Map();
@@ -79,9 +77,8 @@ for (const variant of VARIANTS) {
   results.push({ ...variant, perQuery, errors, ms: ms / qids.length });
 }
 
-// Guard first: a semantic:false preset must fully disable vector participation, even on an
-// embed-configured corpus -- fused-embed-configured must not diverge from fused by a single
-// row.
+// Guard first: a semantic:false preset must fully disable vector participation, even on an embed-configured corpus.
+// fused-embed-configured must not diverge from fused by a single row.
 const fused = results.find((r) => r.name === 'fused');
 const fusedEmbedConfigured = results.find((r) => r.name === 'fused-embed-configured');
 const divergent = qids.filter((qid) => fused.perQuery.get(qid)?.rows !== fusedEmbedConfigured.perQuery.get(qid)?.rows);

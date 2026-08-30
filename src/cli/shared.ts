@@ -29,9 +29,8 @@ export const SEARCH_FLAGS: ParseArgsOptionsConfig = { ...SCOPE, k: { type: 'stri
 
 type Values = Record<string, string | boolean | string[] | undefined>;
 
-// The SCOPE fragment's parsed values as the overrides every scoped command passes down. One
-// place to read them, so a new scope field is added to the fragment and here, not in each
-// command's call.
+// The SCOPE fragment's parsed values as the overrides every scoped command passes down.
+// One place to read them: a new scope field is added to the fragment and here, not per-command.
 export function scopeOf(values: Values): SearchOverrides {
   return {
     preset: values.preset as string | undefined,
@@ -42,8 +41,8 @@ export function scopeOf(values: Values): SearchOverrides {
   };
 }
 
-// An unrecognised value used to fall through to `table`, so a typo looked like it worked.
-// parseArgs is strict about flag names; this is the same strictness for the value.
+// parseArgs is strict about flag names; this applies the same strictness to the value.
+// An unrecognised --format is a usage error, not a silent fallback to `table`.
 function pickFormat<T extends string>(values: Values, allowed: readonly T[]): T {
   const format = String(values.format);
   if ((allowed as readonly string[]).includes(format)) return format as T;
@@ -84,9 +83,8 @@ export function parse(argv: string[], usage: string, options: ParseArgsOptionsCo
   return { values, positionals };
 }
 
-// --k must be a positive integer: SQLite reads a bound LIMIT of -1 as "unlimited" and 0 as
-// "nothing", and parseInt would silently truncate "5.9" -- all three are caller mistakes
-// worth a usage error, matching the config-level SavedSearch validation.
+// --k must be a positive integer: SQLite reads a bound LIMIT of -1 as "unlimited" and 0 as "nothing", and parseInt would silently truncate "5.9".
+// All three are caller mistakes worth a usage error, matching the config-level SavedSearch validation.
 export function parseK(k: string | undefined, usageError: (message: string) => never): number | undefined {
   if (k === undefined) return undefined;
   const parsed = Number(k);
@@ -111,11 +109,8 @@ export async function withDb(ctx: Ctx, configPath: string | undefined, fn: (stor
   }
 }
 
-// `--preset` on SQL binds the scope rather than applying it: the statement joins `scope`
-// itself. Filtering behind the query's back is not available -- the obvious version, temp views
-// shadowing the base tables, cannot cover `content`, because FTS5 `MATCH` uses the table name
-// as a hidden column and a view has none. A flag that silently scoped three tables of four
-// would look scoped and not be.
+// `--preset` on SQL binds a temp `scope` table rather than transparently filtering: temp views shadowing the base tables can't cover `content`, since FTS5 MATCH treats the table name as a hidden column.
+// A flag that silently scoped three tables of four would look scoped and not be.
 async function bindScope(store: Store, cfg: ResolvedConfig, preset: string): Promise<void> {
   const { name } = resolvePreset(cfg, preset); // unknown names throw, listing what is declared
   await store.exec('DROP TABLE IF EXISTS temp.scope');
@@ -141,12 +136,8 @@ export async function runSql(cfg: ResolvedConfig, sql: string, params: string[],
   const { store, warnings } = await openStore(cfg);
   printWarnings(warnings);
   if (preset !== undefined) await bindScope(store, cfg, preset);
-  // Streamed rather than collected: `sql` is the one caller whose result size is the
-  // statement's business, not this package's, so the rows are never held here in bulk.
-  // columns() reads the statement's own metadata, so a 0-row csv still has its header.
-  // A mid-stream SQLite error (e.g. SQLITE_BUSY outlasting busy_timeout) can still leave
-  // partial output; the nonzero exit code is the caller's signal, output completeness is not
-  // guaranteed on failure.
+  // Streamed, not collected: `sql`'s result size is the caller's business, not ours. columns() reads the statement's own metadata, so a 0-row csv gets a header too.
+  // A mid-stream SQLite error (e.g. SQLITE_BUSY outlasting busy_timeout) may leave partial output; the nonzero exit code is the failure signal, not a completeness guarantee.
   try {
     const statement = await store.raw.prepare(sql);
     const columns = statement.columns().map((c) => c.name);
@@ -154,9 +145,8 @@ export async function runSql(cfg: ResolvedConfig, sql: string, params: string[],
   } catch (err) {
     const hinted = columnHint(await store.docs.columns(), err as Error); // columns read while the store is still open
     await store.close();
-    // A saved query or ad-hoc SQL can carry `content MATCH ?` too, so the same FTS5
-    // punctuation trap applies -- the bound parameters are the search terms there. SQL
-    // without MATCH gets its error verbatim; search advice on a plain typo would mislead.
+    // A saved query or ad-hoc SQL can carry `content MATCH ?` too, so the same FTS5 punctuation trap applies to its bound parameters.
+    // SQL without MATCH gets its error verbatim; search advice on a plain typo would mislead.
     if (/\bMATCH\b/i.test(sql)) throw searchError(hinted, params.join(' '));
     throw hinted;
   }

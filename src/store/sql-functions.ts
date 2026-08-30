@@ -1,8 +1,7 @@
 import posix from 'node:path/posix';
 
 // has(field, value) / basename(path, suffix): the two sense-supplied SQL functions with no
-// engine-specific pieces, shared by sqlite/sql-functions.ts and duckdb/sql-functions.ts so each
-// store registers the identical implementation instead of a hand-copied one (DRY).
+// engine-specific pieces, registered identically by each store instead of a hand-copied one.
 
 // JSON-array field -> membership, string field -> substring, NULL -> false.
 export function hasImpl(field: unknown, value: unknown): number {
@@ -20,9 +19,8 @@ export function hasImpl(field: unknown, value: unknown): number {
   return String(field).includes(needle) ? 1 : 0;
 }
 
-// Unix basename(path, suffix?): the filename, minus suffix when it ends with one. Neither
-// engine has a filename function of its own, and LIKE tricks that fake one also match folder
-// names.
+// Unix basename(path, suffix?): the filename, minus suffix when it ends with one. Neither engine
+// has a filename function of its own, and LIKE tricks that fake one also match folder names.
 export function basenameImpl(path: unknown, suffix?: unknown): string | null {
   if (path === null || path === undefined) return null;
   const name = posix.basename(String(path));

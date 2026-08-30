@@ -5,8 +5,7 @@ import { runCli } from '../../lib/cli.ts';
 import { tmpTree, writeNote } from '../../lib/tree.ts';
 
 // A frontmatter key with punctuation (`plugin-id`) is a real column, but unquoted in SQL it
-// parses as an expression; each engine names a fragment (or a table) the user never wrote.
-// These check the hint that maps it back to the actual column, on both stores.
+// parses as an expression and each engine names a fragment the user never wrote; these check the hint that maps it back, on both stores.
 
 function writeConfig(baseDir: string): void {
   writeFileSync(join(baseDir, 'sense.config.json'), JSON.stringify({ version: 4, presets: { default: { include: ['**/*.md'] } }, queries: {} }));

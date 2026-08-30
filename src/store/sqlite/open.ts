@@ -1,12 +1,14 @@
 // The Node floor (>=22.20) is explained here and nowhere else: 22.20 is the first release with
 // both FTS5 and row-returning INSERT ... RETURNING. Raise it only for a load-bearing capability.
-import { mkdirSync, rmSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type { Config, ResolvedConfig } from '../../config/index.ts';
 import { contentTokenize, featureSignature, STATE_DIR } from '../../config/index.ts';
+import { rekeyChunkText } from '../../embed/handoff.ts';
 import { SenseError } from '../../errors.ts';
 import { activeFeatures, FEATURES } from '../../features/index.ts';
+import { clearCache } from '../cache.ts';
 import { getMeta, setMeta } from '../shared.ts';
 import { withTransaction } from '../transaction.ts';
 import type { Connection, Store } from '../types.ts';
@@ -37,17 +39,12 @@ export interface OpenResult {
   warnings: string[];
 }
 
-// Stemming is English-only, but the segmentation underneath it is what decides coverage:
-// unicode61 splits on spaces, so a language written without them (Chinese, Japanese, Thai)
-// indexes a whole run as one token and word search finds nothing. `content.tokenize` is how
-// such a tree picks trigram instead.
+// unicode61 splits on spaces, so a language written without them indexes a whole run as one
+// token and word search finds nothing; `content.tokenize` is how such a tree picks trigram.
 const DEFAULT_TOKENIZE = 'porter unicode61';
 
-// FTS5 takes its tokenizer as a string literal inside DDL, where nothing can bind, so a
-// configured value has to be concatenated. Probing a throwaway table is what makes that safe
-// and is also the whole validation: anything the linked SQLite accepts passes, anything else
-// fails here with SQLite's own message rather than against the real table. It means no table
-// of which version added which tokenizer has to be maintained.
+// FTS5 takes its tokenizer as a DDL string literal where nothing can bind, so the configured
+// value is concatenated; probing a throwaway table first is both the safety and the validation.
 function resolveTokenize(db: DatabaseSync, cfg: Config): string {
   const configured = contentTokenize(cfg);
   if (configured === undefined) return DEFAULT_TOKENIZE;
@@ -71,11 +68,8 @@ function storedTokenize(db: DatabaseSync): string | null {
   return m ? m[1] : null;
 }
 
-// The three `_seg` sidecars are appended after path, never inserted: bm25(content, ...) and
-// snippet(content, 2, ...) are documented against the first three columns and keep working
-// (FTS5 defaults the weights it was not given). Each carries its field's exploded unspaced
-// runs for text that needs it, and an empty string for text that does not. Shared by
-// ensureSchema and the tokenize-only rebuild in connect(), so both create identical DDL.
+// The `_seg` sidecars are appended after path, never inserted: bm25() and snippet(content, 2)
+// are documented against the first three columns. Each holds its field's exploded unspaced runs.
 async function createContentTable(conn: Connection, tokenize: string): Promise<void> {
   await conn.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS content USING fts5(title, summary, text, path UNINDEXED, title_seg, summary_seg, text_seg, tokenize = '${tokenize}')`);
 }
@@ -102,9 +96,8 @@ async function connect(cfg: ResolvedConfig): Promise<ConnectResult> {
   const dbPath = join(stateDir, DB_FILENAME);
 
   const db = new DatabaseSync(dbPath);
-  // A throw below (tokenizer probe, schema, reconcile's COLUMN_LIMIT) must release this handle,
-  // or on Windows the leaked WAL db is undeletable and scratch cleanup fails with EPERM/EBUSY.
-  // closed marks the rebuild branches that close-and-recurse, so the catch never double-closes.
+  // A throw below must release this handle, or on Windows the leaked WAL db is undeletable and
+  // scratch cleanup fails with EPERM/EBUSY. `closed` keeps the catch from double-closing.
   let closed = false;
   try {
     db.exec('PRAGMA journal_mode = WAL');
@@ -137,16 +130,12 @@ async function connect(cfg: ResolvedConfig): Promise<ConnectResult> {
         return connect(cfg);
       }
       const changedKeys = changedSignatureKeys(features ?? '', wantFeatures);
-      // Only the tokenizer moved: frontmatter, links, sections, and embeddings are file-derived
-      // and tokenizer-independent, so they don't need re-deriving. Everything else -- a preset
-      // edit, an embed model change -- still takes the full clear/reopen below.
+      // Only the tokenizer moved, and frontmatter, links, sections and embeddings are file-derived
+      // and tokenizer-independent. Any other signature change takes the full clear/reopen below.
       if (changedKeys.size === 1 && changedKeys.has('tokenize')) {
         console.error('sense: config change (content tokenizer) rebuilds the text index; vectors, links, and sections are kept');
-        // Drop and recreate as one transaction: a crash before COMMIT rolls back to the table
-        // that was there before (old tokenizer, still queryable), never to no table at all.
-        // IF EXISTS also makes a retry after such a crash a no-op instead of a raw SQLite error --
-        // meta.features is only updated once rebuildContentTable (below) finishes, so a retry
-        // re-enters this branch and repopulates from scratch either way.
+        // One transaction, so a crash before COMMIT rolls back to the old tokenizer's table rather
+        // than to no table. IF EXISTS makes a retry after such a crash a no-op, not a raw error.
         await withTransaction(conn, async () => {
           await conn.exec('DROP TABLE IF EXISTS content');
           await createContentTable(conn, tokenize);
@@ -167,10 +156,8 @@ async function connect(cfg: ResolvedConfig): Promise<ConnectResult> {
       }
     }
 
-    // Meta can lie after a crash between table creation and the signature write; the table's
-    // own DDL cannot. A mismatch here rebuilds no matter what meta says. A tokenize-only rebuild
-    // already recreated content with this tokenize above, so stored already matches and this
-    // guard is skipped naturally rather than needing its own case.
+    // Meta can lie after a crash between table creation and the signature write; the table's own
+    // DDL cannot, so a mismatch here rebuilds whatever meta says.
     const stored = storedTokenize(db);
     if (stored !== null && stored !== tokenize) {
       console.error('sense: cache was built with a different content tokenizer; rebuilding the index');
@@ -206,18 +193,13 @@ async function connect(cfg: ResolvedConfig): Promise<ConnectResult> {
 // resulting connection in the async Store interface.
 export async function openSqlite(cfg: ResolvedConfig): Promise<OpenResult> {
   const { db, conn, cfg: resolvedCfg, dbPath, parsed, warnings } = await connect(cfg);
-  return { store: createStore(db, conn, resolvedCfg, resolvedCfg.baseDir), cfg: resolvedCfg, dbPath, parsed, warnings };
+  const store = createStore(db, conn, resolvedCfg, resolvedCfg.baseDir);
+  // reconcile ran before this object existed, so its chunk text is keyed by the connection.
+  rekeyChunkText(conn, store);
+  return { store: store, cfg: resolvedCfg, dbPath, parsed, warnings };
 }
 
 export async function docCount(store: Store): Promise<number> {
   const stmt = await store.prepare('SELECT COUNT(*) AS n FROM frontmatter');
   return ((await stmt.get()) as { n: number }).n;
-}
-
-// Deletes the cache directory, and only that. The rebuild is not this function's job: the next
-// open() reconciles, which is what running any command already does, so a verb that bundled the
-// two described the half that was not its own. Manual reset for a doubted cache; the schema and
-// config-signature mismatches below reset themselves.
-export function clearCache(cfg: ResolvedConfig): void {
-  rmSync(join(cfg.baseDir, STATE_DIR), { recursive: true, force: true });
 }

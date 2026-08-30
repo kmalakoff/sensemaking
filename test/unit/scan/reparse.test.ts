@@ -10,9 +10,8 @@ import { tmpTree, writeNote } from '../../lib/tree.ts';
 
 const cfg: Config = { presets: { default: { include: ['**/*.md'] } }, queries: {} };
 
-// One MessagePort per live pool thread, so this counts worker handles the pool has not released.
-// process.getActiveResourcesInfo() is the public handle list; a leaked pool shows up as a
-// nonzero delta that never returns to baseline.
+// One MessagePort per live pool thread, so this counts worker handles the pool has not released;
+// a leaked pool shows up as a nonzero delta that never returns to baseline.
 function liveWorkerHandles(): number {
   return process.getActiveResourcesInfo().filter((resource) => resource === 'MessagePort').length;
 }
@@ -105,10 +104,7 @@ describe('reparseFiles', () => {
   });
 
   // threshold: 0 forces every file through the real tinypool pool, real worker threads, no
-  // mocking -- proving the dispatch wiring rather than assuming it from code reading.
-  // The shipped constant is the one number a caller actually gets, and every spec below forces
-  // it away. These two probe the boundary itself: 199 files stay serial, 200 pool. Without them
-  // the constant could move to 2000, or the comparison flip to >, with the suite still green.
+  // mocking. The two cases probe the shipped boundary itself: 199 files stay serial, 200 pool -- without them the constant could move to 2000, or the comparison flip to >, with the suite still green.
   describe('the shipped dispatch threshold (200 files)', () => {
     // Pooling is visible while it runs, not after: the pool holds one MessagePort per thread
     // and releases them on destroy, so the check samples during the dispatch.
@@ -173,9 +169,8 @@ describe('reparseFiles', () => {
       );
     });
 
-    // 60 files with one deliberately huge first file: it is dispatched first and finishes last,
-    // so completion order cannot be file order. A unique frontmatter key per file makes
-    // newColumns a direct readout of collection order -- collect-as-complete scrambles it.
+    // 60 files with one deliberately huge first file: it is dispatched first and finishes last, so
+    // completion order cannot be file order. A unique frontmatter key per file makes newColumns a direct readout of collection order -- collect-as-complete scrambles it.
     it('preserves file order when completion order cannot be file order', async () => {
       const baseDir = tmpTree();
       writeNote(baseDir, 'f00.md', { frontmatter: { k00: 1 }, body: 'word '.repeat(200_000) });
@@ -194,9 +189,8 @@ describe('reparseFiles', () => {
       );
     });
 
-    // The pooled path cannot send a Feature across the thread boundary, so it sends the names
-    // and re-resolves them. A subset that came back as "every active feature" would write
-    // rows no caller asked for.
+    // The pooled path cannot send a Feature across the thread boundary, so it sends the names and
+    // re-resolves them: a subset that came back as "every active feature" would write rows no caller asked for.
     it('honors the caller feature selection, matching what the serial path extracts', async () => {
       const baseDir = tmpTree();
       writeNote(baseDir, 'a.md', { body: '# H\n\n[[b]] #tag' });

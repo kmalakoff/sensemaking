@@ -3,10 +3,12 @@ import { join } from 'node:path';
 import type { Database } from '@tursodatabase/database';
 import type { Config, ResolvedConfig } from '../../config/index.ts';
 import { featureSignature, STATE_DIR } from '../../config/index.ts';
+import { rekeyChunkText } from '../../embed/handoff.ts';
+import { STORE_DIMS } from '../../embed/types.ts';
 import { SenseError } from '../../errors.ts';
 import { activeFeatures, FEATURES } from '../../features/index.ts';
+import { clearCache } from '../cache.ts';
 import { getMeta, setMeta } from '../shared.ts';
-import { clearCache } from '../sqlite/open.ts';
 import type { Connection, Store } from '../types.ts';
 import { createConnection } from './connection.ts';
 import { TURSO_PACKAGE, tursoApi } from './native.ts';
@@ -14,10 +16,9 @@ import { reconcile } from './reconcile.ts';
 import { createStore } from './store.ts';
 
 export const DB_FILENAME = 'cache.turso.db';
-// Independent of sqlite's SCHEMA_VERSION and duckdb's -- each store's cache shape evolves
-// separately, and the store name already joins the feature signature (see featureSignature), so
-// a config's `store` key switching cleanly rebuilds rather than reusing another engine's cache.
-export const SCHEMA_VERSION = '1';
+// Independent of sqlite's and duckdb's SCHEMA_VERSION: each store's cache shape evolves
+// separately. Covers the FTS indexes, the "_ngram" sidecar columns, and embeddings.vector's width.
+export const SCHEMA_VERSION = '3';
 
 export interface OpenResult {
   store: Store;
@@ -27,15 +28,24 @@ export interface OpenResult {
   warnings: string[];
 }
 
-// content is a plain table (not FTS-virtual): phase 1 creates no FTS index at all -- that is
-// phase 2's job (see the plan). Untyped ALTER TABLE ADD COLUMN, like sqlite -- turso's dialect
-// accepts it with no declared type (spike-confirmed), unlike duckdb which requires VARIANT.
+// The ngram index is scoped to disjoint "_ngram" sidecar columns: a second index over the same
+// columns makes a bare substring match a whole word, defeating the prefix-query rejection.
 async function ensureSchema(conn: Connection, cfg: Config): Promise<void> {
   await conn.exec(`CREATE TABLE IF NOT EXISTS frontmatter ("path" TEXT PRIMARY KEY, "_mtime" REAL, "_ctime" REAL, "_size" INTEGER, "_parse_error" TEXT)`);
-  await conn.exec(`CREATE TABLE IF NOT EXISTS content ("path" TEXT PRIMARY KEY, title TEXT, summary TEXT, text TEXT)`);
+  await conn.exec(`CREATE TABLE IF NOT EXISTS content ("path" TEXT PRIMARY KEY, title TEXT, summary TEXT, text TEXT, title_ngram TEXT, summary_ngram TEXT, text_ngram TEXT)`);
+  await conn.exec(`CREATE INDEX IF NOT EXISTS content_fts ON content USING fts (title, summary, text) WITH (weights = 'title=10.0,summary=5.0,text=1.0')`);
+  await conn.exec(`CREATE INDEX IF NOT EXISTS content_fts_ngram ON content USING fts (title_ngram, summary_ngram, text_ngram) WITH (tokenizer='ngram', weights='title_ngram=10.0,summary_ngram=5.0,text_ngram=1.0')`);
   await conn.exec(`CREATE TABLE IF NOT EXISTS preset_files ("path" TEXT, preset TEXT, PRIMARY KEY ("path", preset))`);
   await conn.exec('CREATE INDEX IF NOT EXISTS preset_files_preset ON preset_files(preset)');
-  for (const feature of activeFeatures(cfg)) await feature.schema(conn);
+  for (const feature of activeFeatures(cfg)) {
+    // Native F32_BLOB(STORE_DIMS) instead of the embed feature's engine-neutral BLOB DDL. `scale`
+    // is kept unused, so the shared reconcile-time INSERT/DELETE names a column both stores have.
+    if (feature.name === 'embed') {
+      await conn.exec(`CREATE TABLE IF NOT EXISTS embeddings ("path" TEXT, chunk INTEGER, start_line INTEGER, end_line INTEGER, scale REAL, vector F32_BLOB(${STORE_DIMS}), PRIMARY KEY ("path", chunk))`);
+      continue;
+    }
+    await feature.schema(conn);
+  }
   if ((await getMeta(conn, 'schema_version')) === null) await setMeta(conn, 'schema_version', SCHEMA_VERSION);
   if ((await getMeta(conn, 'features')) === null) await setMeta(conn, 'features', featureSignature(cfg, FEATURES));
 }
@@ -54,10 +64,8 @@ async function connect(cfg: ResolvedConfig): Promise<ConnectResult> {
   mkdirSync(stateDir, { recursive: true });
   const dbPath = join(stateDir, DB_FILENAME);
 
-  // Dynamic, not a top-level import: a sqlite or duckdb tree must never even attempt to resolve
-  // this optional dependency, so nothing in this store's module graph imports it as a value until
-  // a turso tree is actually opened (type-only imports elsewhere are erased and cost nothing
-  // either way). Installed on first use if missing (see native.ts's tursoApi).
+  // Dynamic, not a top-level import: a sqlite or duckdb tree must never attempt to resolve this
+  // optional dependency until a turso tree is actually opened. Installed on first use if missing.
   let turso: Awaited<ReturnType<typeof tursoApi>>;
   try {
     turso = await tursoApi();
@@ -68,18 +76,14 @@ async function connect(cfg: ResolvedConfig): Promise<ConnectResult> {
 
   let db: Database;
   try {
-    // Floored at the same 30s sqlite opens with. `timeout` is a connect-time option in this
-    // client (no synchronous PRAGMA-at-open-time escape hatch), so the real derived value --
-    // which depends on this cache's own recorded reconcile_max_ms, readable only once connected
-    // -- is installed via a runtime PRAGMA below, right before the open-time reconcile, the same
-    // lever sqlite's open() uses (spike-confirmed: raw PRAGMA busy_timeout works as a setter too).
-    db = await turso.connect(dbPath, { timeout: 30_000 });
+    // Floored at the same 30s sqlite opens with. `timeout` is connect-time only in this client;
+    // the derived value is set via runtime PRAGMA below. `index_method` is required for ensureSchema()'s FTS indexes (T1).
+    db = await turso.connect(dbPath, { timeout: 30_000, experimental: ['index_method'] });
   } catch (err) {
     throw new SenseError('STORE_DEPENDENCY_MISSING', `store "turso" failed to open ${dbPath}: ${(err as Error).message}`);
   }
-  // A throw below (schema, reconcile's COLUMN_LIMIT) must release this handle, or the leaked WAL
-  // makes the db file undeletable on Windows. closed marks the rebuild branch that closes and
-  // recurses, so the catch never double-closes.
+  // A throw below must release this handle, or the leaked WAL makes the db file undeletable on
+  // Windows. closed guards the catch against double-closing.
   let closed = false;
   try {
     const conn = createConnection(db);
@@ -90,11 +94,8 @@ async function connect(cfg: ResolvedConfig): Promise<ConnectResult> {
     const features = await getMeta(conn, 'features');
     const wantFeatures = featureSignature(cfg, FEATURES);
     if ((version !== null && version !== SCHEMA_VERSION) || (features !== null && features !== wantFeatures)) {
-      // Reconcile only reparses changed files, so a stale cache can't be patched incrementally --
-      // rebuild instead, same as sqlite's and duckdb's open() (see their comments for why this is
-      // announced). No tokenize-only or embed-identity-adopted partial path (sqlite's grace for
-      // those): turso has no content.tokenize knob to special-case, and the grace is an
-      // optimization, not a correctness requirement -- any mismatch rebuilds, duckdb's shape.
+      // Reconcile only reparses changed files, so a stale cache is rebuilt rather than patched
+      // incrementally. No tokenize-only or embed-identity-adopted partial path: any mismatch rebuilds.
       const reason = version !== null && version !== SCHEMA_VERSION ? 'cache format changed (new sensemaking version)' : 'config change (features, tokenizer, or presets)';
       console.error(`sense: ${reason}; rebuilding the index`);
       closed = true;
@@ -123,5 +124,8 @@ async function connect(cfg: ResolvedConfig): Promise<ConnectResult> {
 // connection in the Store interface.
 export async function openTurso(cfg: ResolvedConfig): Promise<OpenResult> {
   const { db, conn, cfg: resolvedCfg, dbPath, parsed, warnings } = await connect(cfg);
-  return { store: createStore(db, conn, resolvedCfg, resolvedCfg.baseDir), cfg: resolvedCfg, dbPath, parsed, warnings };
+  const store = createStore(db, conn, resolvedCfg, resolvedCfg.baseDir);
+  // reconcile ran before this object existed, so its chunk text is keyed by the connection.
+  rekeyChunkText(conn, store);
+  return { store: store, cfg: resolvedCfg, dbPath, parsed, warnings };
 }

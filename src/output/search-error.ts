@@ -1,9 +1,7 @@
 import { SenseError } from '../errors.ts';
 
 // FTS5 reads punctuation as syntax, so `end-to-end` parses as a filter on column `to` and
-// errors `no such column: to` -- true about the parse, misleading about the input. Matched as
-// "not a bareword": an operator list is a list to keep current, and missing a character costs
-// the remedy, not the error.
+// errors `no such column: to` -- true about the parse, misleading about the input.
 const FTS5_PUNCTUATION = /[^\p{L}\p{N}_\s]/u;
 
 export function searchError(err: Error, terms: string, scope?: string): Error {
@@ -11,8 +9,7 @@ export function searchError(err: Error, terms: string, scope?: string): Error {
   if (!/no such column|fts5: syntax error|malformed MATCH/.test(message)) return err;
   const suspects = (terms.match(/\S+/g) ?? []).filter((t) => !t.startsWith('"') && FTS5_PUNCTUATION.test(t));
   // Blame the terms only when the failing token actually came from one -- a typo'd column
-  // in --where (or the tree's default scope) raises "no such column" through this same
-  // statement, and naming a term for it would state a false fact about the input.
+  // in --where can raise "no such column" through this same statement.
   const col = /no such column: (\S+)/.exec(message)?.[1];
   const fromTerms = col === undefined ? suspects.length > 0 : suspects.some((t) => t.split(/[^\p{L}\p{N}]+/u).includes(col));
   if (fromTerms && suspects.length > 0) {

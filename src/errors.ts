@@ -18,7 +18,8 @@ export type SenseErrorCode =
   | 'NOTE_NOT_EMBEDDED'
   | 'STORE_UNKNOWN'
   | 'STORE_DEPENDENCY_MISSING'
-  | 'STORE_CAPABILITY_MISSING';
+  | 'STORE_CAPABILITY_MISSING'
+  | 'LEXICAL_NULL_PATH';
 
 export class SenseError extends Error {
   code: SenseErrorCode;

@@ -1,6 +1,6 @@
 import { SenseError } from '../errors.ts';
 import { SIGNAL_NAMES, SIGNAL_PREREQUISITES, type SignalName } from './signals.ts';
-import type { Config } from './types.ts';
+import { type Config, STORE_NAMES, type StoreName } from './types.ts';
 
 // Shape check for hand-edited files, so a typo names itself instead of surfacing as a
 // TypeError. Unknown top-level keys warn (forward compat); unknown keys inside a block error.
@@ -47,12 +47,9 @@ function validateContentBlock(value: unknown, configPath: string): void {
   }
 }
 
-// "turso" is implemented but not offered: it has no lexical or vector search yet, so a tree
-// naming it could not search. Registered in the store registry and exercised by the parity
-// suite; re-add here and in schema.json's enum when those land.
 function validateStoreKey(value: unknown, configPath: string): void {
-  if (value !== 'sqlite' && value !== 'duckdb') {
-    throw new SenseError('CONFIG_INVALID', `${configPath}: store must be "sqlite" or "duckdb"`);
+  if (!STORE_NAMES.includes(value as StoreName)) {
+    throw new SenseError('CONFIG_INVALID', `${configPath}: store must be ${STORE_NAMES.map((name) => `"${name}"`).join(' or ')}`);
   }
 }
 
@@ -119,9 +116,8 @@ function isSignalWeight(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0;
 }
 
-// Shape (an object of signal name -> weight) plus the one cross-signal prerequisite that
-// doesn't need the top-level embed block: links is seeded by word-match rows, so declaring it
-// without words is always empty.
+// Shape (an object of signal name -> weight) plus the one cross-signal prerequisite that doesn't
+// need the top-level embed block: links is seeded by word-match rows, so declaring it without words is always empty.
 function validatePresetSignals(name: string, value: unknown, configPath: string): void {
   if (typeof value !== 'object' || value === null || Array.isArray(value) || Object.keys(value).length === 0) {
     throw new SenseError(
@@ -173,8 +169,8 @@ function validatePreset(name: string, value: unknown, configPath: string): void 
 
 // A queries.<name> entry: { sql } or a saved search { search, preset?, include?, exclude?, where?, k? }.
 function validateSavedQuery(name: string, value: unknown, configPath: string): void {
-  // A bare string used to mean SQL. It now fails rather than being inferred: an entry says
-  // which of the two verbs it runs, the same choice the CLI makes explicit.
+  // A bare string is rejected rather than inferred to be SQL: an entry says which of the two
+  // verbs it runs, the same choice the CLI makes explicit.
   if (typeof value === 'string') {
     throw new SenseError('CONFIG_INVALID', `${configPath}: queries.${name} must say which verb it runs: { "sql": ${JSON.stringify(value.length > 40 ? `${value.slice(0, 37)}...` : value)} } to run it as SQL, or { "search": "..." } for a ranked search`);
   }

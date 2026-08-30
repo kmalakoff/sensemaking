@@ -1,6 +1,5 @@
-// Shared measurement helpers for run.mjs / sweep.mjs / profile.mjs. One definition of
-// "an indexed file", "a timed CLI run", and "a median" -- a change here lands in every
-// harness at once instead of skewing them apart.
+// Shared measurement helpers for run.mjs / sweep.mjs / profile.mjs: one definition of "an
+// indexed file", "a timed CLI run", and "a median", so a change here lands in every harness at once instead of skewing them apart.
 import { readdirSync } from 'node:fs';
 import { join } from 'node:path';
 

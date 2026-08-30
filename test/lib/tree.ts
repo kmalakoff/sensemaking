@@ -13,9 +13,8 @@ export function tmpTree(): string {
 }
 
 export interface NoteSpec {
-  // An object is JSON-serialized per key, which is the convenient form for tests that only
-  // need well-formed frontmatter. A string is written verbatim, which is the only way to
-  // express the malformed YAML the parse-policy tests are about.
+  // An object is JSON-serialized per key (the convenient form for well-formed frontmatter); a
+  // string is written verbatim, the only way to express the malformed YAML the parse-policy tests are about.
   frontmatter?: Record<string, unknown> | string;
   body?: string;
 }
@@ -55,9 +54,8 @@ export function chineseTree(): string {
   return baseDir;
 }
 
-// v4 makes the `embed` block the whole vector switch, so a tree without one has no vectors
-// and never reaches the model. That is what a bare call gives you. Tests that want vectors
-// pass an `embed` block pointing at a local fixture model (see embed.test.ts).
+// The `embed` block is the whole vector switch, so a tree without one has no vectors and never
+// reaches the model: that is what a bare call gives you. Tests that want vectors pass an `embed` block pointing at a local fixture model.
 export function openTree(baseDir: string, features?: Config['features'], presets?: Record<string, Preset>) {
   return open({ presets: presets ?? { default: { include: ['**/*.md'] } }, queries: {}, features, baseDir, configPath: null });
 }

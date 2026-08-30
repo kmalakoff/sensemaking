@@ -19,9 +19,8 @@ export function toPosixPath(relPath: string, separator: string = sep): string {
   return separator === '\\' ? relPath.split(separator).join('/') : relPath;
 }
 
-// Every command pays listFiles before it answers (the freshness check stats each file), so
-// per-file work here is the hottest path in the package. Everything derivable from the config
-// alone is computed once, above the loop.
+// Every command pays listFiles before it answers (the freshness check stats each file), so per-file work here is the hottest path in the package.
+// Everything derivable from the config alone is computed once, above the loop.
 const NO_THROW = { throwIfNoEntry: false } as const;
 
 export function listFiles(cfg: Config, baseDir: string): FileStat[] {

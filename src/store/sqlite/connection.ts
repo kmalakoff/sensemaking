@@ -2,10 +2,8 @@ import type { DatabaseSync, StatementSync } from 'node:sqlite';
 import { withTransaction } from '../transaction.ts';
 import type { Connection, RunResult, Statement } from '../types.ts';
 
-// Wraps node:sqlite's synchronous DatabaseSync in the async Connection/Statement shape every
-// store presents. Every method below does its real work synchronously and returns an already-
-// resolved promise, so reconcile's loop, the feature hooks, and runBatch never actually cross
-// an async boundary internally -- no regression against the pre-Store synchronous code.
+// Wraps node:sqlite's synchronous DatabaseSync in the async Connection/Statement shape every store presents. Every method does its real
+// work synchronously and returns an already-resolved promise, so reconcile's loop, the feature hooks, and runBatch never cross an async boundary internally.
 class SqliteStatement implements Statement {
   private stmt: StatementSync;
 
@@ -46,10 +44,8 @@ export function createConnection(db: DatabaseSync): Connection {
     async prepare(sql: string): Promise<Statement> {
       return new SqliteStatement(db.prepare(sql));
     },
-    // Prepares once and loops synchronously: today's code, unchanged, wrapped as one async call
-    // so features share one Connection contract with DuckDB. Joins the caller's transaction when
-    // there is one (reconcile); otherwise opens its own, so a standalone batch (a vector write
-    // outside any Store.transaction()) stays atomic and commits once, not once per row.
+    // Prepares once and loops synchronously, wrapped as one async call so features share one
+    // Connection contract with DuckDB. Joins the caller's transaction when there is one (reconcile); otherwise opens its own, so a standalone batch stays atomic and commits once, not per row.
     async runBatch(sql: string, paramRows: unknown[][]): Promise<void> {
       if (paramRows.length === 0) return;
       await withTransaction(conn, async () => {

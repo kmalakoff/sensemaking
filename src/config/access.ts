@@ -16,10 +16,8 @@ export function embedEnabled(cfg: Config): boolean {
   return typeof cfg.embed?.model === 'string' && cfg.embed.model.length > 0;
 }
 
-// A preset's effective signal weights: declared exhaustively when `signals` is present;
-// otherwise every signal whose prerequisite holds, each at weight 1 -- words always, links when
-// the feature is on, vectors when the tree names a model. Single source search() and status/map
-// read.
+// A preset's effective signal weights: declared exhaustively when `signals` is present, else
+// every signal whose prerequisite holds at weight 1 (words always, links when on, vectors when a model is named).
 export function presetSignals(cfg: Config, name: string): SignalWeights {
   const declared = cfg.presets[name]?.signals;
   if (declared) return declared;
@@ -38,9 +36,8 @@ export function anyPresetEmbeds(cfg: Config): boolean {
   return presetNames(cfg).some((name) => presetHasSignal(cfg, name, 'vectors'));
 }
 
-// Opt-out features (default on): absent block or key means enabled. `rank` additionally
-// requires `links`. `embed` is derived, not a features-block member: on iff some preset's
-// effective signals include vectors.
+// Opt-out features (default on): absent block or key means enabled. `rank` additionally requires
+// `links`. `embed` is derived (not a features-block member): on iff some preset's signals include vectors.
 export function featureEnabled(cfg: Config, name: FeatureName): boolean {
   if (name === 'embed') return anyPresetEmbeds(cfg);
   const enabled = cfg.features?.[name] !== false;
@@ -62,18 +59,16 @@ export function featureStates(cfg: Config): { on: FeatureName[]; off: FeatureNam
   };
 }
 
-// Resolved embed provider settings, or null when the config names no model. There is no
-// fallback to DEFAULT_EMBED_MODEL: that constant is a template `init` and the v4 migration
-// write into the file, never an implicit runtime default.
+// Resolved embed provider settings, or null when the config names no model. No fallback to
+// DEFAULT_EMBED_MODEL: that's a template constant `init` and the v4 migration write into the file, never a runtime default.
 export function embedConfig(cfg: Config): { model: string; provider: 'static' | 'openai' | 'cohere'; url?: string; key?: string; languages?: string[]; chunkTokens?: number } | null {
   if (!embedEnabled(cfg)) return null;
   const e = cfg.embed as EmbedConfig;
   return { model: e.model as string, provider: e.provider ?? 'static', url: e.url, key: e.key, languages: e.languages, chunkTokens: e.chunkTokens };
 }
 
-// The configured FTS5 tokenizer, or undefined for the built-in default. Undefined rather than
-// the default string so featureSignature can leave the segment off entirely for trees that
-// never set it, which is what keeps existing indexes from rebuilding on upgrade.
+// The configured FTS5 tokenizer, or undefined for the built-in default. Undefined (not the default
+// string) lets featureSignature omit the segment for trees that never set it, avoiding a spurious rebuild on upgrade.
 export function contentTokenize(cfg: Config): string | undefined {
   const tokenize = cfg.content?.tokenize;
   return tokenize === undefined || tokenize.trim() === '' ? undefined : tokenize.trim();

@@ -1,12 +1,6 @@
 #!/usr/bin/env node
-// Regenerates test/fixtures/chunk/cases/*/expected.json from the committed input.md files,
-// running the BUILT src/chunk/ (dist/esm), never source directly, so what is pinned matches
-// what a published package actually does. This is a regression oracle, not a correctness
-// oracle: it pins accepted W1 behavior so a later change to src/chunk/ shows up as a diff.
-// Known-wrong or known-incomplete behavior (see meta.json "reason" fields and the project
-// report) is pinned as-is; fixing it is out of this script's scope.
-//
-//   npm run build && node test/fixtures/chunk/generate.mjs
+// Regenerates expected.json via the BUILT dist/esm (npm run build first), so the pin matches
+// the published package. A regression oracle, not correctness: known-wrong behavior (meta.json "reason") pins as-is.
 
 import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';

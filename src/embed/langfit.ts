@@ -12,9 +12,8 @@ const SAMPLE_CHARS = 300;
 // never fires below this many classified chunks, declared languages or not.
 const MIN_CLASSIFIED = 10;
 
-// franc-min is a 148K static import; a top-level import put it on every command's module graph
-// regardless of whether the semantic path ran, shipped as the 0.17.0 regression. Deferred to a
-// synchronous require inside checkLanguageFit so only the embed path pays for it.
+// franc-min is a 148K static import; a top-level import would put it on every command's module
+// graph regardless of whether the semantic path ran, so it's deferred to a synchronous require.
 const _require = typeof require === 'undefined' ? Module.createRequire(import.meta.url) : require;
 
 function classify(franc: typeof import('franc-min')['franc'], text: string): string | undefined {

@@ -1,7 +1,4 @@
-// Offline model bake-off over an OpenAI-shaped HTTP endpoint (Ollama, LM Studio, ...): same
-// scoring as bakeoff.mjs (cosine-only and bm25+vector RRF, src/commands.ts's pool/RRF constant)
-// but documents and queries are embedded through the library's own openai provider instead of
-// a local safetensors matrix. Batches documents at the provider's batchCap.
+// Model bake-off over an OpenAI-shaped HTTP endpoint (Ollama, LM Studio, ...), embedding docs/queries via the library's openai provider instead of a local safetensors matrix.
 // usage: node benchmark/bakeoff-http.mjs [corpus] --model <ollama tag> [--url http://localhost:11434/v1] [--queries N] [--k N]
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -52,9 +49,8 @@ const provider = await openaiProvider(MODEL_ID, URL_BASE, undefined);
 const loadMs = now() - tLoad;
 const nativeDims = provider.dims;
 
-// Storage levers: docs are stored sliced (+re-normalized) and optionally int8-quantized;
-// queries are computed at query time and stay f32 at the lever's dims. Capped to what this
-// model actually produces (a lever wider than native dims would read past the vector).
+// Storage levers: docs stored sliced (+re-normalized) and optionally int8-quantized; queries stay f32 at the lever's dims.
+// Capped to native dims - a wider lever would read past the vector.
 const ALL_LEVERS = [
   { name: 'int8-256', dims: 256, int8: true },
   { name: `f32-${nativeDims}`, dims: nativeDims, int8: false },

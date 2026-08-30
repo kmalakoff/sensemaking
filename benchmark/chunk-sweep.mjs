@@ -1,10 +1,6 @@
 #!/usr/bin/env node
-// Corpus sweep for src/chunk/: parse + extract every .md file under a cached corpus tree and
-// report files parsed, error count, block counts by type, and one sha256 digest over every
-// block's type/extent/text in stable (path, then document) order. Not a test -- a release-gate
-// tool: a digest that moves on an unrelated change is a signal to look, not a failure by itself.
-//
-//   node benchmark/chunk-sweep.mjs <corpus-dir> [--out file.json]
+// Corpus sweep for src/chunk/: a sha256 digest over every block's type/extent/text in stable
+// (path, document) order. A release-gate tool, not a test: digest drift is a signal, not a failure.
 
 import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';

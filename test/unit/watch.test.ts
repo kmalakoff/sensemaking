@@ -106,9 +106,8 @@ describe('runWatch', () => {
     writeNote(baseDir, 'a.md');
     const cfg = cfgFor(baseDir);
 
-    // Overlap with an in-flight tick is exercised deterministically by
-    // test/unit/lib/guarded-tick.test.ts; this only checks shutdown still completes cleanly
-    // with the heartbeat running. The probe costs nothing, so it stays as a cheap backstop.
+    // Overlap with an in-flight tick is exercised deterministically by test/unit/lib/guarded-tick.test.ts;
+    // this only checks shutdown still completes cleanly with the heartbeat running, as a cheap backstop.
     const caught: unknown[] = [];
     const onUnhandledRejection = (reason: unknown) => caught.push(reason);
     process.on('unhandledRejection', onUnhandledRejection);
@@ -148,10 +147,8 @@ describe('runWatch', () => {
     const baseDir = tree();
     const cfg = cfgFor(baseDir);
     const controller = new AbortController();
-    // One write into the state dir, then quiet for longer than the debounce: unguarded, that
-    // single event schedules a reconcile which fires inside the window. A repeated heartbeat
-    // cannot show this, because writes at the debounce interval keep resetting the timer and
-    // nothing ever fires either way. The heartbeat is parked so it contributes no writes.
+    // One write into the state dir, then quiet for longer than the debounce: unguarded, that single
+    // event schedules a reconcile which fires inside the window. A repeated heartbeat cannot show this (writes at the debounce interval keep resetting the timer), so the heartbeat is parked.
     const { done, ready, events } = startWatch(cfg, { signal: controller.signal, debounceMs: 15, heartbeatIntervalMs: 10_000 });
     await ready;
     const before = events.length;
@@ -166,9 +163,8 @@ describe('runWatch', () => {
     );
   });
 
-  // The reconcile owns the store, and past the pooling threshold a live worker pool too.
-  // Shutting down underneath it used to close the connection its writes still needed, so the
-  // tree is large enough to make the reconcile a real pooled one rather than a single file.
+  // The reconcile owns the store, and past the pooling threshold a live worker pool too. The
+  // tree is large enough to make the reconcile a real pooled one, so shutdown cannot close the connection its writes still need.
   it('shutdown drains a reconcile that is already in flight instead of closing the store underneath it', async () => {
     const baseDir = tree();
     const cfg = cfgFor(baseDir);

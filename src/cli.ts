@@ -37,14 +37,8 @@ function resolveConfigFor(name: string, configPath: string | undefined) {
 
 // Thrown errors -> exit 1 with the message verbatim; usage errors exit 2 directly.
 export default async function cli(argv: string[], name: string): Promise<void> {
-  // stdout is a pipe whenever the caller pipes or redirects, and a reader that goes away
-  // (`| head`) makes every later write fail. The failure arrives asynchronously, after the
-  // write loop has already returned: console.log absorbs it, process.stdout.write (what the
-  // streaming formats use) does not, so with no listener the process dies on an unhandled
-  // 'error' event having already done its work. Neither throwing nor exiting is safe from
-  // here. The event is async, so a throw is an uncaught exception rather than something
-  // bin/cli.js can catch, and process.exit() would skip the cleanup `sense watch` runs on the
-  // way out, leaving a heartbeat behind that makes a dead watcher look alive.
+  // A closed pipe reader's EPIPE arrives async, after the write loop returns: console.log absorbs it, process.stdout.write (streaming formats) does not, so an unhandled listener kills the process.
+  // A throw here is uncaught (async); process.exit() would skip `sense watch`'s cleanup, leaving a heartbeat behind that makes a dead watcher look alive.
   process.stdout.on('error', (err: NodeJS.ErrnoException) => {
     if (err.code === 'EPIPE') return;
     console.error(`sense: ${err.message}`);

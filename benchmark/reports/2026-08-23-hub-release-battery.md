@@ -17,7 +17,7 @@ fever_ndcg10_semantic: 0.9343
 fever_hit10_semantic: 0.9967
 hub_cold_crawl_local_ms: 1506
 stress_semantic_search_ms: 971
-superseded_by: 2026-08-28-w8-release-gate-regeneration.md
+superseded_by: 2026-08-29-0.18.0-release-gate.md
 ---
 
 ## Results: obsidian-hub @ b11036f9 (6,566 notes, 14 MB)

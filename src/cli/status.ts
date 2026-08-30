@@ -11,14 +11,11 @@ import { USAGE } from './index.ts';
 import { CONFIG, FORMAT, formatOf, parse, printWarnings } from './shared.ts';
 import type { Command } from './types.ts';
 
-// status names what you cannot read off the config file: locations sense chose, values it
-// derived, state it stored. Config content is not echoed -- the config line says which file to
-// read, and duplicating its globs here would create two places that disagree after an edit.
+// status names what you cannot read off the config file: locations sense chose, values it derived, state it stored. Config content itself is not echoed, since duplicating its globs here would create two places that disagree after an edit.
 // The exception is the embed block's url and key, whose effect is remote and otherwise invisible.
 
-// Vectors are computed on the first semantic query, not at reconcile, so a tree can have a
-// semantic-on preset with nothing embedded yet -- reported here because a fast reconcile on
-// such a tree otherwise reads as "the feature isn't on".
+// Vectors are computed on the first semantic query, not at reconcile, so a tree can have a semantic-on preset with nothing embedded yet.
+// Reported here because a fast reconcile on such a tree otherwise reads as "the feature isn't on".
 async function vectorState(store: Store): Promise<{ embedded: number; pending: number } | null> {
   try {
     const stmt = await store.prepare('SELECT COUNT(vector) AS embedded, COUNT(*) - COUNT(vector) AS pending FROM embeddings');
@@ -55,6 +52,19 @@ async function embedReachable(e: { provider: string; url?: string }): Promise<bo
   return probeReachable(e.provider === 'openai' ? `${base}/models` : base);
 }
 
+type LanguagesState = 'declared' | 'none' | 'unresolved' | null;
+
+// Config-declared languages win over the model card, for every provider, as registry.ts does.
+// A local-path model has no card by design, so it is never "unresolved": that means an HF id.
+function languagesInfo(e: NonNullable<ReturnType<typeof embedConfig>>): { languages: string[] | null; state: LanguagesState; source: 'config' | 'card' | null } {
+  if (e.languages) return { languages: e.languages, state: 'declared', source: 'config' };
+  if (e.provider !== 'static' || !isDownloadable(e.model)) return { languages: null, state: null, source: null };
+  const cardLanguages = readLanguages(e.model);
+  if (cardLanguages === undefined) return { languages: null, state: 'unresolved', source: null };
+  if (cardLanguages.length === 0) return { languages: null, state: 'none', source: null };
+  return { languages: cardLanguages, state: 'declared', source: 'card' };
+}
+
 const status: Command = async (ctx) => {
   const { values } = parse(ctx.argv, `usage: ${ctx.name} ${USAGE.status}`, { ...FORMAT, ...CONFIG });
   const format = formatOf(values);
@@ -68,8 +78,7 @@ const status: Command = async (ctx) => {
   const reachable = e ? await embedReachable(e) : null;
   const vectors = e ? await vectorState(store) : null;
   const presets = await presetCoverage(store, cfg);
-  const staticLanguages = e && e.provider === 'static' ? readLanguages(e.model) : undefined;
-  const declaredLanguages = staticLanguages && staticLanguages.length > 0 ? staticLanguages : null;
+  const { languages: declaredLanguages, state: languagesState, source: languagesSource } = e ? languagesInfo(e) : { languages: null, state: null, source: null };
   const detectedLanguages = (await languageDistribution(store)) ?? null;
   const heartbeat = await getMeta(store, 'watch_heartbeat');
   // Written by the store's open() on every open, so it is this cache's true version on either
@@ -93,7 +102,7 @@ const status: Command = async (ctx) => {
     unparseableFrontmatter: await parseErrorCount(store),
     features: features.on,
     featuresOff: features.off,
-    embed: e ? { provider: e.provider, model: e.model, dir: e.provider === 'static' ? modelDir(e.model) : null, url: e.url ? redactUrl(e.url) : null, reachable, keyEnv, downloaded: hasModel, languages: declaredLanguages, detectedLanguages, ...(vectors ?? {}) } : null,
+    embed: e ? { provider: e.provider, model: e.model, dir: e.provider === 'static' ? modelDir(e.model) : null, url: e.url ? redactUrl(e.url) : null, reachable, keyEnv, downloaded: hasModel, languages: declaredLanguages, languagesState, detectedLanguages, ...(vectors ?? {}) } : null,
     presets,
     queries: Object.keys(cfg.queries ?? {}).length,
     watcherPid: await getMeta(store, 'watch_pid'),
@@ -119,7 +128,10 @@ const status: Command = async (ctx) => {
     else {
       console.log(`embed:    ${e.provider} ${e.model}`);
       if (e.provider === 'static') console.log(`          model:   ${modelDir(e.model)} (${hasModel ? 'present' : `missing, ${isDownloadable(e.model) ? `fetches automatically at first search, or run \`${ctx.name} download\` to prefetch` : `no ${MODEL_FILENAMES} in that directory`}`})`);
-      if (declaredLanguages) console.log(`          languages: ${declaredLanguages.join(', ')} (declared by the model card)`);
+      if (declaredLanguages && languagesSource === 'config') console.log(`          languages: ${declaredLanguages.join(', ')} (declared in embed.languages)`);
+      else if (declaredLanguages && languagesSource === 'card') console.log(`          languages: ${declaredLanguages.join(', ')} (declared by the model card)`);
+      else if (languagesState === 'none') console.log('          languages: none declared by the model card');
+      else if (languagesState === 'unresolved') console.log(`          languages: unresolved (model card unreachable; run \`${ctx.name} download\`)`);
       // Cohere defaults to api.cohere.com with no url in the config; show it anyway so the
       // reachability probe below has something to name.
       if (e.url || reachable !== null) {

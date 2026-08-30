@@ -1,4 +1,4 @@
-import { getMeta, setMeta } from '../store/meta.ts';
+import { getMeta, setMeta } from '../store/shared.ts';
 import type { Store } from '../store/types.ts';
 
 // Split out of langfit.ts so reading the persisted counts (status.ts's only need) never pulls in

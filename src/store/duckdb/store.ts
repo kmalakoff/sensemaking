@@ -11,19 +11,12 @@ import { createLexicalIndex } from './lexical.ts';
 import { reconcile } from './reconcile.ts';
 import { scanCandidates, scanSimilar, writeVectorBatch } from './vectors.ts';
 
-// Portable surface, links/sections/tags/rank, raw sql passthrough, lexical (D1: fts BM25 +
-// contains(), see lexical.ts), and vectors (D2: native FLOAT[N] + array_cosine_similarity, see
-// vectors.ts) are implemented. 'snippets' is declined: no snippet()-equivalent exists, so every
-// lexical hit relies on the caller's JS excerpt fallback (commands/search.ts) rather than a
-// bounded engine-native one. 'phrases' means quoted-phrase matching only (types.ts):
-// prefix/boolean/NEAR/column-filter FTS5 syntax is not claimed here -- lexical.ts rejects it
-// rather than answer it differently.
+// Portable surface, links/sections/tags/rank, raw sql passthrough, lexical (fts BM25 + contains(), lexical.ts), and vectors (native
+// FLOAT[N] + array_cosine_similarity, vectors.ts) are implemented. 'snippets' is declined (JS excerpt fallback handles it); 'phrases' means quoted-phrase only -- FTS5 operator syntax is rejected, not answered differently.
 export const CAPABILITIES: ReadonlySet<Capability> = new Set(['lexical', 'phrases', 'vectors']);
 
-// Shares one Connection instance (conn) with open()'s own reconcile call so transaction depth
-// (see transaction.ts) is tracked against the same object everywhere. The instance is the
-// native database handle that owns the WAL: close() must close it, not just disconnect the
-// connection, or DuckDB never checkpoints and the next open reads a mismatched WAL.
+// Shares one Connection instance (conn) with open()'s own reconcile call so transaction depth (transaction.ts) is tracked against the same object everywhere.
+// The instance is the native handle that owns the WAL: close() must close it, not just disconnect, or DuckDB never checkpoints and the next open reads a mismatched WAL.
 export function createStore(instance: DuckDBInstance, duckdb: DuckDBConnection, conn: Connection, cfg: Config, baseDir: string): Store {
   const lex = createLexicalIndex(conn);
   return {
@@ -57,9 +50,8 @@ export function createStore(instance: DuckDBInstance, duckdb: DuckDBConnection, 
     lexical: {
       query: lex.query,
     },
-    // The column's fixed DDL width (STORE_DIMS) is what every scan binds against, not the
-    // interface's per-call storeDims -- see vectors.ts's padded() for why a shorter vector is
-    // still correct against a wider column.
+    // The column's fixed DDL width (STORE_DIMS) is what every scan binds against, not the interface's per-call storeDims --
+    // see vectors.ts's padded() for why a shorter vector remains correct against a wider column.
     vectors: {
       pending: () => pendingRows(conn),
       writeVectors: (rows) => writeVectorBatch(duckdb, conn, STORE_DIMS, rows),

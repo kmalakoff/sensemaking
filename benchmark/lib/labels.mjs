@@ -1,17 +1,10 @@
 // BEIR-format label reader: queries.jsonl ({_id, text}) + <split>.tsv (query-id, corpus-id,
-// score; tab-separated, one header line). Corpus builders that adopt other datasets convert
-// their labels into this shape so the eval harness reads one format.
+// score; one header line). Other datasets convert to this shape so the harness reads one format.
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-// Dataset queries are natural language; bare punctuation is FTS5 syntax and bare words
-// AND-join. The standard bag-of-words baseline: OR over the query's tokens.
-//
-// A \p{L}+ run assumes word-spaced script: for an unspaced script it swallows the whole query
-// into one unsplittable run (no spaces to break on), which only ever matches an exact
-// contiguous phrase -- measured on miracl-zh pre-fix, nDCG@10 0.0119 (chance). Split those runs
-// to one-character unigrams instead, matching Lucene's StandardTokenizer default for CJK;
-// word-spaced scripts (Latin, Cyrillic, ...) are untouched. Mirrors src/segment.ts's SCRIPTS.
+// Bag-of-words baseline: OR over tokens (bare FTS5 words AND-join). Unspaced-script runs become
+// one-character unigrams (Lucene's CJK default): a whole run matched only exact phrases, nDCG@10 0.0119 (chance) on miracl-zh.
 const CJK = /\p{scx=Han}|\p{scx=Hiragana}|\p{scx=Katakana}|\p{scx=Thai}|\p{scx=Khmer}|\p{scx=Lao}|\p{scx=Myanmar}/u;
 export const orBag = (text) =>
   (text.match(/[\p{L}\p{N}]+/gu) ?? [])

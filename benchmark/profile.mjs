@@ -1,7 +1,5 @@
-// Phase-by-phase CPU profile. Re-invokes itself under --cpu-prof so the profile covers one
-// scenario's work, then sums self time by callFrame.url.
-// usage: node benchmark/profile.mjs <treePath> [scenario ...]
-// scenarios: cold nochange update1 search map semantic (default: all applicable)
+// Phase-by-phase CPU profile: re-invokes itself under --cpu-prof so the profile covers one
+// scenario's work, then sums self time by callFrame.url. usage: node benchmark/profile.mjs <treePath> [scenario ...]
 
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, utimesSync } from 'node:fs';
@@ -16,9 +14,8 @@ const PROFILE_DIR = join(ROOT, '.tmp', 'profile');
 
 const ALL_SCENARIOS = ['cold', 'nochange', 'update1', 'search', 'map', 'semantic'];
 
-// callFrame.url -> phase name, for frames whose url is specific enough to place. First
-// match wins; order goes feature modules before the db/commands modules that call them.
-// Returns null for frames too generic to place on their own (native bindings, internals).
+// callFrame.url -> phase name, for frames whose url is specific enough to place. First match
+// wins, feature modules before the db/commands modules that call them; null for frames too generic to place on their own.
 function specificPhase(callFrame) {
   const url = callFrame.url || '';
   const fn = callFrame.functionName || '';

@@ -3,11 +3,8 @@ import { segmentMatch } from '../../text/segment.ts';
 import { basenameImpl, hasImpl } from '../sql-functions.ts';
 import { duckdbApi } from './native.ts';
 
-// Dynamic, not a top-level import: sqlite trees must never even attempt to resolve this optional
-// peer dependency (see open.ts's connect()). Goes through native.ts's shared duckdbApi(), not a
-// bare `import('@duckdb/node-api')` of its own -- by the time this runs, open.ts has already
-// resolved the package, possibly via an on-demand install, and a second independent bare-specifier
-// lookup in the same process would hit Node's stale pre-install resolution miss (see native.ts).
+// Dynamic, not a top-level import: sqlite trees must never attempt to resolve this optional peer dependency (open.ts's connect()).
+// Goes through native.ts's shared duckdbApi(), not its own bare import, since a second independent lookup would hit Node's stale pre-install resolution miss.
 export async function registerFunctions(conn: DuckDBConnection): Promise<void> {
   const { DuckDBIntegerType, DuckDBScalarFunction, DuckDBVarCharType } = await duckdbApi();
   conn.registerScalarFunction(
@@ -37,10 +34,8 @@ export async function registerFunctions(conn: DuckDBConnection): Promise<void> {
       },
     })
   );
-  // segment() rewrites unspaced-script runs into the grapheme phrase FTS5's `_seg` sidecars
-  // need (see src/text/segment.ts); this store's own lexical index uses contains() instead (D1)
-  // and never calls this, but hand-written raw SQL naming it still gets the real implementation
-  // rather than a silent passthrough (PRINCIPLES: no-silent-modes).
+  // segment() rewrites unspaced-script runs into the grapheme phrase FTS5's `_seg` sidecars need (text/segment.ts); this store's own
+  // lexical index uses contains() instead and never calls this, but hand-written raw SQL naming it gets the real implementation, not a silent passthrough (PRINCIPLES: no-silent-modes).
   conn.registerScalarFunction(
     DuckDBScalarFunction.create({
       name: 'segment',

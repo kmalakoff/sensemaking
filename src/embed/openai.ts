@@ -27,7 +27,7 @@ export async function openaiProvider(model: string, url: string | undefined, key
   }
 
   const dims = (await post(['dimension probe']))[0].length;
-  // Symmetric for now: per-model prefixes (nomic's search_document/search_query) are a
-  // later workstream.
+  // embedQuery and embedDocuments are symmetric here; per-model prefixes like nomic's
+  // search_document/search_query are not applied.
   return { id: `openai:${base}:${model}`, dims, batchCap: BATCH_CAP, embedDocuments: post, embedQuery: async (text) => (await post([text]))[0] };
 }

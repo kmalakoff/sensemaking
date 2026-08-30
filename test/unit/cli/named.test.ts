@@ -179,7 +179,7 @@ describe('saved searches', () => {
   });
 
   // Running an entry is how it is validated: a typo errors with the offending column named,
-  // and exits nonzero, which is the whole of what `sense check` used to add.
+  // and exits nonzero.
   it('running a saved search with a typo in where fails, naming the column', () => {
     const dir = makeTree();
     writeConfig(dir, { presets: DEFAULT_LEXICAL, queries: { hot: { search: 'price', where: "f.stauts = 'active'" } } });

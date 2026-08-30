@@ -32,13 +32,8 @@ function paths(dir: string, args: string[]): string[] {
 }
 
 describe('segmentMatch', () => {
-  // Covers qualifier retargeting (title:/summary:/text: -> _seg columns), unqualified runs
-  // scoped to all three sidecars via FTS5's column-set filter (single grapheme and multi-grapheme
-  // phrase alike, since a bare unqualified token leaks the same way a phrase does), quoted-phrase
-  // passthrough (an author's own quoting is their escape hatch to FTS5's native syntax, left
-  // alone even though it can carry the same raw-column leak if they hand-space a CJK phrase --
-  // that is their choice to opt out, not this rewrite's to make for them), and operator
-  // preservation (AND/OR/NOT/parens survive the rewrite around the segmented terms).
+  // Covers qualifier retargeting to _seg columns, unqualified runs scoped to the sidecars via
+  // FTS5's column-set filter, quoted-phrase passthrough (the author's FTS5 escape hatch), and operator preservation.
   const SEG = '{title_seg summary_seg text_seg}:';
   const cases: Array<[string, string]> = [
     ['数据库', `${SEG}"数 据 库"`],
@@ -80,8 +75,7 @@ describe('segmentMatch: unqualified rewrites are valid, composable FTS5 syntax',
   }
 
   // Each case's rewrite must parse under FTS5 MATCH without throwing -- the risk this class of
-  // test exists for: a column-set group juxtaposed with a plain phrase via implicit AND, which is
-  // valid, unlike a parenthesized OR group in the same spot, which FTS5 rejects.
+  // test exists for: a column-set group juxtaposed with a plain phrase via implicit AND is valid, unlike a parenthesized OR group in the same spot, which FTS5 rejects.
   const queries = ['东京 OR budget', '-title:东京 数据', 'budget 东京', '东京 budget', '东京 数据'];
   for (const q of queries) {
     it(`MATCH accepts the rewrite of ${JSON.stringify(q)}`, () => {
@@ -123,10 +117,8 @@ describe('segmentField', () => {
 });
 
 describe('substring parity: search behaves like grep over unspaced-script text', () => {
-  // Exercises the parity harness's substring-truth property: search(term) must return exactly
-  // the docs whose raw text contains term, for every substring up to length 3. Fixture docs:
-  // an ICU-killer split (东京都政府, where ICU splits differently depending on what follows), a
-  // doc with no ICU dictionary entries at all, and mixed kana+kanji.
+  // Exercises the parity harness's substring-truth property: search(term) returns exactly the
+  // docs whose raw text contains term, for every substring up to length 3. Fixture docs: an ICU-killer split (东京都政府), a doc with no ICU dictionary entries at all, and mixed kana+kanji.
   const docs: Record<string, string> = {
     'doc1.md': '东京都政府的办公室',
     'doc2.md': '乒乓球拍卖完了',
@@ -260,9 +252,7 @@ describe('compatibility with the columns the docs name', () => {
 });
 
 // A small alphabet exercising every construct segment.ts's contract has to handle: two Han base
-// characters (so a run can be more than one grapheme), one hiragana, one Thai base+combining-mark
-// cluster (one grapheme, two code points), CJK punctuation whose Script_Extensions keep it inside
-// a run, a space, and one Latin letter.
+// characters (a run of more than one grapheme), one hiragana, one Thai base+combining-mark cluster (one grapheme, two code points), CJK punctuation whose Script_Extensions keep it inside a run, a space, one Latin letter.
 const HAN1 = '数';
 const HAN2 = '据';
 const HIRAGANA = 'あ';
@@ -290,8 +280,7 @@ function enumerate(alphabet: string[], maxLen: number): string[] {
 
 const DOCS = enumerate(ALPHABET, MAX_LEN);
 // The pure unspaced-script subset: grapheme-aligned and punctuation-free, so substring semantics
-// is the whole claim (a query holding a space or 。 is expected to split into separate phrases;
-// one holding the Latin letter never enters a run at all).
+// is the whole claim (a query holding a space or 。 splits into separate phrases; one holding the Latin letter never enters a run at all).
 const PURE_UNSPACED = /^(?:数|据|あ|ค้)+$/;
 const QUERIES = DOCS.filter((d) => PURE_UNSPACED.test(d));
 
@@ -308,7 +297,7 @@ function buildContractDb(): DatabaseSync {
 describe('segment contract: exhaustive small-scope enumeration against String.prototype.includes', () => {
   const db = buildContractDb();
   // What search() actually runs (src/commands/search.ts matchSql): MATCH with the rewritten
-  // query, which an unqualified run now scopes to the sidecars itself (SIDECAR_COLUMNS).
+  // query, which scopes an unqualified run to the sidecars itself (SIDECAR_COLUMNS).
   const matchAll = db.prepare('SELECT rowid FROM content WHERE content MATCH ?');
 
   it(`checks ${QUERIES.length} pure unspaced-script substrings against ${DOCS.length} documents`, () => {
@@ -337,9 +326,8 @@ describe('segment contract: exhaustive small-scope enumeration against String.pr
     }
 
     assert.equal(falseNegatives, 0, `false negatives (recall must be exact):\n${negExamples.join('\n')}`);
-    // An unqualified run now targets only the segmented sidecars (src/segment.ts SIDECAR_COLUMNS),
-    // so raw title/summary/text -- where unicode61 drops punctuation and reads it the same as a
-    // real gap -- are never checked by the rewritten query at all; zero false positives anywhere.
+    // An unqualified run targets only the segmented sidecars (src/segment.ts SIDECAR_COLUMNS), so
+    // raw title/summary/text -- where unicode61 drops punctuation and reads it the same as a real gap -- are never checked by the rewritten query at all; zero false positives anywhere.
     assert.equal(falsePositives, 0, `false positives:\n${posExamples.join('\n')}`);
   });
 });

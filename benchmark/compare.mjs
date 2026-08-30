@@ -1,5 +1,4 @@
-// Run run.mjs per version against its own copy of the tree, print a pasteable table. The
-// baseline is package.json's version, so a bare run answers "did the working tree regress?".
+// Runs run.mjs per version against its own copy of the tree, prints a pasteable table. Baseline is package.json's version, so a bare run answers "did the working tree regress?".
 // usage: node benchmark/compare.mjs [corpus-or-dir] [version...] [--store <name>]
 import { spawnSync } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';

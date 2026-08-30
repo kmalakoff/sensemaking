@@ -9,14 +9,8 @@ import { scratchDir } from './scratch.ts';
 export const cliPath = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'bin', 'cli.js');
 const packageRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
-// A caller passing `cwd` wants the CLI pointed at that tree, not the directory itself. Windows
-// will not delete a directory that is a live process's working directory, and scratch cleanup
-// runs immediately after the last test, so spawning into a scratch dir strands it. Where the
-// tree already holds a config, `--config` reaches it identically from the package root.
-//
-// The cases that cannot use it keep a real cwd, and the existence check picks them out on its
-// own: `sense init` (writes the config, so none exists yet), a suite asserting the error when
-// no config is found, and discovery walking up from a subdirectory.
+// Windows won't delete a directory that is a live process's cwd, and scratch cleanup runs right after the test, so spawning into a scratch dir strands it; `--config` from the package root avoids that.
+// `sense init`, the no-config-found suite, and upward config discovery need a real cwd instead; the config-existence check picks them out.
 export function runCli(args: string[], opts: { cwd?: string } = {}) {
   const config = opts.cwd ? join(opts.cwd, 'sense.config.json') : null;
   if (config && existsSync(config)) return spawnSync(process.execPath, [cliPath, ...args, '--config', config], { encoding: 'utf8', cwd: packageRoot });

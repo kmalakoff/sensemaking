@@ -1,6 +1,5 @@
-// Fetch-once cache under .tmp/cache (gitignored): an entry is built exactly once per key
-// and lives until .tmp is deleted. Builds are atomic — staged in <key>.building, renamed
-// on success — so an interrupted fetch never leaves a half-built entry that looks done.
+// Fetch-once cache under .tmp/cache (gitignored): an entry is built exactly once per key and lives until .tmp is deleted.
+// Builds are atomic - staged in <key>.building, renamed on success - so an interrupted fetch never leaves a half-built entry that looks done.
 import { existsSync, mkdirSync, renameSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';

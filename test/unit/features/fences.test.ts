@@ -4,9 +4,8 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { fenceTracker } from '../../../src/features/fences.ts';
 
-// fenceTracker against every CommonMark "Fenced code blocks" example. For each, we derive the
-// spec's fence content from the html (the text inside <pre><code>) and compare it against what
-// feeding the markdown's lines through the tracker produces.
+// fenceTracker against every CommonMark "Fenced code blocks" example: derive the spec's fence
+// content from html (text inside <pre><code>) and compare it to feeding the markdown's lines through the tracker.
 
 interface FixtureCase {
   markdown: string;
@@ -47,10 +46,8 @@ function trackerContent(markdown: string): string {
   return out;
 }
 
-// DIVERGENCES: examples where our column-0, no-indent, single-fence-per-file-position model
-// disagrees with the CommonMark spec's content, and exactly what the tracker does instead.
-// Each `got` is a hard-coded snapshot of trackerContent(markdown) -- a behavior change here
-// must edit this table, not silently pass.
+// DIVERGENCES: where our column-0, no-indent, single-fence-per-file-position model disagrees with the
+// CommonMark spec, and exactly what the tracker does instead. Each `got` is a hard-coded snapshot of trackerContent(markdown) -- a behavior change must edit this table, not silently pass.
 const DIVERGENCES: Record<number, { reason: string; got: string }> = {
   // Fence markers need blockquote-marker awareness ("> ```") that a column-0 check can't give;
   // the whole thing reads as ordinary non-fence text, so no fence opens at all.
@@ -63,8 +60,7 @@ const DIVERGENCES: Record<number, { reason: string; got: string }> = {
   // Same, at the spec's maximum allowed indent (3 spaces).
   133: { reason: 'opener and closer indented 3 spaces (spec max) are both unrecognized; no fence opens', got: '' },
   // 4-space indent makes this an indented code block per spec (backticks are literal text, not
-  // fence markers). Our tracker never opens a fence here either, but only because column 0 does
-  // not match -- it does not know about indented code blocks at all.
+  // fence markers); the tracker never opens a fence here either, but only because column 0 does not match -- it does not know about indented code blocks at all.
   134: { reason: 'indented code block (4 spaces): not a fence either way, but for an unrelated reason -- no indented-code-block handling', got: '' },
   // Closer indented 2 spaces is not recognized as a closer, so the fence never closes.
   135: { reason: 'a 2-space-indented closer is not recognized; the fence stays open through EOF', got: 'aaa\n  ```\n' },

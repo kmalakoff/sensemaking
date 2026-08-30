@@ -1,26 +1,18 @@
 import type { Database } from '@tursodatabase/database';
 import type { Config } from '../../config/index.ts';
-import { SenseError } from '../../errors.ts';
+import { STORE_DIMS } from '../../embed/types.ts';
 import { getColumns } from '../shared.ts';
 import { withTransaction } from '../transaction.ts';
 import type { Capability, Connection, Statement, Store } from '../types.ts';
 import { hasVectorRow, pendingRows } from '../vectors.ts';
 import { fieldStats } from './fieldStats.ts';
+import { queryLexical } from './lexical.ts';
 import { reconcile } from './reconcile.ts';
+import { scanCandidates, scanSimilar, writeVectorBatch } from './vectors.ts';
 
-// Phase 1: the portable surface only -- frontmatter, links, sections, tags, rank, raw SQL,
-// reconcile, transactions. Neither lexical (Tantivy FTS) nor vectors (native vector_distance_cos
-// scans) is claimed yet -- phase 2 and phase 3 of the plan add them -- so lexical.query() and the
-// vector-math methods throw the named capability error rather than answer differently.
-// pending()/hasVector() are plain IS NULL/IS NOT NULL checks with no engine-specific math, so
-// they're wired through the same store-agnostic helpers duckdb's store.ts reuses: harmless ahead
-// of phase 3 (unreachable in practice, since openStore() already rejects a turso tree whose
-// config uses vectors) and correct with no further change once vectors land.
-export const CAPABILITIES: ReadonlySet<Capability> = new Set();
-
-function missing(name: 'lexical' | 'vectors'): never {
-  throw new SenseError('STORE_CAPABILITY_MISSING', `store "turso" does not implement "${name}" in this build; set "store" to "sqlite" or "duckdb" in this tree's config`);
-}
+// No 'snippets': fts_highlight returns the whole column, not a bounded window, so hits use
+// the caller's JS excerpt. No 'watch-concurrency': single-process by default, as on duckdb.
+export const CAPABILITIES: ReadonlySet<Capability> = new Set(['lexical', 'phrases', 'vectors']);
 
 // Shares one Connection instance (conn) with open()'s own reconcile call so transaction depth
 // (see transaction.ts) is tracked against the same object everywhere.
@@ -50,28 +42,20 @@ export function createStore(db: Database, conn: Connection, cfg: Config, baseDir
       fieldStats: (columns, scopeWhere) => fieldStats(conn, columns, scopeWhere),
     },
     lexical: {
-      async query() {
-        return missing('lexical');
-      },
+      query: (terms, opts) => queryLexical(conn, terms, opts),
     },
+    // The column's fixed DDL width (STORE_DIMS) is what every scan binds against, not the
+    // interface's per-call storeDims -- see vectors.ts's padded() for why a shorter vector is still correct against a wider column.
     vectors: {
       pending: () => pendingRows(conn),
-      async writeVectors() {
-        return missing('vectors');
-      },
-      async candidates() {
-        return missing('vectors');
-      },
-      async similar() {
-        return missing('vectors');
-      },
+      writeVectors: (rows) => writeVectorBatch(conn, STORE_DIMS, rows),
+      candidates: (qv, _storeDims, fetch, allowed) => scanCandidates(conn, qv, STORE_DIMS, fetch, allowed),
+      similar: (path, opts) => scanSimilar(conn, STORE_DIMS, path, opts),
       hasVector: (path) => hasVectorRow(conn, path),
     },
     async engineStatus() {
       // Read back rather than recomputed: this is what open() actually set (3x the largest
-      // recorded reconcile, floored at 30s, capped at 10min), not a value re-derived here.
-      // Turso's raw PRAGMA busy_timeout names its result column "busy_timeout" (spike-verified),
-      // not "timeout" like real SQLite's own quirky column name for this one pragma.
+      // recorded reconcile, floored at 30s, capped at 10min). Turso's PRAGMA busy_timeout names its column "busy_timeout" (spike-verified), not "timeout" like real SQLite.
       const row = (await (await db.prepare('PRAGMA busy_timeout')).get()) as { busy_timeout: number };
       return { busy_timeout: `${row.busy_timeout}ms (derived: 3x the largest reconcile this cache has recorded, floored at 30000ms)` };
     },

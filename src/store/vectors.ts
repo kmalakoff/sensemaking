@@ -11,9 +11,8 @@ export function sampleEvenly<T>(rows: T[], cap: number = TARGET_CHUNK_CAP): T[] 
   return rows.filter((_, i) => i % step === 0);
 }
 
-// Dequantised int8 dot products (sqlite) land a little either side of a true cosine, so an
-// identical pair can print 1.001; array_cosine_similarity (duckdb) has no such error but is
-// rounded the same way, so both stores print the same bounded number.
+// Dequantised int8 dot products (sqlite) land a little either side of a true cosine (an identical
+// pair can print 1.001); array_cosine_similarity (duckdb) has no such error but is rounded the same way, so both stores print the same bounded number.
 export function asCosine(score: number): number {
   return Math.round(Math.min(1, Math.max(-1, score)) * 1000) / 1000;
 }

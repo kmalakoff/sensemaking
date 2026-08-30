@@ -4,9 +4,8 @@ import { join } from 'node:path';
 import { runCli } from '../../lib/cli.ts';
 import { scratchDir } from '../../lib/scratch.ts';
 
-// status is what an agent runs first, so it has to open every store the config names.
-// busy_timeout is reported through Store.engineStatus(), which each store owns; a store
-// without a comparable setting (duckdb) reports an empty record, not a dialect-only pragma error.
+// status opens every store the config names. busy_timeout comes from Store.engineStatus(),
+// which each store owns; duckdb reports an empty record instead of a dialect-only pragma error.
 function makeTree(store?: 'duckdb'): string {
   const dir = scratchDir('status');
   writeFileSync(join(dir, 'sense.config.json'), JSON.stringify({ version: 4, presets: { default: { include: ['*.md'] } }, queries: {}, ...(store ? { store } : {}) }));

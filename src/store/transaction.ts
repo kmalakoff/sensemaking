@@ -1,7 +1,5 @@
 // Store-agnostic joining transaction helper: node:sqlite and DuckDB both support only
-// BEGIN/COMMIT/ROLLBACK, no SAVEPOINT -- nesting joins the outer transaction instead of
-// stacking, so both stores share one semantics through the one thing they have in common,
-// exec(sql).
+// BEGIN/COMMIT/ROLLBACK, no SAVEPOINT -- nesting joins the outer transaction, sharing one semantics through exec(sql).
 interface ExecConnection {
   exec(sql: string): Promise<void>;
 }
@@ -51,8 +49,7 @@ async function leaveErr(conn: ExecConnection, state: TxState): Promise<void> {
 }
 
 // Depth-0 opens BEGIN; a nested call joins it and issues no SQL of its own. The outermost call
-// owns COMMIT/ROLLBACK. Every store, and every internal write loop (reconcile, runBatch), goes
-// through this one helper, so join semantics never differ by call site.
+// owns COMMIT/ROLLBACK; every store and internal write loop goes through this one helper, so join semantics never differ by call site.
 export async function withTransaction<T>(conn: ExecConnection, fn: () => Promise<T>): Promise<T> {
   const state = stateFor(conn);
   await enter(conn, state);

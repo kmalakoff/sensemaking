@@ -3,6 +3,7 @@ import { cpSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { open, peek } from 'sensemaking';
+import { splitFrontmatter } from '../../../src/scan/frontmatter.ts';
 import type { Store } from '../../../src/store/types.ts';
 import { runCli } from '../../lib/cli.ts';
 import { scratchDir } from '../../lib/scratch.ts';
@@ -18,14 +19,12 @@ function openFixtures() {
 
 // Frontmatter that does not parse is quarantined, not recovered: no columns at all, and
 // `_parse_error` carries the reason. One exception, below.
-//
-// These tables are the policy documentation. Nothing here asserts on yaml's internals -- every
-// case runs through a real index build and checks our own output -- so a yaml upgrade that
-// reclassifies a shape fails as a named policy test rather than as a dependency test.
+
+// The tables are the policy documentation: every case runs through a real index build and checks
+// our own output, so a yaml upgrade that reclassifies a shape fails here as a named policy test.
 
 // Every error is BAD_SCALAR_START: YAML reserves `@` and backtick at the start of a plain
-// scalar, so they can never be valid and the recovered text has no second reading. Columns must
-// populate and `_parse_error` must stay NULL.
+// scalar, so the recovered text has no second reading -- columns must populate, `_parse_error` stay NULL.
 const ACCEPTED: Array<{ name: string; fm: string; expect: Record<string, unknown> }> = [
   {
     name: 'Obsidian alias starting with @, alongside ordinary keys',
@@ -179,9 +178,8 @@ describe('frontmatter parse policy: structure', () => {
 const write = (baseDir: string, relPath: string, body: string, frontmatter: Record<string, unknown> = {}) => writeNote(baseDir, relPath, { body, frontmatter });
 
 describe('lenient frontmatter', () => {
-  // An `@` scalar is accepted, not merely tolerated: YAML reserves the character, so the text
-  // can only be what was typed. No warning, no `_parse_error`. Every other fault quarantines --
-  // see the ACCEPTED/QUARANTINED tables above for the full table.
+  // An `@` scalar is accepted, not merely tolerated: YAML reserves the character, so the text can
+  // only be what was typed -- no warning, no `_parse_error`.
   it('an Obsidian-style @ alias parses, with no warning and no parse error', async () => {
     const baseDir = tmpTree();
     writeFileSync(join(baseDir, 'handle.md'), '---\naliases:\n- @someone\ntags:\n- \npublish: true\n---\n\nsearchable prose with [[good]]\n');
@@ -334,9 +332,8 @@ const NORMALIZED: Array<{ name: string; written: string; instant: string; localD
 // Already accepted, so they must survive byte for byte.
 const UNTOUCHED = ['2026-01-28T10:11:49.617-08:00', '2026-01-28T10:11:49.617Z', '2026-01-28T10:11:49.617', '2026-01-28', 'not a date at all', 'v1.2-0800'];
 
-// Not a real instant: nothing to normalize to, so they stay as written and stay auditable.
-// The last three are ISO-legal but nothing writing markdown frontmatter emits them, so they are
-// deliberately out of scope rather than overlooked.
+// Not a real instant: nothing to normalize to, so they stay as written. The last three are
+// ISO-legal but nothing writing frontmatter emits them, so they are out of scope.
 const LEFT_ALONE = ['2026-07-03T06:30:5.512-07:00', '2026-07-18T08:4:00.287-07:00', '2026-13-01T10:11:49-0800', '2026-01-28T25:00:00-0800', '2026-01-28t10:11:49.617-08:00', '2026-01-28T10:11:49,617-0800', '20260128T101149Z'];
 
 async function storedValue(baseDir: string, path: string): Promise<string> {
@@ -508,5 +505,44 @@ describe('db', () => {
     const row = (await (await result.store.prepare('SELECT path, tags FROM frontmatter WHERE path = ?')).get('three-reserved-path.md')) as Record<string, unknown>;
     assert.equal(row.path, 'three-reserved-path.md');
     assert.equal(row.tags, '["alpha"]');
+  });
+});
+
+// Fence rules match Obsidian's own frontmatter splitter (splitFrontMatterAndContent /
+// FRONTMATTER_REGEX in obsidian.d.ts's metadataCache source), not YAML's own document markers.
+describe('splitFrontmatter: fence rules', () => {
+  it('rejects a trailing space on the opening fence', () => {
+    const raw = '--- \ntitle: A\n---\nbody\n';
+    assert.deepEqual(splitFrontmatter(raw), { fm: null, body: raw });
+  });
+
+  it('rejects a trailing space on the closing fence', () => {
+    const raw = '---\ntitle: A\n--- \nbody\n';
+    assert.deepEqual(splitFrontmatter(raw), { fm: null, body: raw });
+  });
+
+  it('rejects a leading blank line before the opening fence', () => {
+    const raw = '\n---\ntitle: A\n---\nbody\n';
+    assert.deepEqual(splitFrontmatter(raw), { fm: null, body: raw });
+  });
+
+  it('does not treat "..." as a valid closer', () => {
+    const raw = '---\ntitle: A\n...\nmore: B\n---\nbody\n';
+    assert.deepEqual(splitFrontmatter(raw), { fm: 'title: A\n...\nmore: B\n', body: 'body\n' });
+  });
+
+  it('does not treat four dashes as a valid closer', () => {
+    const raw = '---\ntitle: A\n----\nmore: B\n---\nbody\n';
+    assert.deepEqual(splitFrontmatter(raw), { fm: 'title: A\n----\nmore: B\n', body: 'body\n' });
+  });
+
+  it('an unclosed run finds no fence anywhere and the whole document is left as body', () => {
+    const raw = '---\ntitle: A\nno closing fence here\n';
+    assert.deepEqual(splitFrontmatter(raw), { fm: null, body: raw });
+  });
+
+  it('splits on CRLF line endings', () => {
+    const raw = '---\r\ntitle: A\r\n---\r\nbody\r\n';
+    assert.deepEqual(splitFrontmatter(raw), { fm: 'title: A\r\n', body: 'body\r\n' });
   });
 });

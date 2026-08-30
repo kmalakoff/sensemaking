@@ -72,11 +72,8 @@ export async function runWatch(cfg: ResolvedConfig, opts: WatchOptions = {}): Pr
     }, debounceMs);
   };
 
-  // Ignore our own state dir, or the heartbeat write would retrigger itself forever. An event
-  // whose filename the platform could not resolve (null, which fs.watch does deliver under
-  // load) is attributed to nothing and so reconciles: one reconcile that parses nothing costs
-  // less than missing a real edit. That is why the guard cannot promise zero reconciles, only
-  // that an identified state-dir write is never one of them.
+  // Ignore our own state dir, or the heartbeat write would retrigger itself forever. An event with
+  // an unresolvable filename (null, which fs.watch delivers under load) reconciles: parsing nothing costs less than missing a real edit.
   const watcher = fsWatch(baseDir, { recursive: true }, (_event, filename) => {
     if (typeof filename === 'string' && filename.startsWith(STATE_DIR)) return;
     scheduleReconcile();

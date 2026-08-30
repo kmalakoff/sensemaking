@@ -1,17 +1,5 @@
-// The whole release benchmark gate as one command: node benchmark/release.mjs [--store <name>]
-// Runs every measurement RELEASING.md reads, in order, and exits nonzero if any step does.
-// Steps that fetch (corpora, npm baselines, the fever wiki dump) cache through
-// benchmark/lib/cache.mjs, so only the first run on a machine pays the downloads.
-//
-// No flag: the default store's gate (compare vs last release, scale, stress, both quality
-// evals). A named store has no npm baseline that can run it (the last release predates
-// store) and the quality evals are store-independent (one sitting under the default store
-// stands for every store), so its gate is the tree battery alone: hub + scale + stress.
-//
-// Steps run cheapest first, so the shape of the whole path is proven on the smallest corpus
-// before an hour goes into the big ones. Each carries a timeout sized as a hang detector, not
-// a performance gate: generous enough that a slow machine never trips it, so a step that hits
-// it has stopped making progress rather than merely taken a while.
+// Release benchmark gate: node benchmark/release.mjs [--store <name>]. Runs every measurement
+// RELEASING.md reads and exits nonzero if any step does; fetches cache via benchmark/lib/cache.mjs.
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 
@@ -22,7 +10,8 @@ const store = storeIdx >= 0 ? argv[storeIdx + 1] : null;
 const storeArgs = store ? ['--store', store] : [];
 
 const MINUTES = 60_000;
-// [title, args, timeoutMs]
+// [title, args, timeoutMs], cheapest first. A named store has no npm baseline and quality evals
+// are store-independent, so its gate is the tree battery alone: hub + scale + stress.
 const STEPS = store
   ? [
       ['hub battery', ['benchmark/run.mjs', '.', 'obsidian-hub', ...storeArgs], 20 * MINUTES],
@@ -45,8 +34,8 @@ for (const [title, args, timeout] of STEPS) {
   const started = Date.now();
   const r = spawnSync(process.execPath, args, { cwd: ROOT, stdio: 'inherit', timeout, killSignal: 'SIGKILL' });
   const elapsed = `${((Date.now() - started) / 1000).toFixed(1)}s`;
-  // A timed-out child is killed, so report the hang rather than the signal it died from: the
-  // remaining steps still run, because one dead measurement should not discard the others.
+  // A timed-out child is killed, so report the hang rather than the signal it died from: one
+  // dead measurement should not discard the others, so the remaining steps run regardless.
   if (r.error?.code === 'ETIMEDOUT' || (r.signal === 'SIGKILL' && Date.now() - started >= timeout)) {
     failed++;
     console.error(`TIMED OUT after ${elapsed} (limit ${timeout / MINUTES}m), killed: ${args.join(' ')}`);

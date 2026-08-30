@@ -45,9 +45,7 @@ export async function mapTree(store: Store, cfg: ResolvedConfig, overrides: Sear
 
     const columns = (await store.docs.columns()).filter((name) => !INTERNAL_COLUMNS.has(name));
     // Observed types, not declared: a field can be text in most notes and numeric in a few, so
-    // every distinct type observed across the scope is reported, not just the first. Aggregated
-    // in SQL, one query per chunk of columns (native-not-emulated: each store's fieldStats()
-    // classifies through its own engine mechanism but returns the same vocabulary).
+    // every distinct type observed across the scope is reported, not just the first.
     const allFields: FieldStat[] = [];
     for (const group of chunk(columns, MAP_COLUMN_CHUNK)) allFields.push(...(await store.docs.fieldStats(group, scopeWhere)));
     allFields.sort((a, b) => b.coverage - a.coverage);

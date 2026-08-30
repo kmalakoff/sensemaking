@@ -36,10 +36,8 @@ export async function openStore(cfg: ResolvedConfig): Promise<OpenResult> {
   const name = storeName(cfg);
   const entry = entryFor(name);
 
-  // The one unambiguous, config-level capability need: an embed block some preset actually
-  // uses for vectors. Word/lexical search has no equivalent unambiguous signal at this level
-  // (every preset defaults to wanting "words"), so a store lacking 'lexical' fails loudly at
-  // first use instead (see duckdb/store.ts's lexical.query()).
+  // The one unambiguous, config-level capability need: an embed block some preset actually uses
+  // for vectors. Lexical search has no such signal at this level (every preset defaults to "words"), so a store lacking it fails loudly at first use.
   if (anyPresetEmbeds(cfg) && !entry.capabilities.has('vectors')) {
     throw new SenseError('STORE_CAPABILITY_MISSING', `store "${name}" does not implement "vectors" in this build, but this config's "embed" block is in use by at least one preset; remove or narrow it, or set "store" to a store that supports vectors (sqlite)`);
   }
@@ -56,7 +54,8 @@ export function requireWatchConcurrency(cfg: ResolvedConfig): void {
   }
 }
 
-export { getMeta, setMeta } from './meta.ts';
+export { clearCache } from './cache.ts';
+export { getMeta, setMeta } from './shared.ts';
 export type { OpenResult } from './sqlite/open.ts';
-export { clearCache, DB_FILENAME, docCount, SCHEMA_VERSION } from './sqlite/open.ts';
+export { DB_FILENAME, docCount, SCHEMA_VERSION } from './sqlite/open.ts';
 export type { Capability, Connection, DocumentStore, LexicalHit, LexicalIndex, LexicalQueryOptions, RawStatement, RunResult, SqlSession, Statement, Store, VectorCandidate, VectorSimilar, VectorStore, VectorWriteRow } from './types.ts';

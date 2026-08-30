@@ -10,14 +10,8 @@ import { getColumns, quoteIdent } from '../shared.ts';
 import { withTransaction } from '../transaction.ts';
 import type { Connection } from '../types.ts';
 
-// Mirrors src/store/sqlite/reconcile.ts's frontmatter-upsert shape (dynamic ALTER TABLE per
-// discovered key, ON CONFLICT upsert keeping the row's identity stable). `content` is a plain
-// table, not FTS-virtual (D1: DuckDB's fts index is built lazily, on first lexical query, from
-// this table -- see duckdb/lexical.ts), so its rows are maintained here unconditionally. The one
-// forced divergence for frontmatter itself is the ALTER TABLE type: DuckDB requires a declared
-// column type where sqlite accepts none, so every dynamic frontmatter column is VARIANT (the
-// only DuckDB type that can hold the different JS types mapValue() produces across files for
-// the same key).
+// Mirrors sqlite/reconcile.ts's frontmatter-upsert shape (dynamic ALTER TABLE per discovered key, ON CONFLICT upsert). `content` is
+// a plain table, not FTS-virtual, so rows are maintained here unconditionally; DuckDB's ALTER TABLE needs a declared type, so every dynamic frontmatter column is VARIANT (holds mapValue()'s mixed JS types for one key across files).
 const CORE_FRONTMATTER_COLUMNS = new Set(['path', '_mtime', '_ctime', '_size', '_parse_error']);
 
 // No rowid coupling needed (unlike sqlite's content, which links to frontmatter's rowid):
@@ -28,9 +22,8 @@ function contentRow(doc: ParsedDoc): unknown[] {
   return [doc.relPath, doc.search.title, doc.search.summary, doc.search.text];
 }
 
-// No compile-time column cap in DuckDB (unlike SQLite's SQLITE_MAX_COLUMN); kept as a sanity
-// fence anyway so a runaway frontmatter generator fails with a clear message instead of an
-// unbounded ALTER TABLE loop.
+// No compile-time column cap in DuckDB (unlike SQLite's SQLITE_MAX_COLUMN); kept as a sanity fence anyway
+// so a runaway frontmatter generator fails with a clear message instead of an unbounded ALTER TABLE loop.
 const MAX_FRONTMATTER_COLUMNS = 10_000;
 
 export async function reconcile(conn: Connection, cfg: Config, baseDir: string): Promise<{ parsed: number; warnings: string[] }> {

@@ -53,11 +53,8 @@ describe('int8 quantization round trip (duckdb)', () => {
     assert.ok(top.similarity > 0.99, `expected near-1 cosine for an identical vector, got ${top.similarity}`);
   });
 
-  // Unlike sqlite's raw dot-product-with-scale score, array_cosine_similarity divides by each
-  // vector's own norm: the per-vector scale is a uniform multiply that cancels out of that
-  // division, so it cannot affect this store's ranking (it still matters for reconstructing the
-  // correct float magnitude, just not for cosine order) -- sqlite's "scale must weight the
-  // score" case has no duckdb equivalent and is intentionally not ported.
+  // Unlike sqlite's raw dot-product score, array_cosine_similarity divides by each vector's own
+  // norm, so per-vector scale cancels out of ranking here (it still matters for magnitude, not order); sqlite's scale-weighted-score case has no duckdb equivalent.
 });
 
 describe('scanCandidates (duckdb)', () => {
@@ -175,9 +172,8 @@ describe('scanSimilar (duckdb)', () => {
     for (let i = 0; i < chunkCount; i++) await insertPending(conn, 'target.md', i);
     await insertPending(conn, 'other.md', 0);
 
-    // other.md points along dim 1; every sampled target chunk points along dim 0 (orthogonal,
-    // cosine 0). Only the unsampled trap chunk (index 1) points along dim 1 like other.md
-    // (cosine 1) -- if sampling were broken, the result would jump from 0 to 1.
+    // other.md and every sampled target chunk are orthogonal (cosine 0); only the unsampled trap
+    // chunk (index 1) matches other.md's direction (cosine 1) -- broken sampling would jump the score to 1.
     const rows: Array<{ path: string; chunk: number; scale: number; vector: Buffer }> = [];
     for (let i = 0; i < chunkCount; i++) rows.push({ path: 'target.md', chunk: i, ...quantize(i === 1 ? full(0, 1) : full(1, 0)) });
     rows.push({ path: 'other.md', chunk: 0, ...quantize(full(0, 1)) });

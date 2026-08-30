@@ -1,14 +1,8 @@
 import { quoteIdent } from '../shared.ts';
 import type { Connection, FieldStat } from '../types.ts';
 
-// DuckDB's frontmatter columns are VARIANT (reconcile.ts's comment on why), so typeof() reports
-// VARIANT for every field regardless of the boxed value; variant_typeof() reports the boxed
-// native type instead (spike-verified against mapValue()'s actual bind shapes: a bound JS bigint
-// always boxes as INT128, a non-integer JS number always boxes as DOUBLE, a string as VARCHAR --
-// literal SQL values box narrower, e.g. INTEGER/DECIMAL(p, s), which this still covers since a
-// query issued through `sense sql` can produce either). Mapped onto the shared integer/real/text
-// vocabulary sqlite/turso's typeof() already emits natively; an unrecognized name throws rather
-// than being silently called text (no-silent-modes).
+// DuckDB's frontmatter columns are VARIANT (reconcile.ts), so typeof() always reports VARIANT; variant_typeof() reports the boxed native
+// type instead -- INT128, DOUBLE, VARCHAR, or a literal's narrower type like DECIMAL(p, s) -- mapped onto sqlite/turso's integer/real/text vocabulary; an unrecognized name throws (no-silent-modes).
 function classifyVariantType(name: string, field: string): 'integer' | 'real' | 'text' {
   if (/^U?INT\d+$/.test(name)) return 'integer';
   if (name === 'FLOAT' || name === 'DOUBLE' || name.startsWith('DECIMAL(')) return 'real';
@@ -16,10 +10,8 @@ function classifyVariantType(name: string, field: string): 'integer' | 'real' | 
   throw new Error(`duckdb: variant_typeof() returned unrecognized type "${name}" for column "${field}"`);
 }
 
-// One aggregate query, one result row: COUNT + string_agg(DISTINCT variant_typeof()) per
-// column, so the query stays O(columns) rather than O(rows x columns). '|' is the string_agg
-// separator, not ',': DECIMAL's own display name ("DECIMAL(4, 2)") contains a comma, which a
-// ',' separator could not be split back apart from.
+// One aggregate query, one result row: COUNT + string_agg(DISTINCT variant_typeof()) per column keeps this O(columns), not O(rows x columns).
+// '|' is the separator, not ',': DECIMAL's display name ("DECIMAL(4, 2)") contains a comma.
 export async function fieldStats(conn: Connection, columns: string[], scopeWhere: string): Promise<FieldStat[]> {
   const exprs = columns.map((name, i) => {
     const quoted = quoteIdent(name);

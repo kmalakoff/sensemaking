@@ -4,7 +4,7 @@ import { search } from 'sensemaking';
 import { mapTree, relatedNotes } from '../../src/commands/index.ts';
 import { findPath } from '../../src/graph/traverse.ts';
 import { writeModel } from '../lib/model.ts';
-import { forEachOfStores, forEachOtherStore, forEachOtherStoreByCapability, forEachStore, forEachStoreByCapability, isMissingDependency, openTreeForStore, type ParityStoreName } from '../lib/stores.ts';
+import { declaredCapabilities, forEachOfStores, forEachOtherStore, forEachOtherStoreByCapability, forEachStore, forEachStoreByCapability, isMissingDependency, openTreeForStore, type ParityStoreName } from '../lib/stores.ts';
 import { CHINESE_SENTENCES, tmpTree, writeNote } from '../lib/tree.ts';
 
 async function docCount(store: Awaited<ReturnType<typeof openTreeForStore>>['store']): Promise<number> {
@@ -150,12 +150,8 @@ describe('store parity: portable surface (sqlite reference)', () => {
   });
 });
 
-// has()/basename()/segment() are sense-registered SQL functions (UDFs), not portable contract
-// (decision T6: shrunk to the store-agnostic intersection -- tables, `?` binds, scope). sqlite
-// and duckdb both register them; turso's client cannot register UDFs at all, so the
-// store-agnostic tests above never call has(), and its coverage lives here instead, scoped to
-// the stores that actually register it, plus turso's rejection as a declared difference
-// (PRINCIPLES: no-silent-modes).
+// has()/basename()/segment() are sense-registered SQL functions (UDFs), not portable contract.
+// sqlite and duckdb register them; turso's client cannot register UDFs, so its rejection is asserted as a declared difference (PRINCIPLES: no-silent-modes).
 const SQL_FUNCTION_STORE_NAMES: Exclude<ParityStoreName, 'turso'>[] = ['sqlite', 'duckdb'];
 
 describe('store parity: has() (SQL function extra, not portable -- T6)', () => {
@@ -180,11 +176,8 @@ describe('store parity: has() (SQL function extra, not portable -- T6)', () => {
   });
 });
 
-// DuckDB composes lexical search from fts BM25 (ranking) and contains() scans (exact
-// substring, phrase verification, unspaced scripts) rather than FTS5 -- sqlite stays the
-// reference implementation. Ordering is asserted identical only where
-// both engines' BM25 must agree (an unambiguous title-vs-body case); where the underlying BM25
-// formulas legitimately differ, this asserts set equality plus the top hit and says so inline.
+// DuckDB composes lexical search from fts BM25 (ranking) plus contains() scans (exact substring, phrase verification, unspaced scripts), not FTS5; sqlite stays the reference.
+// Ordering is asserted only where both engines' BM25 must agree; where BM25 formulas legitimately differ, this asserts set equality plus the top hit instead.
 function lexicalFixtureTree(): string {
   const baseDir = tmpTree();
   writeNote(baseDir, 'apple.md', { frontmatter: { title: 'Apple Pie' }, body: 'A recipe for apple pie, using six apples in total.' });
@@ -198,11 +191,8 @@ function lexicalFixtureTree(): string {
   // [2]/[3], so a substring query into one half never spuriously matches the other.
   writeNote(baseDir, 'zh-weather.md', { body: CHINESE_SENTENCES.slice(0, 2).join('\n\n') });
   writeNote(baseDir, 'zh-other.md', { body: CHINESE_SENTENCES.slice(2, 4).join('\n\n') });
-  // One query spanning both scripts, plus a decoy holding only one half each. "telescope" and
-  // CHINESE_SENTENCES[4] (Beijing) appear in no other note here, so neither half of the query
-  // can match anything but these three. mixed.md doubles as the both-halves note for the
-  // word-plus-phrase case below: phrase.md already holds "night sky" without a telescope, and
-  // telescope-only.md holds the word without the phrase.
+  // "telescope" and CHINESE_SENTENCES[4] (Beijing) appear in no other note, so neither half of a mixed query can match anything but these three.
+  // mixed.md also doubles as the both-halves note for the word-plus-phrase case below; phrase.md holds "night sky" without a telescope, telescope-only.md the word without the phrase.
   writeNote(baseDir, 'mixed.md', { body: `A telescope points at the night sky.\n\n${CHINESE_SENTENCES[4]}` });
   writeNote(baseDir, 'telescope-only.md', { body: 'A telescope points upward.' });
   writeNote(baseDir, 'zh-beijing.md', { body: CHINESE_SENTENCES[4] });
@@ -219,22 +209,16 @@ async function searchPaths(store: ParityStoreName, baseDir: string, terms: strin
   }
 }
 
-// Declared lexical divergences, keyed by case then store: a store not listed for a case must
-// match sqlite's result exactly. A listed store states its own expected result instead of
-// inheriting sqlite's by position, with the reason recorded alongside it -- a new store's
-// gaps become a tested table entry, not prose in a plan.
+// Declared lexical divergences, keyed by case then store: a store not listed must match sqlite's result exactly.
+// A listed store states its own expected result and reason instead of inheriting sqlite's by position.
 const LEXICAL_DIVERGENCES: Partial<Record<string, Partial<Record<ParityStoreName, { paths: string[]; reason: string }>>>> = {
   'exact substring (quoted, punctuated)': {
     duckdb: { paths: ['compound.md'], reason: 'contains() requires the literal hyphen; FTS5 phrase-adjacency ignores it' },
   },
 };
 
-// A store lacking a capability must fail loudly with STORE_CAPABILITY_MISSING naming it
-// (PRINCIPLES: no-silent-modes) -- this is that assertion, shared by every capability-gated
-// case below.
-// A missing-dependency error surfaces as an ordinary rejection too; a store that cannot even be
-// opened cannot be asked to reject a query, so it is left to propagate to the loop's own skip
-// (forEachStoreByCapability/forEachOtherStoreByCapability), not asserted as "rejected the query".
+// A store lacking a capability must fail loudly with STORE_CAPABILITY_MISSING naming it (PRINCIPLES: no-silent-modes); shared by every capability-gated case below.
+// A missing-dependency error is left to propagate to the loop's own skip instead, since a store that cannot open cannot be asked to reject a query.
 async function assertCapabilityMissing(store: ParityStoreName, promise: Promise<unknown>, messagePattern: RegExp): Promise<void> {
   try {
     await promise;
@@ -246,6 +230,63 @@ async function assertCapabilityMissing(store: ParityStoreName, promise: Promise<
   }
   assert.fail(`${store} should reject this query`);
 }
+
+// The Store contract every engine owes, asserted once per store: a new store gets this coverage
+// by joining STORE_NAMES, and its unit twin keeps only what that engine alone does.
+describe('store parity: the Store contract (every store)', () => {
+  it("name matches the registry key, and capabilities match the store module's own declaration", async () => {
+    const baseDir = tmpTree();
+    writeNote(baseDir, 'a.md', { frontmatter: { title: 'A' } });
+    await forEachStore(async (name) => {
+      const { store } = await openTreeForStore(name, baseDir);
+      assert.equal(store.name, name);
+      assert.deepEqual(new Set(store.capabilities), declaredCapabilities(name), name);
+      await store.close();
+    });
+  });
+
+  it('docs.columns() returns frontmatter column names, including dynamic keys', async () => {
+    const baseDir = tmpTree();
+    writeNote(baseDir, 'a.md', { frontmatter: { title: 'A', tags: ['x'] } });
+    await forEachStore(async (name) => {
+      const { store } = await openTreeForStore(name, baseDir);
+      const columns = await store.docs.columns();
+      for (const expected of ['path', 'title', 'tags']) assert.ok(columns.includes(expected), `${name}: expected '${expected}' among ${columns.join(', ')}`);
+      await store.close();
+    });
+  });
+
+  it('raw.prepare() streams rows through its async iterator', async () => {
+    const baseDir = tmpTree();
+    writeNote(baseDir, 'a.md', { frontmatter: { title: 'A' } });
+    writeNote(baseDir, 'b.md', { frontmatter: { title: 'B' } });
+    await forEachStore(async (name) => {
+      const { store } = await openTreeForStore(name, baseDir);
+      const stmt = await store.raw.prepare('SELECT "path" FROM frontmatter ORDER BY "path"');
+      const rows: unknown[] = [];
+      for await (const row of stmt.iterate()) rows.push(row);
+      assert.deepEqual(rows, [{ path: 'a.md' }, { path: 'b.md' }], name);
+      await store.close();
+    });
+  });
+
+  // 2^53 + 9: past the safe-integer range, so a store that hands back a Number has already lost
+  // digits by the time the assertion runs.
+  it('raw.prepare() reads int64 values past 2^53 as BigInt', async () => {
+    const baseDir = tmpTree();
+    writeNote(baseDir, 'a.md', { frontmatter: { title: 'A' } });
+    await forEachStore(async (name) => {
+      const { store } = await openTreeForStore(name, baseDir);
+      const stmt = await store.raw.prepare('SELECT 9007199254740993 AS big');
+      const rows: Array<{ big: unknown }> = [];
+      for await (const row of stmt.iterate()) rows.push(row as { big: unknown });
+      assert.equal(rows.length, 1, name);
+      assert.equal(typeof rows[0].big, 'bigint', name);
+      assert.equal(rows[0].big, BigInt('9007199254740993'), name);
+      await store.close();
+    });
+  });
+});
 
 describe('store parity: lexical search (sqlite reference, D1)', () => {
   it('a plain term agrees on the top hit and the match set', async () => {
@@ -274,12 +315,8 @@ describe('store parity: lexical search (sqlite reference, D1)', () => {
     );
   });
 
-  // A documented divergence, not a bug: FTS5's tokenizer treats the hyphen as a separator, so
-  // its quoted-phrase query matches "customer facing" as two adjacent tokens regardless of the
-  // punctuation between them -- both docs qualify. DuckDB's contains() is a literal substring
-  // check (PRINCIPLES: proven-or-verified, where String.prototype.includes is the cited spec),
-  // so only the doc whose raw text holds the hyphen matches -- recorded in LEXICAL_DIVERGENCES
-  // above, not inline.
+  // FTS5 tokenizes the hyphen as a separator, so its quoted-phrase query matches "customer facing" as two adjacent tokens regardless of punctuation -- both docs qualify.
+  // DuckDB's contains() is a literal substring check (PRINCIPLES: proven-or-verified, String.prototype.includes), so only the doc with the literal hyphen matches; see LEXICAL_DIVERGENCES.
   it('an exact substring (quoted, punctuated): a declared divergence, not a parity gap', async () => {
     const baseDir = lexicalFixtureTree();
     const sqlitePaths = await searchPaths('sqlite', baseDir, '"customer-facing"');
@@ -318,11 +355,8 @@ describe('store parity: lexical search (sqlite reference, D1)', () => {
     );
   });
 
-  // A mixed-script query is where a store composing two engine mechanisms (sqlite: FTS5 terms
-  // plus `_seg` grapheme phrases; duckdb: BM25 plus contains(); turso: two FTS indexes) has to
-  // AND them together. Getting the two halves individually right and their conjunction wrong is
-  // silent -- the result set can stay correct while ranking goes flat -- so this asserts both
-  // halves narrow to the one note that holds them.
+  // A mixed-script query ANDs two engine mechanisms per store (sqlite: FTS5 terms + `_seg` grapheme phrases; duckdb: BM25 + contains(); turso: two FTS indexes).
+  // Getting each half right but the conjunction wrong is silent (ranking goes flat, result set stays correct), so this asserts both halves narrow to the one matching note.
   it('a mixed ascii + CJK query ANDs both halves: only the note holding both matches', async () => {
     const baseDir = lexicalFixtureTree();
     const sqlitePaths = await searchPaths('sqlite', baseDir, 'telescope 北京');
@@ -345,12 +379,8 @@ describe('store parity: lexical search (sqlite reference, D1)', () => {
     );
   });
 
-  // FTS5 query syntax other stores do not interpret (prefix `*`, boolean OR/NOT): sqlite honors
-  // it. Every other store rejects it loudly (STORE_CAPABILITY_MISSING) rather than silently
-  // answering as a literal-term match (PRINCIPLES: no-silent-modes), but the two ways to lack
-  // that grammar are both legitimate and name different things: duckdb has "lexical" but not
-  // FTS5 syntax, so it names the operator (T5: reject FTS5-only operators loudly); turso has no
-  // "lexical" at all, so it names the missing capability instead.
+  // sqlite honors FTS5-only syntax (prefix `*`, boolean OR/NOT); every other store rejects it loudly with STORE_CAPABILITY_MISSING instead of a silent literal-term match (PRINCIPLES: no-silent-modes).
+  // duckdb has "lexical" but not FTS5 syntax, so it names the operator; turso has no "lexical" at all, so it names the missing capability instead.
   it('a prefix query: sqlite honors it, every other store rejects it loudly instead of answering differently', async () => {
     const baseDir = lexicalFixtureTree();
     const sqlitePaths = await searchPaths('sqlite', baseDir, 'appl*');
@@ -374,11 +404,8 @@ describe('store parity: lexical search (sqlite reference, D1)', () => {
   });
 });
 
-// D2: sqlite scans int8+scale BLOBs in a JS loop; duckdb scans native FLOAT[N] arrays with
-// array_cosine_similarity in SQL. Both are handed the same vectors (see embed/query.ts's
-// toStore), so scores agree up to int8 quantization noise -- rank agreement, not float
-// equality. writeModel() is the offline Model2Vec fixture every embed test uses; no network,
-// no download.
+// D2: sqlite scans int8+scale BLOBs in a JS loop; duckdb scans native FLOAT[N] arrays via array_cosine_similarity in SQL, both handed the same vectors (embed/query.ts's toStore).
+// Scores agree only up to int8 quantization noise (rank agreement, not float equality). writeModel() is the offline Model2Vec fixture every embed test uses; no network.
 function semanticFixtureTree(): string {
   const baseDir = tmpTree();
   writeNote(baseDir, 'a.md', { frontmatter: { title: 'Fruit' }, body: 'An apple every day' });
@@ -443,9 +470,8 @@ async function relatedPaths(store: ParityStoreName, baseDir: string, embed: { mo
 }
 
 describe('store parity: related (sqlite reference, D2)', () => {
-  // The worst-case path (cost is target_chunks x stored_chunks): rank agreement is asserted as
-  // the top hit plus set equality, not full order, since a tie the int8/float noise can flip
-  // either way is a legitimate divergence, not a bug (see the file-level comment above).
+  // Worst-case path (cost is target_chunks x stored_chunks): rank agreement is asserted as top hit plus set equality, not full order.
+  // A tie the int8/float noise can flip either way is a legitimate divergence, not a bug (see D2 comment above).
   it('agrees on the top hit and the candidate set, excluding linked notes on both sides', async () => {
     const baseDir = relatedFixtureTree();
     const embed = { model: writeModel(), provider: 'static' as const };
@@ -467,9 +493,8 @@ describe('store parity: related (sqlite reference, D2)', () => {
   });
 });
 
-// map, scoped search, and findPath each materialize a path set into a temp table and filter
-// against it; a whole-tree scope must change nothing and a narrowed scope must narrow
-// identically on both stores.
+// map, scoped search, and findPath each materialize a path set into a temp table and filter against it.
+// A whole-tree scope must change nothing; a narrowed scope must narrow identically on both stores.
 describe('store parity: scoped commands (sqlite reference)', () => {
   it('mapTree agrees with a whole-tree scope and with a narrowed include', async () => {
     const baseDir = fixtureTree();
@@ -479,9 +504,8 @@ describe('store parity: scoped commands (sqlite reference)', () => {
       assert.equal(whole.docs.count, 3, store);
       assert.equal(whole.hubs.length, 3, store);
       assert.equal(whole.recent.length, 3, store);
-      // Field types are classified from decoded values, not engine typeof(), so the label is
-      // identical on every store: text-only, mixed (priority is a number in a.md, a string in
-      // b.md, absent in c.md), a JSON-stringified array, and a boolean stored as an integer.
+      // Field types are classified from decoded values, not engine typeof(), so the label is identical on every store.
+      // priority is mixed (number in a.md, string in b.md, absent in c.md); tags is a JSON-stringified array; active is a boolean stored as an integer.
       const fieldTypes = Object.fromEntries(whole.fields.map((f) => [f.field, f.type]));
       assert.deepEqual(fieldTypes, { title: 'text', priority: 'integer,text', tags: 'text', active: 'integer' }, store);
       const narrowed = await mapTree(s, cfg, { include: ['a.md', 'b.md'] });

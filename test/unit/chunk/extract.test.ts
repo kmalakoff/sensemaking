@@ -10,9 +10,8 @@ function extractParagraph(body: string): string {
   return extractText(parse(body)[0].node);
 }
 
-// Regression suite over test/fixtures/chunk/cases/: real hub-corpus samples plus synthetic
-// flavor-inertness pairs, pinned by test/fixtures/chunk/generate.mjs. No corpus needed on CI --
-// every input.md and expected.json is committed.
+// Regression suite over test/fixtures/chunk/cases/: hub-corpus samples plus synthetic
+// flavor-inertness pairs; every input.md/expected.json is committed, so no corpus needed on CI.
 
 interface ExpectedBlock {
   depth?: number;

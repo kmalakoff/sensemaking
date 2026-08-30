@@ -1,14 +1,12 @@
 import assert from 'node:assert';
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import cr from 'cr';
 import { packageRoot } from '../lib/scratch.ts';
 
-// PRINCIPLES.md is cited by name, not number, so a stale name is detectable: it resolves to no
-// heading here and this check catches it, where a stale number would resolve to the wrong
-// principle silently. The planning directory cites by the old numbers deliberately and is
-// never scanned, which is why the scan below is scoped to src and test.
+// Citing by name makes a stale citation detectable: it resolves to no heading here, where a stale
+// number would resolve to the wrong principle silently. Scoped to src and test; plans cite numbers.
 
 const normalize = (heading: string) =>
   heading
@@ -31,11 +29,12 @@ describe('PRINCIPLES.md citations', () => {
     const valid = new Set([...doc.matchAll(/^##\s+(.+)$/gm)].map((m) => normalize(m[1])));
     assert.ok(valid.size > 0, 'no headings found in PRINCIPLES.md');
 
-    // --others --exclude-standard so a not-yet-committed file is scanned too: a new file is
-    // where a wrong name actually gets introduced, and tracked-only would pass it silently.
+    // --others so an uncommitted file is scanned too, since that is where a wrong name arrives.
+    // existsSync because --cached still lists a file deleted in the tree but not yet staged.
     const files = execFileSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard', 'src', 'test'], { cwd: packageRoot, encoding: 'utf8' })
       .split('\0')
-      .filter((f) => /\.(ts|js|mjs|cjs)$/.test(f));
+      .filter((f) => /\.(ts|js|mjs|cjs)$/.test(f))
+      .filter((f) => existsSync(join(packageRoot, f)));
 
     const offenders: string[] = [];
     for (const file of files) {

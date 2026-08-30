@@ -210,9 +210,8 @@ describe('config validation', () => {
   });
 
   it('--help lists every command in the registry', async () => {
-    // Guards the gap that shipped in 0.7.x: `check` existed and worked but was absent from
-    // --help, so the command that answers "is my config broken" was undiscoverable from the
-    // CLI itself.
+    // Every command in the registry, including `check` (which answers "is my config broken"),
+    // must appear in --help so it stays discoverable from the CLI itself.
     const { COMMANDS } = (await import(pathToFileURL(join(packageRoot, 'dist', 'esm', 'cli', 'index.js')).href)) as { COMMANDS: Record<string, unknown> };
     const help = runCli(['--help']).stdout + runCli([]).stderr;
     for (const name of Object.keys(COMMANDS)) {
@@ -223,8 +222,6 @@ describe('config validation', () => {
 
 describe('featureSignature', () => {
   it('changes when the embed block appears or disappears, since that is the whole vector switch', () => {
-    // featureSignature isn't part of the public barrel (internals stay module-private);
-    // reach it the same way test/integration/verbs.test.ts reaches other src-internal helpers.
     // FEATURES (not activeFeatures(cfg)) matches production: embed's segment is driven by
     // embedConfig(cfg) inside the feature itself, independent of any "active" filtering.
     const base = { presets: { default: { include: ['*.md'] }, raw: { include: ['raw/**/*.md'] } }, queries: {} };

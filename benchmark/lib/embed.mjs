@@ -18,9 +18,8 @@ export async function loadModel(id = MODELS[0].id) {
   return { embedFull: (text) => provider.embedQuery(text), dims: provider.dims, loadMs, id, sha };
 }
 
-// Storage lever: slice + re-normalize (Matryoshka), quantized through toStore's int8 scale
-// and immediately dequantized back to float, so offline cosine scoring feels the same
-// precision loss the real int8 storage path does.
+// Storage lever: slice + re-normalize (Matryoshka), quantized through toStore's int8 scale and
+// immediately dequantized back to float, so offline cosine scoring feels the same precision loss the real int8 storage path does.
 export function leverVec(full, dims, int8) {
   const { v, scale } = toStore(full, dims, int8);
   if (!int8) return v;

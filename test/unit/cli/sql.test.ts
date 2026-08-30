@@ -50,10 +50,8 @@ describe('sql subcommand (ad-hoc SQL)', () => {
   });
 });
 
-// `sql` runs over the whole index whatever preset the other commands would have used, so
-// --preset binds a `scope` table the statement joins rather than filtering behind its back.
-// Applying it invisibly is not available: FTS5 MATCH uses the table name as a hidden column,
-// so a temp view over `content` cannot carry it.
+// `sql` runs over the whole index; --preset binds a `scope` table for the statement to join.
+// It can't filter invisibly: FTS5 MATCH treats the table name as a hidden column a view can't carry.
 describe('sql --preset', () => {
   function scopedTree(): string {
     const dir = tempDir('sense-scope-');

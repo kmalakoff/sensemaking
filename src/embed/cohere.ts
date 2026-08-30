@@ -16,8 +16,8 @@ export async function cohereProvider(model: string, url: string | undefined, key
     const res = await fetchWithRetry(`${base}/v2/embed`, { method: 'POST', headers, body: JSON.stringify({ model, input_type: inputType, texts, embedding_types: ['float'] }) });
     if (!res.ok) throw new SenseError('EMBED_MODEL', `${base}/v2/embed -> HTTP ${res.status}`);
     const body = (await res.json()) as { embeddings: { float: number[][] } };
-    // Cohere returns one vector per text in order, with no index field to re-sort by; the
-    // count is what a caller mapping positionally still has to be able to trust.
+    // Cohere returns one vector per text in order, with no index field to re-sort by; a caller
+    // maps them positionally, so the count below must be trustworthy.
     const vectors = body.embeddings.float;
     if (vectors.length !== texts.length) throw new SenseError('EMBED_MODEL', `${base}/v2/embed returned ${vectors.length} embeddings for ${texts.length} inputs`);
     return vectors.map((v) => Float32Array.from(v));

@@ -1,8 +1,5 @@
-// Shared line-fence tracker for tags/sections/embed. Opener: >=3 backticks or tildes at column
-// 0 -- no indent allowance, a deliberate divergence from CommonMark's up-to-3-space rule (see
-// test/unit/features/fences.test.ts DIVERGENCES table). A backtick opener's info string must not itself
-// contain a backtick (spec rule). A closer is a run of the SAME character, length >= the
-// opener's, holding nothing but trailing spaces after the run.
+// Shared line-fence tracker for tags/sections/embed. Opener: >=3 backticks or tildes at column 0, no indent
+// allowance (diverges from CommonMark's up-to-3-space rule). Closer: same char, length >= opener's, trailing spaces only.
 
 export interface FenceTracker {
   feed(line: string): boolean; // true iff this line is a fence delimiter (open or close)
@@ -49,11 +46,8 @@ export function fenceTracker(): FenceTracker {
   };
 }
 
-// Masks <!-- ... --> spans that may cross line boundaries, one line at a time so callers can
-// interleave it with their own per-line state. In isolation an unclosed <!-- stays open forever
-// (mask() has no notion of a line boundary that should kill it); maskRegions() below is what
-// calls close() at the point an unclosed comment actually dies -- a blank line at paragraph
-// level, or its enclosing HTML block's end.
+// Masks <!-- ... --> spans that may cross line boundaries, one line at a time so callers can interleave their own per-line state.
+// An unclosed comment stays open forever unless closed externally; maskRegions() below calls close() at a paragraph blank line or the enclosing HTML block's end.
 export interface CommentTracker {
   mask(line: string): string;
   close(): void; // force-ends an unclosed comment (paragraph blank line, or its HTML block ending)
@@ -100,10 +94,8 @@ export function commentTracker(): CommentTracker {
   };
 }
 
-// CommonMark's HTML-block type-6 list (fixed by the spec, not a drifting enumeration): a line
-// starting with an open or close tag of one of these, at column 0 (leading whitespace/`>`
-// blockquote markers tolerated), opens a block that swallows following lines -- tags, links,
-// and comments alike -- until a blank line closes it.
+// CommonMark's HTML-block type-6 tag list (fixed by the spec). A line opening or closing one of these at
+// column 0 (leading whitespace/`>` tolerated) swallows following lines -- tags, links, comments alike -- until a blank line.
 const HTML_BLOCK_TAGS = new Set([
   'address',
   'article',
@@ -176,12 +168,8 @@ const HTML_PRE_CLOSE_RE = /<\/(?:script|pre|style|textarea)>/i; // any of the fo
 const HTML_BLOCK_OPEN_RE = /^<\/?([a-zA-Z][a-zA-Z0-9]*)(?:[ \t]|\/?>|$)/;
 const BLANK_LINE_RE = /^[ \t>]*$/; // whitespace/blockquote-markers only -- a paragraph break, and what ends a type-6 block
 
-// Body with fenced-code, HTML-block, and <!-- --> comment regions replaced by spaces (newlines
-// preserved, so line numbers and offsets survive) plus inline code spans masked. The single
-// region masker for tags/links: fence and HTML-block delimiter+content lines are opaque, an
-// unclosed comment dies at its containing block's end (or the next blank line at paragraph
-// level -- never silently to end of file), and a closed comment masks exactly its span.
-// Bodies without a backtick/tilde/`<` fast-path out untouched.
+// Body with fenced-code, HTML-block, and <!-- --> comment regions replaced by spaces (newlines preserved, so line numbers and offsets survive), inline code spans masked too.
+// An unclosed comment dies at its block's end or the next paragraph blank line, never silently to end of file; bodies without a backtick/tilde/`<` fast-path out untouched.
 export function maskRegions(body: string): string {
   if (!/[`~<]/.test(body)) return body;
   const fence = fenceTracker();
@@ -213,7 +201,7 @@ export function maskRegions(body: string): string {
       }
       const uncommented = comment.inComment || line.includes('<!--') ? comment.mask(line) : line;
       if (comment.inComment && BLANK_LINE_RE.test(line)) comment.close(); // paragraph-level: dies at the next blank line
-      // Indented or blockquoted HTML blocks still swallow their content in Obsidian, so the
+      // Indented or blockquoted HTML blocks swallow their content in Obsidian too, so the
       // opener test runs after stripping leading whitespace and > markers.
       const stripped = uncommented.replace(/^[ \t>]*/, '');
       if (stripped[0] === '<') {
@@ -242,9 +230,8 @@ export function maskRegions(body: string): string {
     .join('\n');
 }
 
-// A code span opens on a run of N backticks and closes at the next run of exactly N -- a
-// shorter or longer run in between is literal text, not a delimiter (CommonMark code spans).
-// Masked with spaces so column positions and tag-boundary whitespace are unaffected.
+// A code span opens on a run of N backticks and closes at the next run of exactly N (CommonMark code spans);
+// a shorter/longer run in between is literal text. Masked with spaces so column positions stay unaffected.
 export function maskCodeSpans(line: string): string {
   let out = '';
   let i = 0;

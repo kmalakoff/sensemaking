@@ -5,12 +5,11 @@ import { embedConfig } from '../config/index.ts';
 import { SenseError } from '../errors.ts';
 import { writeFileAtomic } from '../lib/atomic-write.ts';
 import { fetchWithRetry } from './http.ts';
-import { hasModelFiles, isDownloadable, languagesPath, MODEL_FILES, readRef, snapshotDir, writeLanguages, writeRef } from './identity.ts';
+import { DEFAULT_MODELS_ROOT, hasModelFiles, isDownloadable, languagesPath, MODEL_FILES, readRef, snapshotDir, writeLanguages, writeRef } from './identity.ts';
 import { isKnownLanguageTag, MEASURED_MODEL_LANGUAGES } from './languages.ts';
 
 // identity.ts holds paths and cache identity, no network; store.ts holds the network fetches
-// (downloads, sha resolution, language metadata). Re-exported here for callers that otherwise
-// only need store.ts's network surface.
+// (downloads, sha resolution, language metadata), re-exported here for its network surface.
 export { hasModelFiles, isDownloadable, MODEL_FILENAMES, MODEL_FILES, modelDir, readLanguages, refsMainPath, snapshotDir, writeLanguages, writeRef } from './identity.ts';
 
 // A non-static provider has nothing to download here; an unreachable endpoint surfaces as an
@@ -31,8 +30,8 @@ export function localModelMissing(e: ResolvedEmbedConfig | null): e is ResolvedE
 
 // `main` resolves to a sha once per model: a recorded ref pins until its snapshot is
 // removed, so only the first need for an id ever costs this HEAD request.
-async function resolveSha(model: string): Promise<string> {
-  const existing = readRef(model);
+async function resolveSha(model: string, root: string = DEFAULT_MODELS_ROOT): Promise<string> {
+  const existing = readRef(model, root);
   if (existing) return existing;
   const url = `https://huggingface.co/${model}/resolve/main/model.safetensors`;
   // redirect: manual -- the header rides the Hub's own response; following the LFS/CDN
@@ -45,7 +44,7 @@ async function resolveSha(model: string): Promise<string> {
   }
   const sha = res.headers.get('x-repo-commit');
   if (!sha) throw new SenseError('EMBED_MODEL', `${url}: response carried no x-repo-commit header`);
-  writeRef(model, sha);
+  writeRef(model, sha, root);
   return sha;
 }
 
@@ -54,10 +53,8 @@ interface HfModelInfo {
   tags?: string[];
 }
 
-// cardData.language is the structured field (verified live: minishlab/potion-retrieval-32M has
-// neither this nor any language tag, so it stays silent; potion-multilingual-128M carries an
-// array here). Tags are a fallback for cards that only tag languages, filtered to recognized
-// codes so an unrelated short tag (format markers etc.) is never mistaken for one.
+// cardData.language is the structured field; tags are a fallback for cards that only tag
+// languages, filtered to recognized codes so an unrelated short tag is never mistaken for one.
 function languagesFromCard(info: HfModelInfo): string[] | undefined {
   const lang = info.cardData?.language;
   if (typeof lang === 'string') return [lang];
@@ -66,30 +63,39 @@ function languagesFromCard(info: HfModelInfo): string[] | undefined {
   return tagLangs.length > 0 ? tagLangs : undefined;
 }
 
-// Best-effort, cached forever once resolved (even to "none"): unlike model weights, missing or
-// unreachable metadata is not an error -- it just means the language-fit check stays off.
-async function ensureLanguages(model: string): Promise<void> {
-  if (existsSync(languagesPath(model))) return;
+// Unreachable metadata is not an error, only the language-fit check staying off, but it says so:
+// the check that keeps a misfit model loud cannot itself go quiet (PRINCIPLES: no-silent-modes).
+function cardUnreadable(model: string): void {
+  console.error(`sense: could not read the model card for ${model}; the language-fit check is off until it resolves (retries on next run, or run \`sense download\`)`);
+}
+
+async function ensureLanguages(model: string, root: string = DEFAULT_MODELS_ROOT): Promise<void> {
+  if (existsSync(languagesPath(model, root))) return;
   // A measured entry needs no card and no network, and stays deterministic offline.
   const measured = MEASURED_MODEL_LANGUAGES[model];
   if (measured) {
-    writeLanguages(model, measured);
+    writeLanguages(model, measured, root);
     return;
   }
   let res: Response;
   try {
     res = await fetchWithRetry(`https://huggingface.co/api/models/${model}`, {});
   } catch {
+    cardUnreadable(model);
     return;
   }
-  if (!res.ok) return;
+  if (!res.ok) {
+    cardUnreadable(model);
+    return;
+  }
   let info: HfModelInfo;
   try {
     info = (await res.json()) as HfModelInfo;
   } catch {
+    cardUnreadable(model);
     return;
   }
-  writeLanguages(model, languagesFromCard(info) ?? []);
+  writeLanguages(model, languagesFromCard(info) ?? [], root);
 }
 
 async function fetchToFile(url: string, dest: string): Promise<void> {
@@ -105,8 +111,8 @@ async function fetchToFile(url: string, dest: string): Promise<void> {
 
 // Fetches an already-known sha straight into its snapshot dir, without touching refs/main --
 // for downloadModel below, and for callers pinning an exact revision (the parity suite).
-export async function downloadModelRevision(model: string, sha: string, onFile?: (file: string, dir: string) => void): Promise<string> {
-  const dir = snapshotDir(model, sha);
+export async function downloadModelRevision(model: string, sha: string, onFile?: (file: string, dir: string) => void, root: string = DEFAULT_MODELS_ROOT): Promise<string> {
+  const dir = snapshotDir(model, sha, root);
   mkdirSync(dir, { recursive: true });
   for (const file of MODEL_FILES) {
     if (existsSync(join(dir, file))) continue;
@@ -118,13 +124,13 @@ export async function downloadModelRevision(model: string, sha: string, onFile?:
 
 // The only code path that resolves `main`: a static provider's first construction calls it
 // lazily, `sense download` as an explicit prefetch. Idempotent either way.
-export async function downloadModel(model: string, onFile?: (file: string, dir: string) => void): Promise<string> {
+export async function downloadModel(model: string, onFile?: (file: string, dir: string) => void, root: string = DEFAULT_MODELS_ROOT): Promise<string> {
   if (!isDownloadable(model)) {
     throw new SenseError('EMBED_MODEL', `embed.model "${model}" is a local path, not a Hugging Face model id, so there is nothing to download; put model.safetensors and tokenizer.json in that directory, or name a model id like "minishlab/potion-retrieval-32M"`);
   }
-  const sha = await resolveSha(model);
+  const sha = await resolveSha(model, root);
   // Independent of the weights above: a fresh HEAD/GET pair either way, so a lazy first
   // construction and an explicit prefetch both end up with a cached language verdict.
-  await ensureLanguages(model);
-  return downloadModelRevision(model, sha, onFile);
+  await ensureLanguages(model, root);
+  return downloadModelRevision(model, sha, onFile, root);
 }

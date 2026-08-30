@@ -6,8 +6,7 @@ import type { Connection } from '../../../src/store/types.ts';
 import { asCosine, hasVectorRow, pendingRows, sampleEvenly, TARGET_CHUNK_CAP } from '../../../src/store/vectors.ts';
 
 // pendingRows/hasVectorRow are engine-neutral IS NULL/IS NOT NULL checks; sqlite's Connection is
-// the lightest concrete one available (no optional native dependency), used here only as a
-// portable Connection, not to exercise sqlite-specific behavior.
+// the lightest concrete one available (no optional native dependency), used only as a portable Connection, not to exercise sqlite-specific behavior.
 function makeDb(): { db: DatabaseSync; conn: Connection } {
   const db = new DatabaseSync(':memory:');
   db.exec(`CREATE TABLE embeddings ("path" TEXT, chunk INTEGER, start_line INTEGER, end_line INTEGER, scale REAL, vector BLOB, PRIMARY KEY ("path", chunk))`);

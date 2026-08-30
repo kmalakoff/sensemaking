@@ -7,24 +7,23 @@ import type { EmbedProvider } from './types.ts';
 
 const BATCH_CAP = 64;
 
-// @huggingface/tokenizers is a 540K static import; a top-level import put it on every command's
-// module graph regardless of whether the semantic path ran, shipped as the 0.17.0 regression.
-// Deferred to a synchronous require inside staticProvider so only the embed path pays for it.
+// @huggingface/tokenizers is a 540K static import; a top-level import would put it on every
+// command's module graph, so it's deferred to a synchronous require inside staticProvider.
 const _require = typeof require === 'undefined' ? Module.createRequire(import.meta.url) : require;
 
 // Model2Vec safetensors + pure-JS tokenizer. Encode convention from model2vec/model.py: no
 // special tokens, drop unk ids, mean-pool, L2-normalize.
-export async function staticProvider(model: string): Promise<EmbedProvider> {
+export async function staticProvider(model: string, root?: string): Promise<EmbedProvider> {
   let dir: string;
   let languages: string[] | undefined;
   if (isDownloadable(model)) {
     // Naming a HF id is consent: fetch whatever is missing now, announcing it on stderr.
-    dir = await downloadModel(model, (file, into) => console.error(`sense: fetching ${model}/${file} into ${into}`));
+    dir = await downloadModel(model, (file, into) => console.error(`sense: fetching ${model}/${file} into ${into}`), root);
     // Cached beside the repo; a local model directory has no card to read, so it has none.
-    const cached = readLanguages(model);
+    const cached = readLanguages(model, root);
     languages = cached && cached.length > 0 ? cached : undefined;
   } else {
-    dir = modelDir(model);
+    dir = modelDir(model, root);
     for (const file of MODEL_FILES) {
       if (!existsSync(join(dir, file))) {
         throw new SenseError('EMBED_MODEL_MISSING', `embed model ${model} is not available (looked in ${dir}); expected ${MODEL_FILENAMES} in that directory`);
@@ -48,9 +47,8 @@ export async function staticProvider(model: string): Promise<EmbedProvider> {
   const unkId = tokenizerJson.model?.vocab?.[tokenizerJson.model?.unk_token] ?? -1;
 
   function one(text: string): Float32Array {
-    // The tokenizer yields undefined (not the unk id) for tokens outside the vocab; an
-    // undefined id would index the matrix at NaN and poison the whole mean-pool -- and the
-    // int8 conversion then stores the NaN vector as all zeros, silently. Keep integers only.
+    // The tokenizer yields undefined (not the unk id) for out-of-vocab tokens; unfiltered, it
+    // would index the matrix at NaN, and int8 conversion stores that NaN vector as all zeros.
     const ids = (tok.encode(text, { add_special_tokens: false }).ids as number[]).filter((id) => Number.isInteger(id) && id !== unkId);
     const v = new Float32Array(dims);
     if (ids.length === 0) return v;

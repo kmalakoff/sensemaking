@@ -12,10 +12,8 @@ import { packageRoot } from '../lib/scratch.ts';
 // Published surfaces drift silently: nothing fails when the README stops describing what
 // ships. These are the two facts cheap enough to assert -- the rest is RELEASING.md step 5.
 
-// Windows checks out CRLF working trees (core.autocrlf), but these assertions are about
-// document structure, not the bytes on disk -- normalize so a `\n` in the patterns below means
-// the same thing on every platform. `cr` over a hand-rolled replace: it also folds a bare \r,
-// which a hand-rolled /\r\n/ misses.
+// Windows checks out CRLF; normalize so `\n` means the same thing on every platform.
+// `cr` also folds a bare \r, which a hand-rolled /\r\n/ replace misses.
 const read = (...parts: string[]) => cr(readFileSync(join(...parts), 'utf8'));
 
 const readme = () => read(packageRoot, 'README.md');
@@ -54,9 +52,8 @@ describe('published docs', () => {
   });
 });
 
-// validate.ts's KNOWN_EMBED_KEYS is the single source of truth for what the embed block
-// accepts; schema.json is a second, editor-facing copy of that shape that nothing keeps in
-// sync automatically, so a key can validate and still be an editor-flagged schema error.
+// validate.ts's KNOWN_EMBED_KEYS is the source of truth; schema.json is a separate,
+// editor-facing copy nothing keeps in sync, so a key can validate and still fail editor lint.
 describe('schema.json embed properties match validate.ts', () => {
   it('every KNOWN_EMBED_KEYS entry has a schema.json property', () => {
     const schema = JSON.parse(readFileSync(join(packageRoot, 'schema.json'), 'utf8')) as { properties: { embed: { properties: Record<string, unknown> } } };
@@ -67,9 +64,8 @@ describe('schema.json embed properties match validate.ts', () => {
   });
 });
 
-// Every shipped SKILL.md is installed by tooling that parses its frontmatter as YAML, and an
-// unquoted `description:` containing ": " reads as a nested mapping and is skipped entirely.
-// Copying the files and diffing them proves nothing about this; parsing them does.
+// Every shipped SKILL.md is installed by tooling that parses its frontmatter as YAML; an
+// unquoted `description:` containing ": " reads as a nested mapping and gets skipped entirely.
 describe('shipped skills', () => {
   const skillDirs = () =>
     readdirSync(join(packageRoot, 'skills'), { withFileTypes: true })
@@ -95,9 +91,8 @@ describe('shipped skills', () => {
   });
 });
 
-// plans/ is gitignored working material: it is not in the repo a consumer clones and not in
-// the package, so a comment pointing at one sends the reader to a file that does not exist.
-// A reason worth keeping belongs inline, in the code it explains.
+// plans/ is gitignored working material, not in the repo a consumer clones or the package,
+// so a comment pointing at one sends the reader to a file that does not exist.
 describe('no references to local planning files', () => {
   it('no tracked file points at plans/', () => {
     // This file names the directory it forbids, so it is the one exemption.
@@ -108,9 +103,8 @@ describe('no references to local planning files', () => {
     // --others --exclude-standard so a not-yet-committed file is scanned too: tracked-only
     // passes a new file's violation locally and fails only once it is committed.
     const tracked = execFileSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], { cwd: packageRoot, encoding: 'utf8' }).split('\0').filter(Boolean);
-    // git ls-files reports the index, which still names a file staged-but-not-yet-committed as
-    // deleted in a working tree (a mid-flight rename/removal); skip what isn't actually there
-    // rather than let readFileSync throw on a path this check never meant to police.
+    // git ls-files reports the index, which can name a file staged but not yet committed as
+    // deleted in the working tree; skip what isn't there rather than let readFileSync throw.
     const offenders = tracked.filter((file) => /\.(ts|js|mjs|cjs|md|json)$/.test(file) && file !== self && !file.startsWith('plans/') && existsSync(join(packageRoot, file)) && readFileSync(join(packageRoot, file), 'utf8').includes('plans/'));
     assert.deepEqual(offenders, [], `these reference gitignored plans/: ${offenders.join(', ')}`);
   });

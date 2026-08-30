@@ -1,5 +1,4 @@
-// Dev sweep over the two tunable fusion constants: the vector candidate pool and the vector
-// list's RRF weight. Paired per-query deltas against the bake-off shape (w=1, pool=30).
+// Dev sweep over the two tunable fusion constants: the vector candidate pool and the vector list's RRF weight. Paired per-query deltas against the bake-off shape (w=1, pool=30).
 // usage: node benchmark/fusion-sweep.mjs [corpus] [--split dev] [--dims 256] [--f32] [--k N]
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';

@@ -83,10 +83,8 @@ export async function reconcile(conn: Connection, cfg: Config, baseDir: string):
   await withTransaction(conn, async () => {
     for (const col of newColumns) await conn.exec(`ALTER TABLE frontmatter ADD COLUMN ${quoteIdent(col)}`);
 
-    // content's rowid lookup depends on the frontmatter row it's coupled to, so every content
-    // delete/insert below must run after that row exists (vanished paths still have their
-    // frontmatter row at this point) and before it is removed (vanished frontmatter delete
-    // comes last).
+    // content's rowid lookup depends on its coupled frontmatter row, so the content
+    // deletes/inserts run while every path still has one -- the vanished frontmatter delete comes last.
     if (vanished.length > 0) {
       await conn.runBatch(
         'DELETE FROM content WHERE rowid = (SELECT rowid FROM frontmatter WHERE "path" = ?)',
@@ -94,9 +92,8 @@ export async function reconcile(conn: Connection, cfg: Config, baseDir: string):
       );
     }
     if (reparsedExisting.length > 0) {
-      // FTS5 has no upsert, so delete-before-insert into `content`, coupled to the frontmatter
-      // rowid (indexed via its PRIMARY KEY) rather than the UNINDEXED `path` column, which a
-      // per-row DELETE would otherwise scan the whole table to find.
+      // FTS5 has no upsert, so delete-before-insert, coupled to the frontmatter rowid (indexed via
+      // its PRIMARY KEY) rather than the UNINDEXED `path` column, which a per-row DELETE would scan to find.
       await conn.runBatch(
         'DELETE FROM content WHERE rowid = (SELECT rowid FROM frontmatter WHERE "path" = ?)',
         reparsedExisting.map((p) => [p])
@@ -196,12 +193,8 @@ export function signatureDiff(before: string, after: string): string {
   return changed.size === 0 ? 'features' : [...changed].map(label).join(', ');
 }
 
-// The tokenize-only rebuild in open(): content is dropped and repopulated from files already
-// listed in frontmatter, which itself is untouched. Frontmatter, links, sections, and
-// embeddings are file-derived and tokenizer-independent, so they survive. No feature extractors
-// run here -- doc.search (title/summary/text) is all content population needs. Returns
-// parseFile's per-file warnings (e.g. a bad date) so open() can surface them -- mtimes are
-// untouched, so reconcile() never reparses these files and would otherwise never emit them again.
+// Tokenize-only rebuild: only `content` is repopulated (the other tables are tokenizer-independent)
+// and no feature extractors run. Returns per-file warnings, since mtimes stay untouched and reconcile would never reparse them.
 export async function rebuildContentTable(conn: Connection, cfg: Config, baseDir: string): Promise<string[]> {
   const stmt = await conn.prepare('SELECT "path" FROM frontmatter');
   const known = new Set(((await stmt.all()) as Array<{ path: string }>).map((r) => r.path));

@@ -5,5 +5,5 @@ export { resolvePreset, resolveSearch } from './resolve.ts';
 export type { SignalName, SignalWeights } from './signals.ts';
 export { SIGNAL_NAMES, SIGNAL_PREREQUISITES } from './signals.ts';
 export type { Config, EffectiveSearch, EmbedConfig, FeatureName, Preset, ResolvedConfig, SavedQuery, SavedSearch, SearchOverrides, StoreName } from './types.ts';
-export { CONFIG_FILENAME, DEFAULT_EMBED_MODEL, STATE_DIR, SUPPORTED_CONFIG_VERSION } from './types.ts';
+export { CONFIG_FILENAME, DEFAULT_EMBED_MODEL, STATE_DIR, STORE_NAMES, SUPPORTED_CONFIG_VERSION } from './types.ts';
 export { KNOWN_EMBED_KEYS } from './validate.ts';

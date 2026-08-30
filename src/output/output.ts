@@ -10,14 +10,13 @@ export type RowFormat = Format | 'csv';
 // Warned about on stderr (keeps --format json stdout machine-readable), never truncated.
 const OVERSIZE_BYTES = 50_000;
 
-// Flatten embedded newlines so they can't break table column alignment; JSON output is left alone.
+// Flatten embedded newlines so they can't break table column alignment; JSON output keeps them as-is.
 function cell(value: unknown): string {
   return String(value ?? '').replace(/\s*\n\s*/g, ' ');
 }
 
-// RFC 4180, and deliberately not cell(): csv is the format for redirecting a result to a
-// file, so it keeps every character, embedded newlines included. What it cannot carry is
-// NULL vs empty string, or a value's type -- that is what json is for.
+// RFC 4180, deliberately not cell(): csv is the redirect-to-file format, so it keeps every
+// character, newlines included; what it cannot carry (NULL vs empty, types) is what json is for.
 function csvField(value: unknown): string {
   const text = value === null || value === undefined ? '' : String(value);
   return /["\r\n,]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
@@ -32,14 +31,8 @@ function warnOversize(bytes: number, rowCount: number): void {
   console.warn(`warning: result is ${Math.round(bytes / 1000)} KB across ${rowCount} row(s); consider a LIMIT, fewer columns, snippet() instead of whole values, or --format csv redirected to a file`);
 }
 
-// Header names come from a row wherever there is one: a statement's column list keeps
-// duplicates that the row object has already collapsed, so `SELECT a AS x, b AS x` would print
-// b's value under both headers. `columns` is the fallback that labels a 0-row result, and with
-// no rows and no statement (a bounded command that found nothing) csv writes nothing at all --
-// a bare newline would read to a csv parser as one empty record.
-// JSON.stringify throws on BigInt, and stores return int64 as BigInt (DuckDB does). A value
-// that fits a safe integer stays a number; a larger one becomes its decimal string, since a
-// JSON number cannot carry it losslessly.
+// JSON.stringify throws on BigInt, and stores return int64 as BigInt (DuckDB does): a value
+// that fits a safe integer stays a number, a larger one becomes its decimal string.
 const MAX_SAFE = BigInt(Number.MAX_SAFE_INTEGER);
 const bigintSafe = (_key: string, value: unknown): unknown => (typeof value === 'bigint' ? (value >= -MAX_SAFE && value <= MAX_SAFE ? Number(value) : value.toString()) : value);
 
@@ -49,8 +42,8 @@ export function stringifyJson(value: unknown, indent?: number): string {
 
 export function printRows(rows: Row[], format: RowFormat, columns?: string[]): void {
   if (format === 'csv') {
-    // Collapsed the same way a row object collapses them, so a statement naming a column
-    // twice describes itself identically whether it matched anything or not.
+    // Names from a row wherever there is one: the statement's column list keeps duplicates the
+    // row collapsed. Nothing at all with no row and no columns -- a bare newline is an empty record.
     const names = rows.length > 0 ? Object.keys(rows[0]) : [...new Set(columns ?? [])];
     if (names.length === 0) return;
     const rendered = [csvLine(names), ...rows.map((row) => csvLine(names.map((name) => row[name])))].join('\n');
@@ -64,12 +57,8 @@ export function printRows(rows: Row[], format: RowFormat, columns?: string[]): v
   warnOversize(Buffer.byteLength(rendered), rows.length);
 }
 
-// Streaming counterpart for the one unbounded caller, `sense sql`: rows arrive from an async
-// iterator (raw.prepare().iterate(), one microtask for the whole statement, not per row), so a
-// large result is never held here as rows and again as a rendered string. Table buffers by
-// necessity (a column is as wide as its widest cell, which the last row can change); json and
-// csv write row by row. The writes are synchronous, so when stdout is a pipe Node buffers what
-// the reader has not taken yet -- the saving is this module's copies, not the operating system's.
+// Streaming counterpart for the one unbounded caller, `sense sql`: the result is never held as
+// rows and again as a rendered string. Table buffers (column width depends on the last row); json/csv write row by row.
 export async function printRowStream(rows: AsyncIterable<Row>, format: RowFormat, columns: string[]): Promise<void> {
   const iterator = rows[Symbol.asyncIterator]();
   // One step before any write. FTS5 parses a MATCH expression at step time rather than at

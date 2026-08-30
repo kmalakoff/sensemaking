@@ -8,7 +8,7 @@ const PGC_GROUP_SIZE = 2;
 const OVERSIZE_TRIGGER_MULTIPLE = 2;
 
 // D5: segment.ts's unspaced-script set packs close to one token per character; Hangul is
-// spaced but still token-dense, added here as a conservative bound (one Unicode set, one home).
+// spaced but still token-dense and sits in this set as a conservative bound (one Unicode set, one home).
 const DENSE_SCRIPT = new RegExp(`[${UNSPACED_SCRIPTS}\\p{scx=Hangul}]`, 'u');
 
 // D5's size estimate: dense-script graphemes 1:1, everything else at 4 chars/token.
@@ -54,9 +54,8 @@ interface Part {
   startLine: number;
   endLine: number;
   text: string;
-  // true for a sub-line split piece (finalizePiece's splitLineText branch): its text is already
-  // the active mode's final text for its own slice of the line, not the whole line, so group()'s
-  // extent-based raw re-slice (startLine === endLine for every sibling sub-piece) must not touch it.
+  // True for a sub-line split piece: its text is already the final slice, not the whole line --
+  // group()'s extent-based raw re-slice must not touch it (siblings share startLine === endLine).
   final?: boolean;
 }
 
@@ -95,12 +94,8 @@ function pack(segments: string[], working: number): string[] {
   return groups;
 }
 
-// A single line's text, still over working after rule 5's line-split can't reduce a lone line
-// (the CJK case, one sentence-dense line with no newlines), falls back to Intl.Segmenter sentence
-// boundaries, then word boundaries for any one sentence still over working. Never splits inside a
-// grapheme either way (both are ECMA-402, the same proven component segment.ts uses for
-// graphemes). Mode-agnostic: the caller decides whether `text` is the raw line or its extracted
-// flavor -- this only packs whatever text it is given.
+// Line-split alone can't shrink a lone dense line (the CJK case): falls back to sentence then
+// word boundaries (Intl.Segmenter, the same grapheme-safe engine as segment.ts), mode-agnostic on `text`.
 function splitLineText(text: string, working: number): string[] {
   const sentences = segmentsOf(text, SENTENCE_SEGMENTER);
   const out: string[] = [];
@@ -130,10 +125,8 @@ function splitLineText(text: string, working: number): string[] {
 
 const ATOMIC_TYPES: ReadonlySet<BlockType> = new Set(['code', 'table', 'list']);
 
-// An atomic block's (code/table/list) piece is always a raw line slice: re-parsing a table's
-// later pieces without their header/delimiter rows demotes them to paragraph text. A non-atomic
-// piece is a raw line slice too when raw mode requested it; extracted mode re-parses and resolves
-// flavor as before.
+// Atomic (code/table/list) pieces are always a raw line slice: re-parsing a table's later pieces
+// without their header/delimiter rows would demote them to paragraph text.
 function piece(pieceLines: string[], startLine: number, endLine: number, blockType: BlockType, textMode: 'extracted' | 'raw'): Part {
   const text =
     ATOMIC_TYPES.has(blockType) || textMode === 'raw'
@@ -144,13 +137,8 @@ function piece(pieceLines: string[], startLine: number, endLine: number, blockTy
   return { startLine, endLine, text };
 }
 
-// A piece over working size that came from exactly one source line cannot be reduced by another
-// line-boundary pass (rule 5's gap); it is sliced instead, at sentence then word boundaries, over
-// the mode-resolved text piece() already produced -- so raw mode packs the raw line and extracted
-// mode packs its flavor-resolved text. Extents collapse to that one line for every sub-piece (F5:
-// re-derivation is by index over chunk()'s own deterministic output, not by a unique line range
-// per piece); `final` flags each sub-piece so group() knows not to re-derive its text from that
-// shared extent.
+// A one-line piece over working can't shrink via another line-boundary pass (rule 5's gap), so it
+// splits at sentence/word boundaries instead; `final` stops group() re-deriving its text by extent (F5).
 function finalizePiece(pieceLines: string[], startLine: number, endLine: number, working: number, blockType: BlockType, textMode: 'extracted' | 'raw'): Part[] {
   const p = piece(pieceLines, startLine, endLine, blockType, textMode);
   if (pieceLines.length === 1 && estimateTokens(p.text) > working) {
@@ -159,9 +147,8 @@ function finalizePiece(pieceLines: string[], startLine: number, endLine: number,
   return [p];
 }
 
-// A block over 2x working size splits at line boundaries into pieces each <= working size,
-// never mid-line. `seed`: pending tokens (a heading) the first piece must join, checked against
-// the limit too.
+// A block over 2x working size splits at line boundaries into pieces each <= working size, never
+// mid-line. `seed`: pending tokens (e.g. a heading) the first piece must join, checked against the limit.
 function splitOversizeBlock(lines: string[], startLine: number, endLine: number, working: number, blockType: BlockType, textMode: 'extracted' | 'raw', seed = 0): Part[] {
   const pieces: Part[] = [];
   let pieceLines: string[] = [];
@@ -256,8 +243,7 @@ export function group(blocks: Block[], body: string, opts?: ChunkOptions): Chunk
   const chunks: (Chunk & { final?: boolean })[] = [];
   for (const scope of splitScopes(blocks)) chunks.push(...groupScope(scope, lines, resolved));
   // 'raw': the chunk's own source lines verbatim, replacing the flavor-resolved join above (D9).
-  // A `final` chunk (a sub-line split) already carries its own slice's raw text -- re-slicing by
-  // extent would return the whole shared source line instead, once per sub-piece.
+  // A `final` chunk already carries its own slice's raw text; re-slicing by extent would return the whole shared line.
   const texted =
     resolved.text === 'raw'
       ? chunks.map((c) =>

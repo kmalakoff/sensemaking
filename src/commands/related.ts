@@ -18,15 +18,13 @@ export async function relatedNotes(store: Store, cfg: ResolvedConfig, pathArg: s
   const exclude = new Set([path, ...outbound, ...backlinks]);
 
   // Vectors are the only signal `related` has, so every way of not having them is an error
-  // naming the cause. An empty table then means one thing: nothing near in meaning that this
-  // note does not already link to, which is a real answer.
+  // naming the cause; an empty result means one thing, nothing near in meaning.
   const effective = resolveSearch(cfg, overrides);
   if (!embedEnabled(cfg)) {
     throw new SenseError('EMBED_DISABLED', 'related ranks notes by meaning, and this tree has no embedding model; add an "embed" block naming one to sense.config.json (a Hugging Face id fetches automatically at first use; `sense download` prefetches it) -- search works without it, on words and links');
   }
-  // search gates on the same signal (see wantsVectors above); reading it here too keeps a
-  // preset's declared signals meaning one thing. Without this, an overlapping vectors-on
-  // preset's vectors would answer for a scope that declined them.
+  // search gates on the same signal, so a preset's declared signals mean one thing: without
+  // this check an overlapping vectors-on preset would answer for a scope that declined them.
   if (effective.signals.vectors === undefined) {
     throw new SenseError('PRESET_NOT_SEMANTIC', `preset "${effective.presetName}" has no "vectors" signal, so this scope has no vectors and related has no other signal; search it instead (words and links), or add "vectors" to that preset's signals`);
   }

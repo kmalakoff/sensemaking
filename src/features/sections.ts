@@ -1,10 +1,10 @@
-import { estimateTokens } from '../chunk/index.ts';
-import { fenceTracker } from './fences.ts';
+import type { Block } from '../chunk/index.ts';
+import { estimateTokens, parse } from '../chunk/index.ts';
+import { countLines } from '../scan/frontmatter.ts';
 import type { Feature } from './types.ts';
 
 // sections(path, idx, level, heading, start_line, end_line, tokens): the heading outline,
-// 1-indexed over the raw file so a row is a direct Read range; tokens is estimateTokens (D5),
-// CJK-aware rather than a flat chars/4.
+// 1-indexed over the raw file so a row is a direct Read range; tokens is estimateTokens (D5), CJK-aware.
 
 export interface Section {
   level: number;
@@ -14,20 +14,15 @@ export interface Section {
   tokens: number;
 }
 
-// Headings outside fenced code blocks.
-function extract(raw: string): Section[] {
-  const lines = raw.split('\n');
-  const found: Section[] = [];
-  const fence = fenceTracker();
-  for (let i = 0; i < lines.length; i++) {
-    if (fence.feed(lines[i])) continue;
-    if (fence.inFence) continue;
-    const m = lines[i].match(/^(#{1,6}) +(.*)/);
-    if (m) found.push({ level: m[1].length, heading: m[2].trim(), startLine: i + 1, endLine: lines.length, tokens: 0 });
-  }
+// Heading blocks parse() already found (mdast/CommonMark fences), offset back onto the raw file;
+// a section runs to just before the next heading, or EOF.
+function sectionsFromBlocks(blocks: Block[], raw: string, body: string): Section[] {
+  const rawLines = raw.split('\n');
+  const offset = rawLines.length - countLines(body);
+  const found: Section[] = blocks.filter((b) => b.type === 'heading').map((b) => ({ level: b.depth ?? 1, heading: (b.text ?? '').trim(), startLine: b.startLine + offset, endLine: rawLines.length, tokens: 0 }));
   for (let s = 0; s < found.length; s++) {
     if (s + 1 < found.length) found[s].endLine = found[s + 1].startLine - 1;
-    const text = lines.slice(found[s].startLine - 1, found[s].endLine).join('\n');
+    const text = rawLines.slice(found[s].startLine - 1, found[s].endLine).join('\n');
     found[s].tokens = Math.ceil(estimateTokens(text));
   }
   return found;
@@ -38,7 +33,9 @@ export const sections: Feature = {
   async schema(db) {
     await db.exec(`CREATE TABLE IF NOT EXISTS sections ("path" TEXT, idx INTEGER, level INTEGER, heading TEXT, start_line INTEGER, end_line INTEGER, tokens INTEGER, PRIMARY KEY ("path", idx))`);
   },
-  extract,
+  extract(raw, body, _search, _data, _cfg, blocks) {
+    return sectionsFromBlocks(blocks ?? parse(body), raw, body);
+  },
   async remove(db, paths) {
     if (paths.length === 0) return;
     await db.runBatch(

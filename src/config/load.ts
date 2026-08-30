@@ -19,9 +19,8 @@ const MIGRATIONS: Record<number, (cfg: Record<string, unknown>) => Record<string
   // v1 -> v2: features block introduced, opt-out features enabled (matches the old implicit
   // behavior of `links` etc. not existing). embed stays absent -- opt-in.
   1: (cfg) => ({ ...cfg, version: 2, features: Object.fromEntries(V2_OPT_OUT_NAMES.map((name) => [name, true])) }),
-  // v2 -> v3: mechanical-minimal, by decision -- only what keeps an existing config loading.
-  // No restructuring, no preset inference, no query rewriting; real trees get hand-migrated
-  // separately to actually use presets.
+  // v2 -> v3: mechanical-minimal by decision -- only what keeps an existing config loading (no
+  // restructuring, no preset inference, no query rewriting); real trees get hand-migrated to use presets.
   2: (cfg) => {
     const { scan, defaults, features, checks, queries, ...rest } = cfg;
     const scanInclude = (scan as { include: string[] }).include;
@@ -49,9 +48,8 @@ const MIGRATIONS: Record<number, (cfg: Record<string, unknown>) => Record<string
     // features.embed false becomes semantic:false on every preset produced here.
     const prevFeatures = (features as Record<string, unknown> | undefined) ?? {};
     const embedWasOff = prevFeatures.embed === false;
-    // Object form carried provider settings (model/type/url/key), not a toggle -- they move
-    // to the v3 top-level `embed` block verbatim; dropping them would silently switch an
-    // api tree back to the built-in static model.
+    // Object form carries provider settings (model/type/url/key), not a toggle -- they move to
+    // the v3 top-level `embed` block verbatim; dropping them would silently switch an api tree to the static model.
     const embedProvider = typeof prevFeatures.embed === 'object' && prevFeatures.embed !== null ? prevFeatures.embed : undefined;
     const { embed: _embed, ...restFeatures } = prevFeatures;
 
@@ -59,8 +57,6 @@ const MIGRATIONS: Record<number, (cfg: Record<string, unknown>) => Record<string
     if (defaultWhere !== undefined) defaultPreset.where = defaultWhere;
     if (embedWasOff) defaultPreset.semantic = false;
 
-    // checks (assertions over saved queries) was removed in v3; its queries still run under
-    // `queries`, just without the pass/fail assertion -- reachable now only as a saved query.
     if (checks !== undefined) {
       console.error('sense: v2 "checks" was removed in v3 (sense check no longer asserts on saved queries); its queries are carried over under "queries" -- a returned row set is now the reader\'s judgment');
     }
@@ -97,23 +93,14 @@ const MIGRATIONS: Record<number, (cfg: Record<string, unknown>) => Record<string
       result.embed = { model: (prev.model as string | undefined) ?? DEFAULT_EMBED_MODEL, type: (prev.type as string | undefined) ?? 'static', ...(prev.url !== undefined ? { url: prev.url } : {}), ...(prev.key !== undefined ? { key: prev.key } : {}) };
     } else {
       delete result.embed;
-      // Dropping settings silently would look like a bug in a tree that had configured an
-      // api endpoint and then turned vectors off; say it, since v4 has no way to carry
-      // provider settings for a tree that does not embed.
+      // Dropping settings silently would look like a bug in a tree that configured an api endpoint
+      // then turned vectors off; say it, since v4 has no way to carry provider settings for a tree that doesn't embed.
       if (Object.keys(prev).length > 0) console.error('sense: every preset has "semantic": false, so v4 drops the "embed" block (vectors stay off); re-add it, or set a preset\'s semantic back to true, to turn them on');
     }
     return result;
   },
-  // v4 -> v5: embed.type renames to embed.provider -- there are only three wire protocols
-  // now, so a provider name fits the shape better than a loader "type". "api" auto-migrates to
-  // "openai", the wire protocol it always was; any other value is carried over verbatim, since
-  // it is what v5 shape validation names the fix for.
-  //
-  // Also folded in here: a preset's `semantic` migrates to `signals`. false becomes an
-  // explicit exhaustive weight map (words, plus links when that feature is on, each at weight
-  // 1); true or absent needs no key at all, since default-on already means every signal whose
-  // prerequisites hold, each at weight 1. `semantic` leaves the config surface entirely once
-  // this step has run.
+  // v4 -> v5: embed.type renames to embed.provider ("api" migrates to "openai", the wire protocol
+  // it always was; other values pass through). A preset's `semantic` also migrates to `signals` (false -> explicit weights, true/absent -> no key).
   4: (cfg) => {
     const prevEmbed = cfg.embed as Record<string, unknown> | undefined;
     const result: Record<string, unknown> = { ...cfg, version: 5 };
@@ -221,9 +208,8 @@ export function loadConfig(explicitPath?: string): ResolvedConfig {
   const raw = readFileSync(configPath, 'utf8');
   const parsed: unknown = JSON.parse(raw);
 
-  // Ahead of both the version gate and legacy/current shape checks: a non-object file (or
-  // an array -- typeof [] is also 'object') is malformed at every version, so it gets one
-  // error regardless of which branch would otherwise run.
+  // Ahead of both the version gate and shape checks: a non-object file (or array -- typeof []
+  // is also 'object') is malformed at every version, so it gets one error regardless of branch.
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
     throw new SenseError('CONFIG_INVALID', `${configPath}: config must be a JSON object`);
   }

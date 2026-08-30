@@ -5,26 +5,18 @@ import { asCosine, sampleEvenly } from '../vectors.ts';
 import { rewriteUpdate } from './batch.ts';
 import { duckdbApi } from './native.ts';
 
-// This store keeps vectors as native FLOAT[dims] arrays (dims fixed at DDL time by
-// duckdb/open.ts's ensureSchema, from embed/types.ts's STORE_DIMS) and scans them with
-// array_cosine_similarity, pushing top-k into SQL instead of pulling every row into JS --
-// sqlite's int8+scale BLOB scan (src/store/sqlite/vectors.ts) is the other store's own
-// representation and stays as it is. Every function here takes `dims` as a parameter rather
-// than importing STORE_DIMS directly, so it is testable at any width (store.ts wires the real
-// constant at the call site).
-//
-// A value import of '@duckdb/node-api' must never sit at module top level, or a sqlite-only
-// tree would resolve this optional dependency just by importing store/index.ts -- native.ts's
-// shared duckdbApi() (not a bare import of its own) is what keeps that lazy and reuses whatever
-// open.ts already resolved, including via an on-demand install (see native.ts).
+// This store keeps vectors as native FLOAT[dims] arrays (dims fixed at DDL time by open.ts's ensureSchema, from embed/types.ts's STORE_DIMS) and
+// scans them with array_cosine_similarity, pushing top-k into SQL instead of pulling every row into JS; sqlite's int8+scale BLOB scan is its own representation. Every function here takes `dims` as a parameter rather than importing STORE_DIMS directly, so it stays testable at any width.
+
+// A value import of '@duckdb/node-api' must never sit at module top level, or a sqlite-only tree would resolve this optional dependency
+// just by importing store/index.ts; native.ts's shared duckdbApi() keeps that lazy and reuses whatever open.ts already resolved.
 
 // A bind position whose type is left to auto-inference (safe for plain strings/numbers; only
 // the vector ARRAY positions below need an explicit type -- see writeVectorBatch's comment).
 const untyped = undefined as unknown as DuckDBType;
 
-// The DDL-fixed array width can exceed a vector's actual length (a hypothetical model sliced
-// under the column's width); zero-padding leaves cosine scores unchanged since the added
-// dimensions contribute nothing to either vector's dot product or norm.
+// The DDL-fixed array width can exceed a vector's actual length (a hypothetical model sliced under the column's width);
+// zero-padding leaves cosine scores unchanged since the added dimensions contribute nothing to either vector's dot product or norm.
 function padded(values: ArrayLike<number>, dims: number): number[] {
   const out = new Array<number>(dims).fill(0);
   for (let d = 0; d < Math.min(values.length, dims); d++) out[d] = values[d];
@@ -35,9 +27,8 @@ function inClause(column: string, count: number): string {
   return `${column} IN (${Array.from({ length: count }, () => '?').join(', ')})`;
 }
 
-// Rows arrive int8-quantized with a per-vector scale (the wire format embed/query.ts produces
-// for every store, see toStore); dequantizing into a plain float array is this store's own
-// representation choice, so both stores are handed the same vectors and diverge only here.
+// Rows arrive int8-quantized with a per-vector scale (the wire format embed/query.ts produces for every store, see toStore);
+// dequantizing into a plain float array is this store's own representation choice, so both stores are handed the same vectors and diverge only here.
 function dequantize(row: VectorWriteRow, dims: number): number[] {
   const q = new Int8Array(row.vector.buffer, row.vector.byteOffset, row.vector.byteLength);
   return padded(
@@ -46,12 +37,8 @@ function dequantize(row: VectorWriteRow, dims: number): number[] {
   );
 }
 
-// One runBatch-equivalent call per provider batch: a single multi-row UPDATE (batch.ts's
-// rewriteUpdate, the same rewrite Connection.runBatch uses), bound directly against the native
-// connection because the vector column needs an explicit ARRAY(DOUBLE, dims) bind type --
-// automatic type inference on the raw values misreads an all-integer first component (a real
-// vector's exact 0.0 is common) as an INTEGER array and silently truncates the rest of the row
-// (verified against a live connection: an untyped bind of [0, 0.35, 0.1, -0.2] stores [0,0,0,0]).
+// One runBatch-equivalent call per provider batch: a single multi-row UPDATE (batch.ts's rewriteUpdate), bound directly against the
+// native connection because the vector column needs an explicit ARRAY(DOUBLE, dims) bind type -- auto inference misreads an all-integer first component as INTEGER and silently truncates the rest (verified live: an untyped bind of [0, 0.35, 0.1, -0.2] stores [0,0,0,0]).
 export async function writeVectorBatch(duckdb: DuckDBConnection, conn: Connection, dims: number, rows: VectorWriteRow[]): Promise<void> {
   if (rows.length === 0) return;
   const { arrayValue, ARRAY, DOUBLE } = await duckdbApi();
@@ -75,9 +62,8 @@ export async function writeVectorBatch(duckdb: DuckDBConnection, conn: Connectio
   });
 }
 
-// Best chunk per file by cosine, its line range riding along, entirely in SQL: arg_max picks
-// the winning chunk's line range from the same row max(score) came from, per path. An empty
-// `allowed` set matches sqlite's scan (every row filtered out) without touching the table.
+// Best chunk per file by cosine, its line range riding along, entirely in SQL: arg_max picks the winning chunk's line range from the same row max(score) came from, per path.
+// An empty `allowed` set matches sqlite's scan (every row filtered out) without touching the table.
 export async function scanCandidates(duckdb: DuckDBConnection, qv: Float32Array, dims: number, fetch: number, allowed?: Set<string>): Promise<VectorCandidate[]> {
   if (allowed && allowed.size === 0) return [];
   const { arrayValue, ARRAY, DOUBLE } = await duckdbApi();
@@ -104,10 +90,8 @@ export async function scanCandidates(duckdb: DuckDBConnection, qv: Float32Array,
   }
 }
 
-// Note-to-note similarity is the max cosine over (target chunk, other chunk) pairs, pushed
-// into one native scan: the sampled target vectors become a small VALUES list, cross-joined
-// against every stored vector and reduced with max()/GROUP BY, so the O(target x stored) cost
-// the plan measures (12.7s at 201 chunks/note in JS) runs vectorized instead of scalar.
+// Note-to-note similarity is the max cosine over (target chunk, other chunk) pairs, pushed into one native scan: the sampled target vectors become
+// a small VALUES list, cross-joined against every stored vector and reduced with max()/GROUP BY, so the O(target x stored) cost (12.7s at 201 chunks/note in JS) runs vectorized instead of scalar.
 export async function scanSimilar(duckdb: DuckDBConnection, conn: Connection, dims: number, path: string, opts: { exclude: Set<string>; allowed?: Set<string>; k: number }): Promise<VectorSimilar[]> {
   if (opts.allowed && opts.allowed.size === 0) return [];
   const targetStmt = await conn.prepare('SELECT vector FROM embeddings WHERE "path" = ? AND vector IS NOT NULL ORDER BY chunk');

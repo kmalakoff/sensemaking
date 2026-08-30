@@ -6,7 +6,7 @@ Subagents dispatched during a release are spawned with `model: sonnet`. Reviews 
 
 1. `npm test` and `npx tsds validate`, both clean. `npm run test:engines` when the release touches anything platform-near (SQLite pragmas, fs, watch): it runs the suite on the oldest supported Node, which is where "works on my machine" breaks.
 
-   `test/integration/live.test.ts` is the part CI cannot run: it talks to real endpoints, one gate variable per [INTEGRATIONS.md](INTEGRATIONS.md) row, read from `.env.test` (gitignored). A release that touches `src/embed/` runs it with the file populated, and the rows it verified get that day's date. Unset gates skip silently, so a green `npm test` alone does not mean the live paths ran. Check the count.
+   `test/integration/live.test.ts` is the part CI cannot run: it talks to real endpoints, one gate variable per [INTEGRATIONS.md](INTEGRATIONS.md) row, read from `.env.test` (gitignored). A release that touches `src/embed/` runs it with the file populated, `SENSE_TEST_ENV=local-release npm test`, and the rows it verified get that day's date. In that mode, a gate this machine owes and lacks fails outright, naming the fix, rather than skipping silently.
 
    ```
    SENSE_TEST_COHERE_KEY=...                          # cohere row
@@ -24,7 +24,7 @@ Subagents dispatched during a release are spawned with `model: sonnet`. Reviews 
 
    One command on purpose: the gate was a list of manual steps for its first nine releases, and the fever quality eval was skipped by every sitting since 0.6.0 because nothing forced it. Fetches (corpora, npm baselines, the fever wiki dump) cache through `benchmark/lib/cache.mjs`, so only the first run on a machine pays the downloads.
 
-   Save this sitting's output as `benchmark/reports/YYYY-MM-DD-<topic>.md` (today's date, topic naming what it gates, e.g. `release-gate`), with a frontmatter block naming date, package/chunk/schema versions, machine, node, corpora, models, and the headline metrics BENCHMARKING.md's numbers-of-record table tracks. This is a new file per sitting, never an edit to a previous one. Delete the previous terminal report when the new one lands: the numbers-of-record link and the new report's comparison columns carry its values, and git keeps the body.
+   Save this sitting's output as `benchmark/reports/YYYY-MM-DD-<topic>.md` (today's date, topic naming what it gates, e.g. `release-gate`), with a frontmatter block naming date, package/chunk/schema versions, machine, node, corpora, models, and the headline metrics BENCHMARKING.md's numbers-of-record table tracks. This is a new file per sitting, never an edit to a previous one. Repoint whatever named the deleted report in its `superseded_by` at this new one, or the chain dangles. Delete the previous terminal report when the new one lands: the numbers-of-record link and the new report's comparison columns carry its values, and git keeps the body.
 
 The stress corpus packs every measured shape cliff into one tree (1MB note, 200 headings/note, 100 links/note, 300 fields; see benchmark/lib/corpus.mjs); its rows moving means a fixed cliff regressed, regardless of how flat the hub rows look.
 

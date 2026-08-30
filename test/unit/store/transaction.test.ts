@@ -73,9 +73,8 @@ describe('withTransaction', () => {
     const b = makeConn();
     await withTransaction(a.conn, async () => {
       a.db.exec(`INSERT INTO t VALUES ('a')`);
-      // While a's transaction is open, b must still get its own real BEGIN -- if depth
-      // were shared, this would be (wrongly) treated as nested and issue no BEGIN of its own,
-      // leaving b's insert auto-committed instead of rolled back below.
+      // While a's transaction is open, b must still get its own real BEGIN -- if depth were shared,
+      // this would be (wrongly) treated as nested and issue no BEGIN of its own, leaving b's insert auto-committed instead of rolled back below.
       await assert.rejects(
         () =>
           withTransaction(b.conn, async () => {

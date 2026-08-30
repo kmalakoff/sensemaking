@@ -4,9 +4,8 @@ import { checkLanguageFit } from '../../../src/embed/langfit.ts';
 import type { EmbedProvider } from '../../../src/embed/types.ts';
 import { CHINESE_SENTENCES, openTree, tmpTree } from '../../lib/tree.ts';
 
-// languageDistribution now lives in src/embed/distribution.ts (split out so status.ts's read of
-// the persisted counts never pulls in franc-min), but is exercised here alongside
-// checkLanguageFit as one cohesive feature: the persisted state IS checkLanguageFit's contract.
+// languageDistribution lives in src/embed/distribution.ts so status.ts's read of persisted
+// counts never pulls in franc-min; tested here since that persisted state is checkLanguageFit's contract.
 
 // Reliable single-language pools, verified against the real franc-min classifier (no mocking a
 // parser, per house rule): CHINESE_SENTENCES all classify as 'cmn', these as 'eng'/'spa'.

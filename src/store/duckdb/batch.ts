@@ -1,16 +1,5 @@
-// Rewrites a single-row parameterized statement -- the shape every write loop in this codebase
-// prepares once and calls with N different param sets -- into one statement DuckDB executes over
-// all N rows in a single round trip. A columnar engine's cost is row-at-a-time writes themselves,
-// not just the async crossing to reach them, so this recognizes the three statement shapes the
-// store issues (INSERT ... VALUES (...), UPDATE ... SET ... WHERE ..., DELETE ... WHERE ...) and
-// rewrites each into a multi-row form, verified against a live DuckDB connection at
-// implementation time (PRINCIPLES: documented-means-tested). Unrecognized SQL returns null;
-// connection.ts's runBatch falls back to a prepare-once, bind-and-run loop -- still one call
-// from outside the store.
-//
-// This only ever runs against sense's own SQL literals (reconcile, the feature hooks), never
-// arbitrary user SQL (`sense sql` is a separate, unrewritten passthrough), so the shapes below
-// are exactly what those call sites emit, not a general parser.
+// Rewrites the store's single-row parameterized INSERT/UPDATE/DELETE into one multi-row statement --
+// DuckDB's columnar engine pays for row-at-a-time writes, not just the round trip (PRINCIPLES: documented-means-tested).
 
 const INSERT_RE = /^(INSERT\s+(?:OR\s+\w+\s+)?INTO\s+\S+\s*\([^)]*\)\s*VALUES\s*)\(([^()]*)\)(.*)$/is;
 const UPDATE_RE = /^UPDATE\s+(\S+)\s+SET\s+(.+?)\s+WHERE\s+(.+)$/is;
@@ -20,9 +9,8 @@ function placeholderCount(tuple: string): number {
   return (tuple.match(/\?/g) ?? []).length;
 }
 
-// "a = ?, b = ?" or "a = ? AND b = ?" -> ["a", "b"]. Only ever called on clauses already
-// shaped that way by the regexes above; a clause that doesn't fit yields a column list whose
-// length won't match the caller's row width, which rewriteUpdate/rewriteDelete then reject.
+// "a = ?, b = ?" or "a = ? AND b = ?" -> ["a", "b"]. A clause that doesn't fit yields a shorter
+// list, which rewriteUpdate/rewriteDelete reject as a width mismatch.
 function equalityColumns(clause: string, sep: RegExp): string[] | null {
   const parts = clause.split(sep).map((p) => p.trim());
   const cols: string[] = [];

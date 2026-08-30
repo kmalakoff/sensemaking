@@ -24,8 +24,7 @@ export function getProvider(cfg: Config): Promise<EmbedProvider> {
   const factory = REGISTRY[e.provider];
   if (!factory) throw new SenseError('EMBED_MODEL', `embed.provider "${e.provider}" has no provider implementation in this build`);
   // Every input that shapes the provider is in the key: two trees sharing an endpoint and
-  // model but declaring different languages or reading different key env vars are two
-  // providers, not one, however long a process lives.
+  // model but declaring different languages or key env vars are two providers, not one.
   const sig = JSON.stringify([e.provider, e.model, e.url ?? '', e.key ?? '', e.languages ?? []]);
   let p = providers.get(sig);
   if (!p) {

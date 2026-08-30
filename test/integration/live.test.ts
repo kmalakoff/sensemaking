@@ -3,6 +3,7 @@ import { type SenseError, search } from 'sensemaking';
 import { cohereProvider } from '../../src/embed/cohere.ts';
 import { openaiProvider } from '../../src/embed/openai.ts';
 import type { EmbedProvider } from '../../src/embed/types.ts';
+import { type GateName, gate } from '../lib/gate.ts';
 import { CHINESE_SENTENCES, openConfig, tmpTree, writeNote } from '../lib/tree.ts';
 
 // Gated on a variable in .env.test (gitignored) per INTEGRATIONS.md row; an unconfigured machine
@@ -25,10 +26,8 @@ function cosine(a: Float32Array, b: Float32Array): number {
   return dot / (Math.sqrt(na) * Math.sqrt(nb));
 }
 
-// A full batch at the provider's own cap, which is what a first embed of a real vault sends
-// and what every live test before this one avoided: whether a server accepts an array that
-// size, returns one vector per input, and returns them in input order are all per-vendor
-// facts, and a wrong order or a dropped input silently attaches vectors to the wrong chunks.
+// A full batch at the provider's cap tests per-vendor facts: whether a server accepts an
+// array that size, returns one vector per input, and keeps input order -- a wrong order or dropped input silently attaches vectors to the wrong chunks.
 async function assertFullBatch(provider: EmbedProvider): Promise<void> {
   const marker = LANGUAGE_CASES.en.target;
   const alone = (await provider.embedDocuments([marker]))[0];
@@ -49,8 +48,9 @@ async function assertFullBatch(provider: EmbedProvider): Promise<void> {
 
 // Skipped: the Cohere account is out of credits, so the live calls return HTTP 429.
 describe.skip('cohere live', () => {
-  before(function () {
-    if (!process.env.SENSE_TEST_COHERE_KEY) this.skip();
+  before(() => {
+    // Credentials never skip: a missing key is a broken environment, not an absence to gate on.
+    if (!process.env.SENSE_TEST_COHERE_KEY) throw new Error('SENSE_TEST_COHERE_KEY is not set; add it to .env.test');
   });
 
   it('embeds documents and a query against the real API', async function () {
@@ -71,9 +71,8 @@ describe.skip('cohere live', () => {
   });
 });
 
-// Same sense per language: one note about photosynthesis, one about a capital city, and a
-// query that paraphrases the first without repeating it. Which note it reaches is the model's
-// answer, not the tokenizer's, so the assertion holds for any model that declares the language.
+// Same sense per language: one note about photosynthesis, one about a capital city, and a query that paraphrases the first without repeating it.
+// Which note it reaches is the model's answer, not the tokenizer's, so the assertion holds for any model that declares the language.
 interface LanguageCase {
   target: string;
   far: string;
@@ -108,11 +107,8 @@ const LANGUAGE_CASES: Record<string, LanguageCase> = {
   },
 };
 
-// Ollama and LM Studio are the same `openai` provider at different endpoints, so they are the
-// same suite twice. <VENDOR>_URL gates it; _MODEL names the tag; _LANGUAGES is the model's
-// declared language list, passed straight through as the config's embed.languages, so a
-// machine tests exactly what its model supports and nothing it does not. The defaults are the
-// pair INTEGRATIONS.md measured; any other model names both.
+// Ollama and LM Studio are the same `openai` provider at different endpoints, tested via <VENDOR>_URL/_MODEL/_LANGUAGES envs.
+// _LANGUAGES passes straight through as embed.languages, so a machine tests only what its model supports; defaults are the pair INTEGRATIONS.md measured, any other model must name both.
 function httpSuite(vendor: string, defaults?: { model: string; languages: string }): void {
   const url = process.env[`SENSE_TEST_${vendor}_URL`];
   const model = process.env[`SENSE_TEST_${vendor}_MODEL`] ?? defaults?.model;
@@ -121,7 +117,7 @@ function httpSuite(vendor: string, defaults?: { model: string; languages: string
 
   describe(`${vendor.toLowerCase()} live`, () => {
     before(function () {
-      if (!url) this.skip();
+      gate(this, vendor.toLowerCase() as GateName, !!url, `set SENSE_TEST_${vendor}_URL in .env.test`);
       // Gated in but incomplete: a mode, not a skip, and misconfiguration is an error.
       if (!model) throw new Error(`SENSE_TEST_${vendor}_URL is set but SENSE_TEST_${vendor}_MODEL names no model`);
     });

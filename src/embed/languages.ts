@@ -1,7 +1,5 @@
-// HF model cards declare languages as ISO 639-1 tags (e.g. "zh"); franc-min reports ISO 639-3
-// (e.g. "cmn"). This bridges the two for comparison. Limited to franc-min's own 82-language
-// data (README table, https://github.com/wooorm/franc), so every value here is a code franc-min
-// can actually emit; a declared tag with no entry here is compared as-is.
+// HF model cards declare languages as ISO 639-1 (e.g. "zh"); franc-min reports ISO 639-3 (e.g.
+// "cmn"). Limited to franc-min's own 82-language table (https://github.com/wooorm/franc).
 const ISO_639_1_TO_3: Record<string, string> = {
   ar: 'arb',
   am: 'amh',

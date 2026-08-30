@@ -22,17 +22,13 @@ const BLOCK_TYPES: Partial<Record<RootContent['type'], BlockType>> = {
   blockquote: 'blockquote',
 };
 
-// The five extensions extract.ts/group.ts actually consume, imported individually rather than
-// through micromark-extension-gfm/mdast-util-gfm: those bundles also pull in gfm-tagfilter,
-// an HTML-serialization sanitizer this library never uses (no htmlExtensions call anywhere).
-// micromark and mdast-util-from-markdown each already flatten an extensions array themselves,
-// so no combine-extensions helper is needed here.
+// Imported individually, not via micromark-extension-gfm/mdast-util-gfm: those bundles also pull
+// in gfm-tagfilter, an HTML sanitizer this library never uses (no htmlExtensions call anywhere).
 const EXTENSIONS = [gfmAutolinkLiteral(), gfmFootnote(), gfmStrikethrough(), gfmTable(), gfmTaskListItem()];
 const MDAST_EXTENSIONS = [gfmAutolinkLiteralFromMarkdown(), gfmFootnoteFromMarkdown(), gfmStrikethroughFromMarkdown(), gfmTableFromMarkdown(), gfmTaskListItemFromMarkdown()];
 
-// Top-level blocks of a markdown body, typed and line-extent bounded. Extents come from
-// mdast's own node.position, never a regex guess at where a block starts or ends; GFM adds
-// tables, task lists, footnotes and strikethrough to the CommonMark set fromMarkdown parses.
+// Top-level blocks of a markdown body, typed and line-extent bounded from mdast's own
+// node.position (never a regex guess). GFM extensions add tables, task lists, footnotes, strikethrough.
 export function parse(body: string): Block[] {
   const tree = fromMarkdown(body, { extensions: EXTENSIONS, mdastExtensions: MDAST_EXTENSIONS });
   return tree.children.map((node) => {

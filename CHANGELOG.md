@@ -2,6 +2,22 @@
 
 All notable changes to sensemaking are documented here.
 
+## [0.19.0] - 2026-08-30
+
+### Added
+
+- `turso` joins `sqlite` and `duckdb` as a `store` option. The first command that opens a turso tree installs `@tursodatabase/database` on its own. Lexical search is Tantivy rather than FTS5, with an ngram-tokenized sidecar index serving Chinese, Japanese, Thai, Khmer, Lao, and Burmese; a quoted hyphenated phrase (`"customer-facing"`) matches the same notes it does on sqlite, where duckdb diverges. Vectors are native `F32_BLOB` columns. Two gaps are declared, not silent: `has`/`basename`/`segment` are not available (the client cannot register SQL functions), and `sense watch` errors at start, as it does on duckdb.
+
+### Changed
+
+- `sense status` reports the embedding model's language fit as one of five states rather than one line: declared in `embed.languages`, declared by the model card, none declared by the card, unresolved because the card could not be read, or absent for a local-path model, which has no card by design. In JSON, `languages` keeps its shape and a `languagesState` field names which of those applies.
+- A file that changed is parsed once per index pass rather than twice. Reconcile already parsed it to work out its chunk boundaries, and the embedding step then re-read and re-parsed the same file to recover the chunk text; it now takes that text from reconcile directly. Vectors are byte-identical. The second parse still happens when the two steps run in different commands (`sense map` today, `sense search` tomorrow, or indexing done by a background `sense watch`), and only for the files that actually changed.
+- The heading outline for the `sections` table is built from the parse that already ran, instead of walking every line a second time with a separate fence tracker. The table is byte-identical, including for indented fences, where the two fence rules could have disagreed.
+
+### Fixed
+
+- A model card that could not be read failed silently, leaving the language-fit check off with nothing said. It now prints one line naming the consequence and the fix, and still retries on the next run. The check is what makes a default English model safe on a tree in another language, so its failure being quiet was the problem.
+
 ## [0.18.4] - 2026-08-30
 
 ### Fixed

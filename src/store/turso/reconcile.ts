@@ -6,31 +6,31 @@ import { progress } from '../../output/progress.ts';
 import type { ParsedDoc } from '../../scan/index.ts';
 import { listFiles, RESERVED_COLUMNS } from '../../scan/index.ts';
 import { reparseFiles } from '../../scan/reparse.ts';
+import { hasUnspacedRun } from '../../text/segment.ts';
 import { getColumns, getMeta, quoteIdent, setMeta } from '../shared.ts';
 import { withTransaction } from '../transaction.ts';
 import type { Connection } from '../types.ts';
 
-// Fork of sqlite/reconcile.ts (house precedent: each store owns its engine-specific SQL), not
-// duckdb's, even though duckdb's content handling is the structurally closer of the two. duckdb
-// dropped sqlite's reconcile_max_ms bookkeeping entirely, and this store's busy timeout (open.ts)
-// is derived from exactly that recorded value -- forking duckdb's file would lose it silently.
-// content itself follows duckdb's shape instead: a plain table, no rowid coupling, no FTS index
-// (phase 2's job, not reconcile's), and no `_seg` sidecars (turso's unspaced-script path is not
-// FTS5-shaped).
+// Fork of sqlite/reconcile.ts, not duckdb's, so this store keeps reconcile_max_ms bookkeeping
+// (open.ts's busy timeout derives from it). content is a plain table with "_ngram" sidecars for lexical.ts.
 const CORE_FRONTMATTER_COLUMNS = new Set(['path', '_mtime', '_ctime', '_size', '_parse_error']);
 
-// Not a compile-time cap on ALTER TABLE ADD COLUMN (spike-measured: turso accepts 10,000 with no
-// error). The real fence is a SELECT projecting more than this many result columns, which fails
-// to prepare (spike-measured, both `SELECT *` and an explicit list), so a wide frontmatter table
-// would pass every write silently and only break the first time something selects across it.
-// Enforced here, before ALTER, the same shape as sqlite's compile-time fence.
+// '' when the field has no unspaced-script run (the common case), so the ngram index carries
+// nothing for it -- same "pay for nothing when absent" shape as sqlite's segmentField sidecars.
+function ngramSidecar(text: string): string {
+  return hasUnspacedRun(text) ? text : '';
+}
+
+// Not a compile-time cap on ALTER TABLE ADD COLUMN (spike-measured: turso accepts 10,000 with
+// no error); the real fence is a SELECT projecting more than this many result columns, which fails to prepare.
 const MAX_FRONTMATTER_COLUMNS = 2000;
 
 // No rowid coupling (unlike sqlite's FTS5 content): `path` is content's own primary key.
-const INSERT_CONTENT_SQL = `INSERT INTO content ("path", title, summary, text) VALUES (?, ?, ?, ?)`;
+const INSERT_CONTENT_SQL = `INSERT INTO content ("path", title, summary, text, title_ngram, summary_ngram, text_ngram) VALUES (?, ?, ?, ?, ?, ?, ?)`;
 
 function contentRow(doc: ParsedDoc): unknown[] {
-  return [doc.relPath, doc.search.title, doc.search.summary, doc.search.text];
+  const { title, summary, text } = doc.search;
+  return [doc.relPath, title, summary, text, ngramSidecar(title), ngramSidecar(summary), ngramSidecar(text)];
 }
 
 export async function reconcile(conn: Connection, cfg: Config, baseDir: string): Promise<{ parsed: number; warnings: string[] }> {
@@ -69,7 +69,7 @@ export async function reconcile(conn: Connection, cfg: Config, baseDir: string):
   // Columns the frontmatter upsert actually writes: core + parsed frontmatter keys, never a
   // feature-owned reserved column (see CORE_FRONTMATTER_COLUMNS above).
   const writableColumns = allColumns.filter((c) => CORE_FRONTMATTER_COLUMNS.has(c) || !RESERVED_COLUMNS.has(c));
-  // ON CONFLICT UPDATE (not OR REPLACE) keeps the row's identity stable across reparses.
+  // ON CONFLICT UPDATE, rather than the delete-and-insert `OR` clause, keeps the row's identity stable across reparses.
   const insertSql = `INSERT INTO frontmatter (${writableColumns.map(quoteIdent).join(', ')}) VALUES (${writableColumns.map(() => '?').join(', ')}) ON CONFLICT("path") DO UPDATE SET ${writableColumns
     .filter((c) => c !== 'path')
     .map((c) => `${quoteIdent(c)} = excluded.${quoteIdent(c)}`)
@@ -136,14 +136,12 @@ export async function reconcile(conn: Connection, cfg: Config, baseDir: string):
     for (const feature of features) await feature.afterReconcile?.(conn, delta);
   });
 
-  // Reconcile's own write-transaction duration, for open()'s derived busy_timeout: keep the
-  // observed max so a big watcher reconcile's lock hold is what the next open bounds its wait
-  // against (the same mechanism sqlite's reconcile records, and the one this store's busy
-  // timeout is derived from).
+  // Reconcile's own write-transaction duration, for open()'s derived busy_timeout: the observed
+  // max is what the next open bounds its wait against.
   const durationMs = Date.now() - txStart;
   const prevRaw = await getMeta(conn, 'reconcile_max_ms');
   // -1, not 0, so a genuinely 0ms first reconcile (sub-millisecond, common on a tiny tree)
-  // still gets recorded instead of losing to the "nothing recorded yet" default.
+  // gets recorded rather than losing to the "nothing recorded yet" default.
   const prevMax = prevRaw === null ? -1 : Number(prevRaw);
   if (durationMs > prevMax) await setMeta(conn, 'reconcile_max_ms', String(durationMs));
 

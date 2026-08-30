@@ -1,12 +1,8 @@
 import { quoteIdent } from '../shared.ts';
 import type { Connection, FieldStat } from '../types.ts';
 
-// One aggregate query, one result row: COUNT + GROUP_CONCAT(DISTINCT typeof()) per column, so
-// the query stays O(columns) rather than O(rows x columns). typeof()'s output already is the
-// shared vocabulary (integer/real/text -- mapValue() never binds a boolean or blob), so no
-// mapping step is needed here (contrast duckdb/fieldStats.ts). GROUP_CONCAT(DISTINCT ...)'s
-// order is not guaranteed sorted (spike-verified: 3+ distinct types come back in insertion
-// order), so the type set is sorted in JS.
+// One aggregate query per column (COUNT + GROUP_CONCAT(DISTINCT typeof())), O(columns) not O(rows x columns);
+// typeof()'s output is already the shared vocabulary, and GROUP_CONCAT's order is unsorted, so JS sorts the type set.
 export async function fieldStats(conn: Connection, columns: string[], scopeWhere: string): Promise<FieldStat[]> {
   const exprs = columns.map((name, i) => {
     const quoted = quoteIdent(name);

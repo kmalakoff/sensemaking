@@ -6,8 +6,7 @@ import { scratchDir } from '../lib/scratch.ts';
 import { tmpTree, writeNote } from '../lib/tree.ts';
 
 // The llm-wiki example config from skills/sense-setup/EXAMPLES.md, run verbatim through the
-// CLI. Its `embed` block points at a local fixture model, so the semantic path never hits the
-// network.
+// CLI. Its `embed` block points at a local fixture model, so the semantic path never hits the network.
 function writeModel(): string {
   const dir = scratchDir('model');
   const vocab = { '[UNK]': 0, attention: 1, scales: 2, problems: 3 };

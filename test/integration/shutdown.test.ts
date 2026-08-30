@@ -5,19 +5,15 @@ import assert from 'assert';
 import { packageRoot } from '../lib/scratch.ts';
 import { tmpTree, writeNote } from '../lib/tree.ts';
 
-// Interrupting a cold build is the one place worker threads meet process shutdown. Threads die
-// with the process, so nothing is orphaned, but the store is mid-write when the signal lands:
-// what matters is that the process still exits and the tree is usable afterwards.
-//
-// Every spawn below runs from the package root and reaches the tree through --config, never
-// with cwd set to the scratch dir. Windows refuses to delete a directory that is any live
-// process's working directory, and the duckdb leg spawns its own install children that outlive
-// the one this test signals, so a cwd there strands the scratch tree for the whole run.
+// Interrupting a cold build: the store is mid-write when the signal lands; threads die with
+// the process, so the claim is the process exits and the tree is usable afterwards.
+
+// Every spawn runs from the package root with --config, never cwd=scratch: Windows won't delete
+// a live process's cwd, and duckdb's install children outlive the signaled process and would strand it.
 describe('interrupting a pooled cold build', () => {
   const cli = join(packageRoot, 'bin', 'cli.js');
   // Both stores, because the signal kills the process before `store.close()` can run: what is
-  // left behind is a write-ahead log the engine has to recover on its own, and duckdb's is a
-  // native handle rather than Node's built-in SQLite.
+  // left behind is a WAL the engine recovers on its own, and duckdb's is a native handle, not Node's built-in SQLite.
   const stores = ['sqlite', 'duckdb'];
 
   // Past the 200-file pooling threshold, with bodies big enough that the reparse stage lasts

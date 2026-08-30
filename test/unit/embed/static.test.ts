@@ -6,10 +6,10 @@ import { Tokenizer } from '@huggingface/tokenizers';
 import { staticProvider } from '../../../src/embed/static.ts';
 import { downloadModelRevision, MODEL_FILES, snapshotDir } from '../../../src/embed/store.ts';
 import type { EmbedProvider } from '../../../src/embed/types.ts';
+import { gate } from '../../lib/gate.ts';
 
-// Oracle diff for the embedding path: the fixtures are Python model2vec + Python tokenizers,
-// run once offline and committed (test/fixtures/parity/generate.py). This suite reproduces
-// them through the JS path with no Python anywhere in CI or on user machines.
+// Oracle diff: fixtures are Python model2vec + tokenizers output, run once offline and
+// committed (test/fixtures/parity/generate.py); this suite reproduces them via JS with no Python in CI.
 const MODEL_ID = 'minishlab/potion-retrieval-32M';
 const REVISION = '6fc8051fab2a1e0ee76689cf08c853792ac285e7';
 
@@ -46,9 +46,8 @@ function cosine(a: Float32Array, b: number[]): number {
   return dot / (Math.sqrt(na) * Math.sqrt(nb));
 }
 
-// Tolerance: element-wise <= 1e-5 and cosine >= 0.999999 for non-zero fixture vectors; a
-// fixture vector near zero (empty/whitespace/oov-guaranteed input) must come back exactly
-// zero rather than compared by cosine, which is undefined at the zero vector.
+// Tolerance: element-wise <= 1e-5, cosine >= 0.999999 for non-zero vectors; a near-zero
+// fixture vector (empty/whitespace/oov input) must come back exactly zero, since cosine is undefined there.
 function assertVectorParity(category: string, expected: number[], actual: Float32Array): void {
   assert.equal(actual.length, expected.length, `${category}: dims mismatch, fixture ${expected.length} vs js ${actual.length}`);
 
@@ -83,10 +82,10 @@ describe('embedding parity against the Python reference', () => {
         // The pinned revision, never `main`: a mutable HF ref must never compare against
         // different weights than the fixtures were generated from. Cached under ~/.sense/models.
         await downloadModelRevision(MODEL_ID, REVISION, (file, into) => console.error(`fetching ${MODEL_ID}@${REVISION.slice(0, 8)}/${file} into ${into}`));
-      } catch (_err) {
+      } catch (err) {
         // Neither the machine cache nor the network has the model: nothing to diff against.
-        // This is an environment limit, not a parity failure.
-        this.skip();
+        // ci and local-release own this gate and fail rather than skip past it.
+        gate(this, 'hf-network', false, (err as Error).message);
         return;
       }
     }

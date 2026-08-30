@@ -2,9 +2,8 @@ import { SenseError } from '../errors.ts';
 import { presetNames, presetSignals } from './access.ts';
 import type { Config, EffectiveSearch, Preset, SearchOverrides } from './types.ts';
 
-// Looks up a declared preset by name, defaulting to `default`. Throws naming every declared
-// preset when an explicit name is not declared -- the `default` fallback is never unknown
-// itself (validateConfig requires it).
+// Looks up a declared preset by name, defaulting to `default`; throws naming every declared preset
+// when an explicit name isn't declared (the `default` fallback is never unknown itself -- validateConfig requires it).
 export function resolvePreset(cfg: Config, name?: string): { name: string; preset: Preset } {
   const presetName = name ?? 'default';
   const preset = cfg.presets[presetName];

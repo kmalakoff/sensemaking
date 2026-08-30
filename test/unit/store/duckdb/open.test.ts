@@ -32,8 +32,7 @@ describe('openDuckdb', () => {
 
   it('repeated open/close with a write between iterations does not corrupt the cache', async () => {
     // Without the instance's closeSync() on store.close(), the WAL is never checkpointed and
-    // a later open fails with "the WAL checkpoint iteration does not match". The tree is big
-    // enough that each open's reconcile writes a real amount of WAL.
+    // a later open fails with "the WAL checkpoint iteration does not match".
     const baseDir = tmpTree();
     for (let i = 0; i < 100; i++) writeNote(baseDir, `d/note-${String(i).padStart(4, '0')}.md`, { frontmatter: { title: `Note ${i}` } });
     for (let i = 0; i < 8; i++) {

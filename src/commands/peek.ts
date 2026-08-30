@@ -31,8 +31,7 @@ export interface Peek {
   backlinks: string[];
   unresolved: string[];
   // Totals before truncation: a hub can have thousands of backlinks (or a note thousands of
-  // headings), and peek's whole point is bounded output. Query the sections/links tables
-  // directly for the full list.
+  // headings), and peek's whole point is bounded output.
   sectionsTotal: number;
   outboundTotal: number;
   backlinksTotal: number;

@@ -110,10 +110,8 @@ describe('content.tokenize', () => {
     setTokenize(dir, 'nonsense-tokenizer');
     assert.equal(runCli(dir, ['sql', 'SELECT 1']).status, 1);
 
-    // Read the cache file directly rather than through the CLI. Neither `.sense` existing nor
-    // a doc count taken afterwards can tell the two apart: open() creates the directory before
-    // anything can fail, and a later command's reconcile re-crawls the tree and restores the
-    // count. What only survives a cache that was never cleared is the rows already in the file.
+    // Read the cache file directly: a later command's reconcile re-crawls the tree and restores
+    // the doc count either way, so only rows already in the file distinguish "never cleared" from "rebuilt".
     assert.equal(cachedDocs(dir), before, 'the refused tokenizer cleared the cache before rejecting it');
   });
 
@@ -186,9 +184,8 @@ describe('content.tokenize: a tokenize-only change rebuilds text only', () => {
 
     setTokenize(dir, 'trigram'); // config now wants trigram; meta.features still says the old one
 
-    // Simulate a crash between the DROP and the recreate: content gone from the persisted
-    // file, and (as in the real crash) meta was never touched, since that only happens once
-    // rebuildContentTable finishes.
+    // Simulate a crash between the DROP and the recreate: content gone from the persisted file,
+    // meta untouched since it's only written once rebuildContentTable finishes.
     const cachePath = join(dir, '.sense', 'cache.db');
     const crashed = new DatabaseSync(cachePath);
     crashed.exec('DROP TABLE content');
@@ -225,9 +222,8 @@ describe('content.tokenize: a tokenize-only change rebuilds text only', () => {
   });
 });
 
-// The signature's embed segment carries the static model's resolved weight identity
-// (local path: size+mtime), following the content.tokenize precedent above -- gaining an
-// identity that was not tracked before adopts silently, but a changed identity re-embeds.
+// The signature's embed segment carries the static model's resolved weight identity (local
+// path: size+mtime); an untracked identity adopts silently, a changed identity re-embeds.
 describe('embed model identity in the signature', () => {
   function embedTree(modelDir: string): string {
     const dir = scratchDir('embed-sig');
@@ -280,9 +276,8 @@ describe('embed model identity in the signature', () => {
   });
 });
 
-// Fix F: busy_timeout derives from what reconcile has observed itself take, not a
-// constant. See src/store/sqlite/reconcile.ts (meta.reconcile_max_ms bookkeeping) and
-// src/store/sqlite/open.ts (derivation).
+// busy_timeout derives from what reconcile has observed itself take, not a constant -- see
+// src/store/sqlite/reconcile.ts (meta.reconcile_max_ms) and src/store/sqlite/open.ts (derivation).
 
 describe('derived busy_timeout', () => {
   it('a reconcile that does work records its duration in meta.reconcile_max_ms', async () => {

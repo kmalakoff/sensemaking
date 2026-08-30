@@ -11,6 +11,8 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
         # os: [ubuntu-latest, windows-latest, macos-latest]
+    env:
+      SENSE_TEST_ENV: ci
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7

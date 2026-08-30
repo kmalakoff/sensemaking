@@ -8,9 +8,8 @@ import { featuresForFile } from '../scan/reparse.ts';
 import type { WorkerErrorPayload } from '../scan/worker-error.ts';
 import { serializeError } from '../scan/worker-error.ts';
 
-// Constant for the whole dispatch, so it crosses once per worker instead of once per task.
-// A Feature carries closures and cannot cross the thread boundary; its name can, and the
-// registry on this side resolves it back, which keeps the caller's selection intact.
+// Constant for the whole dispatch, so it crosses once per worker instead of once per task. A
+// Feature carries closures and cannot cross the thread boundary; its name can, and the registry here resolves it back.
 export interface ParseWorkerData {
   cfg: Config;
   featureNames: FeatureName[];

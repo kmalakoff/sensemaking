@@ -1,11 +1,8 @@
 import { quoteIdent } from '../shared.ts';
 import type { Connection, FieldStat } from '../types.ts';
 
-// Fork of sqlite/fieldStats.ts (house precedent: each store owns its engine-specific SQL, see
-// turso/reconcile.ts). Turso is SQLite dialect (spike-verified: typeof(), GROUP_CONCAT, and
-// FILTER (WHERE ...) all behave identically to node:sqlite for the bigint/number/string/null
-// shapes mapValue() produces), so the SQL text is identical to sqlite's -- only the Connection
-// it runs against differs.
+// Fork of sqlite/fieldStats.ts (house precedent: each store owns its engine-specific SQL):
+// Turso is SQLite dialect (spike-verified: typeof(), GROUP_CONCAT, FILTER behave identically to node:sqlite), so the SQL text is identical -- only the Connection differs.
 export async function fieldStats(conn: Connection, columns: string[], scopeWhere: string): Promise<FieldStat[]> {
   const exprs = columns.map((name, i) => {
     const quoted = quoteIdent(name);

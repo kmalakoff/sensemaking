@@ -2,8 +2,7 @@ import { maskRegions } from './fences.ts';
 import type { Feature } from './types.ts';
 
 // tags(path, tag): Obsidian's file.tags grain -- frontmatter list/string tags plus inline
-// #tags from the prose, deduplicated, source not distinguished. Nested tags store full
-// (book/scifi); `tag = 'book' OR tag LIKE 'book/%'` is how a caller matches the parent too.
+// #tags, deduplicated, source not distinguished. Nested tags store full (book/scifi); `tag = 'book' OR tag LIKE 'book/%'` matches the parent too.
 
 // Obsidian treats [[#Heading]] as a same-note link, not a tag.
 const WIKILINK_RE = /\[\[.*?\]\]/g; // to the first ]], so a heading holding a lone ] still masks
@@ -36,9 +35,8 @@ function frontmatterTags(data?: Record<string, unknown>): string[] {
   return found;
 }
 
-// #tag tokens outside fenced code blocks, inline code spans, wikilinks, HTML tags, HTML blocks,
-// <!-- --> comments, and link destinations. maskRegions() handles all of those region-level
-// concerns (and code spans, masked once there); this loop only does per-line tag extraction.
+// #tag tokens outside the regions maskRegions() masks (fences, code spans, wikilinks, HTML,
+// comments, link destinations); this loop only does per-line tag extraction.
 function inlineTags(body: string): string[] {
   const found: string[] = [];
   for (const line of maskRegions(body).split('\n')) {
@@ -66,9 +64,8 @@ export const tags: Feature = {
     await db.exec('CREATE INDEX IF NOT EXISTS tags_tag ON tags(tag)');
   },
   extract,
-  // Blanket clear-then-reinsert (store() below always writes the full found list back), so
-  // remove() covers both a vanished file and a reparsed one that already had rows -- no
-  // per-file NOT IN diffing, which cannot be expressed as one statement shared across files.
+  // Blanket clear-then-reinsert (store() always writes the full found list back), so remove()
+  // covers vanished and reparsed files without per-file NOT IN diffing, which cannot be one statement shared across files.
   async remove(db, paths) {
     if (paths.length === 0) return;
     await db.runBatch(

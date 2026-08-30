@@ -1,6 +1,5 @@
-// Corpus catalog: declarative specs, one builder per source type, resolution through the
-// fetch-once cache. corpusPath(name) returns the markdown tree; corpusLabels(name) returns
-// the query/qrels directory for labeled datasets, or null.
+// Declarative corpus specs, one builder per source type, resolved through the fetch-once cache.
+// corpusPath(name) returns the markdown tree; corpusLabels(name) the query/qrels dir, or null.
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -56,9 +55,8 @@ function zipfPicker(rand) {
   };
 }
 
-// k distinct indices in [0,n), never excludeIdx. Dense case (k close to n, e.g. fieldsPerNote
-// == distinctFields for the column-limit probe) shuffles; sparse case (k << n, e.g. 5 links
-// out of 100k notes) retries a Set -- a full shuffle at that end would be O(n) per note.
+// k distinct indices in [0,n), never excludeIdx. Dense k shuffles; sparse k (e.g. 5 links out
+// of 100k notes) retries a Set instead -- a full shuffle would be O(n) per note.
 function chooseKIndices(rand, n, k, excludeIdx) {
   const avail = excludeIdx >= 0 && excludeIdx < n ? n - 1 : n;
   k = Math.max(0, Math.min(k, avail));
@@ -155,9 +153,8 @@ function stableStringify(v) {
   return JSON.stringify(v);
 }
 
-// Cache key from the param values (not the catalog name -- synthetic corpora are requested
-// by spec object, see syntheticPath). A short hash covers every field so an unlisted param
-// still busts the cache; the descriptive prefix keeps .tmp/cache/ readable.
+// Cache key from the param values, not the catalog name (synthetic corpora are requested by
+// spec object, see syntheticPath). Hash covers every field; the prefix keeps .tmp/cache/ readable.
 function specKey(spec) {
   const full = { ...SYNTHETIC_DEFAULTS, ...spec };
   const json = stableStringify(full);
@@ -170,10 +167,8 @@ function specKey(spec) {
   return `synthetic-n${full.notes}-t${full.noteTokens}-h${full.headingsPerNote}-l${full.linksPerNote}-f${full.distinctFields}-fpn${full.fieldsPerNote}-s${full.seed}-${short}`;
 }
 
-// The one write site for the sense.config.json files the harness owns. The store is a
-// run-time fact, not a build fact: corpus cache entries are shared across stores, so the
-// key is added only when a run names one (run.mjs rewrites the config per run), never
-// baked in at build time.
+// Only write site for the harness's sense.config.json files. Store is a run-time fact, not a
+// build fact: cache entries are shared across stores, so the key is set only when a run names one.
 export function writeTreeConfig(tree, config, { store } = {}) {
   if (store) config = { ...config, store };
   writeFileSync(join(tree, 'sense.config.json'), JSON.stringify(config));
@@ -193,9 +188,8 @@ const CORPORA = {
     url: 'https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/nfcorpus.zip',
     version: 'beir-1',
   },
-  // FEVER: claims labeled with their Wikipedia evidence pages, sentence links kept as
-  // wikilinks -- the only corpus that can measure link fusion. Scale rows replicate one real
-  // corpus N times, so duplicate basenames also stress link-ambiguity resolution.
+  // FEVER: claims labeled with Wikipedia evidence pages, sentence links kept as wikilinks --
+  // the only corpus that measures link fusion. Scale rows replicate one corpus N times.
   'obsidian-hub-x2': { type: 'replicate', source: 'obsidian-hub', copies: 2, version: 'x2-hub-1' },
   'obsidian-hub-x4': { type: 'replicate', source: 'obsidian-hub', copies: 4, version: 'x4-hub-1' },
   // Every fixed shape cliff in one tree: 1MB note, 200 headings/note, 100 links/note, 300
@@ -207,11 +201,8 @@ const CORPORA = {
     devUrl: 'https://fever.ai/download/fever/shared_task_dev.jsonl',
     version: 'fever-1',
   },
-  // MIRACL per-language: dev-split judged passages (the only publicly-labeled split; real
-  // test qrels are held out) plus enough sampled distractors to reach ~3-5k docs/language.
-  // Judged docs are a floor, never trimmed -- a language whose qrels already judge more than
-  // the target ships with zero distractors and a correspondingly larger corpus (ja, ru here).
-  // Both HF datasets pinned by commit sha (miracl/miracl and miracl/miracl-corpus).
+  // MIRACL per-language: dev-split judged passages (the only publicly-labeled split) plus
+  // sampled distractors to reach ~3-5k docs/language. HF datasets pinned by commit sha.
   'miracl-de': { type: 'miracl', lang: 'de', shards: 32, targetDocs: 4000, labelsSha: '5be20db9509754dadad47689368639fcec739c00', corpusSha: 'd921ec7e349ce0d28daf30b2da9da5ee698bef0d', seed: 100, version: 'miracl-de-1' },
   'miracl-ja': { type: 'miracl', lang: 'ja', shards: 14, targetDocs: 4000, labelsSha: '5be20db9509754dadad47689368639fcec739c00', corpusSha: 'd921ec7e349ce0d28daf30b2da9da5ee698bef0d', seed: 101, version: 'miracl-ja-1' },
   'miracl-ru': { type: 'miracl', lang: 'ru', shards: 20, targetDocs: 4000, labelsSha: '5be20db9509754dadad47689368639fcec739c00', corpusSha: 'd921ec7e349ce0d28daf30b2da9da5ee698bef0d', seed: 102, version: 'miracl-ru-1' },
@@ -225,9 +216,8 @@ const BUILDERS = {
     execFileSync('git', ['clone', '--quiet', spec.repo, dest], { stdio: ['ignore', 'ignore', 'inherit'] });
     execFileSync('git', ['-C', dest, 'checkout', '--quiet', spec.commit]);
   },
-  // BEIR zips carry corpus.jsonl + queries.jsonl + qrels/*.tsv. Docs become one md file
-  // each (id as filename, title in frontmatter, text as body) so the corpus is a sense
-  // tree; queries and qrels land in labels/ for the eval harness.
+  // BEIR zips carry corpus.jsonl + queries.jsonl + qrels/*.tsv. Docs become one md file each
+  // (id as filename, title in frontmatter, text as body); queries/qrels land in labels/.
   beir(spec, dest) {
     const zip = join(dest, 'dataset.zip');
     execFileSync('curl', ['-fsSL', '-o', zip, spec.url]);
@@ -322,13 +312,8 @@ const BUILDERS = {
     writeFileSync(join(labels, 'test.tsv'), `${qrels.join('\n')}\n`);
     console.error(`fever: ${kept.size} pages (${cited.size} cited), ${keptQueries.length} claims`);
   },
-  // MIRACL: topics (queries) + qrels come from miracl/miracl (TREC 4-col qrels: qid, Q0, docid,
-  // score -- stripped to BEIR's 3-col test.tsv); passages come from miracl/miracl-corpus, shipped
-  // as gzipped jsonl shards with no docid->shard index, so every shard is scanned once. Judged
-  // docids (both relevance grades -- 0 stays a hard negative in the label file, same as BEIR) are
-  // pulled out as they're seen; everything else is a candidate distractor, reservoir-sampled
-  // (Algorithm R, seeded) down to spec.targetDocs total. A language whose qrels alone already
-  // exceed targetDocs ships with zero distractors -- judged docs are a floor, never trimmed.
+  // Topics/qrels from miracl/miracl; passages from miracl/miracl-corpus (gzipped shards, no
+  // docid->shard index, so every shard is scanned). Distractors reservoir-sample down to targetDocs.
   miracl(spec, dest) {
     const { lang, shards, targetDocs, labelsSha, corpusSha, seed } = spec;
     const topicsPath = join(dest, 'topics.tsv');
@@ -389,9 +374,8 @@ const BUILDERS = {
     for (const doc of reservoir) writeDoc(doc);
     writeTreeConfig(tree, { version: 1, scan: { include: ['**/*.md'] }, queries: {} });
 
-    // Labels: BEIR 3-column test.tsv (MIRACL's dev split is the only publicly-labeled split --
-    // it stands in as this harness's "test" split), queries restricted to ones with a judged
-    // doc actually in the tree (always true here: judged is a floor, never trimmed).
+    // Labels: BEIR 3-column test.tsv, MIRACL's dev split standing in as the "test" split.
+    // Queries restricted to ones with a judged doc in the tree.
     const labels = join(dest, 'labels');
     mkdirSync(labels, { recursive: true });
     const keptQueries = [];
@@ -420,17 +404,15 @@ BUILDERS.replicate = (spec, dest) => {
   writeTreeConfig(dest, { version: 1, scan: { include: ['**/*.md'] }, queries: {} });
 };
 
-// Synthetic tree for shape sweeps (benchmark/sweep.mjs): every dimension holds the rest of
-// these params at hub-like values and varies one. Everything derives from spec.seed via
-// mulberry32, so the same spec produces a byte-identical tree (verified in the sweep smoke test).
+// Synthetic tree for shape sweeps (benchmark/sweep.mjs): each dimension holds the other params
+// at hub-like values and varies one. Everything derives from spec.seed, so a spec is reproducible.
 BUILDERS.synthetic = (spec, dest) => {
   const cfg = { ...SYNTHETIC_DEFAULTS, ...spec };
   const rand = mulberry32(cfg.seed);
   const pickWord = zipfPicker(rand);
 
-  // A few subdirectories at varying depth -- "spread across levels", not a balanced tree.
-  // presets mode wants the opposite: one fixed, named folder per declared preset, so each
-  // preset's include glob covers exactly (and only) its own folder.
+  // A few subdirectories at varying depth, spread across levels rather than balanced. Presets
+  // mode instead uses one fixed, named folder per preset, so each preset's include glob is exact.
   const dirs = cfg.presets
     ? cfg.presets.map((p) => p.dir)
     : Array.from({ length: Math.max(1, Math.min(40, Math.ceil(cfg.notes / 50))) }, () => {

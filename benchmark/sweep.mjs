@@ -1,7 +1,5 @@
 // Shape sweep: synthetic corpora isolating one dimension at a time, the rest held hub-like.
-// Every point runs against a working copy, strictly serially -- a shared CPU swamps the signal.
-// usage: node benchmark/sweep.mjs [dimension ...] [--quick] [--out file]
-// dimensions: fields headings links filesize notes bulk probes presets (default: all)
+// Every point runs against a working copy, strictly serially -- a shared CPU swamps the signal. usage: node benchmark/sweep.mjs [dimension ...] [--quick] [--out file]
 import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { appendFileSync, cpSync, mkdirSync, rmSync, statSync, utimesSync } from 'node:fs';
@@ -118,9 +116,8 @@ function printTable(title, paramName, points) {
   printVerdict(points, metricNames);
 }
 
-// Flags a metric whose cost ratio outpaces the swept param's ratio by 1.5x (superlinear),
-// or a *_tokens metric that grows at all -- map/peek/find token output is a contract meant
-// to stay flat with tree size, so any growth there is worth a look even if sub-1.5x.
+// Flags a metric whose cost ratio outpaces the swept param's ratio by 1.5x (superlinear), or a
+// *_tokens metric that grows at all -- token output is a contract meant to stay flat with tree size, so any growth is worth a look even if sub-1.5x.
 function printVerdict(points, metricNames) {
   console.log('\nscaling verdict:');
   let flagged = false;
@@ -157,9 +154,8 @@ async function sweepOne(dimension, paramName, values, specFor) {
   return points;
 }
 
-// distinctFields near SQLITE_MAX_COLUMN (2000): fieldsPerNote == distinctFields so every
-// note declares the whole pool, guaranteeing the frontmatter table actually reaches that
-// many columns rather than a random subsample falling short of the pool size.
+// distinctFields near SQLITE_MAX_COLUMN (2000): fieldsPerNote == distinctFields so every note
+// declares the whole pool, guaranteeing the frontmatter table actually reaches that many columns rather than a random subsample falling short.
 async function columnLimitProbe(dimension) {
   console.log(`\n### ${dimension}: column-limit probe (distinctFields near SQLITE_MAX_COLUMN=2000, notes=100)`);
   const rows = [];
@@ -207,8 +203,7 @@ async function adversarialProbe() {
 }
 
 // Vectors build lazily on the first semantic-participating query (embedPending tops up NULL
-// rows), not at reconcile -- so the warm-up call pays the embed cost and subsequent calls
-// don't. Model is assumed already cached in ~/.sense/models; this probe doesn't fetch it.
+// rows), not at reconcile, so the warm-up call pays the embed cost. Model is assumed already cached in ~/.sense/models.
 async function semanticProbe() {
   console.log('\n### probes: semantic (bare `search` warm-up + 3 timed, median)');
   const rows = [];

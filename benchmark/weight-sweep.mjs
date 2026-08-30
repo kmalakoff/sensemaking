@@ -1,12 +1,5 @@
-// Vector-signal weight sweep: how RRF-fusion nDCG responds to a vectors weight, at fixed pool
-// (fetch), through the same scoring bakeoff.mjs/bakeoff-http.mjs use (their own BM25 SQL, their
-// own weighted-RRF combiner) -- not search()'s signals path, same as fusion-sweep.mjs. Static
-// model path reuses lib/embed.mjs's local Model2Vec loader; --model routes through the shipped
-// openai provider over an OpenAI-shaped HTTP endpoint (Ollama, LM Studio, ...), same as
-// bakeoff-http.mjs.
-// usage:
-//   node benchmark/weight-sweep.mjs nfcorpus [--k N]
-//   node benchmark/weight-sweep.mjs miracl-zh --model qwen3-embedding:0.6b [--url http://localhost:11434/v1] [--k N]
+// Vector-signal weight sweep: how RRF-fusion nDCG responds to a vectors weight, via the same
+// BM25 SQL and weighted-RRF combiner bakeoff.mjs uses. Usage: <corpus> [--model ID] [--url URL] [--k N]
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
