@@ -67,10 +67,26 @@ for (const version of versions) {
   results.set(version, JSON.parse(out.stdout));
 }
 
+// The embed column must never compare a real number against a silent gap: a version whose
+// dialect supports it but produced no cold_embed_ms is a broken measurement, not an absent one,
+// and gets a hard failure instead of a half table.
+const embedCapable = versions.filter((v) => results.get(v).embed_supported);
+const embedBroken = embedCapable.filter((v) => results.get(v).cold_embed_ms === null);
+if (embedBroken.length > 0) {
+  console.error(`embed column broken for ${embedBroken.join(', ')}: ${embedBroken.map((v) => `${v}: ${results.get(v).cold_embed_error ?? 'no error captured'}`).join('; ')}`);
+  process.exit(1);
+}
+if (embedCapable.length === 0) {
+  console.error('embed column: no version being compared supports the embed mechanism it measures -- the vectors column measures nothing for this run');
+} else if (embedCapable.length < versions.length) {
+  console.error(`embed column note: ${versions.filter((v) => !results.get(v).embed_supported).join(', ')} predate the embed mechanism this column measures; only ${embedCapable.join(', ')} are comparable on it`);
+}
+
 const first = results.values().next().value;
 const ms = (v) => (v === null ? '—' : typeof v === 'string' ? `**${v}**` : `${v} ms`);
 const ROWS = [
   ['cold crawl', (r) => ms(r.cold_crawl_ms)],
+  ['embed cold build (crawl + first vector-participating `search`, one process)', (r) => ms(r.cold_embed_ms)],
   ['warm query (`COUNT(*)`)', (r) => ms(r.warm_query_ms)],
   ['BM25 search (canonical join)', (r) => ms(r.bm25_search_ms)],
   ['lexical `search` (BM25 + link fusion)', (r) => ms(r.find_ms)],
