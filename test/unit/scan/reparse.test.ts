@@ -7,14 +7,9 @@ import { listFiles } from '../../../src/scan/index.ts';
 import { reparseFiles } from '../../../src/scan/reparse.ts';
 import { reviveError, serializeError } from '../../../src/scan/worker-error.ts';
 import { tmpTree, writeNote } from '../../lib/tree.ts';
+import { liveWorkerHandles } from '../../lib/worker-handles.ts';
 
 const cfg: Config = { presets: { default: { include: ['**/*.md'] } }, queries: {} };
-
-// One MessagePort per live pool thread, so this counts worker handles the pool has not released;
-// a leaked pool shows up as a nonzero delta that never returns to baseline.
-function liveWorkerHandles(): number {
-  return process.getActiveResourcesInfo().filter((resource) => resource === 'MessagePort').length;
-}
 
 function noopFeature(name: Feature['name'], overrides: Partial<Feature> = {}): Feature {
   return { name, async schema() {}, ...overrides };

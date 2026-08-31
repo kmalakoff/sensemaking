@@ -3,6 +3,7 @@ import { activeFeatures } from '../features/index.ts';
 import type { ExtractedDoc, ReconcileDelta } from '../features/types.ts';
 import { progress } from '../output/progress.ts';
 import { listFiles, RESERVED_COLUMNS } from '../scan/index.ts';
+import type { ParsePool } from '../scan/pool.ts';
 import { reparseFiles } from '../scan/reparse.ts';
 import { getColumns, quoteIdent } from './shared.ts';
 import { withTransaction } from './transaction.ts';
@@ -18,7 +19,7 @@ import type { Connection, ReconcileDialect } from './types.ts';
 // computed value on every touch, not just the reconciles that recompute it.
 const CORE_FRONTMATTER_COLUMNS = new Set(['path', '_mtime', '_ctime', '_size', '_parse_error']);
 
-export async function reconcile(conn: Connection, cfg: Config, baseDir: string, dialect: ReconcileDialect): Promise<{ parsed: number; warnings: string[] }> {
+export async function reconcile(conn: Connection, cfg: Config, baseDir: string, dialect: ReconcileDialect, pool?: ParsePool): Promise<{ parsed: number; warnings: string[] }> {
   const files = listFiles(cfg, baseDir);
   const currentSet = new Set(files.map((f) => f.relPath));
 
@@ -40,7 +41,7 @@ export async function reconcile(conn: Connection, cfg: Config, baseDir: string, 
   // Bulk reparses (a sync, a cold build) are the long silences a query can hit; short
   // reconciles stay silent (progress() has a threshold).
   const report = progress('reparsing files', toReparse.length);
-  const { docs: parsedDocs, warnings, newColumns } = await reparseFiles(toReparse, features, cfg, seenColumns, report.tick);
+  const { docs: parsedDocs, warnings, newColumns } = await reparseFiles(toReparse, features, cfg, seenColumns, report.tick, { pool });
   report.finish();
   for (const col of newColumns) seenColumns.add(col);
 

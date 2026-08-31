@@ -34,6 +34,24 @@ interface FtsIndexState {
   stale: boolean;
 }
 
+// One state per connection, not per store instance: reconcileContent (reconcile.ts) marks it
+// stale from outside createLexicalIndex's closure, whether a one-shot open or a watcher's builder ran it.
+const ftsState = new WeakMap<Connection, FtsIndexState>();
+function stateFor(conn: Connection): FtsIndexState {
+  let state = ftsState.get(conn);
+  if (!state) {
+    state = { stale: true };
+    ftsState.set(conn, state);
+  }
+  return state;
+}
+
+// Called whenever this store's reconcileContent changes `content`, so the next lexical query
+// rebuilds instead of searching stale content.
+export function markContentStale(conn: Connection): void {
+  stateFor(conn).stale = true;
+}
+
 // A run whose script marks no word boundaries makes match_bm25's whitespace tokenizer index the whole run as one token
 // (same gap FTS5 has without the `_seg` sidecar), so such runs -- and any author-quoted phrase, any script -- go through contains() instead.
 function splitTerms(terms: string): { words: string[]; substrings: string[] } {
@@ -123,14 +141,11 @@ export async function queryLexical(conn: Connection, terms: string, opts: Lexica
   return (await stmt.all(...params, limit)) as unknown as LexicalHit[];
 }
 
-// One instance per store: `stale` starts true (a fresh connection can't know whether an on-disk fts schema matches `content`),
-// and store.ts's reconcile wrapper flips it back to true whenever content changes, so the next query rebuilds first.
+// `stale` starts true (a fresh connection can't know whether an on-disk fts schema matches
+// `content`), and reconcileContent (reconcile.ts) marks it stale again on every content change.
 export function createLexicalIndex(conn: Connection): { query: (terms: string, opts: LexicalQueryOptions) => Promise<LexicalHit[]>; markStale: () => void } {
-  const state: FtsIndexState = { stale: true };
   return {
-    query: (terms, opts) => queryLexical(conn, terms, opts, state),
-    markStale: () => {
-      state.stale = true;
-    },
+    query: (terms, opts) => queryLexical(conn, terms, opts, stateFor(conn)),
+    markStale: () => markContentStale(conn),
   };
 }

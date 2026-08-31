@@ -2,6 +2,7 @@ import { SenseError } from '../../errors.ts';
 import type { ReconcileDelta } from '../../features/types.ts';
 import type { ParsedDoc } from '../../scan/index.ts';
 import type { Connection, ReconcileDialect } from '../types.ts';
+import { markContentStale } from './lexical.ts';
 
 // This store's dialect (types.ts's ReconcileDialect) for the shared orchestration in
 // store/reconcile.ts. `content` is a plain table, not FTS-virtual, so rows are maintained here
@@ -27,6 +28,9 @@ async function reconcileContent(conn: Connection, touched: string[], docs: Parse
       touched.map((p) => [p])
     );
   if (docs.length > 0) await conn.runBatch(INSERT_CONTENT_SQL, docs.map(contentRow));
+  // content changed: the fts index is rebuilt lazily, on the next lexical query that needs it,
+  // not here (lexical.ts's FtsIndexState).
+  markContentStale(conn);
 }
 
 export const duckdbDialect: ReconcileDialect = {
