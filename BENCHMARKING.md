@@ -199,6 +199,13 @@ history; each entry names the commit that introduced the change.
   opens with a real "cache format changed; rebuilding the index" notice as the first line of
   its run, rather than trusting that the version constant changed without observing the
   rebuild fire against real prior cache state.
+- **2026-08-30 (0.20.0 release gate).** `store-dump.mjs` grows from two scenarios
+  (cold, incremental) to six, adding four reopen scenarios (warm, schema-bump,
+  signature, embed-identity) that also capture the store's stderr notices, because
+  several `open()` branches (full rebuild versus in-place adoption) end at identical
+  tables by different routes and the notice is the only observable that tells them
+  apart. `embed-identity` exists to make 0.20.0's in-place identity adoption visible
+  against 0.19.2's clear-and-re-embed path on duckdb and turso.
 
 ## Numbers of record
 
@@ -207,25 +214,25 @@ produced it. When a number here moves, replace the value and the link together.
 
 | metric | value | report |
 |---|---|---|
-| cold crawl, obsidian-hub (wall, local) | 2445 ms | [2026-08-30](benchmark/reports/2026-08-30-0.19.2-release-gate.md) |
-| warm query (`COUNT(*)`) | 138 ms | [2026-08-30](benchmark/reports/2026-08-30-0.19.2-release-gate.md) |
-| lexical `search` | 192 ms | [2026-08-30](benchmark/reports/2026-08-30-0.19.2-release-gate.md) |
+| cold crawl, obsidian-hub (wall, local) | 2758 ms | [2026-08-30](benchmark/reports/2026-08-30-0.20.0-release-gate.md) |
+| warm query (`COUNT(*)`) | 137 ms | [2026-08-30](benchmark/reports/2026-08-30-0.20.0-release-gate.md) |
+| lexical `search` | 184 ms | [2026-08-30](benchmark/reports/2026-08-30-0.20.0-release-gate.md) |
 | `search` row size | ~71 tokens | [2026-08-29](benchmark/reports/2026-08-29-0.18.0-release-gate.md) |
-| `map` | 173 ms / ~496 tokens | [2026-08-30](benchmark/reports/2026-08-30-0.19.2-release-gate.md) |
-| `peek` largest note | 155 ms / ~581 tokens | [2026-08-30](benchmark/reports/2026-08-30-0.19.2-release-gate.md) |
-| in-process: cold index build | 2971 ms | [2026-08-30](benchmark/reports/2026-08-30-0.19.2-release-gate.md) |
-| in-process: freshness check, no change | 36.6 ms | [2026-08-30](benchmark/reports/2026-08-30-0.19.2-release-gate.md) |
+| `map` | 166 ms / ~496 tokens | [2026-08-30](benchmark/reports/2026-08-30-0.20.0-release-gate.md) |
+| `peek` largest note | 146 ms / ~581 tokens | [2026-08-30](benchmark/reports/2026-08-30-0.20.0-release-gate.md) |
+| in-process: cold index build | 2130 ms | [2026-08-30](benchmark/reports/2026-08-30-0.20.0-release-gate.md) |
+| in-process: freshness check, no change | 35.8 ms | [2026-08-30](benchmark/reports/2026-08-30-0.20.0-release-gate.md) |
 | `--version` canary | 20 ms | [2026-08-29](benchmark/reports/2026-08-29-0.18.0-release-gate.md) |
-| scale, 13k: cold crawl (wall) | 5.13 s | [2026-08-30](benchmark/reports/2026-08-30-0.19.2-release-gate.md) |
-| scale, 26k: cold crawl (wall) | 9.64 s | [2026-08-30](benchmark/reports/2026-08-30-0.19.2-release-gate.md) |
-| stress: lexical `search` | 356 ms | [2026-08-30](benchmark/reports/2026-08-30-0.19.2-release-gate.md) |
-| stress: semantic `search` | 1029 ms | [2026-08-30](benchmark/reports/2026-08-30-0.19.2-release-gate.md) |
+| scale, 13k: cold crawl (wall) | 4.50 s | [2026-08-30](benchmark/reports/2026-08-30-0.20.0-release-gate.md) |
+| scale, 26k: cold crawl (wall) | 9.11 s | [2026-08-30](benchmark/reports/2026-08-30-0.20.0-release-gate.md) |
+| stress: lexical `search` | 357 ms | [2026-08-30](benchmark/reports/2026-08-30-0.20.0-release-gate.md) |
+| stress: semantic `search` | 972 ms | [2026-08-30](benchmark/reports/2026-08-30-0.20.0-release-gate.md) |
 | nfcorpus semantic nDCG@10 / hit@10 | 0.3427 / 0.7121 | [2026-08-29](benchmark/reports/2026-08-29-0.18.0-release-gate.md) |
 | fever semantic nDCG@10 / hit@10 | 0.9337 / 0.9965 | [2026-08-29](benchmark/reports/2026-08-29-0.18.0-release-gate.md) |
 | chunker grouping (D3/D4/D9) | pgc, no overlap, raw text | [2026-08-27 chunking sweep (W4)](benchmark/reports/2026-08-27-chunking-sweep-w4.md) |
 | default static model | `minishlab/potion-retrieval-32M` | [2026-08-27 embedding model selection](benchmark/reports/2026-08-27-embedding-model-selection.md) |
 | storage lever | int8 @ 256 dims | [2026-08-13 static-model bake-off](benchmark/reports/2026-08-13-static-model-bakeoff.md) |
-| turso: hub battery (total wall) | 49.3 s | [2026-08-30](benchmark/reports/2026-08-30-0.19.2-release-gate.md) |
-| duckdb: hub battery (total wall) | 76.4 s | [2026-08-30](benchmark/reports/2026-08-30-0.19.2-release-gate.md) |
-| turso: 13k tree battery (total wall) | 88.5 s | [2026-08-30](benchmark/reports/2026-08-30-0.19.2-release-gate.md) |
-| duckdb: 13k tree battery (total wall) | 130.7 s | [2026-08-30](benchmark/reports/2026-08-30-0.19.2-release-gate.md) |
+| turso: hub battery (total wall) | 46.8 s | [2026-08-30](benchmark/reports/2026-08-30-0.20.0-release-gate.md) |
+| duckdb: hub battery (total wall) | 68.6 s | [2026-08-30](benchmark/reports/2026-08-30-0.20.0-release-gate.md) |
+| turso: 13k tree battery (total wall) | 84.4 s | [2026-08-30](benchmark/reports/2026-08-30-0.20.0-release-gate.md) |
+| duckdb: 13k tree battery (total wall) | 119.3 s | [2026-08-30](benchmark/reports/2026-08-30-0.20.0-release-gate.md) |

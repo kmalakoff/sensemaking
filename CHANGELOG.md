@@ -2,6 +2,18 @@
 
 All notable changes to sensemaking are documented here.
 
+## [0.20.0] - 2026-08-30
+
+### Changed
+
+- The exported `Store` shape changes, with no shim: `reconcile()` is no longer on `Store`, which now answers queries only. Bringing the index current is internal to the package, with no public replacement; a command that needs the index current runs any query, since every query reconciles first. The internal path also got faster for the watcher: `sense watch` reuses one parse worker pool across its whole lifetime instead of creating and destroying a pool on every tick and paying 85-100 ms of pool startup each time.
+- A change to the embedding model that only moves its resolved identity no longer clears the duckdb or turso cache and re-embeds every chunk; the new identity is adopted in meta in place. The behaviour was previously sqlite-only.
+- When a config change forces a rebuild, all three stores name which config segment moved, instead of reporting a generic rebuild reason.
+
+### Fixed
+
+- Hidden comment text no longer leaks into the index. A `%%...%%` comment split by a blank line, and an inline `<!-- -->` comment opened in one paragraph and closed in a later one, were indexed with their markers while Obsidian hides them. Text extraction now resolves sibling blocks in one pass with code held out of it, so a `%%` inside a fenced block stays literal. Cache schema versions bump on all three stores (sqlite 18 to 19, duckdb 2 to 3, turso 3 to 4), so an existing tree rebuilds on its first query after the upgrade, and an embed tree re-embeds as it does.
+
 ## [0.19.2] - 2026-08-30
 
 ### Added
