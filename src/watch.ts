@@ -3,7 +3,7 @@ import type { ResolvedConfig } from './config/index.ts';
 import { STATE_DIR } from './config/index.ts';
 import { SenseError } from './errors.ts';
 import { guardedTick } from './lib/guarded-tick.ts';
-import { docCount, getMeta, openStore, requireWatchConcurrency, setMeta } from './store/index.ts';
+import { docCount, getMeta, openStoreForWatch, requireWatchConcurrency, setMeta } from './store/index.ts';
 
 // Watch is a cache pre-warmer, not a correctness mechanism: open() always reconciles anyway, so any fs event just triggers a debounced full reconcile.
 const DEBOUNCE_MS = 200;
@@ -27,13 +27,14 @@ export async function runWatch(cfg: ResolvedConfig, opts: WatchOptions = {}): Pr
   const onEvent = opts.onEvent ?? (() => {});
   const debounceMs = opts.debounceMs ?? DEBOUNCE_MS;
   const heartbeatIntervalMs = opts.heartbeatIntervalMs ?? HEARTBEAT_INTERVAL_MS;
-  const { store, dbPath, warnings: initialWarnings, parsed: initialParsed } = await openStore(cfg);
+  const { store, builder, dbPath, warnings: initialWarnings, parsed: initialParsed } = await openStoreForWatch(cfg);
   const baseDir = cfg.baseDir;
 
   const existingHeartbeat = await getMeta(store, 'watch_heartbeat');
   if (existingHeartbeat && !opts.force) {
     const age = Date.now() - Date.parse(existingHeartbeat);
     if (age >= 0 && age < STALE_HEARTBEAT_MS) {
+      await builder.close();
       await store.close();
       throw new SenseError('WATCH_ACTIVE', `another watcher appears active (heartbeat ${Math.round(age / 1000)}s ago); use --force to override`);
     }
@@ -61,7 +62,7 @@ export async function runWatch(cfg: ResolvedConfig, opts: WatchOptions = {}): Pr
       debounceTimer = null;
       inFlight = (async () => {
         try {
-          const { parsed, warnings } = await store.reconcile();
+          const { parsed, warnings } = await builder.build();
           onEvent({ type: 'reconciled', parsed, total: await docCount(store), warnings });
         } catch (err) {
           onEvent({ type: 'reconcile-error', message: (err as Error).message });
@@ -96,6 +97,7 @@ export async function runWatch(cfg: ResolvedConfig, opts: WatchOptions = {}): Pr
       if (debounceTimer) clearTimeout(debounceTimer);
       watcher.close();
       await inFlight;
+      await builder.close();
       await setMeta(store, 'watch_heartbeat', null);
       await setMeta(store, 'watch_pid', null);
       await store.close();

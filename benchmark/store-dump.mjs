@@ -1,8 +1,12 @@
 #!/usr/bin/env node
 
 // Rebuild-parity gate: every logical table plus ranked search output (a table dump alone misses a
-// silently unranked lexical index). See benchmark/oracle.mjs for the sibling parity-gate shape.
-// usage: node benchmark/store-dump.mjs capture <outDir> [--corpus <name|path>] [--store sqlite,duckdb,turso] [--scenario cold|incremental]
+// silently unranked lexical index) plus, for the reopen scenarios, the store's own stderr notices --
+// several open() branches (full rebuild vs in-place adoption) end at identical tables.txt by
+// different routes, and the notice is the only observable that tells them apart.
+// See benchmark/oracle.mjs for the sibling parity-gate shape.
+// usage: node benchmark/store-dump.mjs capture <outDir> [--corpus <name|path>] [--store sqlite,duckdb,turso]
+//                                              [--scenario cold|incremental|warm|schema-bump|signature|embed-identity]
 //        node benchmark/store-dump.mjs compare <dirA> <dirB>
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
@@ -13,7 +17,7 @@ import { CORPUS_NAMES, corpusPath, writeTreeConfig } from './lib/corpus.mjs';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const ALL_STORES = ['sqlite', 'duckdb', 'turso'];
-const SCENARIOS = ['cold', 'incremental'];
+const SCENARIOS = ['cold', 'incremental', 'warm', 'schema-bump', 'signature', 'embed-identity'];
 
 // >= 10 terms of varying selectivity: near-stopword frequency down to domain-specific and a
 // two-word phrase, so a ranking regression (order OR score) has somewhere to show up.
@@ -217,6 +221,118 @@ async function captureStoreIncremental(lib, featureEnabled, embedDefaults, store
   rmSync(join(tree, '.sense'), { recursive: true, force: true });
 }
 
+// A chunk-size lever distinct from buildConfig's default (unset -> CHUNK_VERSION alone), so
+// reopening with it moves exactly the embed segment of the feature signature.
+const SIGNATURE_CHUNK_TOKENS = 128;
+
+// Segment format matches config/access.ts's featureSignature: '|'-joined parts, one of them
+// 'embed:<provider>:<model>:<chunkVersion>[@<identity>]'. Strips just the identity suffix.
+function stripEmbedIdentity(signature) {
+  return signature
+    .split('|')
+    .map((part) => {
+      if (!part.startsWith('embed:')) return part;
+      const at = part.indexOf('@');
+      return at === -1 ? part : part.slice(0, at);
+    })
+    .join('|');
+}
+
+// warm: no mutation at all -- the control proving a no-change reopen rebuilds nothing.
+async function mutateWarm() {
+  return undefined;
+}
+
+// Older than the store's own SCHEMA_VERSION, whatever that happens to be: any mismatch takes
+// open()'s cache-format rebuild branch the same way a real version bump would.
+async function mutateSchemaBump(storeShared, store) {
+  await storeShared.setMeta(store, 'schema_version', '0');
+  return undefined;
+}
+
+// Moves the embed segment of the feature signature through a real config edit (chunkTokens),
+// so reopen sees it the way a user's own edit would -- no meta fabrication needed here.
+async function mutateSignature(_storeShared, _store, _coldCfg, tree, storeName, embedDefaults) {
+  return buildConfig(storeName, tree, { ...embedDefaults, chunkTokens: SIGNATURE_CHUNK_TOKENS });
+}
+
+// Rewrites meta's own "features" row back to before the model's resolved identity was known,
+// then reopens unchanged -- the exact state transition open() adopts in place on sqlite.
+async function mutateEmbedIdentity(storeShared, store) {
+  const features = await storeShared.getMeta(store, 'features');
+  assert(features !== null, 'embed-identity scenario needs a "features" meta row from the cold build');
+  const stripped = stripEmbedIdentity(features);
+  assert(stripped !== features, 'embed-identity scenario needs the cold build to have already resolved a model identity (embed:...@<sha>) -- is the model cached under ~/.sense/models?');
+  await storeShared.setMeta(store, 'features', stripped);
+  return undefined;
+}
+
+const MUTATIONS = {
+  warm: mutateWarm,
+  'schema-bump': mutateSchemaBump,
+  signature: mutateSignature,
+  'embed-identity': mutateEmbedIdentity,
+};
+
+// Cold build, mutate (meta and/or config), reopen while capturing stderr notices in order, then
+// dump tables + ranking + notices. Config and cache are restored in a finally; a restore failure
+// is reported and thrown only after the finally completes, so it never masks a try-block error.
+async function captureStoreScenario(lib, featureEnabled, storeShared, embedDefaults, storeName, tree, outDir, scenario) {
+  const storeDir = join(outDir, storeName);
+  mkdirSync(storeDir, { recursive: true });
+  rmSync(join(tree, '.sense'), { recursive: true, force: true });
+
+  const configPath = join(tree, 'sense.config.json');
+  const hadConfig = existsSync(configPath);
+  const originalConfig = hadConfig ? readFileSync(configPath) : null;
+
+  const restoreFailures = [];
+  try {
+    const coldCfg = buildConfig(storeName, tree, embedDefaults);
+    const cold = await openOrThrow(lib, coldCfg, storeName);
+    let reopenCfg = coldCfg;
+    try {
+      reopenCfg = (await MUTATIONS[scenario](storeShared, cold.store, coldCfg, tree, storeName, embedDefaults)) ?? coldCfg;
+    } finally {
+      await cold.store.close();
+    }
+
+    // Every notice printed while reopening, in order; forwarded to the real stderr too so a run stays visible live.
+    const notices = [];
+    const origError = console.error;
+    console.error = (...consoleArgs) => {
+      notices.push(consoleArgs.map(String).join(' '));
+      origError(...consoleArgs);
+    };
+    let warm;
+    try {
+      warm = await openOrThrow(lib, reopenCfg, storeName);
+    } finally {
+      console.error = origError;
+    }
+    const { store } = warm;
+    try {
+      await dumpStore(lib, featureEnabled, store, reopenCfg, storeDir);
+    } finally {
+      await store.close();
+    }
+    writeFileSync(join(storeDir, 'notices.txt'), `${notices.join('\n')}\n`);
+  } finally {
+    try {
+      rmSync(join(tree, '.sense'), { recursive: true, force: true });
+      if (hadConfig) writeFileSync(configPath, originalConfig);
+      else rmSync(configPath, { force: true });
+    } catch (err) {
+      restoreFailures.push(err.message);
+    }
+  }
+  if (restoreFailures.length > 0) {
+    const msg = `scenario "${scenario}" failed to restore ${tree} to its original state: ${restoreFailures.join('; ')}`;
+    console.error(msg);
+    throw new Error(msg);
+  }
+}
+
 async function runCapture(args) {
   const outDirArg = args.find((a) => !a.startsWith('--'));
   const flag = (name, dflt) => {
@@ -224,7 +340,7 @@ async function runCapture(args) {
     return i >= 0 ? args[i + 1] : dflt;
   };
   if (!outDirArg) {
-    console.error('usage: node benchmark/store-dump.mjs capture <outDir> [--corpus <name|path>] [--store sqlite,duckdb,turso] [--scenario cold|incremental]');
+    console.error(`usage: node benchmark/store-dump.mjs capture <outDir> [--corpus <name|path>] [--store sqlite,duckdb,turso] [--scenario ${SCENARIOS.join('|')}]`);
     process.exit(2);
   }
   const outDir = resolve(outDirArg);
@@ -240,10 +356,11 @@ async function runCapture(args) {
 
   const lib = await import(pathToFileURL(join(repoRoot, 'dist', 'esm', 'index.js')).href);
   const { featureEnabled, DEFAULT_EMBED_MODEL } = await import(pathToFileURL(join(repoRoot, 'dist', 'esm', 'config', 'index.js')).href);
+  const storeShared = await import(pathToFileURL(join(repoRoot, 'dist', 'esm', 'store', 'shared.js')).href);
   const embedDefaults = { model: DEFAULT_EMBED_MODEL, provider: 'static' };
 
   mkdirSync(outDir, { recursive: true });
-  const capture = scenario === 'incremental' ? captureStoreIncremental : captureStore;
+  const capture = scenario === 'incremental' ? captureStoreIncremental : scenario === 'cold' ? captureStore : (l, fe, ed, storeName, t, o) => captureStoreScenario(l, fe, storeShared, ed, storeName, t, o, scenario);
   for (const storeName of stores) {
     console.log(`capturing ${storeName} (${scenario})...`);
     await capture(lib, featureEnabled, embedDefaults, storeName, tree, outDir);
@@ -331,9 +448,13 @@ function runCompare(args) {
       ok = false;
       continue;
     }
-    const tables = compareFile(`${s}/tables.txt`, join(dirA, s, 'tables.txt'), join(dirB, s, 'tables.txt'));
-    const ranking = compareFile(`${s}/ranking.txt`, join(dirA, s, 'ranking.txt'), join(dirB, s, 'ranking.txt'));
-    ok = ok && tables && ranking;
+    // notices.txt only exists for the reopen scenarios; comparing it when either side has one
+    // catches a missing/extra file, and skipping it entirely for cold/incremental is correct too.
+    const artifacts = ['tables.txt', 'ranking.txt'];
+    if (existsSync(join(dirA, s, 'notices.txt')) || existsSync(join(dirB, s, 'notices.txt'))) artifacts.push('notices.txt');
+    for (const artifact of artifacts) {
+      ok = compareFile(`${s}/${artifact}`, join(dirA, s, artifact), join(dirB, s, artifact)) && ok;
+    }
   }
   if (ok) console.log(`compare: clean across ${stores.length} store(s) (${stores.join(', ')})`);
   process.exit(ok ? 0 : 1);
@@ -345,7 +466,7 @@ if (mode === 'capture') {
 } else if (mode === 'compare') {
   runCompare(rest);
 } else {
-  console.error('usage: node benchmark/store-dump.mjs capture <outDir> [--corpus <name|path>] [--store sqlite,duckdb,turso] [--scenario cold|incremental]');
+  console.error(`usage: node benchmark/store-dump.mjs capture <outDir> [--corpus <name|path>] [--store sqlite,duckdb,turso] [--scenario ${SCENARIOS.join('|')}]`);
   console.error('       node benchmark/store-dump.mjs compare <dirA> <dirB>');
   process.exit(2);
 }

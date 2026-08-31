@@ -1,7 +1,7 @@
 // The backing-store interface: a minimal portable statement surface (exec/prepare), plus
 // dedicated interfaces exactly where engines diverge (lexical index, vector scan, raw sql).
 
-import type { Config, StoreName } from '../config/index.ts';
+import type { Config, ResolvedConfig, StoreName } from '../config/index.ts';
 import type { ReconcileDelta } from '../features/types.ts';
 import type { ParsedDoc } from '../scan/index.ts';
 
@@ -53,6 +53,39 @@ export interface ReconcileDialect {
   // Records this reconcile's write-transaction duration. sqlite/turso use it for open()'s derived
   // busy_timeout; duckdb has no such PRAGMA and omits it.
   recordDuration?(conn: Connection, ms: number): Promise<void>;
+}
+
+// One open algorithm (src/store/open.ts), parameterised per engine. `Handle` is whatever this
+// store needs to close the connection and construct its Store (sqlite: {db, tokenize}; duckdb:
+// {instance, duckdb}; turso: db) -- opaque to the shared orchestration, threaded through unchanged.
+export interface OpenDialect<Handle> {
+  // Cache filename under STATE_DIR, e.g. 'cache.db'.
+  filename: string;
+  // Cache shape version, independent of the config's own `version`; bumping it rebuilds an existing tree.
+  schemaVersion: string;
+  reconcileDialect: ReconcileDialect;
+  // Opens the physical connection and applies pragmas due before any SQL runs (sqlite: busy_timeout
+  // + WAL; turso: connect-time timeout; duckdb: none).
+  connect(dbPath: string, cfg: ResolvedConfig): Promise<{ handle: Handle; conn: Connection }>;
+  // Releases the handle, for both the rebuild-and-reopen branch and error cleanup on this attempt.
+  close(handle: Handle): Promise<void>;
+  // A signature change fully explained by this dialect's own carve-out (sqlite's tokenize-only
+  // partial rebuild): performs the DDL swap and returns true, or false when this change isn't one.
+  // Absent for duckdb/turso, which have no such carve-out.
+  partialRebuild?(handle: Handle, conn: Connection, cfg: Config, changedKeys: Set<string>): Promise<boolean>;
+  // Runs after ensureSchema when partialRebuild returned true this attempt: repopulates whatever
+  // the DDL swap emptied and records the adopted signature. sqlite-only.
+  postSchemaRebuild?(handle: Handle, conn: Connection, cfg: Config, baseDir: string, wantFeatures: string): Promise<string[]>;
+  // A rebuild trigger independent of the schema/feature signature (sqlite: the content table's own
+  // tokenizer no longer matches meta). Returns the rebuild reason, or null when none applies.
+  extraRebuildReason?(handle: Handle): string | null;
+  // Schema DDL beyond frontmatter/preset_files/meta (content table, feature hooks); sole owner of
+  // whether it wraps itself in a write transaction (sqlite: yes, guards a cold-open ALTER race; duckdb/turso: no).
+  ensureSchema(handle: Handle, conn: Connection, cfg: Config): Promise<void>;
+  // Installs the derived busy_timeout PRAGMA right before reconcile (sqlite/turso); absent for
+  // duckdb, which has no such PRAGMA.
+  setDerivedBusyTimeout?(handle: Handle, conn: Connection, ms: number): Promise<void>;
+  createStore(handle: Handle, conn: Connection, cfg: ResolvedConfig): Store;
 }
 
 export interface FieldStat {
@@ -138,9 +171,6 @@ export interface Store {
   // Pins one snapshot across multi-statement reads; `map` and `peek` use it. A network-bound
   // write (search's embedding top-up) must stay outside it. Nesting joins the enclosing transaction.
   transaction<T>(fn: () => Promise<T>): Promise<T>;
-  // The whole file-sync pass (parse changed files, run every feature hook, resolve links,
-  // recompute rank) behind one method: per-file iteration never crosses the async boundary.
-  reconcile(): Promise<{ parsed: number; warnings: string[] }>;
   docs: DocumentStore;
   lexical: LexicalIndex;
   vectors: VectorStore;

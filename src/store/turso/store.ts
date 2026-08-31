@@ -1,23 +1,20 @@
 import type { Database } from '@tursodatabase/database';
-import type { Config } from '../../config/index.ts';
 import { STORE_DIMS } from '../../embed/types.ts';
-import { reconcile } from '../reconcile.ts';
 import { getColumns } from '../shared.ts';
 import { withTransaction } from '../transaction.ts';
 import type { Capability, Connection, Statement, Store } from '../types.ts';
 import { hasVectorRow, pendingRows } from '../vectors.ts';
 import { fieldStats } from './fieldStats.ts';
 import { queryLexical } from './lexical.ts';
-import { tursoDialect } from './reconcile.ts';
 import { scanCandidates, scanSimilar, writeVectorBatch } from './vectors.ts';
 
 // No 'snippets': fts_highlight returns the whole column, not a bounded window, so hits use
 // the caller's JS excerpt. No 'watch-concurrency': single-process by default, as on duckdb.
 export const CAPABILITIES: ReadonlySet<Capability> = new Set(['lexical', 'phrases', 'vectors']);
 
-// Shares one Connection instance (conn) with open()'s own reconcile call so transaction depth
+// Shares one Connection instance (conn) with the builder's own reconcile call so transaction depth
 // (see transaction.ts) is tracked against the same object everywhere.
-export function createStore(db: Database, conn: Connection, cfg: Config, baseDir: string): Store {
+export function createStore(db: Database, conn: Connection): Store {
   return {
     name: 'turso',
     capabilities: CAPABILITIES,
@@ -32,9 +29,6 @@ export function createStore(db: Database, conn: Connection, cfg: Config, baseDir
     },
     async transaction<T>(fn: () => Promise<T>): Promise<T> {
       return withTransaction(conn, fn);
-    },
-    async reconcile() {
-      return reconcile(conn, cfg, baseDir, tursoDialect);
     },
     docs: {
       async columns() {
