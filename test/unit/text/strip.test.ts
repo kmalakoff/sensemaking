@@ -69,4 +69,32 @@ describe('stripText', () => {
     const text = stripText('Run `const apiKey = process.env.KEY;` first.');
     assert.ok(text.includes('const apiKey = process.env.KEY;'));
   });
+
+  // A blank line inside %%...%% splits it across mdast blocks. Stripping per block then never saw
+  // a closing %%, so the whole comment and both markers were indexed and searchable.
+  it('a %%comment%% spanning a blank line is absent, markers included', () => {
+    const text = stripText('Visible one.\n\n%%\nhiddenalpha aside\n\nhiddenbeta still inside\n%%\n\nVisible two.');
+    assert.ok(!text.includes('hiddenalpha'), text);
+    assert.ok(!text.includes('hiddenbeta'), text);
+    assert.ok(!text.includes('%%'), text);
+    assert.ok(text.includes('Visible one.') && text.includes('Visible two.'));
+  });
+
+  // Same shape as the %% case: stripHtml runs per html node, so an inline <!-- opened in one
+  // paragraph and closed in a later one never paired. Block comments were always fine, since
+  // CommonMark's HTML block runs to --> across blank lines.
+  it('an inline <!-- --> spanning paragraphs is absent, markers included', () => {
+    const text = stripText('Visible one. <!-- hiddeneee\n\nhiddenfff --> Visible two.');
+    assert.ok(!text.includes('hiddeneee'), text);
+    assert.ok(!text.includes('hiddenfff'), text);
+    assert.ok(!text.includes('<!--') && !text.includes('-->'), text);
+    assert.ok(text.includes('Visible one.') && text.includes('Visible two.'));
+  });
+
+  // The strip runs across blocks now, so a fence between two %% must not become a comment pair.
+  it('%% inside a fenced code block is literal, not a comment delimiter', () => {
+    const text = stripText('Before.\n\n```\nconst a = "%%";\nkeepalpha\nconst b = "%%";\n```\n\nAfter.');
+    assert.ok(text.includes('keepalpha'), text);
+    assert.ok(text.includes('Before.') && text.includes('After.'));
+  });
 });

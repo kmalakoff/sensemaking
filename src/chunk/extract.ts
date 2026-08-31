@@ -44,6 +44,7 @@ function embedText(inner: string): string {
 
 function resolveFlavor(text: string): string {
   return text
+    .replace(HTML_COMMENT, '')
     .replace(COMMENT_PAIR, '')
     .replace(EMBED, (_, inner: string) => embedText(inner))
     .replace(WIKILINK, (_, inner: string) => wikilinkText(inner))
@@ -127,7 +128,17 @@ const CODE_PLACEHOLDER = /\uE000(\d+)\uE000/g;
 // Plain text of one mdast node (or a whole tree): heading/list/table structure is kept as text,
 // markup (emphasis, link targets, task and callout markers) is dropped. Pure, synchronous.
 export function extractText(node: Nodes): string {
+  return extractTexts([node]);
+}
+
+// Blocks resolved together: a blank line inside %%...%% splits it across blocks, and a per-block
+// strip then never sees the closing %%. Code stays placeholder-held across all of them.
+export function extractTexts(nodes: Nodes[]): string {
   const code: string[] = [];
-  const resolved = resolveFlavor(extractNode(node, code));
+  const joined = nodes
+    .map((n) => extractNode(n, code))
+    .filter((s) => s.length > 0)
+    .join('\n');
+  const resolved = resolveFlavor(joined);
   return code.length === 0 ? resolved : resolved.replace(CODE_PLACEHOLDER, (_, i: string) => code[Number(i)]);
 }
