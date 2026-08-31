@@ -480,4 +480,43 @@ describe('links feature', () => {
 
     assert.deepEqual(incrementalRows, rebuiltRows);
   });
+
+  // The threshold's stated rationale is that a full pass "is the only one guaranteed to match
+  // resolveTarget's ambiguity rules". These are the two cases that claim is actually about, and
+  // neither was covered: a basename tie whose winner changes, and a same-note anchor, which stores
+  // target_base = NULL and so can never match resolveIncremental's `target_base IN (...)` lookup.
+  it('incremental resolve matches a full rebuild when an added file takes over a basename tie', async () => {
+    const baseDir = tmpTree();
+    write(baseDir, 'b/dup.md', 'second by path');
+    write(baseDir, 'c/dup.md', 'third by path');
+    write(baseDir, 'src.md', 'points at [[dup]] and [[ghost]].');
+    write(baseDir, 'anchor.md', '# Top\n\nsee [[#Top]] and [[dup]].');
+    for (let i = 0; i < 20; i++) write(baseDir, `filler${i}.md`, `mentions [[filler${(i + 1) % 20}]]`);
+
+    const first = await openTree(baseDir);
+    const tie = (await (await first.store.prepare('SELECT dst FROM links WHERE src = ? AND target = ?')).get('src.md', 'dup')) as { dst: string };
+    assert.equal(tie.dst, 'b/dup.md', 'lexicographically-first wins before the new file lands');
+    await first.store.close();
+
+    // 2 adds against 26 files, far under the 20% churn threshold, so this takes the incremental path
+    write(baseDir, 'a/dup.md', 'now first by path');
+    write(baseDir, 'ghost.md', 'the formerly dead target');
+
+    const incremental = await openTree(baseDir);
+    const incrementalRows = await (await incremental.store.prepare('SELECT src, target, dst FROM links ORDER BY src, target')).all();
+    await incremental.store.close();
+
+    const cfg = { presets: { default: { include: ['**/*.md'] } }, queries: {}, baseDir, configPath: null };
+    clearCache(cfg);
+    const rebuilt = await open(cfg);
+    const rebuiltRows = await (await rebuilt.store.prepare('SELECT src, target, dst FROM links ORDER BY src, target')).all();
+    await rebuilt.store.close();
+
+    // The oracle must show the answer actually moved, or both paths could agree on a stale value
+    // and this would pass while proving nothing.
+    const oracleTie = (rebuiltRows as Array<{ src: string; target: string; dst: string | null }>).find((r) => r.src === 'src.md' && r.target === 'dup');
+    assert.equal(oracleTie?.dst, 'a/dup.md', 'the added file must take over the tie in a full rebuild');
+
+    assert.deepEqual(incrementalRows, rebuiltRows);
+  });
 });

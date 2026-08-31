@@ -19,7 +19,7 @@ import { createStore } from './store.ts';
 export const DB_FILENAME = 'cache.turso.db';
 // Independent of sqlite's and duckdb's SCHEMA_VERSION: each store's cache shape evolves
 // separately. Covers the FTS indexes, the "_ngram" sidecar columns, and embeddings.vector's width.
-export const SCHEMA_VERSION = '3';
+export const SCHEMA_VERSION = '4';
 
 export interface OpenResult {
   store: Store;

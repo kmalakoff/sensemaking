@@ -20,7 +20,7 @@ import { createStore } from './store.ts';
 export const DB_FILENAME = 'cache.duckdb';
 // Independent of sqlite's SCHEMA_VERSION -- the two stores' cache shapes evolve separately (VARIANT frontmatter columns vs untyped).
 // The store name already joins the feature signature, so switching a config's `store` key rebuilds rather than reusing the other engine's cache.
-export const SCHEMA_VERSION = '2';
+export const SCHEMA_VERSION = '3';
 
 export interface OpenResult {
   store: Store;
