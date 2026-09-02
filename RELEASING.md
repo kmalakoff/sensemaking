@@ -83,6 +83,17 @@ Reports in `benchmark/reports/` are generated from the sitting's own JSON, never
 Two storage formats version themselves, and neither is a judgement call:
 
 - **The cache.** Any change to what reconcile writes: bump `SCHEMA_VERSION` in each store's `open.ts`, so existing trees rebuild on first query instead of reading rows written in an older format. Consumers pay one re-crawl (and embed trees re-embed on their next vector search), worth saying in the consumer notes so it doesn't read as a hang.
-- **The config file.** A change that makes an existing `sense.config.json` wrong (a renamed or removed key, a changed default, a restructured block) bumps `SUPPORTED_CONFIG_VERSION` in `src/config/types.ts`, adds a step to `MIGRATIONS` that rewrites the old shape, and extends `version`'s enum in `schema.json`. A purely additive change (a new optional key, a new accepted value shape) leaves every old config valid and does not bump; saved queries are the example: `queries` gained an object form and v2 configs kept working untouched.
+- **The config file.** A change that makes an existing `sense.config.json` wrong (a renamed or removed key, a changed default, a restructured block) bumps `SUPPORTED_CONFIG_VERSION` in `src/config/types.ts`, adds a step to `MIGRATIONS` that rewrites the old shape, and extends `version`'s enum in `schema.json`.
+
+  **One sanctioned exception: a key that was never portable fails loudly instead of migrating.**
+  `content.tokenize` was deleted in 0.21.0 without a migration, on the owner's decision, and that is
+  correct rather than an oversight. It passed a raw SQLite FTS5 tokenizer string straight into the
+  DDL, so `trigram` did something on sqlite and nothing at all on duckdb or turso. It never worked
+  as a portable setting, and every outcome it selected is now automatic on all three stores.
+  Migrating it silently would delete a choice someone made deliberately without
+  telling them, which is the `no-silent-modes` failure inverted. A tree carrying the key fails to
+  load with a message naming the removal; removing the block rebuilds the index under the current
+  tokenizer, verified end to end on a v0.20.0 cache. Migration remains the rule for a key that did
+  what it said. A purely additive change (a new optional key, a new accepted value shape) leaves every old config valid and does not bump; saved queries are the example: `queries` gained an object form and v2 configs kept working untouched.
 
 Whether or not either version moved, the release verifies both paths on a scratch tree: a config from the oldest supported version still auto-migrates (`sense <any command>` prints the migration line and rewrites the file), and a cache written by the previous release rebuilds rather than erroring. `test/unit/config/load.test.ts` covers the migration chain; the scratch run is what proves it against the packed build.
