@@ -1,226 +1,15 @@
 import assert from 'node:assert';
-import { utimesSync, writeFileSync } from 'node:fs';
+import { mkdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import type { Config } from '../../../../src/config/index.ts';
-import { featureSignature } from '../../../../src/config/index.ts';
-import { FEATURES } from '../../../../src/features/index.ts';
 import { runCli as spawnCli } from '../../../lib/cli.ts';
 import { writeModel } from '../../../lib/model.ts';
 import { scratchDir } from '../../../lib/scratch.ts';
 import { openTree, tmpTree, writeNote } from '../../../lib/tree.ts';
 
-// A note in a language written without spaces, which is what the setting exists for: unicode61
-// has no segmenter, so the whole run indexes as one token and word search cannot reach it.
-function makeTree(tokenize?: string): string {
-  const dir = scratchDir('tokenize');
-  const content = tokenize === undefined ? {} : { content: { tokenize } };
-  writeFileSync(join(dir, 'sense.config.json'), JSON.stringify({ version: 4, presets: { default: { include: ['*.md'] } }, ...content, queries: {} }));
-  writeFileSync(join(dir, 'cjk.md'), '---\ntitle: notes\n---\n数据库全文搜索很有用。\n');
-  writeFileSync(join(dir, 'en.md'), '---\ntitle: english\n---\nRevenue grew.\n');
-  return dir;
-}
-
 function runCli(dir: string, args: string[]) {
   return spawnCli([...args, '--config', join(dir, 'sense.config.json')]);
 }
-
-function setTokenize(dir: string, tokenize: string): void {
-  writeFileSync(join(dir, 'sense.config.json'), JSON.stringify({ version: 4, presets: { default: { include: ['*.md'] } }, content: { tokenize }, queries: {} }));
-}
-
-// Rows in the cache file as it sits on disk, without going through a command that would
-// rebuild it. Returns -1 when the crawl never got as far as creating the table.
-function cachedDocs(dir: string): number {
-  let db: DatabaseSync | undefined;
-  try {
-    db = new DatabaseSync(join(dir, '.sense', 'cache.db'), { readOnly: true });
-    return (db.prepare('SELECT count(*) AS n FROM frontmatter').get() as { n: number }).n;
-  } catch {
-    return -1;
-  } finally {
-    db?.close();
-  }
-}
-
-function match(dir: string, term: string): string[] {
-  const result = runCli(dir, ['sql', 'SELECT path FROM content WHERE content MATCH ?', term, '--format', 'json']);
-  assert.equal(result.status, 0, result.stderr);
-  return (JSON.parse(result.stdout) as Array<{ path: string }>).map((r) => r.path);
-}
-
-describe('content.tokenize', () => {
-  it('defaults to porter unicode61, which cannot reach a language written without spaces', () => {
-    const dir = makeTree();
-    const ddl = runCli(dir, ['sql', "SELECT sql FROM sqlite_master WHERE name = 'content'", '--format', 'json']);
-    assert.match(ddl.stdout, /porter unicode61/);
-    assert.deepEqual(match(dir, '全文搜'), []);
-  });
-
-  it('trigram indexes the same tree so the words become reachable', () => {
-    const dir = makeTree('trigram');
-    const ddl = runCli(dir, ['sql', "SELECT sql FROM sqlite_master WHERE name = 'content'", '--format', 'json']);
-    assert.match(ddl.stdout, /tokenize = 'trigram'/);
-    assert.deepEqual(match(dir, '全文搜'), ['cjk.md']);
-  });
-
-  it('trigram also matches inside a word, which a stemmer cannot', () => {
-    const dir = makeTree('trigram');
-    assert.deepEqual(match(dir, 'evenu'), ['en.md']);
-  });
-
-  it('trigram needs three characters, so a two-character term still finds nothing', () => {
-    const dir = makeTree('trigram');
-    assert.deepEqual(match(dir, '全文'), []);
-  });
-
-  it('changing it rebuilds once, naming the tokenizer rather than "features"', () => {
-    const dir = makeTree();
-    runCli(dir, ['sql', 'SELECT 1']);
-    setTokenize(dir, 'trigram');
-    const changed = runCli(dir, ['sql', 'SELECT 1']);
-    // A tokenize-only change takes the dedicated fast path: it names the content
-    // tokenizer, not "features", and says what is kept, not just what rebuilds.
-    assert.match(changed.stderr, /config change \(content tokenizer\) rebuilds the text index; vectors, links, and sections are kept/);
-    const again = runCli(dir, ['sql', 'SELECT 1']);
-    assert.ok(!again.stderr.includes('rebuilds the index'), again.stderr);
-  });
-
-  it('a tree that never sets it carries no signature segment, so upgrading does not rebuild it', () => {
-    const base = { presets: { default: { include: ['*.md'] } }, queries: {} } as unknown as Config;
-    assert.ok(!featureSignature(base, FEATURES).includes('tokenize:'), featureSignature(base, FEATURES));
-    const set = { ...base, content: { tokenize: 'trigram' } } as unknown as Config;
-    assert.match(featureSignature(set, FEATURES), /tokenize:trigram/);
-  });
-
-  it('a tokenizer this SQLite does not accept is refused by the probe, naming the built-ins', () => {
-    const dir = makeTree('nonsense-tokenizer');
-    const result = runCli(dir, ['sql', 'SELECT 1']);
-    assert.equal(result.status, 1);
-    assert.match(result.stderr, /content.tokenize "nonsense-tokenizer" is not a tokenizer this SQLite accepts/);
-    assert.match(result.stderr, /unicode61, ascii, porter, and trigram/);
-  });
-
-  it('a refused tokenizer leaves a warm cache alone, so a typo costs no re-index', () => {
-    const dir = makeTree();
-    assert.equal(runCli(dir, ['sql', 'SELECT 1']).status, 0);
-    const before = cachedDocs(dir);
-    assert.ok(before > 0, 'the fixture should have indexed something to lose');
-
-    setTokenize(dir, 'nonsense-tokenizer');
-    assert.equal(runCli(dir, ['sql', 'SELECT 1']).status, 1);
-
-    // Read the cache file directly: a later command's reconcile re-crawls the tree and restores
-    // the doc count either way, so only rows already in the file distinguish "never cleared" from "rebuilt".
-    assert.equal(cachedDocs(dir), before, 'the refused tokenizer cleared the cache before rejecting it');
-  });
-
-  it('a cache whose meta was lost still rebuilds when the tokenizer changes, read from the table DDL', () => {
-    const dir = makeTree();
-    assert.equal(runCli(dir, ['sql', 'SELECT 1']).status, 0);
-
-    const cachePath = join(dir, '.sense', 'cache.db');
-    const db = new DatabaseSync(cachePath);
-    db.exec(`DELETE FROM meta WHERE key = 'features'`);
-    db.close();
-
-    setTokenize(dir, 'trigram');
-    const rebuilt = runCli(dir, ['sql', "SELECT sql FROM sqlite_master WHERE name='content'", '--format', 'json']);
-    assert.equal(rebuilt.status, 0, rebuilt.stderr);
-    assert.match(rebuilt.stderr, /different content tokenizer; rebuilding/);
-    assert.match(rebuilt.stdout, /tokenize = 'trigram'/);
-
-    assert.deepEqual(match(dir, '全文搜'), ['cjk.md']);
-  });
-
-  it('an unknown key inside the block names itself', () => {
-    const dir = scratchDir('tokenize');
-    writeFileSync(join(dir, 'sense.config.json'), JSON.stringify({ version: 4, presets: { default: { include: ['*.md'] } }, content: { tokeniz: 'trigram' }, queries: {} }));
-    const result = runCli(dir, ['sql', 'SELECT 1']);
-    assert.equal(result.status, 1);
-    assert.match(result.stderr, /content has unknown key\(s\) tokeniz; content takes tokenize/);
-  });
-
-  it('a non-string value is refused before it reaches DDL', () => {
-    const dir = scratchDir('tokenize');
-    writeFileSync(join(dir, 'sense.config.json'), JSON.stringify({ version: 4, presets: { default: { include: ['*.md'] } }, content: { tokenize: 7 }, queries: {} }));
-    const result = runCli(dir, ['sql', 'SELECT 1']);
-    assert.equal(result.status, 1);
-    assert.match(result.stderr, /content.tokenize must be a non-empty string/);
-  });
-});
-
-// A tokenize-only signature change rebuilds content alone; vectors, links, and sections are
-// file-derived, not tokenizer-derived, and stay untouched.
-describe('content.tokenize: a tokenize-only change rebuilds text only', () => {
-  it('keeps embeddings (and everything else file-derived) while content is rebuilt', () => {
-    const dir = makeTree();
-    assert.equal(runCli(dir, ['sql', 'SELECT 1']).status, 0);
-
-    // The fixture has no embed config, so reconcile never creates this table; add it by hand
-    // with the exact DDL embed.ts uses, carrying a real (non-NULL) vector.
-    const cachePath = join(dir, '.sense', 'cache.db');
-    const setup = new DatabaseSync(cachePath);
-    setup.exec(`CREATE TABLE IF NOT EXISTS embeddings ("path" TEXT, chunk INTEGER, start_line INTEGER, end_line INTEGER, scale REAL, vector BLOB, PRIMARY KEY ("path", chunk))`);
-    setup.prepare(`INSERT INTO embeddings VALUES ('cjk.md', 0, 1, 2, 1.0, X'00')`).run();
-    setup.close();
-
-    setTokenize(dir, 'trigram');
-    const result = runCli(dir, ['sql', 'SELECT 1']);
-    assert.equal(result.status, 0, result.stderr);
-    assert.match(result.stderr, /text index; vectors, links, and sections are kept/);
-
-    const after = new DatabaseSync(cachePath, { readOnly: true });
-    const row = after.prepare(`SELECT vector FROM embeddings WHERE "path" = 'cjk.md'`).get() as { vector: Uint8Array } | undefined;
-    after.close();
-    assert.ok(row?.vector != null, 'the embeddings row should survive the tokenize-only rebuild');
-
-    assert.deepEqual(match(dir, '全文搜'), ['cjk.md']); // content was actually rebuilt, with trigram
-  });
-
-  it('self-heals a crash between the DROP and the recreate: content missing, meta still pointing at the old tokenizer', () => {
-    const dir = makeTree();
-    assert.equal(runCli(dir, ['sql', 'SELECT 1']).status, 0); // cold build, default tokenize
-
-    setTokenize(dir, 'trigram'); // config now wants trigram; meta.features still says the old one
-
-    // Simulate a crash between the DROP and the recreate: content gone from the persisted file,
-    // meta untouched since it's only written once rebuildContentTable finishes.
-    const cachePath = join(dir, '.sense', 'cache.db');
-    const crashed = new DatabaseSync(cachePath);
-    crashed.exec('DROP TABLE content');
-    crashed.close();
-
-    const result = runCli(dir, ['sql', 'SELECT 1']);
-    assert.equal(result.status, 0, result.stderr);
-    assert.match(result.stderr, /text index; vectors, links, and sections are kept/);
-    assert.deepEqual(match(dir, '全文搜'), ['cjk.md']); // content rebuilt with trigram, not wedged
-  });
-
-  it('a preset include change still takes the full rebuild, not the text-index-only path', () => {
-    const dir = makeTree();
-    assert.equal(runCli(dir, ['sql', 'SELECT 1']).status, 0);
-    writeFileSync(join(dir, 'sense.config.json'), JSON.stringify({ version: 4, presets: { default: { include: ['*.md', '*.mdx'] } }, queries: {} }));
-    const result = runCli(dir, ['sql', 'SELECT 1']);
-    assert.equal(result.status, 0, result.stderr);
-    assert.match(result.stderr, /config change \(preset "default"\) rebuilds the index/);
-    assert.ok(!result.stderr.includes('text index'), result.stderr);
-  });
-
-  it('reprints a frontmatter warning on the run that rebuilds text only, since mtimes are untouched so reconcile never reparses it', () => {
-    const dir = makeTree();
-    writeFileSync(join(dir, 'bad-date.md'), '---\ntitle: Bad\ncreated: "2024-13-01T10:00"\n---\nbody\n');
-    const cold = runCli(dir, ['sql', 'SELECT 1']);
-    assert.equal(cold.status, 0, cold.stderr);
-    assert.match(cold.stderr, /bad-date\.md: created is not a valid date/);
-
-    setTokenize(dir, 'trigram');
-    const changed = runCli(dir, ['sql', 'SELECT 1']);
-    assert.equal(changed.status, 0, changed.stderr);
-    assert.match(changed.stderr, /text index; vectors, links, and sections are kept/);
-    assert.match(changed.stderr, /bad-date\.md: created is not a valid date/);
-  });
-});
 
 // The signature's embed segment carries the static model's resolved weight identity (local
 // path: size+mtime); an untracked identity adopts silently, a changed identity re-embeds.
@@ -273,6 +62,393 @@ describe('embed model identity in the signature', () => {
     const result = runCli(dir, ['sql', 'SELECT 1']);
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stderr, /config change \(embed settings\) rebuilds the index/);
+  });
+});
+
+// Plan item 1.1: a preset-only signature change forces a reparse of exactly the files whose
+// preset coverage moved, not the whole tree. `file.embed` is a union across presets (scan/list.ts),
+// so the case most likely to be wrong is a file two presets cover where only one stops.
+describe('preset membership: narrow reparse instead of a full clear', () => {
+  // "default" is required by config validation; "extra" is the second preset the trap is about.
+  function twoPresetTree(modelDir: string): string {
+    const dir = scratchDir('preset-membership');
+    writeFileSync(join(dir, 'sense.config.json'), JSON.stringify({ version: 5, presets: { default: { include: ['*.md'] }, extra: { include: ['both.md'] } }, embed: { model: modelDir, provider: 'static' }, queries: {} }));
+    writeFileSync(join(dir, 'both.md'), '---\ntitle: Both\n---\n\napple\n'); // covered by default and extra
+    writeFileSync(join(dir, 'default-only.md'), '---\ntitle: DefaultOnly\n---\n\napple\n'); // covered by default alone
+    return dir;
+  }
+
+  function narrowDefault(dir: string, modelDir: string): void {
+    writeFileSync(join(dir, 'sense.config.json'), JSON.stringify({ version: 5, presets: { default: { include: ['*.md'], exclude: ['both.md'] }, extra: { include: ['both.md'] } }, embed: { model: modelDir, provider: 'static' }, queries: {} }));
+  }
+
+  it('a file two presets cover keeps its vector coverage when only one of them drops it', () => {
+    const model = writeModel();
+    const dir = twoPresetTree(model);
+    assert.equal(runCli(dir, ['sql', 'SELECT 1']).status, 0);
+
+    const cachePath = join(dir, '.sense', 'cache.db');
+    const setup = new DatabaseSync(cachePath);
+    // Real (non-NULL) vectors on both files, so default-only.md's survival below actually
+    // proves nothing was re-embedded, and both.md's is a deliberate sentinel to prove it goes stale.
+    setup.prepare(`UPDATE embeddings SET scale = 1.0, vector = X'2A' WHERE "path" = 'default-only.md' AND chunk = 0`).run();
+    setup.prepare(`UPDATE embeddings SET scale = 1.0, vector = X'2A' WHERE "path" = 'both.md' AND chunk = 0`).run();
+    setup.close();
+
+    narrowDefault(dir, model);
+    const result = runCli(dir, ['sql', 'SELECT 1']);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stderr, /config change \(preset "default"\) reparses only the files it affects/);
+
+    const afterReparse = new DatabaseSync(cachePath, { readOnly: true });
+    const defaultOnly = afterReparse.prepare(`SELECT vector FROM embeddings WHERE "path" = 'default-only.md' AND chunk = 0`).get() as { vector: Uint8Array } | undefined;
+    const both = afterReparse.prepare(`SELECT * FROM embeddings WHERE "path" = 'both.md'`).all() as Array<{ vector: Uint8Array | null }>;
+    const presets = afterReparse.prepare(`SELECT preset FROM preset_files WHERE "path" = 'both.md' ORDER BY preset`).all() as Array<{ preset: string }>;
+    afterReparse.close();
+    assert.equal(Buffer.from(defaultOnly?.vector as Uint8Array).toString('hex'), '2a', 'default-only.md was never touched by the "default" change, so its vector must be untouched');
+    assert.ok(both.length > 0, 'both.md must still have an embeddings row: it is still covered, by "extra"');
+    assert.deepEqual(
+      presets.map((r) => r.preset),
+      ['extra'],
+      'both.md drops "default" from its preset_files row but stays present via "extra"'
+    );
+
+    // The row went through the normal touched-file path (its "default" membership genuinely
+    // moved), so its vector goes pending; a query embeds it, proving it never silently stopped
+    // being owed a vector, only that it needed one recomputed. Scoped to "extra": both.md left
+    // "default"'s coverage, so that is the preset it is still findable through.
+    const search = runCli(dir, ['search', 'apple', '--preset', 'extra', '--format', 'json']);
+    assert.equal(search.status, 0, search.stderr);
+    const rows = JSON.parse(search.stdout) as Array<{ path: string }>;
+    assert.ok(
+      rows.some((r) => r.path === 'both.md'),
+      JSON.stringify(rows)
+    );
+
+    const afterEmbed = new DatabaseSync(cachePath, { readOnly: true });
+    const bothVector = afterEmbed.prepare(`SELECT vector FROM embeddings WHERE "path" = 'both.md' AND chunk = 0`).get() as { vector: Uint8Array | null } | undefined;
+    afterEmbed.close();
+    assert.ok(bothVector?.vector != null, 'both.md must have a real vector again, not be left permanently pending');
+  });
+
+  it('a file that loses coverage from every preset is removed through delta.vanished, not left behind', () => {
+    const model = writeModel();
+    const dir = twoPresetTree(model);
+    assert.equal(runCli(dir, ['sql', 'SELECT 1']).status, 0);
+
+    // Drops both.md from every preset (default excludes it, extra is removed): it must fully vanish.
+    writeFileSync(join(dir, 'sense.config.json'), JSON.stringify({ version: 5, presets: { default: { include: ['*.md'], exclude: ['both.md'] } }, embed: { model, provider: 'static' }, queries: {} }));
+    const result = runCli(dir, ['sql', 'SELECT 1']);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stderr, /config change \(preset "(default|extra)", preset "(default|extra)"\) reparses only the files it affects/);
+
+    const cachePath = join(dir, '.sense', 'cache.db');
+    const after = new DatabaseSync(cachePath, { readOnly: true });
+    const frontmatter = after.prepare(`SELECT "path" FROM frontmatter WHERE "path" = 'both.md'`).get();
+    const embeddings = after.prepare(`SELECT * FROM embeddings WHERE "path" = 'both.md'`).all();
+    const presetFiles = after.prepare(`SELECT * FROM preset_files WHERE "path" = 'both.md'`).all();
+    after.close();
+    assert.equal(frontmatter, undefined, 'both.md must be gone from frontmatter, not left as a phantom row');
+    assert.deepEqual(embeddings, []);
+    assert.deepEqual(presetFiles, []);
+  });
+
+  it('a file gaining coverage for the first time is parsed like any brand-new file', () => {
+    const dir = scratchDir('preset-membership');
+    writeFileSync(join(dir, 'sense.config.json'), JSON.stringify({ version: 5, presets: { default: { include: ['default-only/*.md'] } }, queries: {} }));
+    mkdirSync(join(dir, 'default-only'), { recursive: true });
+    writeFileSync(join(dir, 'default-only', 'a.md'), '---\ntitle: A\n---\n\nbody\n');
+    mkdirSync(join(dir, 'extra-only'), { recursive: true });
+    writeFileSync(join(dir, 'extra-only', 'newcomer.md'), '---\ntitle: Newcomer\n---\n\nbody\n');
+    assert.equal(runCli(dir, ['sql', 'SELECT 1']).status, 0);
+
+    writeFileSync(join(dir, 'sense.config.json'), JSON.stringify({ version: 5, presets: { default: { include: ['default-only/*.md'] }, extra: { include: ['extra-only/*.md'] } }, queries: {} }));
+    const result = runCli(dir, ['sql', 'SELECT 1']);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stderr, /config change \(preset "extra"\) reparses only the files it affects/);
+
+    const cachePath = join(dir, '.sense', 'cache.db');
+    const after = new DatabaseSync(cachePath, { readOnly: true });
+    const row = after.prepare(`SELECT "path", title FROM frontmatter WHERE "path" = 'extra-only/newcomer.md'`).get() as { path: string; title: string } | undefined;
+    const presets = after.prepare(`SELECT preset FROM preset_files WHERE "path" = 'extra-only/newcomer.md'`).all() as Array<{ preset: string }>;
+    after.close();
+    assert.deepEqual(row, { path: 'extra-only/newcomer.md', title: 'Newcomer' }, 'the newly-covered file must be fully parsed, same as any other new file');
+    assert.deepEqual(
+      presets.map((r) => r.preset),
+      ['extra']
+    );
+  });
+
+  it('an unrelated preset (not part of the changed set) is entirely untouched: never reparsed, never in the notice', () => {
+    const model = writeModel();
+    const dir = twoPresetTree(model);
+    assert.equal(runCli(dir, ['sql', 'SELECT 1']).status, 0);
+
+    const cachePath = join(dir, '.sense', 'cache.db');
+    const setup = new DatabaseSync(cachePath);
+    setup.prepare(`UPDATE embeddings SET scale = 1.0, vector = X'2A' WHERE "path" = 'default-only.md' AND chunk = 0`).run();
+    setup.close();
+
+    narrowDefault(dir, model);
+    const result = runCli(dir, ['sql', 'SELECT 1']);
+    assert.equal(result.status, 0, result.stderr);
+    assert.ok(!result.stderr.includes('preset "extra"'), result.stderr);
+
+    const after = new DatabaseSync(cachePath, { readOnly: true });
+    const defaultOnly = after.prepare(`SELECT vector FROM embeddings WHERE "path" = 'default-only.md' AND chunk = 0`).get() as { vector: Uint8Array } | undefined;
+    after.close();
+    assert.equal(Buffer.from(defaultOnly?.vector as Uint8Array).toString('hex'), '2a');
+  });
+});
+
+// Plan item 1.1: a feature-toggle-only signature change invalidates only that feature's own
+// table. The trap: reconcile.ts's activeFeatures skips a disabled feature's remove/store hooks
+// entirely, so its rows rot (orphaned by a deletion, missing for an addition, stale for an edit)
+// while it is off -- re-enabling it must fully re-derive from every indexed file, not patch.
+describe('feature toggle: narrow reparse instead of a full clear', () => {
+  function tagsTree(): string {
+    const dir = scratchDir('feature-toggle');
+    writeFileSync(join(dir, 'sense.config.json'), JSON.stringify({ version: 5, presets: { default: { include: ['*.md'] } }, queries: {} }));
+    writeFileSync(join(dir, 'a.md'), '---\ntitle: A\ntags: ["alpha"]\n---\n\n# Heading A\n\nBody with #beta and a link to [[b]].\n');
+    writeFileSync(join(dir, 'b.md'), '---\ntitle: B\ntags: ["gamma"]\n---\n\n# Heading B\n\nBody with #delta.\n');
+    return dir;
+  }
+
+  function setTagsFeature(dir: string, enabled: boolean): void {
+    writeFileSync(join(dir, 'sense.config.json'), JSON.stringify({ version: 5, presets: { default: { include: ['*.md'] } }, features: { tags: enabled }, queries: {} }));
+  }
+
+  function tagsRows(dbPath: string): Array<{ path: string; tag: string }> {
+    const db = new DatabaseSync(dbPath, { readOnly: true });
+    const rows = db.prepare('SELECT "path", tag FROM tags ORDER BY "path", tag').all() as Array<{ path: string; tag: string }>;
+    db.close();
+    return rows;
+  }
+
+  function sentinelSections(dbPath: string, value: string): void {
+    const db = new DatabaseSync(dbPath);
+    db.prepare(`UPDATE sections SET heading = ? WHERE "path" = 'a.md' AND idx = 0`).run(value);
+    db.close();
+  }
+
+  function readSectionsHeading(dbPath: string): string | undefined {
+    const db = new DatabaseSync(dbPath, { readOnly: true });
+    const row = db.prepare(`SELECT heading FROM sections WHERE "path" = 'a.md' AND idx = 0`).get() as { heading: string } | undefined;
+    db.close();
+    return row?.heading;
+  }
+
+  function sentinelLinks(dbPath: string, value: string): void {
+    const db = new DatabaseSync(dbPath);
+    db.prepare(`UPDATE links SET dst = ? WHERE src = 'a.md' AND target = 'b'`).run(value);
+    db.close();
+  }
+
+  function readLinksDst(dbPath: string): string | null | undefined {
+    const db = new DatabaseSync(dbPath, { readOnly: true });
+    const row = db.prepare(`SELECT dst FROM links WHERE src = 'a.md' AND target = 'b'`).get() as { dst: string | null } | undefined;
+    db.close();
+    return row?.dst;
+  }
+
+  it('tags toggled off empties the tags table and leaves sections/links untouched', () => {
+    const dir = tagsTree();
+    assert.equal(runCli(dir, ['sql', 'SELECT 1']).status, 0);
+    const cachePath = join(dir, '.sense', 'cache.db');
+    assert.ok(tagsRows(cachePath).length > 0, 'fixture must actually produce tags to prove the table emptied');
+
+    const SENTINEL_HEADING = 'SENTINEL-HEADING-untouched-off';
+    const SENTINEL_DST = 'SENTINEL-DST-untouched-off';
+    sentinelSections(cachePath, SENTINEL_HEADING);
+    sentinelLinks(cachePath, SENTINEL_DST);
+
+    setTagsFeature(dir, false);
+    const result = runCli(dir, ['sql', 'SELECT 1']);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stderr, /config change \(feature "tags"\) reparses only the feature it affects/);
+
+    assert.deepEqual(tagsRows(cachePath), []);
+    assert.equal(readSectionsHeading(cachePath), SENTINEL_HEADING, 'sections must be untouched by a tags-only toggle');
+    assert.equal(readLinksDst(cachePath), SENTINEL_DST, 'links must be untouched by a tags-only toggle');
+  });
+
+  it('tags toggled back on fully re-derives the tags table for every file, sections/links still untouched', () => {
+    const dir = tagsTree();
+    assert.equal(runCli(dir, ['sql', 'SELECT 1']).status, 0);
+    const cachePath = join(dir, '.sense', 'cache.db');
+    const originalTags = tagsRows(cachePath);
+
+    setTagsFeature(dir, false);
+    assert.equal(runCli(dir, ['sql', 'SELECT 1']).status, 0);
+    assert.deepEqual(tagsRows(cachePath), []);
+
+    const SENTINEL_HEADING = 'SENTINEL-HEADING-untouched-on';
+    const SENTINEL_DST = 'SENTINEL-DST-untouched-on';
+    sentinelSections(cachePath, SENTINEL_HEADING);
+    sentinelLinks(cachePath, SENTINEL_DST);
+
+    setTagsFeature(dir, true);
+    const result = runCli(dir, ['sql', 'SELECT 1']);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stderr, /config change \(feature "tags"\) reparses only the feature it affects/);
+
+    assert.deepEqual(tagsRows(cachePath), originalTags, 'tags must be fully and correctly re-derived for every file');
+    assert.equal(readSectionsHeading(cachePath), SENTINEL_HEADING, 'sections must be untouched by a tags-only toggle');
+    assert.equal(readLinksDst(cachePath), SENTINEL_DST, 'links must be untouched by a tags-only toggle');
+  });
+
+  it('the rot case: a file deleted and another edited while tags is off must not survive re-enable -- the table is fully re-derived, not patched', () => {
+    const dir = tagsTree();
+    assert.equal(runCli(dir, ['sql', 'SELECT 1']).status, 0);
+    const cachePath = join(dir, '.sense', 'cache.db');
+
+    setTagsFeature(dir, false);
+    assert.equal(runCli(dir, ['sql', 'SELECT 1']).status, 0);
+
+    // While tags is off: b.md is deleted (its old tags rows would orphan under a patch-based
+    // implementation) and a.md is edited to a different tag set (its old rows would go stale).
+    rmSync(join(dir, 'b.md'));
+    writeFileSync(join(dir, 'a.md'), '---\ntitle: A\ntags: ["alpha-2"]\n---\n\n# Heading A\n\nBody with #epsilon now, no more beta.\n');
+
+    setTagsFeature(dir, true);
+    const result = runCli(dir, ['sql', 'SELECT 1']);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stderr, /config change \(feature "tags"\) reparses only the feature it affects/);
+
+    const actual = tagsRows(cachePath);
+    assert.ok(!actual.some((r) => r.path === 'b.md'), 'b.md was deleted while tags was off; a patch-based re-derive would leave its rows behind');
+    assert.deepEqual(actual.map((r) => r.tag).sort(), ['alpha-2', 'epsilon']);
+
+    // Oracle: a from-scratch tree with tags on from the start, holding the exact same final
+    // file contents. Row equality with it proves re-derivation, not incremental patching.
+    const oracleDir = scratchDir('feature-toggle-oracle');
+    writeFileSync(join(oracleDir, 'sense.config.json'), JSON.stringify({ version: 5, presets: { default: { include: ['*.md'] } }, queries: {} }));
+    writeFileSync(join(oracleDir, 'a.md'), '---\ntitle: A\ntags: ["alpha-2"]\n---\n\n# Heading A\n\nBody with #epsilon now, no more beta.\n');
+    assert.equal(runCli(oracleDir, ['sql', 'SELECT 1']).status, 0);
+    const expected = tagsRows(join(oracleDir, '.sense', 'cache.db'));
+
+    assert.deepEqual(actual, expected);
+  });
+});
+
+// Plan item 1.1: rank has no table of its own -- it writes PageRank into frontmatter's own
+// `_rank` column -- and a links toggle always co-changes the `feature:rank` segment
+// (featureEnabled's dependency), so both are handled together rather than falling through.
+describe('feature toggle: rank and links (no table of its own; links co-changes rank)', () => {
+  function rankTree(): string {
+    const dir = scratchDir('feature-toggle-rank');
+    writeFileSync(join(dir, 'sense.config.json'), JSON.stringify({ version: 5, presets: { default: { include: ['*.md'] } }, queries: {} }));
+    writeFileSync(join(dir, 'a.md'), '---\ntitle: A\ntags: ["alpha"]\n---\n\n# Heading A\n\nLinks to [[b]].\n');
+    writeFileSync(join(dir, 'b.md'), '---\ntitle: B\ntags: ["beta"]\n---\n\n# Heading B\n\nLinks to [[c]].\n');
+    writeFileSync(join(dir, 'c.md'), '---\ntitle: C\ntags: ["gamma"]\n---\n\n# Heading C\n\nLinks to [[a]].\n');
+    return dir;
+  }
+
+  function setFeatures(dir: string, features: Record<string, boolean>): void {
+    writeFileSync(join(dir, 'sense.config.json'), JSON.stringify({ version: 5, presets: { default: { include: ['*.md'] } }, features, queries: {} }));
+  }
+
+  function rankRows(dbPath: string): Array<{ path: string; _rank: number | null }> {
+    const db = new DatabaseSync(dbPath, { readOnly: true });
+    const rows = db.prepare('SELECT "path", "_rank" FROM frontmatter ORDER BY "path"').all() as Array<{ path: string; _rank: number | null }>;
+    db.close();
+    return rows;
+  }
+
+  function linksRows(dbPath: string): Array<{ src: string; target: string; dst: string | null; embed: number }> {
+    const db = new DatabaseSync(dbPath, { readOnly: true });
+    const rows = db.prepare('SELECT src, target, dst, embed FROM links ORDER BY src, target, embed').all() as Array<{ src: string; target: string; dst: string | null; embed: number }>;
+    db.close();
+    return rows;
+  }
+
+  it('rank toggled off nulls _rank for every row and nothing else', () => {
+    const dir = rankTree();
+    assert.equal(runCli(dir, ['sql', 'SELECT 1']).status, 0);
+    const cachePath = join(dir, '.sense', 'cache.db');
+    const beforeRanks = rankRows(cachePath);
+    assert.ok(
+      beforeRanks.every((r) => typeof r._rank === 'number'),
+      'the fixture must have real rank values to prove nulling'
+    );
+    const beforeLinks = linksRows(cachePath);
+
+    setFeatures(dir, { rank: false });
+    const result = runCli(dir, ['sql', 'SELECT 1']);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stderr, /config change \(feature "rank"\) reparses only the feature it affects/);
+
+    assert.deepEqual(
+      rankRows(cachePath).map((r) => r._rank),
+      [null, null, null]
+    );
+    assert.deepEqual(linksRows(cachePath), beforeLinks, 'links must be untouched by a rank-only toggle');
+  });
+
+  it('rank toggled back on recomputes _rank to match a from-scratch build, over the unchanged links table', () => {
+    const dir = rankTree();
+    assert.equal(runCli(dir, ['sql', 'SELECT 1']).status, 0);
+    const cachePath = join(dir, '.sense', 'cache.db');
+
+    setFeatures(dir, { rank: false });
+    assert.equal(runCli(dir, ['sql', 'SELECT 1']).status, 0);
+
+    setFeatures(dir, {});
+    const result = runCli(dir, ['sql', 'SELECT 1']);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stderr, /config change \(feature "rank"\) reparses only the feature it affects/);
+
+    // Oracle: a from-scratch tree with rank on from the start, holding the same file contents.
+    const oracleDir = scratchDir('feature-toggle-rank-oracle-on');
+    writeFileSync(join(oracleDir, 'sense.config.json'), JSON.stringify({ version: 5, presets: { default: { include: ['*.md'] } }, queries: {} }));
+    writeFileSync(join(oracleDir, 'a.md'), '---\ntitle: A\ntags: ["alpha"]\n---\n\n# Heading A\n\nLinks to [[b]].\n');
+    writeFileSync(join(oracleDir, 'b.md'), '---\ntitle: B\ntags: ["beta"]\n---\n\n# Heading B\n\nLinks to [[c]].\n');
+    writeFileSync(join(oracleDir, 'c.md'), '---\ntitle: C\ntags: ["gamma"]\n---\n\n# Heading C\n\nLinks to [[a]].\n');
+    assert.equal(runCli(oracleDir, ['sql', 'SELECT 1']).status, 0);
+
+    assert.deepEqual(rankRows(cachePath), rankRows(join(oracleDir, '.sense', 'cache.db')));
+  });
+
+  it('the rot case: links off then on, with a file deleted and another edited in between -- links and _rank both fully re-derive to match a from-scratch build', () => {
+    const dir = rankTree();
+    assert.equal(runCli(dir, ['sql', 'SELECT 1']).status, 0);
+    const cachePath = join(dir, '.sense', 'cache.db');
+
+    setFeatures(dir, { links: false });
+    const off = runCli(dir, ['sql', 'SELECT 1']);
+    assert.equal(off.status, 0, off.stderr);
+    assert.match(off.stderr, /config change \(feature "links", feature "rank"\) reparses only the feature it affects/);
+    assert.deepEqual(linksRows(cachePath), [], 'links must be dropped while off');
+    assert.deepEqual(
+      rankRows(cachePath).map((r) => r._rank),
+      [null, null, null],
+      'rank must also null while links is off, since rank depends on links'
+    );
+
+    // While links is off: c.md is deleted (its edges must not survive a patch) and b.md is
+    // edited to link to a instead of c.
+    rmSync(join(dir, 'c.md'));
+    writeFileSync(join(dir, 'b.md'), '---\ntitle: B\ntags: ["beta"]\n---\n\n# Heading B\n\nNow links to [[a]].\n');
+
+    setFeatures(dir, {});
+    const on = runCli(dir, ['sql', 'SELECT 1']);
+    assert.equal(on.status, 0, on.stderr);
+    assert.match(on.stderr, /config change \(feature "links", feature "rank"\) reparses only the feature it affects/);
+
+    const actualLinks = linksRows(cachePath);
+    const actualRank = rankRows(cachePath);
+    assert.ok(!actualLinks.some((r) => r.src === 'c.md' || r.dst === 'c.md'), 'c.md was deleted while links was off; a patch-based re-derive would leave its edges behind');
+
+    // Oracle: a from-scratch tree holding the exact final file contents.
+    const oracleDir = scratchDir('feature-toggle-rank-oracle');
+    writeFileSync(join(oracleDir, 'sense.config.json'), JSON.stringify({ version: 5, presets: { default: { include: ['*.md'] } }, queries: {} }));
+    writeFileSync(join(oracleDir, 'a.md'), '---\ntitle: A\ntags: ["alpha"]\n---\n\n# Heading A\n\nLinks to [[b]].\n');
+    writeFileSync(join(oracleDir, 'b.md'), '---\ntitle: B\ntags: ["beta"]\n---\n\n# Heading B\n\nNow links to [[a]].\n');
+    assert.equal(runCli(oracleDir, ['sql', 'SELECT 1']).status, 0);
+    const oracleCachePath = join(oracleDir, '.sense', 'cache.db');
+
+    assert.deepEqual(actualLinks, linksRows(oracleCachePath));
+    assert.deepEqual(actualRank, rankRows(oracleCachePath));
   });
 });
 

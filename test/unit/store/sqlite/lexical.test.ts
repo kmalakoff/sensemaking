@@ -26,7 +26,7 @@ describe('queryLexical', () => {
     const { db, conn } = makeDb();
     insertDoc(db, 'a.md', 'Astronomy', '', 'stars and planets');
     insertDoc(db, 'b.md', 'Cooking', '', 'recipes and food');
-    const hits = await queryLexical(conn, 'astronomy', { ...BASE, limit: 10 }, true);
+    const hits = await queryLexical(conn, 'astronomy', { ...BASE, limit: 10 });
     assert.deepEqual(
       hits.map((h) => h.path),
       ['a.md']
@@ -37,7 +37,7 @@ describe('queryLexical', () => {
     const { db, conn } = makeDb();
     insertDoc(db, 'title-hit.md', 'widget', '', 'nothing else relevant here');
     insertDoc(db, 'body-hit.md', 'unrelated', '', 'a widget is mentioned only in passing here');
-    const hits = await queryLexical(conn, 'widget', { ...BASE, limit: 10 }, true);
+    const hits = await queryLexical(conn, 'widget', { ...BASE, limit: 10 });
     assert.deepEqual(
       hits.map((h) => h.path),
       ['title-hit.md', 'body-hit.md']
@@ -52,7 +52,7 @@ describe('queryLexical', () => {
     const long = `${'padding '.repeat(3000)} needle`;
     insertDoc(db, 'long.md', 'long', '', long);
 
-    const hits = await queryLexical(conn, 'needle', { ...BASE, limit: 10 }, true);
+    const hits = await queryLexical(conn, 'needle', { ...BASE, limit: 10 });
     const shortHit = hits.find((h) => h.path === 'short.md');
     const longHit = hits.find((h) => h.path === 'long.md');
 
@@ -71,27 +71,17 @@ describe('queryLexical', () => {
     db.exec(`CREATE TEMP TABLE _search_scope ("path" TEXT)`);
     db.exec(`INSERT INTO _search_scope VALUES ('in-scope.md')`);
 
-    const hits = await queryLexical(conn, 'apple', { whereJoin: '', whereCond: '', scopeCond: `AND content.path IN (SELECT "path" FROM _search_scope)`, limit: 10 }, true);
+    const hits = await queryLexical(conn, 'apple', { whereJoin: '', whereCond: '', scopeCond: `AND content.path IN (SELECT "path" FROM _search_scope)`, limit: 10 });
     assert.deepEqual(
       hits.map((h) => h.path),
       ['in-scope.md']
     );
   });
 
-  it('segments an unspaced-script run into a grapheme phrase against the _seg sidecars when segmenting is true', async () => {
+  it('segments an unspaced-script run into a grapheme phrase against the _seg sidecars', async () => {
     const { db, conn } = makeDb();
     insertSegmented(db, 'zh.md', '你好世界');
-    const hits = await queryLexical(conn, '你好', { ...BASE, limit: 10 }, true);
-    assert.deepEqual(
-      hits.map((h) => h.path),
-      ['zh.md']
-    );
-  });
-
-  it('passes terms through unmodified when segmenting is false, matching only a byte-identical run', async () => {
-    const { db, conn } = makeDb();
-    insertDoc(db, 'zh.md', '', '', '你好世界');
-    const hits = await queryLexical(conn, '你好世界', { ...BASE, limit: 10 }, false);
+    const hits = await queryLexical(conn, '你好', { ...BASE, limit: 10 });
     assert.deepEqual(
       hits.map((h) => h.path),
       ['zh.md']

@@ -44,8 +44,9 @@ export interface ReconcileDialect {
   beginMode(): string;
   // Throws SenseError('COLUMN_LIMIT', ...) past this store's own column ceiling and reasoning.
   checkColumnLimit(count: number): void;
-  // Type suffix for ALTER TABLE ADD COLUMN: '' for sqlite/turso, ' VARIANT' for duckdb.
-  columnTypeSuffix(): string;
+  // Adds `names` to frontmatter, already filtered to columns this connection doesn't have yet.
+  // sqlite/turso loop (their ADD COLUMN is metadata-only); duckdb issues one statement per call.
+  addColumns(conn: Connection, names: string[]): Promise<void>;
   // Deletes content rows for `touched`, inserts rows for `docs`; `delta` carries the tree state a
   // strategy may need. Must not open its own transaction, and must not return before its own
   // multi-step strategy (e.g. turso's DROP/rebuild) completes.
@@ -56,7 +57,7 @@ export interface ReconcileDialect {
 }
 
 // One open algorithm (src/store/open.ts), parameterised per engine. `Handle` is whatever this
-// store needs to close the connection and construct its Store (sqlite: {db, tokenize}; duckdb:
+// store needs to close the connection and construct its Store (sqlite: {db}; duckdb:
 // {instance, duckdb}; turso: db) -- opaque to the shared orchestration, threaded through unchanged.
 export interface OpenDialect<Handle> {
   // Cache filename under STATE_DIR, e.g. 'cache.db'.
@@ -77,16 +78,6 @@ export interface OpenDialect<Handle> {
   // 'GenericFailure' on every failure alike with rawCode undefined. Neither exposes anything a
   // predicate could switch on, so each dialect pins its engine's wordings and unit-tests them.
   isLocked?(err: Error): boolean;
-  // A signature change fully explained by this dialect's own carve-out (sqlite's tokenize-only
-  // partial rebuild): performs the DDL swap and returns true, or false when this change isn't one.
-  // Absent for duckdb/turso, which have no such carve-out.
-  partialRebuild?(handle: Handle, conn: Connection, cfg: Config, changedKeys: Set<string>): Promise<boolean>;
-  // Runs after ensureSchema when partialRebuild returned true this attempt: repopulates whatever
-  // the DDL swap emptied and records the adopted signature. sqlite-only.
-  postSchemaRebuild?(handle: Handle, conn: Connection, cfg: Config, baseDir: string, wantFeatures: string): Promise<string[]>;
-  // A rebuild trigger independent of the schema/feature signature (sqlite: the content table's own
-  // tokenizer no longer matches meta). Returns the rebuild reason, or null when none applies.
-  extraRebuildReason?(handle: Handle): string | null;
   // Schema DDL beyond frontmatter/preset_files/meta (content table, feature hooks); sole owner of
   // whether it wraps itself in a write transaction (sqlite: yes, guards a cold-open ALTER race; duckdb/turso: no).
   ensureSchema(handle: Handle, conn: Connection, cfg: Config): Promise<void>;

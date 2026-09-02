@@ -55,7 +55,7 @@ describe('concurrent commands on one tree', () => {
       // Whole stderr, not its last line: the engines word this across several lines on Windows, and
       // the tail alone cannot tell a predicate that failed to match from a deadline that ran out.
       assert.deepEqual(
-        failed.map((r) => r.stderr.trim().replace(/\s+/g, ' ')),
+        failed.map((r) => r.stderr.trim().split('\n').pop()),
         [],
         `${store}: every concurrent open must wait for the lock rather than fail`
       );

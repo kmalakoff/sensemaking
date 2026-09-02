@@ -1,6 +1,7 @@
 import { SenseError } from '../../errors.ts';
 import type { ReconcileDelta } from '../../features/types.ts';
 import type { ParsedDoc } from '../../scan/index.ts';
+import { quoteIdent } from '../shared.ts';
 import type { Connection, ReconcileDialect } from '../types.ts';
 import { markContentStale } from './lexical.ts';
 
@@ -33,6 +34,16 @@ async function reconcileContent(conn: Connection, touched: string[], docs: Parse
   markContentStale(conn);
 }
 
+// DuckDB rejects more than one ALTER command per statement ("Parser Error: Only one ALTER
+// command per statement is supported", measured), so every name's clause joins into one string
+// and runs as a single exec() -- one column-add "leg" through the driver instead of `names.length`.
+// VARIANT is the only type that can hold the mixed bigint/number/string/null shapes mapValue()
+// produces for one key across files.
+async function addColumns(conn: Connection, names: string[]): Promise<void> {
+  if (names.length === 0) return;
+  await conn.exec(names.map((name) => `ALTER TABLE frontmatter ADD COLUMN ${quoteIdent(name)} VARIANT`).join('; '));
+}
+
 export const duckdbDialect: ReconcileDialect = {
   beginMode: () => 'BEGIN',
   checkColumnLimit(count) {
@@ -40,8 +51,6 @@ export const duckdbDialect: ReconcileDialect = {
       throw new SenseError('COLUMN_LIMIT', `frontmatter would need ${count} columns, crossing this store's sanity limit (${MAX_FRONTMATTER_COLUMNS}). Narrow the presets' include globs so fewer/other files are indexed, or fix whatever is generating unbounded frontmatter keys.`);
     }
   },
-  // DuckDB's ALTER TABLE ADD COLUMN requires a type; VARIANT is the only one that can hold
-  // the mixed bigint/number/string/null shapes mapValue() produces for one key across files.
-  columnTypeSuffix: () => ' VARIANT',
+  addColumns,
   reconcileContent,
 };

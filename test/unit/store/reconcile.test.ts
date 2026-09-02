@@ -17,7 +17,9 @@ function baseDialect(overrides: Partial<ReconcileDialect> = {}): ReconcileDialec
   return {
     beginMode: () => BEGIN_WRITE,
     checkColumnLimit: () => undefined,
-    columnTypeSuffix: () => '',
+    addColumns: async (conn, names) => {
+      for (const name of names) await conn.exec(`ALTER TABLE frontmatter ADD COLUMN "${name}"`);
+    },
     reconcileContent: async () => undefined,
     ...overrides,
   };
@@ -161,6 +163,57 @@ describe('reconcile orchestration', () => {
     assert.equal(calls.length, 1);
     assert.deepEqual([...calls[0].touched].sort(), ['a.md', 'c.md']);
     assert.deepEqual([...calls[0].docs].sort(), ['a.md', 'd.md']);
+
+    db.close();
+  });
+
+  it('forcedPaths reparses an unchanged file (stamp untouched); an unlisted file is left alone', async () => {
+    const baseDir = tmpTree();
+    writeNote(baseDir, 'a.md', { frontmatter: { title: 'A' } });
+    writeNote(baseDir, 'b.md', { frontmatter: { title: 'B' } });
+    const { store, cfg, dbPath } = await openTree(baseDir);
+    await store.close();
+
+    // Neither file's mtime/size changes -- forcedPaths is the only reason a.md reparses.
+    const { db, conn } = freshConnection(dbPath);
+    const touchedCalls: string[][] = [];
+    const dialect = baseDialect({
+      reconcileContent: async (_conn, touched) => {
+        touchedCalls.push([...touched]);
+      },
+    });
+
+    const result = await reconcile(conn, cfg, baseDir, dialect, undefined, new Set(['a.md']));
+
+    assert.equal(result.parsed, 1, 'only the forced file is reparsed');
+    assert.deepEqual(touchedCalls, [['a.md']]);
+
+    db.close();
+  });
+
+  it('a forced path no longer covered by any preset is left to the ordinary vanished computation, not double-handled', async () => {
+    const baseDir = tmpTree();
+    writeNote(baseDir, 'a.md', { frontmatter: { title: 'A' } });
+    const { store, cfg, dbPath } = await openTree(baseDir);
+    await store.close();
+
+    rmSync(join(baseDir, 'a.md'));
+    const { db, conn } = freshConnection(dbPath);
+    const calls: Array<{ touched: string[]; delta: { vanished: string[] } }> = [];
+    const dialect = baseDialect({
+      reconcileContent: async (_conn, touched, _docs, delta) => {
+        calls.push({ touched: [...touched], delta: { vanished: [...delta.vanished] } });
+      },
+    });
+
+    // a.md is gone from disk, so it's absent from `files` regardless of forcedPaths; it must
+    // still surface exactly once, through delta.vanished, not duplicated by the force union.
+    const result = await reconcile(conn, cfg, baseDir, dialect, undefined, new Set(['a.md']));
+
+    assert.equal(result.parsed, 0);
+    assert.equal(calls.length, 1);
+    assert.deepEqual(calls[0].touched, ['a.md']);
+    assert.deepEqual(calls[0].delta.vanished, ['a.md']);
 
     db.close();
   });

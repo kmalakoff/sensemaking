@@ -4,13 +4,12 @@ import { type Config, STORE_NAMES, type StoreName } from './types.ts';
 
 // Shape check for hand-edited files, so a typo names itself instead of surfacing as a
 // TypeError. Unknown top-level keys warn (forward compat); unknown keys inside a block error.
-const KNOWN_KEYS = new Set(['$schema', 'version', 'presets', 'features', 'embed', 'content', 'store', 'queries']);
+const KNOWN_KEYS = new Set(['$schema', 'version', 'presets', 'features', 'embed', 'store', 'queries']);
 const KNOWN_PRESET_KEYS = new Set(['include', 'exclude', 'k', 'signals', 'where']);
 const KNOWN_FEATURE_KEYS = new Set(['links', 'sections', 'tags', 'rank']);
 // Exported so a docs test can assert every key here has a schema.json property -- one source
 // of truth for what the embed block accepts, checked against the other for drift.
 export const KNOWN_EMBED_KEYS = new Set(['model', 'provider', 'url', 'key', 'languages', 'chunkTokens']);
-const KNOWN_CONTENT_KEYS = new Set(['tokenize']);
 const SAVED_SEARCH_KEYS = new Set(['search', 'preset', 'include', 'exclude', 'where', 'k']);
 
 export function unknownConfigKeys(cfg: Record<string, unknown>): string[] {
@@ -28,22 +27,6 @@ export function validateLegacyScan(parsed: unknown, configPath: string): void {
   const scan = cfg?.scan as { include?: unknown } | undefined;
   if (!cfg || !scan || !isNonEmptyStringArray(scan.include)) {
     throw new SenseError('CONFIG_INVALID', `${configPath}: scan.include must be a non-empty array of glob strings`);
-  }
-}
-
-// Only the shape is checked here. Whether the linked SQLite accepts the tokenizer is settled
-// by probing it in store/sqlite/open.ts, so this never has to carry a table of which version added what.
-function validateContentBlock(value: unknown, configPath: string): void {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    throw new SenseError('CONFIG_INVALID', `${configPath}: content must be an object of { tokenize?: string }`);
-  }
-  const block = value as Record<string, unknown>;
-  const unknown = Object.keys(block).filter((k) => !KNOWN_CONTENT_KEYS.has(k));
-  if (unknown.length > 0) {
-    throw new SenseError('CONFIG_INVALID', `${configPath}: content has unknown key(s) ${unknown.join(', ')}; content takes tokenize`);
-  }
-  if (block.tokenize !== undefined && (typeof block.tokenize !== 'string' || block.tokenize.trim() === '')) {
-    throw new SenseError('CONFIG_INVALID', `${configPath}: content.tokenize must be a non-empty string, e.g. "trigram" or "unicode61 tokenchars '-_'"`);
   }
 }
 
@@ -228,6 +211,13 @@ export function validateConfig(parsed: unknown, configPath: string): Config {
     throw new SenseError('CONFIG_INVALID', `${configPath}: checks was removed in v3 -- sense check no longer asserts on saved queries; a returned row set is the reader's judgment`);
   }
 
+  // `content` (content.tokenize) is rejected by name for the same reason: every outcome it
+  // selected (unspaced-script search, stemming, quoted-phrase substring matching) is now
+  // automatic on every store, so a config that still sets it would silently get nothing back.
+  if (cfg.content !== undefined) {
+    throw new SenseError('CONFIG_INVALID', `${configPath}: content.tokenize was removed -- every outcome it selected is now automatic on every store; remove the "content" block`);
+  }
+
   const presets = cfg.presets as Record<string, unknown> | undefined;
   if (!presets || typeof presets !== 'object' || Array.isArray(presets) || Object.keys(presets).length === 0) {
     throw new SenseError('CONFIG_INVALID', `${configPath}: presets must be a non-empty object of preset name -> { include, exclude?, k?, signals?, where? }`);
@@ -253,9 +243,6 @@ export function validateConfig(parsed: unknown, configPath: string): Config {
   }
   if (cfg.embed !== undefined) {
     validateEmbedBlock(cfg.embed, configPath);
-  }
-  if (cfg.content !== undefined) {
-    validateContentBlock(cfg.content, configPath);
   }
   if (cfg.store !== undefined) {
     validateStoreKey(cfg.store, configPath);

@@ -1,10 +1,9 @@
 import type { Config } from '../../config/index.ts';
-import { contentTokenize } from '../../config/index.ts';
 import { SenseError } from '../../errors.ts';
 import type { ReconcileDelta } from '../../features/types.ts';
 import type { ParsedDoc } from '../../scan/index.ts';
 import { segmentField } from '../../text/segment.ts';
-import { recordReconcileDuration } from '../shared.ts';
+import { quoteIdent, recordReconcileDuration } from '../shared.ts';
 import { BEGIN_WRITE } from '../transaction.ts';
 import type { Connection, ReconcileDialect } from '../types.ts';
 
@@ -20,11 +19,11 @@ export const INSERT_CONTENT_SQL = `INSERT INTO content (rowid, title, summary, t
 
 // A single content row's param tuple, matching INSERT_CONTENT_SQL's placeholder order.
 // Assumes the frontmatter row for doc.relPath already exists (rowid subquery).
-export function contentRow(doc: ParsedDoc, segmenting: boolean): unknown[] {
-  return [doc.relPath, doc.search.title, doc.search.summary, doc.search.text, doc.relPath, segmenting ? segmentField(doc.search.title) : '', segmenting ? segmentField(doc.search.summary) : '', segmenting ? segmentField(doc.search.text) : ''];
+export function contentRow(doc: ParsedDoc): unknown[] {
+  return [doc.relPath, doc.search.title, doc.search.summary, doc.search.text, doc.relPath, segmentField(doc.search.title), segmentField(doc.search.summary), segmentField(doc.search.text)];
 }
 
-async function reconcileContent(conn: Connection, touched: string[], docs: ParsedDoc[], _delta: ReconcileDelta, cfg: Config): Promise<void> {
+async function reconcileContent(conn: Connection, touched: string[], docs: ParsedDoc[], _delta: ReconcileDelta, _cfg: Config): Promise<void> {
   // FTS5 has no upsert, so delete-before-insert, coupled to the frontmatter rowid (indexed via
   // its PRIMARY KEY) rather than the UNINDEXED `path` column, which a per-row DELETE would scan to find.
   // `touched` already covers a path a concurrent reconcile turned out to have created first --
@@ -35,15 +34,12 @@ async function reconcileContent(conn: Connection, touched: string[], docs: Parse
       touched.map((p) => [p])
     );
 
-  if (docs.length > 0) {
-    // A non-default tokenizer means the tree has chosen its own scheme; a phrase query over
-    // grapheme runs would be nonsense against trigram, so the sidecars stay empty.
-    const segmenting = contentTokenize(cfg) === undefined;
-    await conn.runBatch(
-      INSERT_CONTENT_SQL,
-      docs.map((doc) => contentRow(doc, segmenting))
-    );
-  }
+  if (docs.length > 0) await conn.runBatch(INSERT_CONTENT_SQL, docs.map(contentRow));
+}
+
+// SQLite's ADD COLUMN is metadata-only, so a loop costs nothing extra over one statement.
+async function addColumns(conn: Connection, names: string[]): Promise<void> {
+  for (const name of names) await conn.exec(`ALTER TABLE frontmatter ADD COLUMN ${quoteIdent(name)}`);
 }
 
 export const sqliteDialect: ReconcileDialect = {
@@ -58,7 +54,7 @@ export const sqliteDialect: ReconcileDialect = {
       );
     }
   },
-  columnTypeSuffix: () => '',
+  addColumns,
   reconcileContent,
   recordDuration: recordReconcileDuration,
 };

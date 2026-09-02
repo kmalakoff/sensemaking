@@ -68,9 +68,6 @@ export interface Config {
   features?: { links?: boolean; sections?: boolean; tags?: boolean; rank?: boolean };
   // Names the embedding model. Present means every indexed file gets vectors; absent means none do.
   embed?: EmbedConfig;
-  // Settings for the `content` FTS5 table. `tokenize` decides which languages the tree can be
-  // word-searched in at all; changing it rebuilds the index.
-  content?: { tokenize?: string };
   // Backing store engine: "sqlite" (default, zero-dependency), "duckdb", or "turso" (optional
   // dependency, installed on first use). What differs per store is declared through CAPABILITIES (store/types.ts).
   store?: StoreName;

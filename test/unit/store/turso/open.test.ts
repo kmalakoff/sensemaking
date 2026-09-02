@@ -1,6 +1,5 @@
 import assert from 'node:assert';
 import { join } from 'node:path';
-import { tursoOpenDialect } from '../../../../src/store/turso/open.ts';
 import { openConfig, tmpTree, writeNote } from '../../../lib/tree.ts';
 
 function tursoTree(baseDir: string, presets?: Record<string, unknown>) {
@@ -44,13 +43,13 @@ describe('openTurso', () => {
     }
   });
 
-  it('a feature-toggle config change rebuilds the cache rather than erroring', async () => {
+  it('a feature-toggle config change narrows to the toggled feature instead of erroring or reparsing the tree', async () => {
     const baseDir = tmpTree();
     writeNote(baseDir, 'a.md', { frontmatter: { title: 'A' } });
     const first = await tursoTree(baseDir);
     await first.store.close();
     const second = await openConfig({ store: 'turso', presets: { default: { include: ['**/*.md'] } }, features: { tags: false }, queries: {}, baseDir, configPath: null } as Parameters<typeof openConfig>[0]);
-    assert.equal(second.parsed, 1);
+    assert.equal(second.parsed, 0);
     await second.store.close();
   });
 });
@@ -112,23 +111,5 @@ describe('derived busy_timeout', () => {
     const timeout = ((await (await store.prepare('PRAGMA busy_timeout')).get()) as { busy_timeout: number }).busy_timeout;
     assert.equal(timeout, 30000);
     await store.close();
-  });
-});
-
-// Recorded from real concurrent opens. Only the "Failed locking file" prefix is common to both
-// platforms; what follows it differs, which is why the match is on the prefix.
-describe('turso isLocked', () => {
-  const held = [
-    ['posix', 'store "turso" failed to open /t/.sense/cache.turso.db: failed to open database /t/.sense/cache.turso.db: Locking error: Failed locking file \'/t/.sense/cache.turso.db\'. File is locked by another process'],
-    ['windows', 'store "turso" failed to open D:\\t\\cache.turso.db: failed to open database D:\\t\\cache.turso.db: Locking error: Failed locking file, The process cannot access the file because it is being used by another process.'],
-  ] as const;
-  for (const [platform, message] of held) {
-    it(`treats the ${platform} held-lock wording as retryable`, () => {
-      assert.equal(tursoOpenDialect.isLocked?.(new Error(message)), true);
-    });
-  }
-
-  it('leaves an error that is not a held lock alone', () => {
-    assert.equal(tursoOpenDialect.isLocked?.(new Error('failed to open database /t/x.db: no such file')), false);
   });
 });

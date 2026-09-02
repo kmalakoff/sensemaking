@@ -8,6 +8,11 @@ import { FEATURES } from '../features/index.ts';
 import type { Builder } from './builder.ts';
 import { createBuilder } from './builder.ts';
 import { clearCache } from './cache.ts';
+import type { EmbedChangeKind } from './embed-scope.ts';
+import { classifyEmbedChange } from './embed-scope.ts';
+import type { FeatureToggle } from './feature-scope.ts';
+import { classifyFeatureToggles, isFeatureOnlyChange } from './feature-scope.ts';
+import { forcedPresetPaths, isPresetOnlyChange } from './preset-scope.ts';
 import { getMeta, setMeta } from './shared.ts';
 import { changedSignatureKeys, embedIdentityAdopted, signatureDiff } from './signature.ts';
 import type { Connection, OpenDialect, Store } from './types.ts';
@@ -79,7 +84,13 @@ async function connectWithDialect<Handle>(cfg: ResolvedConfig, dialect: OpenDial
     const version = await getMeta(conn, 'schema_version');
     const features = await getMeta(conn, 'features');
     const wantFeatures = featureSignature(cfg, FEATURES);
-    let tokenizeOnlyRebuild = false;
+    // Set only by the preset-membership branch below; reconcile treats these paths as touched
+    // despite an unchanged stamp, for this one build() call.
+    let forcedPaths: Set<string> | undefined;
+    // Set only by the embed-narrow branch below; applied via builder.invalidate() after ensureSchema.
+    let embedInvalidate: EmbedChangeKind | undefined;
+    // Set only by the feature-toggle branch below; applied via builder.invalidateFeatures() after ensureSchema.
+    let featureToggles: FeatureToggle[] | undefined;
     if ((version !== null && version !== dialect.schemaVersion) || (features !== null && features !== wantFeatures)) {
       // Indexing derives from presets, so a config edit rebuilding the cache must say so and
       // name what changed -- silent rebuilds make derived indexing look like a hang or a bug.
@@ -92,14 +103,45 @@ async function connectWithDialect<Handle>(cfg: ResolvedConfig, dialect: OpenDial
         return connectWithDialect(cfg, dialect, keepBuilderOpen);
       }
       const changedKeys = changedSignatureKeys(features ?? '', wantFeatures);
-      // Only a dialect-owned carve-out (sqlite's tokenizer) skips the rebuild below with its own
-      // partial DDL swap; every other single- or multi-segment change takes it.
-      if (dialect.partialRebuild && (await dialect.partialRebuild(handle, conn, cfg, changedKeys))) {
-        tokenizeOnlyRebuild = true;
-      } else if (changedKeys.size === 1 && changedKeys.has('embed') && embedIdentityAdopted(features ?? '', wantFeatures)) {
+      // Null (rather than the empty set) when changedKeys isn't preset-only, or a changed
+      // preset's stored segment can't be parsed back into old include/exclude/vectors -- either
+      // way the branch below is skipped and the full rebuild stays the fallback.
+      const presetForced = isPresetOnlyChange(changedKeys) ? forcedPresetPaths(cfg, cfg.baseDir, features ?? '', changedKeys) : null;
+      // Null unless exactly one segment changed and it decomposes into a recognised embed-only
+      // case (embed-scope.ts): anything else, including embed toggled on/off, stays null.
+      const embedKind = changedKeys.size === 1 && changedKeys.has('embed') ? classifyEmbedChange(features ?? '', wantFeatures) : null;
+      // Null (rather than the empty set) when changedKeys isn't feature-toggle-only, or a changed
+      // feature's stored segment can't be parsed back into old/new on-off -- either way the branch
+      // below is skipped and the full rebuild stays the fallback.
+      const toggles = isFeatureOnlyChange(changedKeys) ? classifyFeatureToggles(features ?? '', wantFeatures, changedKeys) : null;
+      if (changedKeys.size === 1 && changedKeys.has('embed') && embedIdentityAdopted(features ?? '', wantFeatures)) {
         // First sight of a resolved weight identity: the model itself hasn't changed, so
-        // adopt it into meta with no rebuild and no re-embed, mirroring the tokenize precedent.
+        // adopt it into meta with no rebuild and no re-embed.
         console.error("sense: recorded the embedding model's resolved identity; vectors are unaffected");
+        await setMeta(conn, 'features', wantFeatures);
+      } else if (embedKind !== null) {
+        // Chunk boundaries are file-derived, not model-derived (embed.ts's chunksOf), so neither
+        // case needs any file reparsed for any feature but embed itself.
+        embedInvalidate = embedKind;
+        console.error(embedKind === 'model' ? 'sense: config change (embed settings) invalidates only the stale vectors' : 'sense: config change (embed settings) rebuilds only the embeddings it affects');
+        await setMeta(conn, 'features', wantFeatures);
+      } else if (presetForced !== null) {
+        // Membership only: which files a preset covers moved, not a file's own content, a
+        // global feature, or the embed model. reconcile() already knows how to
+        // add, update, and remove a file correctly (every cross-feature cascade included); it
+        // just needs telling which unchanged files to treat as touched (forcedPaths, above).
+        forcedPaths = presetForced;
+        const changed = signatureDiff(features ?? '', wantFeatures);
+        console.error(`sense: config change (${changed}) reparses only the files it affects`);
+        await setMeta(conn, 'features', wantFeatures);
+      } else if (toggles !== null) {
+        // A feature turned off or on: reconcile.ts's activeFeatures skips a disabled feature's
+        // hooks entirely, so its rows rot while off -- invalidateFeatures drops them and, for a
+        // feature turning back on, fully re-derives across every indexed file rather than
+        // trusting rows written before or during that window.
+        featureToggles = toggles;
+        const changed = signatureDiff(features ?? '', wantFeatures);
+        console.error(`sense: config change (${changed}) reparses only the feature it affects`);
         await setMeta(conn, 'features', wantFeatures);
       } else {
         const changed = signatureDiff(features ?? '', wantFeatures);
@@ -111,23 +153,7 @@ async function connectWithDialect<Handle>(cfg: ResolvedConfig, dialect: OpenDial
       }
     }
 
-    // A rebuild trigger independent of the signature comparison above (sqlite: the content
-    // table's own DDL no longer matches the resolved tokenizer).
-    const extraReason = dialect.extraRebuildReason ? dialect.extraRebuildReason(handle) : null;
-    if (extraReason !== null) {
-      console.error(`sense: ${extraReason}; rebuilding the index`);
-      closed = true;
-      await dialect.close(handle);
-      clearCache(cfg);
-      return connectWithDialect(cfg, dialect, keepBuilderOpen);
-    }
-
     await dialect.ensureSchema(handle, conn, cfg);
-
-    let rebuildWarnings: string[] = [];
-    if (tokenizeOnlyRebuild && dialect.postSchemaRebuild) {
-      rebuildWarnings = await dialect.postSchemaRebuild(handle, conn, cfg, cfg.baseDir, wantFeatures);
-    }
 
     // 3x the largest reconcile this cache has recorded, floored at 30s and capped at 10min.
     // Installed before build() -- that call is the one that races a watcher's transaction.
@@ -136,11 +162,17 @@ async function connectWithDialect<Handle>(cfg: ResolvedConfig, dialect: OpenDial
       await dialect.setDerivedBusyTimeout(handle, conn, Math.min(Math.max(30000, 3 * recordedMaxMs), 600_000));
     }
 
-    const { parsed, warnings } = await builder.build();
+    // Runs before build(): forcedPaths, embedInvalidate and featureToggles never target the same
+    // call (each comes from its own mutually exclusive branch above: a preset-only, embed-only, or
+    // feature-toggle-only changed-key set).
+    const embedParsed = embedInvalidate ? (await builder.invalidate(embedInvalidate)).parsed : 0;
+    const featureParsed = featureToggles ? (await builder.invalidateFeatures(featureToggles)).parsed : 0;
+
+    const { parsed, warnings } = await builder.build(forcedPaths);
     // A one-shot open is done reconciling for good; a watcher keeps `builder` alive across its run.
     if (!keepBuilderOpen) await builder.close();
 
-    return { handle, conn, cfg, dbPath, parsed, warnings: [...rebuildWarnings, ...warnings], builder };
+    return { handle, conn, cfg, dbPath, parsed: parsed + embedParsed + featureParsed, warnings, builder };
   } catch (err) {
     await builder.close();
     if (!closed) await dialect.close(handle);
