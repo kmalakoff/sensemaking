@@ -1,14 +1,14 @@
 // Shape sweep: synthetic corpora isolating one dimension at a time, the rest held hub-like.
-// Every point runs against a working copy, strictly serially -- a shared CPU swamps the signal. usage: node benchmark/sweep.mjs [dimension ...] [--quick] [--out file]
+// Every point runs against a working copy, strictly serially -- a shared CPU swamps the signal. usage: node benchmark/tools/sweep.mjs [dimension ...] [--quick] [--out file]
 import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { appendFileSync, cpSync, mkdirSync, rmSync, statSync, utimesSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { syntheticPath } from './lib/corpus.mjs';
-import { futureDate, median, medianAsync, timedCli, walkMd } from './lib/measure.mjs';
+import { syntheticPath } from '../lib/corpus.mjs';
+import { futureDate, median, medianAsync, timedCli, walkMd } from '../lib/measure.mjs';
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const CLI = join(ROOT, 'bin', 'cli.js');
 const WORK_ROOT = join(ROOT, '.tmp', 'sweep-work');
 

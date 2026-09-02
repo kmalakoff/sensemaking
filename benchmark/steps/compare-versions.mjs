@@ -1,14 +1,17 @@
 // Runs run.mjs per version against its own copy of the tree, prints a pasteable table. Baseline is package.json's version, so a bare run answers "did the working tree regress?".
-// usage: node benchmark/compare.mjs [corpus-or-dir] [version...] [--store <name>]
+// usage: node benchmark/steps/compare-versions.mjs [corpus-or-dir] [version...] [--store <name>] [--reverse] [--out <file>]
 import { spawnSync } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { cached } from './lib/cache.mjs';
-import { corpusPath, writeTreeConfig } from './lib/corpus.mjs';
+import { cached } from '../lib/cache.mjs';
+import { corpusPath, writeTreeConfig } from '../lib/corpus.mjs';
+import { writeOut } from '../lib/out.mjs';
+import { renderRowsTable } from '../lib/render.mjs';
+import { ROWS, TIMING_KINDS } from '../lib/rows.mjs';
 
 const benchDir = dirname(fileURLToPath(import.meta.url));
-const ROOT = join(benchDir, '..');
+const ROOT = join(benchDir, '..', '..');
 
 function releasedBaseline() {
   const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'));
@@ -19,11 +22,17 @@ function releasedBaseline() {
   return pkg.version;
 }
 
-const argv = process.argv.slice(2);
-const storeIdx = argv.indexOf('--store');
-const store = storeIdx >= 0 ? argv[storeIdx + 1] : null;
-// With no flag storeIdx is -1, and filtering on storeIdx + 1 (0) would drop the first positional.
-const positional = storeIdx >= 0 ? argv.filter((_a, i) => i !== storeIdx && i !== storeIdx + 1) : argv;
+// Extracts one `--flag value` pair, returning [value, argsWithoutIt].
+function takeFlag(args, flag) {
+  const idx = args.indexOf(flag);
+  return idx < 0 ? [null, args] : [args[idx + 1], args.filter((_a, i) => i !== idx && i !== idx + 1)];
+}
+
+const afterFlags0 = process.argv.slice(2);
+const [store, afterStore] = takeFlag(afterFlags0, '--store');
+const [outArg, afterOut] = takeFlag(afterStore, '--out');
+const reverse = afterOut.includes('--reverse');
+const positional = afterOut.filter((a) => a !== '--reverse');
 const [corpusArg, ...versionArgs] = positional;
 const treeDir = corpusArg ? (corpusPath(corpusArg) ?? resolve(corpusArg)) : corpusPath('obsidian-hub');
 if (!existsSync(treeDir)) {
@@ -31,9 +40,13 @@ if (!existsSync(treeDir)) {
   process.exit(2);
 }
 const versions = versionArgs.length > 0 ? versionArgs : [releasedBaseline(), 'local'];
+// The remedy for a suspicious delta (2026-08-21 methodology, PLAN.md 3.10): the same measurement
+// with run order and column order both swapped, so a measurement-order artifact shows up as the
+// delta flipping rather than repeating.
+if (reverse) versions.reverse();
 
-mkdirSync(join(benchDir, '..', '.tmp'), { recursive: true });
-const work = mkdtempSync(join(benchDir, '..', '.tmp', 'bench-'));
+mkdirSync(join(benchDir, '..', '..', '.tmp'), { recursive: true });
+const work = mkdtempSync(join(benchDir, '..', '..', '.tmp', 'bench-'));
 
 function rootFor(version) {
   if (version === 'local') return ROOT;
@@ -59,8 +72,9 @@ function treeCopyFor(version) {
 const results = new Map();
 for (const version of versions) {
   process.stderr.write(`benchmarking ${version}...\n`);
-  const out = spawnSync(process.execPath, [join(benchDir, 'run.mjs'), rootFor(version), treeCopyFor(version), ...(store ? ['--store', store] : [])], { encoding: 'utf8', maxBuffer: 16e6 });
+  const out = spawnSync(process.execPath, [join(benchDir, 'measure-tree.mjs'), rootFor(version), treeCopyFor(version), ...(store ? ['--store', store] : [])], { encoding: 'utf8', maxBuffer: 16e6 });
   if (out.status !== 0) {
+    writeOut(outArg, { corpus: treeDir, store: store ?? 'sqlite', versions, reversed: reverse, error: `run.mjs failed for ${version}: ${out.stderr}` });
     console.error(`run.mjs failed for ${version}:\n${out.stderr}`);
     process.exit(1);
   }
@@ -73,6 +87,7 @@ for (const version of versions) {
 const embedCapable = versions.filter((v) => results.get(v).embed_supported);
 const embedBroken = embedCapable.filter((v) => results.get(v).cold_embed_ms === null);
 if (embedBroken.length > 0) {
+  writeOut(outArg, { corpus: treeDir, store: store ?? 'sqlite', versions, reversed: reverse, error: `embed column broken for ${embedBroken.join(', ')}`, results: Object.fromEntries(results) });
   console.error(`embed column broken for ${embedBroken.join(', ')}: ${embedBroken.map((v) => `${v}: ${results.get(v).cold_embed_error ?? 'no error captured'}`).join('; ')}`);
   process.exit(1);
 }
@@ -82,29 +97,12 @@ if (embedCapable.length === 0) {
   console.error(`embed column note: ${versions.filter((v) => !results.get(v).embed_supported).join(', ')} predate the embed mechanism this column measures; only ${embedCapable.join(', ')} are comparable on it`);
 }
 
-const first = results.values().next().value;
-const ms = (v) => (v === null ? '—' : typeof v === 'string' ? `**${v}**` : `${v} ms`);
-const ROWS = [
-  ['cold crawl', (r) => ms(r.cold_crawl_ms)],
-  ['embed cold build (crawl + first vector-participating `search`, one process)', (r) => ms(r.cold_embed_ms)],
-  ['warm query (`COUNT(*)`)', (r) => ms(r.warm_query_ms)],
-  ['BM25 search (canonical join)', (r) => ms(r.bm25_search_ms)],
-  ['lexical `search` (BM25 + link fusion)', (r) => ms(r.find_ms)],
-  ['`search` row size (json)', (r) => (r.find_row_tokens == null ? '—' : `~${r.find_row_tokens} tokens`)],
-  ['`map` (orient)', (r) => (r.map_ms === null ? '—' : `${r.map_ms} ms / ~${r.map_tokens} tokens`)],
-  [`\`peek\` largest note (~${first.largest_note_tokens} t)`, (r) => (r.peek_ms === null ? '—' : `${r.peek_ms} ms / ~${r.peek_tokens} tokens (${((r.peek_tokens / r.largest_note_tokens) * 100).toFixed(1)}%)`)],
-  [`bulk change (${first.bulk_files} files): first query`, (r) => ms(r.bulk_change_ms)],
-  [`bulk change (${first.bulk_files} files): with warm watcher`, (r) => ms(r.bulk_watch_ms)],
-  ['in-process: cold index build', (r) => (r.inproc?.cold_build_ms === undefined ? `**${r.inproc?.error ?? '—'}**` : `${r.inproc.cold_build_ms} ms`)],
-  ['in-process: freshness check, no change', (r) => (r.inproc?.open_nochange_ms === undefined ? '—' : `${r.inproc.open_nochange_ms} ms`)],
-  ['in-process: update, 1 file touched', (r) => (r.inproc?.update_1_file_ms === undefined ? '—' : `${r.inproc.update_1_file_ms} ms`)],
-  ['in-process: update, 10 files modified', (r) => (r.inproc?.update_10_files_ms === undefined ? '—' : `${r.inproc.update_10_files_ms} ms`)],
-];
+// Every wall/inproc/tokens catalog row prints as one table row here; report.mjs renders the
+// same rows from the --out JSON below through the same renderer, so the two never drift.
+const printable = ROWS.filter((row) => TIMING_KINDS.includes(row.kind));
+const resultsByColumn = Object.fromEntries(versions.map((v) => [v, results.get(v)]));
+console.log(renderRowsTable(printable, versions, resultsByColumn));
 
-console.log(`| metric | ${versions.join(' | ')} |`);
-console.log(`|---|${versions.map(() => '---').join('|')}|`);
-for (const [label, cell] of ROWS) {
-  console.log(`| ${label} | ${versions.map((v) => cell(results.get(v))).join(' | ')} |`);
-}
+writeOut(outArg, { corpus: treeDir, store: store ?? 'sqlite', versions, reversed: reverse, results: Object.fromEntries(results) });
 
 rmSync(work, { recursive: true, force: true });

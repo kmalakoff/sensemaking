@@ -1,6 +1,6 @@
 import assert from 'assert';
 import type { ResolvedConfig } from '../../../src/config/index.ts';
-import { clearCache, DB_FILENAME, docCount, getMeta, openStore, SCHEMA_VERSION, setMeta } from '../../../src/store/index.ts';
+import { DB_FILENAME, docCount, getMeta, openStore, setMeta } from '../../../src/store/index.ts';
 import { tmpTree, writeNote } from '../../lib/tree.ts';
 
 function cfgFor(baseDir: string): ResolvedConfig {
@@ -59,14 +59,10 @@ describe('openStore: store selection and capability gating', () => {
 });
 
 describe('exported surface', () => {
-  it('re-exports the bindings external callers (watch.ts, cli/status.ts) rely on', async () => {
-    assert.equal(typeof openStore, 'function');
-    assert.equal(typeof getMeta, 'function');
-    assert.equal(typeof setMeta, 'function');
-    assert.equal(typeof clearCache, 'function');
-    assert.equal(typeof docCount, 'function');
+  // sqlite's cache filename, re-exported here for callers that never import the sqlite store
+  // directly (watch.ts, cli/status.ts). TypeScript already proves the re-exports are functions.
+  it("DB_FILENAME is sqlite's cache filename", () => {
     assert.equal(DB_FILENAME, 'cache.db');
-    assert.equal(typeof SCHEMA_VERSION, 'string');
   });
 
   it('getMeta/setMeta work against a store opened through this module', async () => {

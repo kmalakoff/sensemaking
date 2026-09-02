@@ -36,7 +36,10 @@ describe('interrupting a pooled cold build', () => {
       // Signal only once the reparse stage has actually started, so the test is not racing the
       // build to completion and silently proving nothing.
       await new Promise<void>((resolve, reject) => {
-        const killTimer = setTimeout(() => reject(new Error('reparse never started')), 30_000);
+        const killTimer = setTimeout(() => {
+          child.kill('SIGKILL');
+          reject(new Error('reparse never started'));
+        }, 30_000);
         child.stderr.on('data', (chunk: Buffer) => {
           if (chunk.toString().includes('reparsing files')) {
             clearTimeout(killTimer);

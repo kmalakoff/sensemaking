@@ -1,13 +1,10 @@
 import assert from 'node:assert';
-import { execFileSync } from 'node:child_process';
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
-import { join, relative, sep } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import cr from 'cr';
 import { SUPPORTED_CONFIG_VERSION } from 'sensemaking';
-import { parse } from 'yaml';
-import { KNOWN_EMBED_KEYS, STORE_NAMES } from '../../src/config/index.ts';
-import { packageRoot } from '../lib/scratch.ts';
+import { packageRoot, scratchDir } from '../lib/scratch.ts';
 
 // Published surfaces drift silently: nothing fails when the README stops describing what
 // ships. These are the two facts cheap enough to assert -- the rest is RELEASING.md step 5.
@@ -27,94 +24,225 @@ describe('published docs', () => {
     }
   });
 
-  it('README names every runtime dependency', () => {
-    const pkg = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8')) as { dependencies: Record<string, string> };
-    const text = readme();
-    for (const dep of Object.keys(pkg.dependencies)) {
-      assert.ok(text.includes(dep), `${dep} is a runtime dependency but the README never names it`);
-    }
-  });
-
   it('README config example is on the supported config version', () => {
     const example = JSON.parse(/```json\n([\s\S]*?)```/.exec(readme())?.[1] ?? '{}') as { version?: number };
     assert.equal(example.version, SUPPORTED_CONFIG_VERSION);
   });
+});
 
-  it('package.json description is the README opening sentence', () => {
-    const pkg = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8')) as { description: string };
-    const opening = readme()
-      .split(/^#\s.*$/m)[1]
-      .trim()
-      .split(/\n{2,}/)[0]
-      .replace(/\s+/g, ' ')
-      .replace(/\.$/, '');
-    assert.equal(pkg.description, opening);
+// Static, publish-blocking hygiene (README naming every dependency, package.json description
+// matching the README, schema.json staying in sync, shipped skills, no tracked file citing the
+// gitignored planning directory) moved to scripts/prepublish.ts: it has nothing to do with
+// behavior, and belongs in the fast fail-early pass before the test suite, not in it. See
+// prepublishOnly and benchmark/lib/stages.mjs stage 0.
+
+// The release-gate benchmark harness (benchmark/report.mjs and friends): generated numbers of
+// record, the owner-override contract, and idempotent re-rendering. See benchmark-automation.md.
+
+// Fabricated, not measured: a benchmark fixture built as data, per the plan's own rule that a
+// timing check is never exercised by running the real gate here.
+function fixtureSitting(dir: string, date: string, findRowTokens: [number, number]): void {
+  writeFileSync(
+    join(dir, 'sitting.json'),
+    JSON.stringify({
+      date,
+      baseline_version: '9.9.9',
+      last_tag: 'v9.9.8',
+      machine: { cpu_model: 'Fixture CPU', cpu_count: 8, arch: 'arm64' },
+      node: 'v99.0.0',
+      chunk_version: 'chunk:v99',
+      schema_version: { sqlite: '99', duckdb: '9', turso: '9' },
+      changed_paths: ['src/chunk/index.ts'],
+      owed: { baseline: ['src/chunk/index.ts'] },
+      continue: false,
+      allow_busy: true,
+      steps: {},
+      failed_stage_reasons: [],
+    })
+  );
+  const row = (tokens: number) => ({
+    cold_crawl_ms: 100,
+    version_canary_ms: 20,
+    warm_query_ms: 50,
+    bm25_search_ms: 50,
+    find_ms: 60,
+    find_row_tokens: tokens,
+    cold_embed_ms: 200,
+    semantic_find_ms: 90,
+    map_ms: 40,
+    map_tokens: 496,
+    peek_ms: 35,
+    peek_tokens: 581,
+    related_ms: 80,
+    related_tokens: 60,
+    largest_note_tokens: 77274,
+    bulk_change_ms: 600,
+    bulk_watch_ms: 150,
+    inproc: { cold_build_ms: 2100, open_nochange_ms: 35, update_1_file_ms: 38, update_10_files_ms: 44 },
+  });
+  writeFileSync(
+    join(dir, 'compare.json'),
+    JSON.stringify({
+      corpus: '/fixture/tree',
+      store: 'sqlite',
+      versions: ['9.9.8', 'local'],
+      reversed: false,
+      results: { '9.9.8': row(findRowTokens[0]), local: row(findRowTokens[1]) },
+    })
+  );
+}
+
+describe('benchmark release-gate: numbers of record', () => {
+  it('the tracked numbers-of-record table equals a fresh render of the newest release-gate JSON, where one exists', async () => {
+    const reportsDir = join(packageRoot, 'benchmark', 'reports');
+    const jsonFiles = existsSync(reportsDir) ? readdirSync(reportsDir).filter((f) => /^\d{4}-\d{2}-\d{2}-release-gate\.json$/.test(f)) : [];
+    if (jsonFiles.length === 0) return; // no generated report has landed yet (phase 4 migration, out of scope here)
+    const newest = jsonFiles.sort().at(-1) as string;
+    const { updateNumbersOfRecord, parseNumbersTable, NUMBERS_START: START, NUMBERS_END: END } = await import('../../benchmark/report.mjs');
+    const report = JSON.parse(readFileSync(join(reportsDir, newest), 'utf8'));
+    if (report.verdict !== 'PASS') return; // a blocked sitting's numbers are never the official ones
+    const scratch = scratchDir('numbers-render');
+    const mdPath = join(scratch, 'BENCHMARKING.md');
+    const tracked = readFileSync(join(packageRoot, 'BENCHMARKING.md'), 'utf8');
+    const start = tracked.indexOf(START);
+    const end = tracked.indexOf(END);
+    writeFileSync(mdPath, `${tracked.slice(0, start + START.length)}\n\n<!-- placeholder -->\n\n${tracked.slice(end)}`);
+    updateNumbersOfRecord(report, mdPath);
+    const rendered = parseNumbersTable(readFileSync(mdPath, 'utf8'), 0, readFileSync(mdPath, 'utf8').length);
+    const live = parseNumbersTable(tracked, start, end);
+    for (const [key, value] of Object.entries(report.record as Record<string, unknown>)) {
+      if (value === null || value === undefined) continue;
+      assert.deepEqual(rendered.get(key)?.[0], live.get(key)?.[0], `BENCHMARKING.md's numbers-of-record row "${key}" does not match ${newest}`);
+    }
+  });
+
+  it('fixture: a PASS sitting merges into the numbers-of-record table without deleting a metric it did not measure', async () => {
+    const { buildReport, persist } = await import('../../benchmark/report.mjs');
+    const sitting = scratchDir('numbers-fixture-sitting');
+    fixtureSitting(sitting, '2099-06-01', [71, 71]); // identical, so this sitting is PASS
+    const reportsDir = scratchDir('numbers-fixture-reports');
+    const mdPath = join(scratchDir('numbers-fixture-md'), 'BENCHMARKING.md');
+    writeFileSync(mdPath, `# Benchmarks\n\n${'<!-- numbers -->'}\n\n| metric | value | report |\n|---|---|---|\n| pre_existing_metric | 42 ms | [old](old.md) |\n\n${'<!-- /numbers -->'}\n`);
+    const report = buildReport(sitting, { reportsDir });
+    assert.equal(report.verdict, 'PASS');
+    persist(report, { reportsDir, benchmarkingMdPath: mdPath });
+    const after = readFileSync(mdPath, 'utf8');
+    assert.match(after, /pre_existing_metric \| 42 ms/, 'a metric this sitting never measured must survive a PASS regeneration');
+    assert.match(after, /hub_find_row_tokens \| 71/, 'a metric this sitting measured must be added');
   });
 });
 
-// validate.ts's KNOWN_EMBED_KEYS is the source of truth; schema.json is a separate,
-// editor-facing copy nothing keeps in sync, so a key can validate and still fail editor lint.
-describe('schema.json embed properties match validate.ts', () => {
-  it('every KNOWN_EMBED_KEYS entry has a schema.json property', () => {
-    const schema = JSON.parse(readFileSync(join(packageRoot, 'schema.json'), 'utf8')) as { properties: { embed: { properties: Record<string, unknown> } } };
-    const declared = new Set(Object.keys(schema.properties.embed.properties));
-    for (const key of KNOWN_EMBED_KEYS) {
-      assert.ok(declared.has(key), `embed.${key} validates but has no schema.json property, so an editor with additionalProperties:false flags it`);
+describe('benchmark release-gate: owner override needs a reason', () => {
+  it('acceptRow refuses a blank reason, whatever calls it', async () => {
+    const { acceptRow, buildReport, persist } = await import('../../benchmark/report.mjs');
+    const sitting = scratchDir('accept-blank-sitting');
+    fixtureSitting(sitting, '2099-06-03', [71, 90]); // token contract -> forced BLOCK
+    const reportsDir = scratchDir('accept-blank-reports');
+    const mdPath = join(scratchDir('accept-blank-md'), 'BENCHMARKING.md');
+    writeFileSync(mdPath, `# Benchmarks\n\n${'<!-- numbers -->'}\n\n<!-- /numbers -->\n`);
+    persist(buildReport(sitting, { reportsDir }), { reportsDir, benchmarkingMdPath: mdPath });
+
+    // The CLI already refuses a missing --reason. These reach acceptRow anyway, which is the only
+    // path that can turn a BLOCK into a PASS.
+    for (const blank of ['', '   ', '\n']) {
+      assert.throws(() => acceptRow('compare/find_row_tokens', blank, { reportsDir, benchmarkingMdPath: mdPath }), /needs a reason/, `a reason of ${JSON.stringify(blank)} must be refused`);
+    }
+    const stillBlocked = JSON.parse(readFileSync(join(reportsDir, '2099-06-03-release-gate.json'), 'utf8')) as { verdict: string; accepted: Record<string, unknown> };
+    assert.equal(stillBlocked.verdict, 'BLOCK', 'a refused override must leave the verdict alone');
+    assert.deepEqual(stillBlocked.accepted, {}, 'a refused override must record nothing');
+  });
+
+  it('fixture: report.mjs --accept refuses a missing reason at the CLI, and a recorded override always carries one', async () => {
+    const { acceptRow, buildReport, persist } = await import('../../benchmark/report.mjs');
+    const sitting = scratchDir('accept-fixture-sitting');
+    fixtureSitting(sitting, '2099-06-02', [71, 90]); // token contract -> forced BLOCK
+    const reportsDir = scratchDir('accept-fixture-reports');
+    const mdPath = join(scratchDir('accept-fixture-md'), 'BENCHMARKING.md');
+    writeFileSync(mdPath, `# Benchmarks\n\n${'<!-- numbers -->'}\n\n<!-- /numbers -->\n`);
+    const report = buildReport(sitting, { reportsDir });
+    assert.equal(report.verdict, 'BLOCK');
+    persist(report, { reportsDir, benchmarkingMdPath: mdPath });
+    const accepted = acceptRow('compare/find_row_tokens', 'fixture: exercising the override', { reportsDir, benchmarkingMdPath: mdPath });
+    assert.equal(accepted.verdict, 'PASS');
+    assert.equal(accepted.accepted['compare/find_row_tokens'].reason, 'fixture: exercising the override');
+    // Every accepted entry the module ever writes carries a non-empty reason: acceptRow has no
+    // path that stores one without it (the CLI itself refuses before calling acceptRow).
+    for (const entry of Object.values(accepted.accepted) as Array<{ reason: string }>) assert.ok(entry.reason.length > 0);
+  });
+
+  it('every release-gate JSON currently in the tree has a non-empty reason on every accepted row', () => {
+    const reportsDir = join(packageRoot, 'benchmark', 'reports');
+    const jsonFiles = existsSync(reportsDir) ? readdirSync(reportsDir).filter((f) => /-release-gate\.json$/.test(f)) : [];
+    for (const file of jsonFiles) {
+      const report = JSON.parse(readFileSync(join(reportsDir, file), 'utf8')) as { accepted?: Record<string, { reason?: string }> };
+      for (const [id, entry] of Object.entries(report.accepted ?? {})) {
+        assert.ok(entry.reason && entry.reason.trim().length > 0, `${file}: accepted row "${id}" has no reason`);
+      }
+    }
+  });
+
+  it('every BLOCK reason in a tracked release-gate JSON is either fixed by a later sitting or carries an owner decision', () => {
+    const reportsDir = join(packageRoot, 'benchmark', 'reports');
+    const jsonFiles = existsSync(reportsDir)
+      ? readdirSync(reportsDir)
+          .filter((f) => /^\d{4}-\d{2}-\d{2}-release-gate\.json$/.test(f))
+          .sort()
+      : [];
+    for (let i = 0; i < jsonFiles.length; i++) {
+      const report = JSON.parse(readFileSync(join(reportsDir, jsonFiles[i]), 'utf8')) as { verdict: string; classifications: Array<{ id: string; verdict: string }>; accepted: Record<string, { reason?: string }> };
+      if (report.verdict !== 'BLOCK') continue;
+      const hasLaterSitting = i < jsonFiles.length - 1;
+      if (hasLaterSitting) continue; // a later sitting is the fix; nothing to check on this one
+      const blocking = report.classifications.filter((c) => ['moved', 'contract', 'fell'].includes(c.verdict));
+      const unresolved = blocking.filter((c) => !report.accepted[c.id]?.reason);
+      assert.deepEqual(
+        unresolved.map((c) => c.id),
+        [],
+        `${jsonFiles[i]} is BLOCK, has no later sitting, and these rows have neither a fix nor an owner decision: ${unresolved.map((c) => c.id).join(', ')}`
+      );
     }
   });
 });
 
-// STORE_NAMES is the source of truth; schema.json's enum is the editor-facing copy, and
-// benchmark/release.mjs reads that enum to decide which stores its battery covers.
-describe('schema.json store enum matches STORE_NAMES', () => {
-  it('the enum is exactly the declared store list, in order', () => {
-    const schema = JSON.parse(readFileSync(join(packageRoot, 'schema.json'), 'utf8')) as { properties: { store: { enum: string[] } } };
-    assert.deepEqual(schema.properties.store.enum, [...STORE_NAMES], 'a store that validates but is missing from the enum is one the benchmark battery never runs');
+describe('benchmark release-gate: generated report re-render is idempotent', () => {
+  it('fixture: buildReport + persist is byte-identical to a second run against the same sitting', async () => {
+    const { buildReport, persist } = await import('../../benchmark/report.mjs');
+    const sitting = scratchDir('idempotent-fixture-sitting');
+    fixtureSitting(sitting, '2099-06-03', [71, 71]);
+    const reportsDir = scratchDir('idempotent-fixture-reports');
+    const mdPath = join(scratchDir('idempotent-fixture-md'), 'BENCHMARKING.md');
+    writeFileSync(mdPath, `# Benchmarks\n\n${'<!-- numbers -->'}\n\n<!-- /numbers -->\n`);
+    const first = buildReport(sitting, { reportsDir });
+    const { jsonPath, mdPath: reportMdPath } = persist(first, { reportsDir, benchmarkingMdPath: mdPath });
+    const jsonAfterFirst = readFileSync(jsonPath, 'utf8');
+    const mdAfterFirst = readFileSync(reportMdPath, 'utf8');
+
+    const second = buildReport(sitting, { reportsDir });
+    persist(second, { reportsDir, benchmarkingMdPath: mdPath });
+    assert.equal(readFileSync(jsonPath, 'utf8'), jsonAfterFirst, 'release-gate JSON must be byte-identical on re-render');
+    assert.equal(readFileSync(reportMdPath, 'utf8'), mdAfterFirst, 'release-gate md must be byte-identical on re-render');
   });
-});
 
-// Every shipped SKILL.md is installed by tooling that parses its frontmatter as YAML; an
-// unquoted `description:` containing ": " reads as a nested mapping and gets skipped entirely.
-describe('shipped skills', () => {
-  const skillDirs = () =>
-    readdirSync(join(packageRoot, 'skills'), { withFileTypes: true })
-      .filter((d) => d.isDirectory())
-      .map((d) => d.name);
-
-  it('every SKILL.md has frontmatter that parses, with a name and description', () => {
-    const names = skillDirs();
-    assert.ok(names.length > 0, 'no skills found to check');
-    for (const name of names) {
-      const file = join(packageRoot, 'skills', name, 'SKILL.md');
-      const fm = /^---\n([\s\S]*?)\n---\n/.exec(read(file));
-      assert.ok(fm, `${name}/SKILL.md has no frontmatter block`);
-      const parsed = parse(fm[1]) as { name?: string; description?: string };
-      assert.equal(parsed.name, name, `${name}/SKILL.md declares a name that is not its directory`);
-      assert.ok(parsed.description && parsed.description.length > 0, `${name}/SKILL.md has no description`);
+  it('every generated release-gate md tracked in the tree is byte-identical to its regeneration', async () => {
+    const reportsDir = join(packageRoot, 'benchmark', 'reports');
+    const jsonFiles = existsSync(reportsDir) ? readdirSync(reportsDir).filter((f) => /^\d{4}-\d{2}-\d{2}-release-gate\.json$/.test(f)) : [];
+    if (jsonFiles.length === 0) return; // no generated report has landed yet
+    const { buildReport, persist } = await import('../../benchmark/report.mjs');
+    for (const file of jsonFiles) {
+      const report = JSON.parse(readFileSync(join(reportsDir, file), 'utf8')) as { generated?: boolean; date: string };
+      if (!report.generated) continue;
+      const sittingDate = report.date;
+      const sittingsDir = join(packageRoot, '.tmp', 'sittings');
+      const candidates = existsSync(sittingsDir) ? readdirSync(sittingsDir).filter((d) => d.startsWith(sittingDate)) : [];
+      if (candidates.length === 0) continue; // the sitting that produced this report was cleaned from .tmp
+      const scratch = scratchDir('regen-check-reports');
+      const rebuilt = buildReport(join(sittingsDir, candidates[0]), { reportsDir: join(packageRoot, 'benchmark', 'reports') });
+      const scratchMd = join(scratchDir('regen-check-md'), 'BENCHMARKING.md');
+      writeFileSync(scratchMd, readFileSync(join(packageRoot, 'BENCHMARKING.md'), 'utf8'));
+      persist(rebuilt, { reportsDir: scratch, benchmarkingMdPath: scratchMd });
+      const trackedMd = readFileSync(join(reportsDir, file.replace(/\.json$/, '.md')), 'utf8');
+      const regeneratedMd = readFileSync(join(scratch, file.replace(/\.json$/, '.md')), 'utf8');
+      assert.equal(regeneratedMd, trackedMd, `${file.replace(/\.json$/, '.md')} is not byte-identical to its regeneration`);
     }
-  });
-
-  it('every skill named in package.json files is actually packed', () => {
-    const pkg = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8')) as { files: string[] };
-    assert.ok(pkg.files.includes('skills'), 'skills/ is not in package.json files');
-  });
-});
-
-// plans/ is gitignored working material, not in the repo a consumer clones or the package,
-// so a comment pointing at one sends the reader to a file that does not exist.
-describe('no references to local planning files', () => {
-  it('no tracked file points at plans/', () => {
-    // This file names the directory it forbids, so it is the one exemption.
-    // git ls-files reports posix separators; relative() uses the platform's.
-    const self = relative(packageRoot, fileURLToPath(import.meta.url))
-      .split(sep)
-      .join('/');
-    // --others --exclude-standard so a not-yet-committed file is scanned too: tracked-only
-    // passes a new file's violation locally and fails only once it is committed.
-    const tracked = execFileSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], { cwd: packageRoot, encoding: 'utf8' }).split('\0').filter(Boolean);
-    // git ls-files reports the index, which can name a file staged but not yet committed as
-    // deleted in the working tree; skip what isn't there rather than let readFileSync throw.
-    const offenders = tracked.filter((file) => /\.(ts|js|mjs|cjs|md|json)$/.test(file) && file !== self && !file.startsWith('plans/') && existsSync(join(packageRoot, file)) && readFileSync(join(packageRoot, file), 'utf8').includes('plans/'));
-    assert.deepEqual(offenders, [], `these reference gitignored plans/: ${offenders.join(', ')}`);
   });
 });

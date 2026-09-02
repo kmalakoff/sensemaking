@@ -404,7 +404,7 @@ BUILDERS.replicate = (spec, dest) => {
   writeTreeConfig(dest, { version: 1, scan: { include: ['**/*.md'] }, queries: {} });
 };
 
-// Synthetic tree for shape sweeps (benchmark/sweep.mjs): each dimension holds the other params
+// Synthetic tree for shape sweeps (benchmark/tools/sweep.mjs): each dimension holds the other params
 // at hub-like values and varies one. Everything derives from spec.seed, so a spec is reproducible.
 BUILDERS.synthetic = (spec, dest) => {
   const cfg = { ...SYNTHETIC_DEFAULTS, ...spec };

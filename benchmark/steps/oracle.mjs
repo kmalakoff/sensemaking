@@ -6,14 +6,54 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { writeOut } from '../lib/out.mjs';
 
-const [vaultName, vaultPath] = process.argv.slice(2);
-if (!vaultName || !vaultPath) {
-  console.error('usage: node benchmark/oracle.mjs <vault-name> <vault-path>');
+const argv = process.argv.slice(2);
+const outIdx = argv.indexOf('--out');
+const outArg = outIdx >= 0 ? argv[outIdx + 1] : null;
+// One positional is the vault path; two are name then path. The name defaults to .env.test.
+const positionals = outIdx >= 0 ? argv.filter((_a, i) => i !== outIdx && i !== outIdx + 1) : argv;
+const [vaultArg, vaultPath] = positionals.length > 1 ? positionals : [undefined, positionals[0]];
+if (!vaultPath) {
+  console.error('usage: node benchmark/steps/oracle.mjs [vault-name] <vault-path> [--out <file>]; the name defaults to SENSE_TEST_OBSIDIAN_VAULT');
   process.exit(2);
 }
 
-const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
+const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
+
+// Exit code for "the prerequisite is not on this machine", which the gate reads as owed-and-unmet
+// rather than a failure. Obsidian has no headless mode, so CI can never satisfy this one.
+export const UNAVAILABLE = 78;
+
+// Obsidian answers through its own CLI against a running app. If none is running, open the vault
+// and wait: a gate nobody has to remember to prepare is the whole point.
+function ensureObsidian(name) {
+  const answers = () => spawnSync('obsidian', [`vault=${name}`, 'eval', 'code=1'], { stdio: 'ignore' }).status === 0;
+  if (spawnSync('obsidian', ['--version'], { stdio: 'ignore' }).error) return false;
+  if (answers()) return true;
+  const opener = process.platform === 'darwin' ? ['open', ['-g', `obsidian://open?vault=${encodeURIComponent(name)}`]] : ['xdg-open', [`obsidian://open?vault=${encodeURIComponent(name)}`]];
+  console.error(`oracle: no running Obsidian answered, opening vault "${name}"`);
+  if (spawnSync(opener[0], opener[1], { stdio: 'ignore' }).error) return false;
+  // Cold launch plus first index of the pinned corpus; polled rather than slept so a warm app
+  // costs a second and a cold one is still waited out.
+  for (let i = 0; i < 60; i++) {
+    if (answers()) return true;
+    spawnSync(process.execPath, ['-e', 'setTimeout(()=>{},2000)'], { stdio: 'ignore' });
+  }
+  return false;
+}
+
+// .env.test says which machines own a gate, the same way the live-endpoint suites do.
+if (existsSync(join(repoRoot, '.env.test'))) process.loadEnvFile(join(repoRoot, '.env.test'));
+if (!process.env.SENSE_TEST_OBSIDIAN_VAULT) {
+  console.error('oracle: SENSE_TEST_OBSIDIAN_VAULT is not set, so this machine does not own the Obsidian parity gate. Set it in .env.test to the vault name Obsidian has registered for the pinned corpus.');
+  process.exit(UNAVAILABLE);
+}
+const vaultName = vaultArg ?? process.env.SENSE_TEST_OBSIDIAN_VAULT;
+if (!ensureObsidian(vaultName)) {
+  console.error(`oracle: SENSE_TEST_OBSIDIAN_VAULT names "${process.env.SENSE_TEST_OBSIDIAN_VAULT}" but no Obsidian answered for it. Open that vault once so Obsidian registers it (RELEASING.md step 3).`);
+  process.exit(UNAVAILABLE);
+}
 mkdirSync(join(repoRoot, '.tmp'), { recursive: true });
 const work = mkdtempSync(join(repoRoot, '.tmp', 'oracle-'));
 
@@ -120,7 +160,10 @@ try {
     console.log(`${label}: ${differing} differing / ${paths.size} files${differing === 0 ? ' -- parity' : ''}`);
     return differing;
   };
-  const total = diffSection('tags', nfc(ours), nfc(theirs)) + diffSection('links', nfc(ourEdges), nfc(theirEdges)) + diffSection('dead-links', nfc(ourDead), nfc(theirDead));
+  const tagsDiffering = diffSection('tags', nfc(ours), nfc(theirs));
+  const linksDiffering = diffSection('links', nfc(ourEdges), nfc(theirEdges));
+  const deadLinksDiffering = diffSection('dead-links', nfc(ourDead), nfc(theirDead));
+  const total = tagsDiffering + linksDiffering + deadLinksDiffering;
 
   // 4. Block extents: src/chunk's parse() (imported from the built dist/esm, a real-consumer check) against
   // metadataCache's headings/sections. parse() is 1-indexed over the frontmatter-stripped body; Obsidian is 0-indexed over the raw file (frontmatter included); `offset` (frontmatter's line count) maps ours onto Obsidian's coordinates.
@@ -427,7 +470,30 @@ try {
   console.log(`unexplained (not covered by a documented class -- candidate bugs): ${unexplained.count}`);
   for (const ex of unexplained.examples) console.log(`  ${ex}`);
 
-  process.exit(total === 0 && headingBuckets.differing === 0 && unexplained.count === 0 ? 0 : 1);
+  const parity = total === 0 && headingBuckets.differing === 0 && unexplained.count === 0;
+  writeOut(outArg, {
+    vault: vaultName,
+    filesCompared,
+    tags: { differing: tagsDiffering },
+    links: { differing: linksDiffering },
+    deadLinks: { differing: deadLinksDiffering },
+    headings: { differing: headingBuckets.differing },
+    blockExtents: {
+      frontmatterSections,
+      eofPhantom: eofPhantom.count,
+      blockRefAnchor: blockRefAnchor.count,
+      commentSwallow: commentSwallow.count,
+      commentCascade: commentCascade.count,
+      listContinuation: listContinuation.count,
+      sectionMerge: sectionMerge.count,
+      edgeAdjust: edgeAdjust.count,
+      trailingBlank: trailingBlank.count,
+      malformedFrontmatter: malformedFrontmatter.count,
+      unexplained: unexplained.count,
+    },
+    parity,
+  });
+  process.exit(parity ? 0 : 1);
 } finally {
   rmSync(work, { recursive: true, force: true });
 }

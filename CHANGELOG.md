@@ -2,7 +2,11 @@
 
 All notable changes to sensemaking are documented here.
 
-## [0.20.1] - 2026-09-02
+## [0.21.0] - 2026-09-02
+
+### Removed
+
+- `content.tokenize` is gone, and a config that still sets it fails to load with a message naming the removal rather than being migrated silently. It passed a raw SQLite FTS5 tokenizer string straight into the DDL, so it did something on sqlite and nothing at all on duckdb or turso: it never worked as a portable setting. Every outcome it selected is now automatic on all three stores, so removing the `content` block is the whole fix, and doing so rebuilds the index under the current tokenizer.
 
 ### Fixed
 
@@ -11,13 +15,14 @@ All notable changes to sensemaking are documented here.
 
 ### Changed
 
+- A config change now invalidates what it affects instead of clearing the whole cache. Editing a preset glob, swapping the embed model, changing `chunkTokens`, or toggling a feature (tags, sections, links, rank) each narrow to the rows they touch, so a preset edit no longer re-embeds a tree that did not change. The rebuild notice names which segment moved.
 - Link resolution re-resolves only what a change could have affected, unless the build is cold. The previous rule handed a fifth of the tree changing to the slower whole-table pass, which cost more than the incremental path at every churn level short of a rebuild. Output is unchanged.
 
 ## [0.20.0] - 2026-08-30
 
 ### Changed
 
-- The exported `Store` shape changes, with no shim: `reconcile()` is no longer on `Store`, which now answers queries only. Bringing the index current is internal to the package, with no public replacement; a command that needs the index current runs any query, since every query reconciles first. The internal path also got faster for the watcher: `sense watch` reuses one parse worker pool across its whole lifetime instead of creating and destroying a pool on every tick and paying 85-100 ms of pool startup each time.
+- The exported `Store` shape changes, with no shim: `reconcile()` is no longer on `Store`, which now answers queries only. Bringing the index current is internal to the package, with no public replacement. Reconcile happens in `open()`, so a CLI invocation is always current because each one opens fresh; a library consumer holding a store from `open()` is not, and calls `open(cfg)` again to get a current one. There is no in-place refresh for a store already held. The internal path also got faster for the watcher: `sense watch` reuses one parse worker pool across its whole lifetime instead of creating and destroying a pool on every tick and paying 85-100 ms of pool startup each time.
 - A change to the embedding model that only moves its resolved identity no longer clears the duckdb or turso cache and re-embeds every chunk; the new identity is adopted in meta in place. The behaviour was previously sqlite-only.
 - When a config change forces a rebuild, all three stores name which config segment moved, instead of reporting a generic rebuild reason.
 

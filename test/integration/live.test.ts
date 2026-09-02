@@ -46,11 +46,9 @@ async function assertFullBatch(provider: EmbedProvider): Promise<void> {
   assert.ok(cosine(vectors[1], alone) < 0.99, 'a filler position must not carry it');
 }
 
-// Skipped: the Cohere account is out of credits, so the live calls return HTTP 429.
-describe.skip('cohere live', () => {
-  before(() => {
-    // Credentials never skip: a missing key is a broken environment, not an absence to gate on.
-    if (!process.env.SENSE_TEST_COHERE_KEY) throw new Error('SENSE_TEST_COHERE_KEY is not set; add it to .env.test');
+describe('cohere live', () => {
+  beforeEach(function () {
+    gate(this, 'cohere', !!process.env.SENSE_TEST_COHERE_KEY, 'set SENSE_TEST_COHERE_KEY in .env.test; pull the key when the account is gone and this stops running');
   });
 
   it('embeds documents and a query against the real API', async function () {
