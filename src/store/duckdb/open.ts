@@ -95,8 +95,10 @@ export const duckdbOpenDialect: OpenDialect<DuckdbHandle> = {
   reconcileDialect: duckdbDialect,
   connect,
   close,
-  // "Conflicting lock is held in <exe> (PID n)": duckdb's file lock spans the connection's life.
-  isLocked: (err) => /Could not set lock on file/.test(err.message),
+  // duckdb's file lock spans the connection's life, and each platform words the refusal its own
+  // way: posix "Could not set lock on file ... Conflicting lock is held in <exe> (PID n)", Windows
+  // "Cannot open file ... being used by another process". Both are the same condition.
+  isLocked: (err) => /Could not set lock on file|being used by another process/.test(err.message),
   ensureSchema,
   createStore: (handle, conn) => createStore(handle.instance, handle.duckdb, conn),
 };

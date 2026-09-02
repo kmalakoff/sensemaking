@@ -78,9 +78,10 @@ export const tursoOpenDialect: OpenDialect<Database> = {
   reconcileDialect: tursoDialect,
   connect,
   close,
-  // "Locking error: Failed locking file ... File is locked by another process". Distinct from the
-  // write-time "database is locked" its connect-time `timeout` covers; that one never reaches here.
-  isLocked: (err) => /File is locked by another process/.test(err.message),
+  // "Locking error: Failed locking file ...", worded per platform: posix "File is locked by another
+  // process", Windows "another process has locked a portion of the file (os error 33)". Distinct from
+  // the write-time "database is locked" its connect-time `timeout` covers; that one never reaches here.
+  isLocked: (err) => /File is locked by another process|locked a portion of the file/.test(err.message),
   ensureSchema,
   setDerivedBusyTimeout,
   createStore: (handle, conn) => createStore(handle, conn),
