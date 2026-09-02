@@ -2,6 +2,17 @@
 
 All notable changes to sensemaking are documented here.
 
+## [0.20.1] - 2026-09-02
+
+### Fixed
+
+- Two `sense` commands running at the same moment on one tree could fail. On duckdb and turso, all but one failed at open with the engine's own lock error, warm trees as well as cold, because both hold the cache file for a connection's whole life rather than for a transaction; a command now waits for the holder to finish, up to five seconds, and past that says which store serves concurrent commands instead of repeating the engine's message. On sqlite the failure was cold-build only and had a different cause: two processes each classified the same file as new from a read taken before the write lock, and the second then collided with the first's row. That classification is now rechecked once the lock is held.
+- `has()`, `basename()` and `segment()` on a turso tree reported the engine's `no such function`, which reads as a typo in valid sense SQL. They now name the gap and the stores that have it, and for `has()` hand over the equivalent plain SQL, since turso can express it. A function sense never supplies still gets the engine's message.
+
+### Changed
+
+- Link resolution re-resolves only what a change could have affected, unless the build is cold. The previous rule handed a fifth of the tree changing to the slower whole-table pass, which cost more than the incremental path at every churn level short of a rebuild. Output is unchanged.
+
 ## [0.20.0] - 2026-08-30
 
 ### Changed
