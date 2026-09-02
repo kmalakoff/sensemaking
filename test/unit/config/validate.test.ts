@@ -181,6 +181,16 @@ describe('config validation', () => {
     assert.match(result.stderr, /checks was removed in v3/);
   });
 
+  it('content.tokenize is rejected with a named error, not silently ignored (plan 1.8: removed, now automatic on every store)', () => {
+    const dir = scratchDir('content-tokenize');
+    const configPath = join(dir, 'sense.config.json');
+    writeFileSync(configPath, JSON.stringify({ version: 4, presets: { default: { include: ['*.md'] } }, queries: {}, content: { tokenize: 'trigram' } }));
+    const result = runCli(['--list', '--config', configPath]);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /content\.tokenize was removed/);
+    assert.match(result.stderr, /automatic on every store/);
+  });
+
   it('a saved search requires non-empty search text -- a scope without a question is just flags', () => {
     const result = runWith('{"version":4,"presets":{"default":{"include":["*.md"]}},"queries":{"empty":{"search":"","k":5}}}');
     assert.equal(result.status, 1);

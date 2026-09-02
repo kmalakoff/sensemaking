@@ -101,17 +101,6 @@
         "chunkTokens": { "type": "integer", "minimum": 1, "description": "Chunk size ceiling in estimated tokens for small-context models; default 500." }
       }
     },
-    "content": {
-      "type": "object",
-      "additionalProperties": false,
-      "description": "Settings for the `content` FTS5 table. Changing anything here rebuilds the content table: FTS5 cannot alter a tokenizer in place, and the prose is stored nowhere else, so every file's text is re-read. Vectors, links, and sections are file-derived and tokenizer-independent, so they are kept. The rebuild announces itself on stderr, naming the content tokenizer as the cause.",
-      "properties": {
-        "tokenize": {
-          "type": "string",
-          "description": "FTS5 tokenizer for word search, defaulting to `porter unicode61`. Languages written without word spaces (Chinese, Japanese, Thai, Khmer, Lao, Burmese) need no decision here: their text is indexed per grapheme and searched as an ordered grapheme phrase against machine-written sidecar columns, which is substring semantics -- what grep gives, a query matches wherever its exact text occurs, including inside a longer run, and needs no minimum length. What this setting is for is substring matching inside a Latin word, `trigram`, which indexes every three-character window, at the cost of stemming (`running` stops matching `run`), weaker bm25 relevance because trigrams are not words, a larger index, and a floor of three characters. `unicode61 tokenchars '-_'` is the smaller lever, keeping hyphenated terms whole. Naming any tokenizer turns the grapheme-phrase scheme off, on the reasoning that the tree has chosen its own scheme. Built-in choices are unicode61, ascii, porter, and trigram, each with their own options; the value is validated by building a throwaway table with it, so whatever the linked SQLite accepts is accepted here and anything else errors carrying SQLite's own message."
-        }
-      }
-    },
     "store": {
       "type": "string",
       "enum": ["sqlite", "duckdb", "turso"],

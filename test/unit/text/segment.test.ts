@@ -187,18 +187,6 @@ describe('ranking: mirrored bm25 weights put a title hit above a body hit', () =
   });
 });
 
-describe('gating: content.tokenize turns segmentation off, on both sides', () => {
-  it('sidecars stay empty and search never phrase-rewrites, but trigram still matches', () => {
-    const dir = makeTree({ content: { tokenize: 'trigram' } });
-    const rows = JSON.parse(runCli(dir, ['sql', 'SELECT title_seg, summary_seg, text_seg FROM content', '--format', 'json']).stdout) as Array<{ title_seg: string; summary_seg: string; text_seg: string }>;
-    assert.ok(rows.length > 0);
-    for (const r of rows) assert.deepEqual(r, { title_seg: '', summary_seg: '', text_seg: '' });
-    // 3 characters, so trigram (not the sidecar phrase machinery) is what finds it; ja.md uses
-    // 検索, not 搜索, so this substring is zh.md-only.
-    assert.deepEqual(paths(dir, ['search', '全文搜']), ['zh.md']);
-  });
-});
-
 describe('search across languages', () => {
   it('finds a two-character word, which the default tokenizer alone cannot', () => {
     const dir = makeTree();

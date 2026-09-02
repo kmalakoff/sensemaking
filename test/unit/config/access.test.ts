@@ -69,7 +69,7 @@ describe('D8 migration: chunk version in the feature signature', () => {
     assert.match(features, /:chunk:v\d+:100(?:@|\||$)/, features);
   });
 
-  it('setting, changing, or clearing embed.chunkTokens each rebuild the index', () => {
+  it('setting, changing, or clearing embed.chunkTokens each rebuild the embeddings, not the whole index', () => {
     const model = writeModel();
     const dir = scratchDir('chunk-sig');
     const configPath = join(dir, 'sense.config.json');
@@ -92,12 +92,12 @@ describe('D8 migration: chunk version in the feature signature', () => {
       return row?.vector != null;
     };
 
-    // unset -> 100: a lever set for the first time must rebuild.
+    // unset -> 100: a lever set for the first time must rebuild the embeddings.
     sentinel();
     writeCfg(100);
     let result = runCli(dir, ['sql', 'SELECT 1']);
     assert.equal(result.status, 0, result.stderr);
-    assert.match(result.stderr, /config change \(embed settings\) rebuilds the index/);
+    assert.match(result.stderr, /config change \(embed settings\) rebuilds only the embeddings it affects/);
     assert.equal(vectorSurvived(), false, 'unset -> 100 must rebuild');
 
     // 100 -> 200: changing the value must rebuild too, not just setting it once.
@@ -105,7 +105,7 @@ describe('D8 migration: chunk version in the feature signature', () => {
     writeCfg(200);
     result = runCli(dir, ['sql', 'SELECT 1']);
     assert.equal(result.status, 0, result.stderr);
-    assert.match(result.stderr, /config change \(embed settings\) rebuilds the index/);
+    assert.match(result.stderr, /config change \(embed settings\) rebuilds only the embeddings it affects/);
     assert.equal(vectorSurvived(), false, '100 -> 200 must rebuild');
 
     // 200 -> unset: removing the lever must rebuild rather than silently reusing stale chunks.
@@ -113,7 +113,7 @@ describe('D8 migration: chunk version in the feature signature', () => {
     writeCfg(undefined);
     result = runCli(dir, ['sql', 'SELECT 1']);
     assert.equal(result.status, 0, result.stderr);
-    assert.match(result.stderr, /config change \(embed settings\) rebuilds the index/);
+    assert.match(result.stderr, /config change \(embed settings\) rebuilds only the embeddings it affects/);
     assert.equal(vectorSurvived(), false, '200 -> unset must rebuild');
   });
 });

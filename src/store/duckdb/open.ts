@@ -29,7 +29,7 @@ interface DuckdbHandle {
 }
 
 // `content` is a plain table (not FTS-virtual): the fts index is built over it lazily, only when a lexical query runs (lexical.ts), and read directly for contains() verification either way.
-// No tokenizer resolution: this store always uses the fts extension's default (porter) stemmer; sqlite's configurable `content.tokenize` is not read here.
+// No tokenizer resolution: this store always uses the fts extension's default (porter) stemmer.
 async function ensureSchema(_handle: DuckdbHandle, conn: Connection, cfg: Config): Promise<void> {
   await conn.exec(`CREATE TABLE IF NOT EXISTS frontmatter ("path" TEXT PRIMARY KEY, "_mtime" DOUBLE, "_ctime" DOUBLE, "_size" INTEGER, "_parse_error" TEXT)`);
   await conn.exec(`CREATE TABLE IF NOT EXISTS content ("path" TEXT PRIMARY KEY, title TEXT, summary TEXT, text TEXT)`);
@@ -96,12 +96,7 @@ export const duckdbOpenDialect: OpenDialect<DuckdbHandle> = {
   connect,
   close,
   // "Conflicting lock is held in <exe> (PID n)": duckdb's file lock spans the connection's life.
-  // Two wordings for one condition, both recorded from a real concurrent open: POSIX says
-  // "Could not set lock on file ... Conflicting lock is held in <exe> (PID n)", Windows says
-  // "Cannot open file ... The process cannot access the file because it is being used by another
-  // process". The Windows text is a sharing violation, which is always another holder, never a
-  // missing or corrupt file, so retrying it is right.
-  isLocked: (err) => /Could not set lock on file|being used by another process/i.test(err.message),
+  isLocked: (err) => /Could not set lock on file/.test(err.message),
   ensureSchema,
   createStore: (handle, conn) => createStore(handle.instance, handle.duckdb, conn),
 };

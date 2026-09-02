@@ -1,10 +1,12 @@
 // Feature-signature comparison for open()'s rebuild-vs-adopt decision (config.featureSignature's
-// format: global features, embed provider, tokenize, then one segment per preset). Pure string
-// comparison, no SQL, shared by every store's open dialect.
+// format: one `feature:<name>:on|off` segment per feature, embed provider, then one segment per
+// preset). Pure string comparison, no SQL, shared by every store's open dialect.
 
-// Segment keys that moved between two feature signatures.
+// Segment keys that moved between two feature signatures. `preset:` and `feature:` segments key
+// on their first two colon-separated parts (e.g. `preset:default`, `feature:tags`) so a change to
+// one preset or one feature is independently detectable; every other segment keys on its prefix alone.
 export function changedSignatureKeys(before: string, after: string): Set<string> {
-  const keyOf = (part: string) => (part.startsWith('preset:') ? part.split(':').slice(0, 2).join(':') : part.split(':')[0]);
+  const keyOf = (part: string) => (part.startsWith('preset:') || part.startsWith('feature:') ? part.split(':').slice(0, 2).join(':') : part.split(':')[0]);
   const parse = (sig: string) => new Map(sig.split('|').map((part) => [keyOf(part), part]));
   const a = parse(before);
   const b = parse(after);
@@ -28,6 +30,6 @@ export function embedIdentityAdopted(before: string, after: string): boolean {
 // Names what moved, for the rebuild notice.
 export function signatureDiff(before: string, after: string): string {
   const changed = changedSignatureKeys(before, after);
-  const label = (key: string) => (key === 'embed' ? 'embed settings' : key === 'tokenize' ? 'content tokenizer' : key.startsWith('preset:') ? `preset "${key.slice(7)}"` : 'features');
+  const label = (key: string) => (key === 'embed' ? 'embed settings' : key.startsWith('preset:') ? `preset "${key.slice(7)}"` : key.startsWith('feature:') ? `feature "${key.slice(8)}"` : 'features');
   return changed.size === 0 ? 'features' : [...changed].map(label).join(', ');
 }

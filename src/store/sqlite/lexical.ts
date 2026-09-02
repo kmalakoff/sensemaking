@@ -6,11 +6,11 @@ import type { Connection, LexicalHit, LexicalQueryOptions } from '../types.ts';
 const SNIPPET_BOUND = 16_384;
 const WEIGHTED_BM25 = 'bm25(content, 10.0, 5.0, 1.0, 0, 10.0, 5.0, 1.0)';
 
-// Ranked BM25 word-match query with excerpt, scoped by the caller-built SQL fragments. `segmenting`
-// mirrors the predicate that populated the `_seg` sidecars (contentTokenize(cfg) === undefined): an unspaced-script run in `terms` becomes a quoted grapheme phrase against them only when they exist.
-export async function queryLexical(conn: Connection, terms: string, opts: LexicalQueryOptions, segmenting: boolean): Promise<LexicalHit[]> {
+// Ranked BM25 word-match query with excerpt, scoped by the caller-built SQL fragments. An
+// unspaced-script run in `terms` becomes a quoted grapheme phrase against the `_seg` sidecars.
+export async function queryLexical(conn: Connection, terms: string, opts: LexicalQueryOptions): Promise<LexicalHit[]> {
   const { whereJoin, whereCond, scopeCond, limit } = opts;
-  const query = segmenting ? segmentMatch(terms) : terms;
+  const query = segmentMatch(terms);
   // A run of pure unspaced-script punctuation segments to nothing searchable: an empty MATCH
   // string is an FTS5 syntax error, not zero rows, so return zero rows directly rather than issuing it.
   if (query.trim() === '') return [];

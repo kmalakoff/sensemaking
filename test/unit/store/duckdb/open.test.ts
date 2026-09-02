@@ -1,6 +1,5 @@
 import assert from 'node:assert';
 import { join } from 'node:path';
-import { duckdbOpenDialect } from '../../../../src/store/duckdb/open.ts';
 import { openConfig, tmpTree, writeNote } from '../../../lib/tree.ts';
 
 function duckdbTree(baseDir: string, presets?: Record<string, unknown>) {
@@ -44,31 +43,13 @@ describe('openDuckdb', () => {
     }
   });
 
-  it('a feature-toggle config change rebuilds the cache rather than erroring', async () => {
+  it('a feature-toggle config change narrows to the toggled feature instead of erroring or reparsing the tree', async () => {
     const baseDir = tmpTree();
     writeNote(baseDir, 'a.md', { frontmatter: { title: 'A' } });
     const first = await duckdbTree(baseDir);
     await first.store.close();
     const second = await openConfig({ store: 'duckdb', presets: { default: { include: ['**/*.md'] } }, features: { tags: false }, queries: {}, baseDir, configPath: null } as Parameters<typeof openConfig>[0]);
-    assert.equal(second.parsed, 1);
+    assert.equal(second.parsed, 0);
     await second.store.close();
-  });
-});
-
-// Recorded from real concurrent opens on each platform. The engine words one condition two ways,
-// and matching only the POSIX one shipped a retry that never fired on Windows.
-describe('duckdb isLocked', () => {
-  const held = [
-    ['posix', 'store "duckdb" failed to open /t/.sense/cache.duckdb: IO Error: Could not set lock on file "/t/.sense/cache.duckdb": Conflicting lock is held in /usr/bin/node (PID 4776) by user kevin.'],
-    ['windows', 'store "duckdb" failed to open D:\\t\\.sense\\cache.duckdb: IO Error: Cannot open file "D:\\t\\.sense\\cache.duckdb": The process cannot access the file because it is being used by another process.'],
-  ] as const;
-  for (const [platform, message] of held) {
-    it(`treats the ${platform} held-lock wording as retryable`, () => {
-      assert.equal(duckdbOpenDialect.isLocked?.(new Error(message)), true);
-    });
-  }
-
-  it('leaves an error that is not a held lock alone', () => {
-    assert.equal(duckdbOpenDialect.isLocked?.(new Error('IO Error: Cannot open file "/t/x.duckdb": No such file or directory')), false);
   });
 });

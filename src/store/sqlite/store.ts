@@ -1,6 +1,4 @@
 import type { DatabaseSync } from 'node:sqlite';
-import type { Config } from '../../config/index.ts';
-import { contentTokenize } from '../../config/index.ts';
 import { getColumns } from '../shared.ts';
 import { withTransaction } from '../transaction.ts';
 import type { Capability, Connection, Statement, Store, VectorWriteRow } from '../types.ts';
@@ -13,7 +11,7 @@ export const CAPABILITIES: ReadonlySet<Capability> = new Set(['phrases', 'snippe
 
 // Wraps the synchronous DatabaseSync connection in the async Store interface, sharing one
 // Connection instance (conn) with the builder's own reconcile call so transaction depth is tracked against the same object everywhere.
-export function createStore(db: DatabaseSync, conn: Connection, cfg: Config): Store {
+export function createStore(db: DatabaseSync, conn: Connection): Store {
   return {
     name: 'sqlite',
     capabilities: CAPABILITIES,
@@ -39,7 +37,7 @@ export function createStore(db: DatabaseSync, conn: Connection, cfg: Config): St
     },
     lexical: {
       async query(terms, opts) {
-        return queryLexical(conn, terms, opts, contentTokenize(cfg) === undefined);
+        return queryLexical(conn, terms, opts);
       },
     },
     vectors: {

@@ -19,18 +19,23 @@ import type { Connection, ReconcileDialect } from './types.ts';
 // computed value on every touch, not just the reconciles that recompute it.
 const CORE_FRONTMATTER_COLUMNS = new Set(['path', '_mtime', '_ctime', '_size', '_parse_error']);
 
-export async function reconcile(conn: Connection, cfg: Config, baseDir: string, dialect: ReconcileDialect, pool?: ParsePool): Promise<{ parsed: number; warnings: string[] }> {
+export async function reconcile(conn: Connection, cfg: Config, baseDir: string, dialect: ReconcileDialect, pool?: ParsePool, forcedPaths?: ReadonlySet<string>): Promise<{ parsed: number; warnings: string[] }> {
   const files = listFiles(cfg, baseDir);
   const currentSet = new Set(files.map((f) => f.relPath));
 
   const existingStmt = await conn.prepare('SELECT "path", "_mtime", "_size" FROM frontmatter');
   const existingRows = (await existingStmt.all()) as Array<{ path: string; _mtime: number; _size: number }>;
   const existing = new Map(existingRows.map((r) => [r.path, r]));
+  // A path whose coverage moved between presets (forcedPaths) but is no longer covered at all is
+  // already caught below by !currentSet.has, since it can only be forced by having existed under
+  // an old preset's match, which means it was reconciled into `existing` already.
   const vanished = existingRows.filter((r) => !currentSet.has(r.path)).map((r) => r.path);
 
+  // forcedPaths treats an unchanged file as touched because its preset coverage moved, not its
+  // stamp -- reconcile still owns add/update/remove and every cross-feature cascade for it.
   const toReparse = files.filter((f) => {
     const row = existing.get(f.relPath);
-    return !row || row._mtime !== f.mtimeMs || row._size !== f.size;
+    return !row || row._mtime !== f.mtimeMs || row._size !== f.size || (forcedPaths?.has(f.relPath) ?? false);
   });
 
   if (vanished.length === 0 && toReparse.length === 0) return { parsed: 0, warnings: [] };
@@ -74,7 +79,8 @@ export async function reconcile(conn: Connection, cfg: Config, baseDir: string, 
       // Re-read inside the write transaction: newColumns came from a read taken before it opened, so a
       // concurrent reconcile may have added some of them since. ALTER has no IF NOT EXISTS.
       const present = await getColumns(conn);
-      for (const col of newColumns) if (!present.has(col)) await conn.exec(`ALTER TABLE frontmatter ADD COLUMN ${quoteIdent(col)}${dialect.columnTypeSuffix()}`);
+      const missingColumns = newColumns.filter((col) => !present.has(col));
+      if (missingColumns.length > 0) await dialect.addColumns(conn, missingColumns);
 
       // Revalidated once the lock is held, before this process's own frontmatter upsert below:
       // `added` came from a path read taken before this transaction's lock, so a path still

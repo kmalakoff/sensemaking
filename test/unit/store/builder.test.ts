@@ -15,7 +15,9 @@ function baseDialect(): ReconcileDialect {
   return {
     beginMode: () => BEGIN_WRITE,
     checkColumnLimit: () => undefined,
-    columnTypeSuffix: () => '',
+    addColumns: async (conn, names) => {
+      for (const name of names) await conn.exec(`ALTER TABLE frontmatter ADD COLUMN "${name}"`);
+    },
     reconcileContent: async () => undefined,
   };
 }

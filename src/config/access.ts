@@ -67,19 +67,15 @@ export function embedConfig(cfg: Config): { model: string; provider: 'static' | 
   return { model: e.model as string, provider: e.provider ?? 'static', url: e.url, key: e.key, languages: e.languages, chunkTokens: e.chunkTokens };
 }
 
-// The configured FTS5 tokenizer, or undefined for the built-in default. Undefined (not the default
-// string) lets featureSignature omit the segment for trees that never set it, avoiding a spurious rebuild on upgrade.
-export function contentTokenize(cfg: Config): string | undefined {
-  const tokenize = cfg.content?.tokenize;
-  return tokenize === undefined || tokenize.trim() === '' ? undefined : tokenize.trim();
-}
-
 // Cache key over everything indexing derives from, so any change to those inputs rebuilds.
-// Segment order is fixed (features list, then `features` in registry order, then tokenize, then presets) since reordering alone would fire a spurious rebuild; tokenize/presets stay here because no Feature module owns either.
+// Segment order is fixed (one `feature:<name>:on|off` per FEATURE_NAMES entry but embed, then
+// `features` in registry order, then presets) since reordering alone would fire a spurious
+// rebuild; presets stay here because no Feature module owns it.
 export function featureSignature(cfg: Config, features: Feature[]): string {
-  const globalPart = enabledFeatures(cfg)
-    .filter((name) => name !== 'embed')
-    .join(',');
+  // One segment per toggle (not one lumped csv) so store/signature.ts's changedSignatureKeys can
+  // tell which feature moved -- store/feature-scope.ts routes a recognised toggle to a narrow
+  // per-table invalidation instead of the full clear.
+  const togglesPart = FEATURE_NAMES.filter((name) => name !== 'embed').map((name) => `feature:${name}:${featureEnabled(cfg, name) ? 'on' : 'off'}`);
   const featureParts = features.map((feature) => feature.signature?.(cfg)).filter((part): part is string => part !== undefined);
   // One keyed segment per preset so a rebuild notice can name exactly which preset moved.
   const presetsPart = [...presetNames(cfg)]
@@ -91,9 +87,5 @@ export function featureSignature(cfg: Config, features: Feature[]): string {
       return `preset:${name}:${include}:${exclude}:${presetHasSignal(cfg, name, 'vectors') ? 'on' : 'off'}`;
     })
     .join('|');
-  const tokenize = contentTokenize(cfg);
-  const parts = [`features:${globalPart}`, ...featureParts];
-  if (tokenize !== undefined) parts.push(`tokenize:${tokenize}`);
-  parts.push(presetsPart);
-  return parts.join('|');
+  return [...togglesPart, ...featureParts, presetsPart].join('|');
 }

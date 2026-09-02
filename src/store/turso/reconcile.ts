@@ -2,7 +2,7 @@ import { SenseError } from '../../errors.ts';
 import type { ReconcileDelta } from '../../features/types.ts';
 import type { ParsedDoc } from '../../scan/index.ts';
 import { hasUnspacedRun } from '../../text/segment.ts';
-import { recordReconcileDuration } from '../shared.ts';
+import { quoteIdent, recordReconcileDuration } from '../shared.ts';
 import { BEGIN_WRITE } from '../transaction.ts';
 import type { Connection, ReconcileDialect } from '../types.ts';
 
@@ -60,6 +60,11 @@ async function reconcileContent(conn: Connection, touched: string[], docs: Parse
   if (bulk) for (const ddl of CONTENT_FTS_DDL) await conn.exec(ddl);
 }
 
+// turso's ADD COLUMN is metadata-only, so a loop costs nothing extra over one statement.
+async function addColumns(conn: Connection, names: string[]): Promise<void> {
+  for (const name of names) await conn.exec(`ALTER TABLE frontmatter ADD COLUMN ${quoteIdent(name)}`);
+}
+
 export const tursoDialect: ReconcileDialect = {
   beginMode: () => BEGIN_WRITE,
   checkColumnLimit(count) {
@@ -70,7 +75,7 @@ export const tursoDialect: ReconcileDialect = {
       );
     }
   },
-  columnTypeSuffix: () => '',
+  addColumns,
   reconcileContent,
   recordDuration: recordReconcileDuration,
 };

@@ -99,6 +99,19 @@ describe('reconcile (duckdb)', () => {
     await store.close();
   });
 
+  it('several new frontmatter columns discovered in one reconcile all land (duckdbDialect.addColumns joins them into one ALTER)', async () => {
+    const baseDir = tmpTree();
+    writeNote(baseDir, 'a.md', { frontmatter: { fieldA: 1, fieldB: 'x', fieldC: true } });
+    writeNote(baseDir, 'b.md', { frontmatter: { fieldD: 2, fieldE: 'y' } });
+    const { store } = await duckdbTree(baseDir);
+    const row = (await (await store.prepare('SELECT "fieldA", "fieldB", "fieldC", "fieldD", "fieldE" FROM frontmatter WHERE "path" = ?')).get('a.md')) as Record<string, unknown>;
+    assert.equal(row.fieldA, BigInt(1));
+    assert.equal(row.fieldB, 'x');
+    assert.equal(row.fieldC, true);
+    assert.equal(row.fieldD, null);
+    await store.close();
+  });
+
   it('rank populates frontmatter._rank from the resolved link graph', async () => {
     const baseDir = tmpTree();
     writeNote(baseDir, 'a.md', { body: 'See [[b]].' });
