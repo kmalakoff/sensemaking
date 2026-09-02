@@ -78,6 +78,13 @@ export const tursoOpenDialect: OpenDialect<Database> = {
   reconcileDialect: tursoDialect,
   connect,
   close,
+  // "Locking error: Failed locking file ... File is locked by another process". Distinct from the
+  // write-time "database is locked" its connect-time `timeout` covers; that one never reaches here.
+  // "Locking error: Failed locking file" prefixes both platforms; what follows does not ("File is
+  // locked by another process" on POSIX, the Win32 sharing-violation sentence on Windows), so the
+  // match is on the part that is common. Distinct from the write-time "database is locked" this
+  // client's connect-time `timeout` covers, which never reaches here.
+  isLocked: (err) => /Failed locking file/i.test(err.message),
   ensureSchema,
   setDerivedBusyTimeout,
   createStore: (handle, conn) => createStore(handle, conn),

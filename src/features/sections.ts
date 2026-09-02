@@ -47,6 +47,9 @@ export const sections: Feature = {
     const rows: unknown[][] = [];
     for (const { path, extracted } of docs) (extracted as Section[]).forEach((s, idx) => rows.push([path, idx, s.level, s.heading, s.startLine, s.endLine, s.tokens]));
     if (rows.length === 0) return;
-    await db.runBatch('INSERT INTO sections ("path", idx, level, heading, start_line, end_line, tokens) VALUES (?, ?, ?, ?, ?, ?, ?)', rows);
+    // DO NOTHING, not a bare INSERT: reconcile's added/touched split is decided before this
+    // write's lock, so a path called "added" here can already have this row from a concurrent
+    // reconcile that committed first -- same file, same parse, same row.
+    await db.runBatch('INSERT INTO sections ("path", idx, level, heading, start_line, end_line, tokens) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT("path", idx) DO NOTHING', rows);
   },
 };

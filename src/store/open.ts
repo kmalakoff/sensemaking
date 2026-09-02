@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import type { ResolvedConfig } from '../config/index.ts';
 import { featureSignature, STATE_DIR } from '../config/index.ts';
 import { rekeyChunkText } from '../embed/handoff.ts';
+import { SenseError } from '../errors.ts';
 import { FEATURES } from '../features/index.ts';
 import type { Builder } from './builder.ts';
 import { createBuilder } from './builder.ts';
@@ -36,12 +37,34 @@ interface ConnectResult<Handle> {
   builder: Builder;
 }
 
+// duckdb and turso hold the cache file for their connection's whole life, not for a transaction,
+// so a second command waits on the first command finishing. Bounded rather than open-ended: this
+// clears a warm query's collision (~100ms) and still fails loudly behind a cold build instead of
+// looking hung.
+const LOCK_RETRY_MS = 5_000;
+const LOCK_POLL_MS = 50;
+
+async function connectUnlocked<Handle>(dbPath: string, cfg: ResolvedConfig, dialect: OpenDialect<Handle>): Promise<{ handle: Handle; conn: Connection }> {
+  const deadline = Date.now() + LOCK_RETRY_MS;
+  for (;;) {
+    try {
+      return await dialect.connect(dbPath, cfg);
+    } catch (err) {
+      if (!dialect.isLocked?.(err as Error)) throw err;
+      if (Date.now() >= deadline) {
+        throw new SenseError('STORE_BUSY', `another sense process is using this tree's ${cfg.store} cache (${dbPath}) and did not release it within ${LOCK_RETRY_MS / 1000}s; wait for that command to finish, or set "store" to "sqlite" in sense.config.json, which serves concurrent commands`);
+      }
+      await new Promise((resolve) => setTimeout(resolve, LOCK_POLL_MS));
+    }
+  }
+}
+
 async function connectWithDialect<Handle>(cfg: ResolvedConfig, dialect: OpenDialect<Handle>, keepBuilderOpen: boolean): Promise<ConnectResult<Handle>> {
   const stateDir = join(cfg.baseDir, STATE_DIR);
   mkdirSync(stateDir, { recursive: true });
   const dbPath = join(stateDir, dialect.filename);
 
-  const { handle, conn } = await dialect.connect(dbPath, cfg);
+  const { handle, conn } = await connectUnlocked(dbPath, cfg, dialect);
   // A throw below must release this handle, or the leaked WAL makes the cache file undeletable on
   // Windows. `closed` keeps the catch from double-closing a handle a rebuild branch already closed.
   let closed = false;

@@ -76,6 +76,19 @@ export async function reconcile(conn: Connection, cfg: Config, baseDir: string, 
       const present = await getColumns(conn);
       for (const col of newColumns) if (!present.has(col)) await conn.exec(`ALTER TABLE frontmatter ADD COLUMN ${quoteIdent(col)}${dialect.columnTypeSuffix()}`);
 
+      // Revalidated once the lock is held, before this process's own frontmatter upsert below:
+      // `added` came from a path read taken before this transaction's lock, so a path still
+      // called "added" here may already have a content row from a concurrent reconcile that
+      // committed while this one waited. One SELECT, not a DELETE per added file -- with no
+      // contention it returns the same set `existing` already ruled out, so nothing extra clears.
+      let contentTouched = touched;
+      if (added.length > 0) {
+        const currentPathsStmt = await conn.prepare('SELECT "path" FROM frontmatter');
+        const currentPaths = new Set(((await currentPathsStmt.all()) as Array<{ path: string }>).map((r) => r.path));
+        const staleAdded = added.filter((p) => currentPaths.has(p));
+        if (staleAdded.length > 0) contentTouched = [...touched, ...staleAdded];
+      }
+
       if (parsedDocs.length > 0) {
         const rows = parsedDocs.map((doc) =>
           writableColumns.map((col) => {
@@ -93,7 +106,7 @@ export async function reconcile(conn: Connection, cfg: Config, baseDir: string, 
 
       // After the upsert, so every doc already has the frontmatter row sqlite's content rowid
       // couples to. ON CONFLICT DO UPDATE preserves that rowid, so a reparse keeps its identity.
-      await dialect.reconcileContent(conn, touched, parsedDocs, delta, cfg);
+      await dialect.reconcileContent(conn, contentTouched, parsedDocs, delta, cfg);
 
       // A preset edit forces a full rebuild, so an unchanged doc's coverage is already correct;
       // new docs have nothing to clear, which keeps cold builds linear.
@@ -104,7 +117,10 @@ export async function reconcile(conn: Connection, cfg: Config, baseDir: string, 
         );
       const presetRows: unknown[][] = [];
       for (const doc of parsedDocs) for (const presetName of doc.presets) presetRows.push([doc.relPath, presetName]);
-      if (presetRows.length > 0) await conn.runBatch('INSERT INTO preset_files ("path", preset) VALUES (?, ?)', presetRows);
+      // DO NOTHING, not a bare INSERT: the added/touched split above comes from a read taken
+      // before this transaction's lock, so a path this process calls "added" can already have
+      // its (path, preset) row committed by a concurrent reconcile -- the row would be identical either way.
+      if (presetRows.length > 0) await conn.runBatch('INSERT INTO preset_files ("path", preset) VALUES (?, ?) ON CONFLICT("path", preset) DO NOTHING', presetRows);
 
       // Before the feature hooks, never after: rank's afterReconcile reads frontmatter as PageRank's
       // node set, so a lingering vanished row would dilute rank mass across every surviving note.

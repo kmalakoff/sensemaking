@@ -69,6 +69,14 @@ export interface OpenDialect<Handle> {
   connect(dbPath: string, cfg: ResolvedConfig): Promise<{ handle: Handle; conn: Connection }>;
   // Releases the handle, for both the rebuild-and-reopen branch and error cleanup on this attempt.
   close(handle: Handle): Promise<void>;
+  // True when connect() failed because another process holds the cache file, which the orchestration
+  // retries. Each engine words it differently, so the match is the dialect's own (`native-not-emulated`).
+  // Absent for sqlite, whose file lock is shared and whose concurrent-open failure is a different defect.
+  // Matching on message text is forced, not chosen: measured 2026-09-02, duckdb throws a plain Error
+  // whose only own properties are stack and message, and turso sets code to the constant
+  // 'GenericFailure' on every failure alike with rawCode undefined. Neither exposes anything a
+  // predicate could switch on, so each dialect pins its engine's wordings and unit-tests them.
+  isLocked?(err: Error): boolean;
   // A signature change fully explained by this dialect's own carve-out (sqlite's tokenize-only
   // partial rebuild): performs the DDL swap and returns true, or false when this change isn't one.
   // Absent for duckdb/turso, which have no such carve-out.
