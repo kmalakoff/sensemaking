@@ -7,20 +7,42 @@ digits linked from "Numbers of record" below.
 
 ## Running
 
+The gate is one command. Everything under it is reachable alone, and the directory says which is
+which: `benchmark/gate.mjs` is the entry, `benchmark/steps/` is what the gate runs, and
+`benchmark/tools/` is decision support that is never part of a release.
+
 ```bash
-node benchmark/compare.mjs                             # released baseline (package.json) vs working tree
-node benchmark/compare.mjs obsidian-hub 0.2.1 local    # explicit corpus and versions
-node benchmark/eval.mjs nfcorpus                       # retrieval quality on a labeled corpus
-node benchmark/bakeoff.mjs nfcorpus                     # storage-lever bake-off for one model
-node benchmark/weight-sweep.mjs nfcorpus                # per-signal RRF weight sweep
-node benchmark/oracle.mjs <corpus> <path>               # tags/links/chunk extents vs Obsidian's metadataCache
-node benchmark/store-dump.mjs capture <dir>             # every store's rows and ranked output, for an A/B against a refactor
-node benchmark/store-dump.mjs compare <dirA> <dirB>     # diffs two captures, non-zero on any difference
+npm run benchmark                     # the gate: the stages the diff owes, a report, a verdict
+npm run benchmark -- --dry-run        # what it would run, measuring nothing
+npm run benchmark -- --smoke          # the whole pipeline on small trees, minutes rather than hours
+npm run benchmark -- --store duckdb   # one store's battery alone, for diagnosis
+node benchmark/report.mjs             # re-render a report from its sitting, measuring nothing
+```
+
+The steps, each runnable alone when investigating one thing:
+
+```bash
+node benchmark/steps/measure-tree.mjs . <notes-dir|corpus>          # one package against one tree; the JSON row everything else reads
+node benchmark/steps/compare-versions.mjs                           # released baseline (package.json) vs working tree
+node benchmark/steps/compare-versions.mjs obsidian-hub 0.2.1 local  # explicit corpus and versions
+node benchmark/steps/quality.mjs nfcorpus                           # retrieval quality on a labeled corpus
+node benchmark/steps/oracle.mjs <corpus> <path>                     # tags/links/chunk extents vs Obsidian's metadataCache
+node benchmark/steps/store-dump.mjs capture <dir>                   # every store's rows and ranked output, for an A/B against a refactor
+node benchmark/steps/store-dump.mjs compare <dirA> <dirB>           # diffs two captures, non-zero on any difference
+```
+
+The tools, for settling a decision rather than gating a release:
+
+```bash
+node benchmark/tools/bakeoff.mjs nfcorpus       # storage-lever bake-off for one model
+node benchmark/tools/weight-sweep.mjs nfcorpus  # per-signal RRF weight sweep
+node benchmark/tools/sweep.mjs                  # the shape sweep behind the stress corpus
+node benchmark/tools/profile.mjs                # cold build by stage
 ```
 
 The default run answers "did the working tree regress?" `local` is whatever is checked out. The working-tree column is labeled `local` until the release exists: regenerate the table at release time and the column gets its real number. Named corpora, dataset builds, and npm-installed comparison versions all cache through `benchmark/lib/cache.mjs` into `.tmp/cache/` (gitignored): fetched once, built atomically in a staging dir, safe to delete anytime. Corpus specs are pinned in `benchmark/lib/corpus.mjs`, the single source of truth. A directory path works in place of a corpus name.
 
-`compare.mjs` installs each npm version into a temp dir (`local` = this working tree), gives every version an isolated copy of the tree with a v1 config (the lowest common denominator every version can read; copies keep cache formats and config auto-migration from cross-contaminating), runs `benchmark/run.mjs` per version, and prints the table. `run.mjs` can also run alone against any single package root + tree; it prints one JSON row.
+`compare.mjs` installs each npm version into a temp dir (`local` = this working tree), gives every version an isolated copy of the tree with a v1 config (the lowest common denominator every version can read; copies keep cache formats and config auto-migration from cross-contaminating), runs `benchmark/steps/measure-tree.mjs` per version, and prints the table. `run.mjs` can also run alone against any single package root + tree; it prints one JSON row.
 
 `bakeoff.mjs` and `weight-sweep.mjs` measure one specific model/dims/weight choice against a labeled corpus's qrels, decision-support for a config default, not a release gate. `oracle.mjs` is the correctness gate against Obsidian's own metadataCache (RELEASING.md step 3), needs Obsidian running, and stores nothing.
 
@@ -48,8 +70,8 @@ Two kinds of metric per version:
 
 ## Interpreting
 
-- Timings are medians (wall: 5 runs, cold crawl 1; in-process: 5 no-change, 3 updates).
-- Wall minus in-process ≈ per-invocation overhead: process spawn, Node/V8 startup, importing sense and its dependencies, argv parsing. The two move independently. If the in-process number grows, the engine (scan/reconcile/SQL) got slower; if the gap grows while in-process stays flat, startup got heavier, typically a new dependency imported at module top level, which every invocation pays for before any work happens. Commands lazy-load from `src/cli/` (cli.ts imports no tree code), so a heavy import belongs inside the one command that uses it; `--version` is the canary: it should stay at bare Node startup (~25 ms here).
+- Timings are medians. Wall: 5 runs, cold crawl 3, bulk change 3, bulk change with a warm watcher 3. In-process: 5 no-change, 3 updates, cold build 3. Cold crawl, in-process cold build and both bulk-change rows stepped down from a single sample to a median of 3 on 2026-09-01 (see the methodology changelog); every other row was already a median.
+- Wall minus in-process ≈ per-invocation overhead: process spawn, Node/V8 startup, importing sense and its dependencies, argv parsing. The two move independently. If the in-process number grows, the engine (scan/reconcile/SQL) got slower; if the gap grows while in-process stays flat, startup got heavier, typically a new dependency imported at module top level, which every invocation pays for before any work happens. Commands lazy-load from `src/cli/` (cli.ts imports no tree code), so a heavy import belongs inside the one command that uses it; `version_canary_ms` is the canary, a median of 5 `--version` spawns: it should stay at bare Node startup.
 - The update rows include everything reconcile does after re-parsing: link re-resolution across the whole table and a full PageRank pass. They are the numbers to watch as features add reconcile work.
 - The bulk-change pair measures `watch`: without a watcher, the first query after many files change pays the whole reparse; with one running, the reparse happened in the background and the query pays only the freshness check.
 - Token columns (`map`, `peek`, `search` row) are output-size contracts, not performance: they must stay roughly flat as trees grow. A token number that scales with tree size is a context-bloat regression even if timings look fine. The `search` row is measured in json, per row actually returned, and tracks summary and snippet length rather than tree size.
@@ -57,7 +79,7 @@ Two kinds of metric per version:
 
 ## Scale
 
-The README claims linear scaling and links here rather than carrying figures of its own. `obsidian-hub-x2` and `obsidian-hub-x4` (13k / 26k notes) are named corpora that replicate the pinned hub tree N times under one root: real notes, real frontmatter, real links, regenerated from nothing like every corpus. Duplicate basenames across copies stress link-ambiguity resolution harder than a natural tree. Run `node benchmark/run.mjs . <corpusPath>` per tree; regenerate scale rows together with the main table, in the same report file.
+The README claims linear scaling and links here rather than carrying figures of its own. `obsidian-hub-x2` and `obsidian-hub-x4` (13k / 26k notes) are named corpora that replicate the pinned hub tree N times under one root: real notes, real frontmatter, real links, regenerated from nothing like every corpus. Duplicate basenames across copies stress link-ambiguity resolution harder than a natural tree. Run `node benchmark/steps/measure-tree.mjs . <corpusPath>` per tree; regenerate scale rows together with the main table, in the same report file.
 
 Cold-crawl wall numbers move with file-cache state: the first pass of the day reads high, so only a same-sitting, same-cache version A/B is a meaningful comparison for that row, confirmed more than once across sittings (see the reports).
 
@@ -67,7 +89,7 @@ Current numbers: see "Numbers of record" below.
 
 ## Stress: the shape-cliff guard
 
-`stress` is a pinned synthetic corpus (benchmark/lib/corpus.mjs) that packs every measured shape cliff into one 2,000-note tree: a 1 MB note, 200 headings per note, 100 links per note, 300 distinct frontmatter fields. Each cliff was found by the shape sweep (`benchmark/sweep.mjs`), fixed, and is held fixed by this row per release: `node benchmark/run.mjs . .tmp/cache/stress-stress-1`.
+`stress` is a pinned synthetic corpus (benchmark/lib/corpus.mjs) that packs every measured shape cliff into one 2,000-note tree: a 1 MB note, 200 headings per note, 100 links per note, 300 distinct frontmatter fields. Each cliff was found by the shape sweep (`benchmark/tools/sweep.mjs`), fixed, and is held fixed by this row per release: `node benchmark/steps/measure-tree.mjs . .tmp/cache/stress-stress-1`.
 
 The sweep itself (`sweep.mjs`) re-runs when the engine changes, not per release; the probes it keeps (SQLite's 2,000-column limit fenced with a named error, adversarial markdown at ~8 s / 5 pathological notes with no timeout) are recorded in the findings file.
 
@@ -75,7 +97,7 @@ Current numbers: see "Numbers of record" below.
 
 ## Retrieval quality
 
-`benchmark/eval.mjs <corpus>` runs every labeled query through the shipped library in four passes and reports nDCG@10, MRR@10 and hit@10 against the corpus qrels: **bm25-only** (links and rank off), **fused** (BM25 + link expansion), **fused-embed-configured** (the embed block present, the preset's `signals` without `vectors`; a hidden guard pass), and **semantic** (embed block present, `vectors` in the preset's `signals`). There is no per-call semantic switch: the preset decides, so the guard exercises the one lever a tree owner actually has. Queries are natural-language text submitted as an OR bag of words (the standard bag-of-words baseline; bare FTS5 terms AND-join and punctuation is syntax).
+`benchmark/steps/quality.mjs <corpus>` runs every labeled query through the shipped library in four passes and reports nDCG@10, MRR@10 and hit@10 against the corpus qrels: **bm25-only** (links and rank off), **fused** (BM25 + link expansion), **fused-embed-configured** (the embed block present, the preset's `signals` without `vectors`; a hidden guard pass), and **semantic** (embed block present, `vectors` in the preset's `signals`). There is no per-call semantic switch: the preset decides, so the guard exercises the one lever a tree owner actually has. Queries are natural-language text submitted as an OR bag of words (the standard bag-of-words baseline; bare FTS5 terms AND-join and punctuation is syntax).
 
 Two guards run before any number is reported:
 
@@ -166,7 +188,7 @@ history; each entry names the commit that introduced the change.
   nothing, the two bugs masked each other). Produces the still-standing rule: eval columns
   regenerate whenever eval.mjs or the config semantics it drives change, not only when
   ranking does.
-- **2026-08-23, `25e0e0f`.** An Obsidian metadataCache parity gate (`benchmark/oracle.mjs`)
+- **2026-08-23, `25e0e0f`.** An Obsidian metadataCache parity gate (`benchmark/steps/oracle.mjs`)
   is added as RELEASING.md step 3: diffs sense's tags/links (later extended to section/block
   extents) against Obsidian's own metadataCache on both the hub corpus and a real vault. A
   correctness-gate discipline layered on top of the performance/quality gates: a release can
@@ -206,11 +228,29 @@ history; each entry names the commit that introduced the change.
   tables by different routes and the notice is the only observable that tells them
   apart. `embed-identity` exists to make 0.20.0's in-place identity adoption visible
   against 0.19.2's clear-and-re-embed path on duckdb and turso.
+- **2026-09-01 (staged release gate).** `cold_crawl_ms`, in-process `cold_build_ms`,
+  `bulk_change_ms` and `bulk_watch_ms` step down from one sample to a median of 3, clearing
+  `.sense` (cold rows) or re-touching (bulk rows) before each rep, same shape as the 2026-08-23
+  re-pin's "regenerate every column together" discipline: the sample list travels beside the
+  median in `run.mjs`'s JSON row rather than replacing it. A catalog (`benchmark/lib/rows.mjs`)
+  becomes the single vocabulary for every field `run.mjs` and `eval.mjs` emit, a pure classifier
+  (`benchmark/lib/classify.mjs`) turns a prior/current reading into `flat`/`noise`/`moved`/
+  `contract`/`fell`/`no-prior`, and `release.mjs` prints a generated `PASS`/`BLOCK` verdict from
+  it instead of a "paste these tables in" instruction. `run.mjs` gains `version_canary_ms` (five
+  `--version` spawns, median), the row the numbers of record already carried with nothing
+  measuring it. `benchmark/report.mjs` renders `benchmark/reports/<date>-release-gate.{json,md}`
+  from a sitting and is the only writer of the numbers-of-record table below: a `PASS` sitting
+  repoints it, a `BLOCK` sitting leaves it untouched, and `report.mjs --accept <row id> --reason
+  "<words>"` is the sole owner override.
 
 ## Numbers of record
 
 The canonical digits a release gate compares against, each linking to the report that
-produced it. When a number here moves, replace the value and the link together.
+produced it. When a number here moves, replace the value and the link together. This table is
+generated by `benchmark/report.mjs`: a `PASS` sitting repoints it at the newest report, a
+`BLOCK` sitting leaves it exactly as it was.
+
+<!-- numbers -->
 
 | metric | value | report |
 |---|---|---|
@@ -236,3 +276,5 @@ produced it. When a number here moves, replace the value and the link together.
 | duckdb: hub battery (total wall) | 68.6 s | [2026-08-30](benchmark/reports/2026-08-30-0.20.0-release-gate.md) |
 | turso: 13k tree battery (total wall) | 84.4 s | [2026-08-30](benchmark/reports/2026-08-30-0.20.0-release-gate.md) |
 | duckdb: 13k tree battery (total wall) | 119.3 s | [2026-08-30](benchmark/reports/2026-08-30-0.20.0-release-gate.md) |
+
+<!-- /numbers -->

@@ -1,10 +1,14 @@
 // Retrieval quality in three passes (bm25-only, fused, semantic) plus a hidden guard pass: a vectors-free preset must be row-identical to `fused`. Paired deltas with a sign-test z.
-// usage: node benchmark/eval.mjs [corpus] [--queries N] [--k N] [--split test|dev] [--store name]
+// usage: node benchmark/steps/quality.mjs [corpus] [--queries N] [--k N] [--split test|dev] [--store name] [--out file]
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { corpusLabels, corpusPath } from './lib/corpus.mjs';
-import { orBag, readLabels } from './lib/labels.mjs';
-import { metrics } from './lib/metrics.mjs';
+import { corpusLabels, corpusPath } from '../lib/corpus.mjs';
+import { orBag, readLabels } from '../lib/labels.mjs';
+import { metrics } from '../lib/metrics.mjs';
+import { writeOut } from '../lib/out.mjs';
+import { mdTable } from '../lib/render.mjs';
+import { ROWS } from '../lib/rows.mjs';
+import { stableWorkTree } from '../lib/work-tree.mjs';
 
 const args = process.argv.slice(2);
 const corpus = args.find((a) => !a.startsWith('--')) ?? 'nfcorpus';
@@ -18,15 +22,20 @@ const SPLIT = flag('split', 'test');
 // Retrieval quality is per-store once a store has its own lexical layer: each engine ranks with its own BM25, so scores are comparable only against the same store on the same corpus.
 // Omitted, this measures the default store, matching every recorded baseline in benchmark/reports.
 const STORE = flag('store', undefined);
+const outArg = flag('out', null);
 
-const tree = corpusPath(corpus);
+const ROOT = join(new URL('.', import.meta.url).pathname, '..', '..');
+const source = corpusPath(corpus);
 const labelsDir = corpusLabels(corpus);
-if (!tree || !labelsDir) {
+if (!source || !labelsDir) {
   console.error(`not a labeled corpus: ${corpus}`);
   process.exit(2);
 }
+// A private, reused copy of the pinned corpus: its vectors are expensive to rebuild (nfcorpus
+// 3,633 docs, fever 2,860), so this stays warm across runs instead of being thrown away like
+// run.mjs's per-run copy. The pinned entry in .tmp/cache is never written to.
+const tree = stableWorkTree(join(ROOT, '.tmp', 'eval-work'), `${corpus}-${STORE ?? 'sqlite'}`, source);
 
-const ROOT = join(new URL('.', import.meta.url).pathname, '..');
 const lib = await import(pathToFileURL(join(ROOT, 'dist', 'esm', 'index.js')).href);
 
 const { queries, qrels } = readLabels(labelsDir, SPLIT);
@@ -83,6 +92,7 @@ const fused = results.find((r) => r.name === 'fused');
 const fusedEmbedConfigured = results.find((r) => r.name === 'fused-embed-configured');
 const divergent = qids.filter((qid) => fused.perQuery.get(qid)?.rows !== fusedEmbedConfigured.perQuery.get(qid)?.rows);
 if (divergent.length > 0) {
+  writeOut(outArg, { corpus, split: SPLIT, queries: qids.length, k: K, store: STORE ?? 'sqlite', error: `NO-SILENT-CHANGE VIOLATION: ${divergent.length}/${qids.length} queries diverged from fused (first: ${divergent[0]})` });
   console.error(`NO-SILENT-CHANGE VIOLATION: semantic:false didn't fully disable vectors on the embed-configured corpus -- ${divergent.length}/${qids.length} queries diverged from fused (first: ${divergent[0]})`);
   process.exit(1);
 }
@@ -90,17 +100,9 @@ console.log(`no-silent-change: ok — semantic:false on an embed-configured corp
 
 const mean = (r, key) => [...r.perQuery.values()].reduce((a, q) => a + q.m[key], 0) / qids.length;
 const shown = results.filter((r) => !r.hidden);
+const qualityRows = ROWS.filter((row) => row.kind === 'quality');
 console.log(`corpus: ${corpus} | split: ${SPLIT} | queries: ${qids.length} | k: ${K} | query form: OR bag of words\n`);
-console.log(`| metric | ${shown.map((r) => r.name).join(' | ')} |`);
-console.log(`|---|${shown.map(() => '---').join('|')}|`);
-for (const [label, key, digits] of [
-  [`nDCG@${K}`, 'ndcg', 4],
-  [`MRR@${K}`, 'rr', 4],
-  [`hit@${K}`, 'hit', 4],
-]) {
-  console.log(`| ${label} | ${shown.map((r) => mean(r, key).toFixed(digits)).join(' | ')} |`);
-}
-console.log(`| mean ms/query | ${shown.map((r) => r.ms.toFixed(1)).join(' | ')} |`);
+console.log(mdTable(['metric', ...shown.map((r) => r.name)], [...qualityRows.map((row) => [row.label, ...shown.map((r) => mean(r, row.key).toFixed(4))]), ['mean ms/query', ...shown.map((r) => r.ms.toFixed(1))]]));
 
 // Paired per-query deltas between adjacent pairs of interest.
 function paired(a, b, key) {
@@ -118,13 +120,26 @@ function paired(a, b, key) {
 const bm25 = results.find((r) => r.name === 'bm25-only');
 const semantic = results.find((r) => r.name === 'semantic');
 console.log('\npaired per-query deltas (wins/losses, sign-test z; |z| > 2 is beyond noise):');
-for (const [label, a, b] of [
-  ['fused vs bm25-only', bm25, fused],
-  ['semantic vs fused', fused, semantic],
+const pairedOut = {};
+for (const [label, key, a, b] of [
+  ['fused vs bm25-only', 'fused_vs_bm25', bm25, fused],
+  ['semantic vs fused', 'semantic_vs_fused', fused, semantic],
 ]) {
   const nd = paired(a, b, 'ndcg');
   const h = paired(a, b, 'hit');
   console.log(`- ${label}: nDCG ${nd.wins}W/${nd.losses}L z=${nd.z.toFixed(1)} · hit ${h.wins}W/${h.losses}L z=${h.z.toFixed(1)}`);
+  pairedOut[key] = { ndcg: nd, hit: h };
 }
 const errTotal = results.filter((r) => r.errors > 0);
 if (errTotal.length > 0) console.log(`\nerrors: ${errTotal.map((r) => `${r.name}=${r.errors}`).join(', ')}`);
+
+writeOut(outArg, {
+  corpus,
+  split: SPLIT,
+  queries: qids.length,
+  k: K,
+  store: STORE ?? 'sqlite',
+  no_silent_change: true,
+  variants: Object.fromEntries(shown.map((r) => [r.name, { ndcg: mean(r, 'ndcg'), rr: mean(r, 'rr'), hit: mean(r, 'hit'), ms_per_query: r.ms, errors: r.errors }])),
+  paired: pairedOut,
+});

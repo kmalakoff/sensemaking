@@ -34,7 +34,7 @@ or an algorithm with a citation and a reference implementation (Porter 1980,
 BM25, PageRank, RRF: Cormack et al. 2009, model2vec's encode convention). Or
 unavoidable glue: kept minimal, and verified by diff against an independent
 oracle rather than by its author's reasoning. Existing oracles:
-`benchmark/oracle.mjs` against Obsidian's metadataCache for links and tags;
+`benchmark/steps/oracle.mjs` against Obsidian's metadataCache for links and tags;
 `String.prototype.includes` is the specification of substring semantics.
 Mirroring a reference convention without a parity test against the reference
 implementation is a violation of this principle, not an instance of it.

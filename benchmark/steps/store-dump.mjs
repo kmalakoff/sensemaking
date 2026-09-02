@@ -4,18 +4,21 @@
 // silently unranked lexical index) plus, for the reopen scenarios, the store's own stderr notices --
 // several open() branches (full rebuild vs in-place adoption) end at identical tables.txt by
 // different routes, and the notice is the only observable that tells them apart.
-// See benchmark/oracle.mjs for the sibling parity-gate shape.
-// usage: node benchmark/store-dump.mjs capture <outDir> [--corpus <name|path>] [--store sqlite,duckdb,turso]
+// See benchmark/steps/oracle.mjs for the sibling parity-gate shape.
+// usage: node benchmark/steps/store-dump.mjs capture <outDir> [--corpus <name|path>] [--store sqlite,duckdb,turso]
 //                                              [--scenario cold|incremental|warm|schema-bump|signature|embed-identity]
-//        node benchmark/store-dump.mjs compare <dirA> <dirB>
+//        node benchmark/steps/store-dump.mjs compare <dirA> <dirB> [--out <file>]
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import assert from 'assert';
-import { CORPUS_NAMES, corpusPath, writeTreeConfig } from './lib/corpus.mjs';
+import { safeRmSync } from 'fs-remove-compat';
+import { CORPUS_NAMES, corpusPath, writeTreeConfig } from '../lib/corpus.mjs';
+import { writeOut } from '../lib/out.mjs';
+import { ephemeralWorkTree } from '../lib/work-tree.mjs';
 
-const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
+const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const ALL_STORES = ['sqlite', 'duckdb', 'turso'];
 const SCENARIOS = ['cold', 'incremental', 'warm', 'schema-bump', 'signature', 'embed-identity'];
 
@@ -340,13 +343,13 @@ async function runCapture(args) {
     return i >= 0 ? args[i + 1] : dflt;
   };
   if (!outDirArg) {
-    console.error(`usage: node benchmark/store-dump.mjs capture <outDir> [--corpus <name|path>] [--store sqlite,duckdb,turso] [--scenario ${SCENARIOS.join('|')}]`);
+    console.error(`usage: node benchmark/steps/store-dump.mjs capture <outDir> [--corpus <name|path>] [--store sqlite,duckdb,turso] [--scenario ${SCENARIOS.join('|')}]`);
     process.exit(2);
   }
   const outDir = resolve(outDirArg);
   const corpusArg = flag('corpus', 'obsidian-hub');
-  const tree = CORPUS_NAMES.includes(corpusArg) ? corpusPath(corpusArg) : resolve(corpusArg);
-  assert(existsSync(tree), `corpus tree not found: ${tree}`);
+  const sourceTree = CORPUS_NAMES.includes(corpusArg) ? corpusPath(corpusArg) : resolve(corpusArg);
+  assert(existsSync(sourceTree), `corpus tree not found: ${sourceTree}`);
   const stores = flag('store', ALL_STORES.join(','))
     .split(',')
     .map((s) => s.trim())
@@ -360,10 +363,17 @@ async function runCapture(args) {
   const embedDefaults = { model: DEFAULT_EMBED_MODEL, provider: 'static' };
 
   mkdirSync(outDir, { recursive: true });
-  const capture = scenario === 'incremental' ? captureStoreIncremental : scenario === 'cold' ? captureStore : (l, fe, ed, storeName, t, o) => captureStoreScenario(l, fe, storeShared, ed, storeName, t, o, scenario);
-  for (const storeName of stores) {
-    console.log(`capturing ${storeName} (${scenario})...`);
-    await capture(lib, featureEnabled, embedDefaults, storeName, tree, outDir);
+  // A capture mutates the tree it runs against (.sense, sense.config.json, and the incremental
+  // scenario's delete/modify/restore cycle): a private copy keeps the pinned corpus read-only.
+  const tree = ephemeralWorkTree(join(repoRoot, '.tmp'), 'store-dump-', sourceTree);
+  try {
+    const capture = scenario === 'incremental' ? captureStoreIncremental : scenario === 'cold' ? captureStore : (l, fe, ed, storeName, t, o) => captureStoreScenario(l, fe, storeShared, ed, storeName, t, o, scenario);
+    for (const storeName of stores) {
+      console.log(`capturing ${storeName} (${scenario})...`);
+      await capture(lib, featureEnabled, embedDefaults, storeName, tree, outDir);
+    }
+  } finally {
+    safeRmSync(tree, { recursive: true, force: true });
   }
   console.log(`capture complete: ${stores.join(', ')} -> ${outDir}`);
 }
@@ -429,9 +439,11 @@ function compareFile(label, pathA, pathB) {
 }
 
 function runCompare(args) {
-  const [dirAArg, dirBArg] = args;
+  const outIdx = args.indexOf('--out');
+  const outArg = outIdx >= 0 ? args[outIdx + 1] : null;
+  const [dirAArg, dirBArg] = outIdx >= 0 ? args.filter((_a, i) => i !== outIdx && i !== outIdx + 1) : args;
   if (!dirAArg || !dirBArg) {
-    console.error('usage: node benchmark/store-dump.mjs compare <dirA> <dirB>');
+    console.error('usage: node benchmark/steps/store-dump.mjs compare <dirA> <dirB> [--out <file>]');
     process.exit(2);
   }
   const dirA = resolve(dirAArg);
@@ -442,21 +454,27 @@ function runCompare(args) {
   const stores = [...new Set([...storesA, ...storesB])].sort();
 
   let ok = true;
+  const perStore = {};
   for (const s of stores) {
     if (!storesA.has(s) || !storesB.has(s)) {
       console.error(`store "${s}": present in only one directory`);
       ok = false;
+      perStore[s] = { ok: false, reason: 'present in only one directory' };
       continue;
     }
     // notices.txt only exists for the reopen scenarios; comparing it when either side has one
     // catches a missing/extra file, and skipping it entirely for cold/incremental is correct too.
     const artifacts = ['tables.txt', 'ranking.txt'];
     if (existsSync(join(dirA, s, 'notices.txt')) || existsSync(join(dirB, s, 'notices.txt'))) artifacts.push('notices.txt');
+    let storeOk = true;
     for (const artifact of artifacts) {
-      ok = compareFile(`${s}/${artifact}`, join(dirA, s, artifact), join(dirB, s, artifact)) && ok;
+      storeOk = compareFile(`${s}/${artifact}`, join(dirA, s, artifact), join(dirB, s, artifact)) && storeOk;
     }
+    perStore[s] = { ok: storeOk, artifacts };
+    ok = storeOk && ok;
   }
   if (ok) console.log(`compare: clean across ${stores.length} store(s) (${stores.join(', ')})`);
+  writeOut(outArg, { dirA, dirB, stores: perStore, ok });
   process.exit(ok ? 0 : 1);
 }
 
@@ -466,7 +484,7 @@ if (mode === 'capture') {
 } else if (mode === 'compare') {
   runCompare(rest);
 } else {
-  console.error(`usage: node benchmark/store-dump.mjs capture <outDir> [--corpus <name|path>] [--store sqlite,duckdb,turso] [--scenario ${SCENARIOS.join('|')}]`);
-  console.error('       node benchmark/store-dump.mjs compare <dirA> <dirB>');
+  console.error(`usage: node benchmark/steps/store-dump.mjs capture <outDir> [--corpus <name|path>] [--store sqlite,duckdb,turso] [--scenario ${SCENARIOS.join('|')}]`);
+  console.error('       node benchmark/steps/store-dump.mjs compare <dirA> <dirB> [--out <file>]');
   process.exit(2);
 }

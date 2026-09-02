@@ -1,14 +1,14 @@
 // Phase-by-phase CPU profile: re-invokes itself under --cpu-prof so the profile covers one
-// scenario's work, then sums self time by callFrame.url. usage: node benchmark/profile.mjs <treePath> [scenario ...]
+// scenario's work, then sums self time by callFrame.url. usage: node benchmark/tools/profile.mjs <treePath> [scenario ...]
 
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, utimesSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { walkMd } from './lib/measure.mjs';
+import { walkMd } from '../lib/measure.mjs';
 
 const THIS_FILE = fileURLToPath(import.meta.url);
-const ROOT = join(dirname(THIS_FILE), '..');
+const ROOT = join(dirname(THIS_FILE), '..', '..');
 const DIST_INDEX = join(ROOT, 'dist', 'esm', 'index.js');
 const PROFILE_DIR = join(ROOT, '.tmp', 'profile');
 
@@ -192,7 +192,7 @@ async function main() {
 
   const [treeArg, ...scenarioArgs] = argv;
   if (!treeArg) {
-    console.error('usage: node benchmark/profile.mjs <treePath> [scenario ...]');
+    console.error('usage: node benchmark/tools/profile.mjs <treePath> [scenario ...]');
     console.error(`scenarios: ${ALL_SCENARIOS.join(' ')} (default: all applicable)`);
     process.exit(2);
   }

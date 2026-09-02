@@ -72,6 +72,7 @@
     "schema.json"
   ],
   "scripts": {
+    "benchmark": "node benchmark/gate.mjs",
     "build": "tsds build",
     "format": "tsds format",
     "prepublishOnly": "tsds validate",

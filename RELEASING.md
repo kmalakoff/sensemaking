@@ -4,9 +4,20 @@ Everything that can block a release runs **before** the version bump, and publis
 
 Subagents dispatched during a release are spawned with `model: sonnet`. Reviews at high or max effort go through the `coding-standards` skill, which keeps the built-in review's fork and its workers on Sonnet whatever the session model. When the session model is costlier than Sonnet, the multi-step items below (the benchmark write-up, the docs reconcile) are dispatched to subagents rather than run inline; the session keeps the one-command gates and the reading of results.
 
-1. `npm test` and `npx tsds validate`, both clean. `npm run test:engines` when the release touches anything platform-near (SQLite pragmas, fs, watch): it runs the suite on the oldest supported Node, which is where "works on my machine" breaks.
+1. **Run the gate.** One command, and it decides what to run from the diff since the last tag:
 
-   `test/integration/live.test.ts` is the part CI cannot run: it talks to real endpoints, one gate variable per [INTEGRATIONS.md](INTEGRATIONS.md) row, read from `.env.test` (gitignored). A release that touches `src/embed/` runs it with the file populated, `SENSE_TEST_ENV=local-release npm test`, and the rows it verified get that day's date. In that mode, a gate this machine owes and lacks fails outright, naming the fix, rather than skipping silently.
+   ```bash
+   npm run benchmark              # runs the owed stages, writes the report, prints the verdict
+   npm run benchmark -- --dry-run # what it would run, without measuring
+   ```
+
+   Stages run in order and a failing one stops the run: static checks, then the functional suites, then the hub baseline, then scale and stress, then retrieval quality. A broken build is never benchmarked, and a basic regression is not paid for at 26k. Run it on a machine that is otherwise idle; it refuses to start a timing stage when the one-minute load is above half the core count, and `--allow-busy` overrides that while saying so in the output.
+
+   **The diff picks the gates, not the person running it.** `benchmark/lib/gates.mjs` maps changed paths to the gates they owe: a change under `src/embed/` owes the live endpoint suite and the fever eval, a change under `src/chunk/` owes the Obsidian parity gate, a docs-only change owes the tests and nothing else. A gate the map owes cannot be skipped by a flag. This exists because the fever eval was skipped by every sitting from 0.6.0 until something forced it.
+
+   Two gates cannot run themselves and are reported as owed and unmet rather than skipped quietly. The Obsidian parity gate needs Obsidian running with the pinned corpus opened as a vault, and `store-dump`'s A/B needs a checkout and build of the last tag. Run those by hand when the gate says they are owed; [BENCHMARKING.md](BENCHMARKING.md) has both commands.
+
+   `test/integration/live.test.ts` is the part CI cannot run: it talks to real endpoints, one gate variable per [INTEGRATIONS.md](INTEGRATIONS.md) row, read from `.env.test` (gitignored). The gate runs it when the diff owes it, and in that mode a gate this machine owes and lacks fails outright, naming the fix, rather than skipping silently.
 
    ```
    SENSE_TEST_COHERE_KEY=...                          # cohere row
@@ -16,27 +27,29 @@ Subagents dispatched during a release are spawned with `model: sonnet`. Reviews 
    SENSE_TEST_LMSTUDIO_URL=http://localhost:1234/v1   # same three, LM Studio side; _KEY too if it wants one
    ```
 
-2. **Regenerate the benchmarks**, still on the previous version number, and write the sitting down. No release goes out on numbers from an earlier run (see [BENCHMARKING.md](BENCHMARKING.md)):
+2. **Read the verdict.** PASS or BLOCK, with one generated line per reason. Nothing is retyped: the report is rendered from the sitting's own JSON into `benchmark/reports/YYYY-MM-DD-release-gate.{md,json}`, and `npm test` fails if a report and its data disagree.
+
+   **The report cites no commit hash.** One reached by rebase or squash is unreachable afterwards,
+   and the claim resting on it becomes uncheckable. The report records what survives instead: the
+   last tag, the package version, and the changed paths the gate read to decide what was owed.
+   Where a claim needs the measured tree to be the shipped one, state the property and how it was
+   checked, `git diff --quiet <a> <b> -- src test` for byte-identical `src/` and `test/`.
+
+   A reason states what was measured, never a cause: the row, both values, the band it exceeded, and whether a reversed-order re-run agreed. A wall-clock delta says where a cost is, not what it is. Two attributions made from one on this repo in a single day were both wrong, so settle a cause by removing the mechanism and re-measuring, or by timing it directly, before writing it anywhere.
+
+   What blocks: a token contract that moved at all, a quality metric that fell, a stress or scale row beyond its band, a store battery that failed, a timing row beyond its band that a reversed-order re-run agreed with. What does not: anything inside its band, and the rows too noisy to gate, which say so.
+
+   On PASS the numbers-of-record table in BENCHMARKING.md moves to this sitting. On BLOCK it is left exactly as it was, so a blocked sitting's numbers never become the official ones. The run says which happened.
+
+3. **On BLOCK, fix it or accept it.** Fixing it and running again is the ordinary path. Where the movement is understood and the owner decides to ship anyway, record that decision against the row in the owner's own words and run the gate again:
 
    ```bash
-   node benchmark/release.mjs   # compare + 13k/26k scale + stress + both quality evals
+   node benchmark/report.mjs --accept <row id> --reason "<why this ships>"
    ```
 
-   One command on purpose: the gate was a list of manual steps for its first nine releases, and the fever quality eval was skipped by every sitting since 0.6.0 because nothing forced it. Fetches (corpora, npm baselines, the fever wiki dump) cache through `benchmark/lib/cache.mjs`, so only the first run on a machine pays the downloads.
+   The reason is required and cannot be blank: an override with nothing written in it records no decision. It appears in the report beside the row, and `npm test` fails on a report carrying an accepted row without one. An agent never runs this. The version is the maintainer's call and so is this.
 
-   Save this sitting's output as `benchmark/reports/YYYY-MM-DD-<topic>.md` (today's date, topic naming what it gates, e.g. `release-gate`), with a frontmatter block naming date, package/chunk/schema versions, machine, node, corpora, models, and the headline metrics BENCHMARKING.md's numbers-of-record table tracks. This is a new file per sitting, never an edit to a previous one. It cites no commit hash for work that reached it by rebase or squash: that hash is unreachable afterwards and the claim resting on it becomes uncheckable. State the property that survives instead, and how it was checked ("the verified state and the shipped tag carry byte-identical `src/` and `test/`, per `git diff --quiet ... -- src test`"). Repoint whatever named the deleted report in its `superseded_by` at this new one, or the chain dangles. Delete the previous terminal report when the new one lands: the numbers-of-record link and the new report's comparison columns carry its values, and git keeps the body.
-
-The stress corpus packs every measured shape cliff into one tree (1MB note, 200 headings/note, 100 links/note, 300 fields; see benchmark/lib/corpus.mjs); its rows moving means a fixed cliff regressed, regardless of how flat the hub rows look.
-
-With no arguments `compare.mjs` benchmarks the version in `package.json` (installed from npm) against this working tree. Because the bump happens after a release, that version is the last release until the moment you bump, so the default is always "the release we shipped vs what is about to ship", with no version typed anywhere. Older columns can be added by naming versions explicitly. Run nothing else on the machine while they run.
-
-3. **Obsidian parity, when the release touches parsing** (tags, links, sections, fences, frontmatter): `node benchmark/oracle.mjs obsidian-hub-b11036f9 .tmp/cache/obsidian-hub-b11036f9` diffs sense's tags table, and `src/chunk`'s block extents (headings, section extents), against Obsidian's own metadata cache, the reference implementation, so drift cannot ship silently. The target is the repo's own pinned benchmark corpus; one-time setup per machine: open that folder in Obsidian via "Open folder as vault" (the registration is path-based and survives `.tmp` regeneration; the `.obsidian/` it writes lives in a throwaway cache dir). The script needs Obsidian running, requires `npm run build` first (block extents import the built dist/esm), and stores nothing. Dump and index live in temp and are deleted. Zero differing files passes for tags/links; for block extents, zero diffs outside the documented representation classes the script itself buckets and prints. Anything else is adjudicated line by line, never averaged away.
-
-4. Read the numbers against the previous column. A row that moved beyond noise blocks the release until it is explained or fixed. Noise looks like: differences under ~10% that disagree in direction between correlated metrics (wall vs in-process), on rows the harness measures once. A real regression moves consistently and grows with tree size, which is what the 13k/26k rows are for. Token counts (`map`, `peek`, `search` row) are contracts, not timings: any growth there is a context-bloat regression regardless of size.
-
-5. Point BENCHMARKING.md's numbers-of-record table at this sitting's report file (step 2), and add the new version's entry to [CHANGELOG.md](CHANGELOG.md): consumer-visible changes only. Write down which movements were judged noise, so the next reader does not re-hunt them.
-
-6. **Reconcile the docs with what actually ships.** Published surfaces drift silently because nothing fails when they do; this step is what catches it. Every new command, flag, config key, and output column belongs in the surface that owns it:
+4. **Reconcile the docs with what actually ships.** Published surfaces drift silently because nothing fails when they do; this step is what catches it. Every new command, flag, config key, and output column belongs in the surface that owns it:
 
    | surface | owns | audience |
    |---|---|---|
@@ -49,9 +62,9 @@ With no arguments `compare.mjs` benchmarks the version in `package.json` (instal
 
 The mechanical facts are tested in `test/integration/docs.test.ts`; the rest is a read. For `keywords`: write down the search terms a person looking for this release's new capability would type (a release that added semantic search added `semantic-search`), check each is present, and drop keywords for things sense no longer emphasizes. Keywords are how npm search finds the package, and they only change when capabilities do, so this review belongs to the release that changes them. Form: npm's indexer tokenizes hyphens as word separators (verified empirically 2026-08-15 against the registry search API), so `knowledge-base` matches both "knowledge-base" and "knowledge base" queries, while a closed compound (`knowledgebase`) matches only itself. Always prefer the hyphenated form for multi-word keywords. Re-check every measured claim in the docs against the run from step 2; a number that no longer holds is worse than no number, because the next reader trusts it. Prefer linking BENCHMARKING.md over copying figures that drift.
 
-7. Commit steps 1–6, as one commit, or a few when the diff separates naturally (the code change, the benchmark tables). A release is not a trail of incremental work-in-progress commits; if the work accumulated as one, squash before the bump. Messages are short and factual, no Co-Authored-By trailer. Never start a pre-bump subject with the version number: the bump commit is a bare version number, so a subject leading with one reads as the release having already happened. Name the work and carry the version inside it, `Benchmarking for 0.19.2 release: full battery on all three stores`.
+5. Commit steps 1-4, as one commit, or a few when the diff separates naturally (the code change, the benchmark tables). A release is not a trail of incremental work-in-progress commits; if the work accumulated as one, squash before the bump. Messages are short and factual, no Co-Authored-By trailer. Never start a pre-bump subject with the version number: the bump commit is a bare version number, so a subject leading with one reads as the release having already happened. Name the work and carry the version inside it, `Benchmarking for 0.19.2 release: full battery on all three stores`.
 
-8. Maintainer picks the version, then: `npm version <chosen>` → `npm publish` → `git push --follow-tags`. Confirm the tag reached the remote (`git ls-remote --tags origin`): a skipped push leaves a version on npm with no commit or tag behind it, and nothing downstream notices.
+6. Maintainer picks the version, then: `npm version <chosen>` → `npm publish` → `git push --follow-tags`. Confirm the tag reached the remote (`git ls-remote --tags origin`): a skipped push leaves a version on npm with no commit or tag behind it, and nothing downstream notices.
 
 Run the three as separate commands, never chained with `&&`: a chain publishes with no point to stop and read what is about to ship.
 
@@ -59,11 +72,11 @@ Run the three as separate commands, never chained with `&&`: a chain publishes w
 
 `npm version` leaves HEAD on the release commit, which reads like any other commit in `git log`. Never `--amend` from there, and check `git log -1` before amending at all: rewriting it diverges from the tag and from what npm already shipped. A follow-up fix is a new commit, and the next `npm version` carries it.
 
-9. Tell consumers what changed: dependent trees get their note, and the git tag's release notes carry the consumer-visible changes (new config keys, changed output shapes, bug fixes), the same list the maintainer used to pick the version. Commit messages and release notes are short and factual, and never carry a Co-Authored-By trailer. Consumers are on the previous version until they upgrade, so guidance written for unreleased behaviour is guidance that fails.
+7. Tell consumers what changed: dependent trees get their note, and the git tag's release notes carry the consumer-visible changes (new config keys, changed output shapes, bug fixes), the same list the maintainer used to pick the version. Commit messages and release notes are short and factual, and never carry a Co-Authored-By trailer. Consumers are on the previous version until they upgrade, so guidance written for unreleased behaviour is guidance that fails.
 
-**Docs-only patches take the short path.** When the diff touches nothing but published prose (*.md files, skill text, schema descriptions), steps 2–4 (the benchmarks and their reading) are skipped: text cannot move a number. What remains: `npm test` (the docs tests guard the mechanical facts), the step-5 read of the surfaces the diff touched, then version → publish → push with the tag check. Anything that touches src/, benchmark logic, or dependencies is not a docs-only patch, whatever the diff size.
+**Docs-only patches take the short path**, and the gate takes it for you: a diff touching nothing but published prose owes the static checks and `npm test`, nothing more, because text cannot move a number. What remains: `npm test` (the docs tests guard the mechanical facts), the step-5 read of the surfaces the diff touched, then version → publish → push with the tag check. Anything that touches src/, benchmark logic, or dependencies is not a docs-only patch, whatever the diff size.
 
-Benchmark tables in `benchmark/reports/` are pasted from harness output, never hand-typed. `compare.mjs` derives the baseline column's version label from `package.json`, so a hand-written version string in a table is a sign the table didn't come from a run.
+Reports in `benchmark/reports/` are generated from the sitting's own JSON, never written by hand, and `npm test` fails if a report and its data disagree. The markdown of a past report is never edited either: a dated report records what was true that day.
 
 **The version is the maintainer's call.** An agent preparing a release states what changed and what a consumer would notice (new config keys, changed output shapes, changed storage classes, bug fixes only) and suggests a bump if asked. It does not choose one, and does not encode a bump policy here.
 

@@ -1,29 +1,55 @@
 // Benchmark one package against one tree; prints a JSON row for BENCHMARKING.md. Wall-time metrics spawn the CLI (what an agent pays); in-process ones time the engine alone.
-// usage: node benchmark/run.mjs <package-root> <notes-dir|corpus-name> [--store <name>]
+// usage: node benchmark/steps/measure-tree.mjs <package-root> <notes-dir|corpus-name> [--store <name>] [--work <dir>] [--out <file>]
 import { spawn, spawnSync } from 'node:child_process';
-import { appendFileSync, rmSync, statSync, utimesSync } from 'node:fs';
-import { join, resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
-import { CORPUS_NAMES, corpusPath, writeTreeConfig } from './lib/corpus.mjs';
-import { futureDate, medianAsync, timedCli, walkMd } from './lib/measure.mjs';
+import { appendFileSync, mkdirSync, rmSync, statSync, utimesSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { safeRmSync } from 'fs-remove-compat';
+import { CORPUS_NAMES, corpusPath, writeTreeConfig } from '../lib/corpus.mjs';
+import { futureDate, medianAsync, medianOf, timedCli, walkMd, warmFileCache } from '../lib/measure.mjs';
+import { writeOut } from '../lib/out.mjs';
+import { copyTree, ephemeralWorkTree } from '../lib/work-tree.mjs';
 
-const argv = process.argv.slice(2);
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
+
+// Extracts one `--flag value` pair, returning [value, argsWithoutIt]. Never mis-trims the
+// positionals when the flag is absent (idx -1), since it only touches indices when idx >= 0.
+function takeFlag(args, flag) {
+  const idx = args.indexOf(flag);
+  return idx < 0 ? [null, args] : [args[idx + 1], args.filter((_a, i) => i !== idx && i !== idx + 1)];
+}
+
 // The store is a config fact the harness writes into the tree. Pre-store packages have no `search` verb and read the config as-is, ignoring the flag.
 // Every old column of a compare run stays a valid sqlite measurement.
-const storeIdx = argv.indexOf('--store');
-const store = storeIdx >= 0 ? argv[storeIdx + 1] : null;
-// With no flag storeIdx is -1, and filtering on storeIdx + 1 (0) would drop the first positional.
-const [pkgRootArg, treeArg] = storeIdx >= 0 ? argv.filter((_a, i) => i !== storeIdx && i !== storeIdx + 1) : argv;
+const [store, afterStore] = takeFlag(process.argv.slice(2), '--store');
+// Where the measured copy goes. Defaults under this package's own .tmp/, not the tree's.
+const [workArg, afterWork] = takeFlag(afterStore, '--work');
+const [outArg, rest] = takeFlag(afterWork, '--out');
+const [pkgRootArg, treeArg] = rest;
 if (!pkgRootArg || !treeArg) {
-  console.error('usage: node bench/run.mjs <package-root> <notes-dir|corpus-name> [--store <name>]');
+  console.error('usage: node bench/run.mjs <package-root> <notes-dir|corpus-name> [--store <name>] [--work <dir>] [--out <file>]');
   process.exit(2);
 }
 // Absolute from the start: spawns below run with cwd set to the tree.
 const pkgRoot = resolve(pkgRootArg);
 // A known corpus name builds and caches itself (atomic, fetch-once) rather than needing a
-// pre-materialized path; anything else is treated as a directory path.
-const tree = CORPUS_NAMES.includes(treeArg) ? corpusPath(treeArg) : resolve(treeArg);
+// pre-materialized path; anything else is treated as a directory path. Read-only from here on.
+const sourceTree = CORPUS_NAMES.includes(treeArg) ? corpusPath(treeArg) : resolve(treeArg);
 const cli = join(pkgRoot, 'bin', 'cli.js');
+
+// A run measures a private copy, never the cached corpus: benchmark/lib/work-tree.mjs is the
+// same mechanism compare.mjs and store-dump.mjs use. Without this, run.mjs's in-place edits
+// below would drift the cache itself.
+const copyStart = process.hrtime.bigint();
+let tree;
+if (workArg) {
+  tree = resolve(workArg);
+  mkdirSync(tree, { recursive: true });
+  copyTree(sourceTree, tree);
+} else {
+  tree = ephemeralWorkTree(join(ROOT, '.tmp'), 'run-', sourceTree);
+}
+const copyMs = Math.round(Number(process.hrtime.bigint() - copyStart) / 1e6);
 
 const run = (args) => spawnSync(process.execPath, [cli, ...args], { cwd: tree, encoding: 'utf8', maxBuffer: 64e6 });
 
@@ -54,6 +80,10 @@ const lexicalArgs = (terms, k = '10') => (NEW_DIALECT ? ['search', terms, '--pre
 // new dialect participates by default.
 const vectorArgs = (terms, k = '10') => (NEW_DIALECT ? ['search', terms, '--k', k] : ['find', terms, '--semantic', '--k', k]);
 
+// version_canary_ms: bare Node startup plus argv parsing, no tree work at all -- the number
+// BENCHMARKING.md's Interpreting section calls the canary for "startup got heavier".
+const versionCanary = timed(['--version'], 5);
+
 // Largest note: peek target and the read-cost baseline. Also collect files for update benchmarks.
 const mdFiles = walkMd(tree).map((rel) => ({ rel, size: statSync(join(tree, rel)).size }));
 const largest = mdFiles.reduce((a, b) => (b.size > a.size ? b : a), { rel: null, size: 0 });
@@ -62,8 +92,22 @@ const SEARCH = `SELECT f.path, content.title, snippet(content, -1, '«', '»', '
 
 // --- wall-time (CLI) ---
 if (NEW_DIALECT) writeTreeConfig(tree, TWO_SCOPES, { store });
-rmSync(join(tree, '.sense'), { recursive: true, force: true });
-const cold = timed(['status'], 1); // first open = full crawl
+// Every timed row measures a warm file cache, deliberately and identically in every sitting.
+// "Cold" here means the index is built from nothing, not that the disk is cold: the latter
+// depends on what the machine did minutes earlier and is not reproducible.
+const warmedBytes = warmFileCache(tree);
+// Median of 3, clearing .sense before each rep (PLAN.md 3.10: +21% same-code spread on one
+// sample). The last rep leaves .sense built, which warm/search/find below reuse.
+const COLD_REPS = 3;
+const coldSamples = [];
+let coldStatus = 0;
+for (let i = 0; i < COLD_REPS; i++) {
+  rmSync(join(tree, '.sense'), { recursive: true, force: true });
+  const r = timed(['status'], 1); // first open = full crawl
+  coldSamples.push(r.ms);
+  if (r.status !== 0) coldStatus = r.status;
+}
+const coldMs = medianOf(coldSamples);
 const warm = fail(timed([SQL_VERB, 'SELECT COUNT(*) AS n FROM frontmatter']));
 const search = fail(timed([SQL_VERB, SEARCH, 'the']));
 const findR = fail(timed(lexicalArgs('the'), 3));
@@ -125,67 +169,99 @@ try {
     touch(mdFiles.slice(0, 10));
     return openClose();
   }, 3);
-  rmSync(join(tree, '.sense'), { recursive: true, force: true });
-  const t = process.hrtime.bigint();
-  const opened = await lib.open(cfg);
-  const coldBuild = Math.round(Number(process.hrtime.bigint() - t) / 1e6);
-  await (opened.store ?? opened.db).close();
-  inproc = { cold_build_ms: coldBuild, open_nochange_ms: noChange, update_1_file_ms: touch1, update_10_files_ms: modify10 };
+  // Median of 3, clearing .sense before each rep (same instrument-spread rationale as cold crawl).
+  const COLD_BUILD_REPS = 3;
+  const coldBuildSamples = [];
+  for (let i = 0; i < COLD_BUILD_REPS; i++) {
+    rmSync(join(tree, '.sense'), { recursive: true, force: true });
+    const t = process.hrtime.bigint();
+    const opened = await lib.open(cfg);
+    coldBuildSamples.push(Math.round(Number(process.hrtime.bigint() - t) / 1e6));
+    await (opened.store ?? opened.db).close();
+  }
+  const coldBuild = medianOf(coldBuildSamples);
+  inproc = { cold_build_ms: coldBuild, cold_build_ms_samples: coldBuildSamples, open_nochange_ms: noChange, update_1_file_ms: touch1, update_10_files_ms: modify10 };
 } catch (err) {
   inproc = { error: String(err.message ?? err).split('\n')[0] };
 }
 
 // --- bulk change (watch's scenario): touch many files, time the first query after ---
 const BULK = Math.min(500, mdFiles.length);
-const touchMany = () => {
-  const future = new Date(Date.now() + 120_000 + Math.random() * 60_000);
+// rep spaces each touch further into the future than the last, so a reconcile always sees a
+// newer mtime than the one it just indexed.
+const touchMany = (rep = 0) => {
+  const future = new Date(Date.now() + 120_000 + rep * 60_000 + Math.random() * 60_000);
   for (const f of mdFiles.slice(0, BULK)) utimesSync(join(tree, f.rel), future, future);
 };
 run([SQL_VERB, 'SELECT 1']); // warm the cache first
-touchMany();
-const bulkCold = fail(timed([SQL_VERB, 'SELECT COUNT(*) AS n FROM frontmatter'], 1));
+// Median of 3, re-touching before each rep (PLAN.md 3.10: +73% same-code spread on one sample).
+const BULK_REPS = 3;
+const bulkSamples = [];
+let bulkStatus = 0;
+for (let i = 0; i < BULK_REPS; i++) {
+  touchMany(i);
+  const r = timed([SQL_VERB, 'SELECT COUNT(*) AS n FROM frontmatter'], 1);
+  bulkSamples.push(r.ms);
+  if (r.status !== 0) bulkStatus = r.status;
+}
+const bulkColdMs = bulkStatus === 0 ? medianOf(bulkSamples) : null;
 
 // Same change with a watcher already running: it reparses in the background, so the
-// first query pays only the freshness check.
-let bulkWatch = null;
+// first query pays only the freshness check. One watcher for all 3 reps: startup is a fixed
+// cost the row is not measuring.
+let bulkWatchMs = null;
+const bulkWatchSamples = [];
 try {
   const watcher = spawn(process.execPath, [cli, 'watch', '--force'], { cwd: tree, stdio: 'ignore' });
   await new Promise((r) => setTimeout(r, 1500)); // watcher startup + initial reconcile
-  touchMany();
-  await new Promise((r) => setTimeout(r, 1500 + 1.5 * (bulkCold?.ms ?? 4000))); // debounce + background reparse, scaled to the measured reparse cost
-  bulkWatch = fail(timed([SQL_VERB, 'SELECT COUNT(*) AS n FROM frontmatter'], 1));
+  const WATCH_REPS = 3;
+  let watchStatus = 0;
+  for (let i = 0; i < WATCH_REPS; i++) {
+    touchMany(BULK_REPS + i);
+    await new Promise((r) => setTimeout(r, 1500 + 1.5 * (bulkColdMs ?? 4000))); // debounce + background reparse, scaled to the measured reparse cost
+    const r = timed([SQL_VERB, 'SELECT COUNT(*) AS n FROM frontmatter'], 1);
+    bulkWatchSamples.push(r.ms);
+    if (r.status !== 0) watchStatus = r.status;
+  }
+  bulkWatchMs = watchStatus === 0 ? medianOf(bulkWatchSamples) : null;
   watcher.kill('SIGTERM');
   await new Promise((r) => setTimeout(r, 300));
 } catch {}
 
-console.log(
-  JSON.stringify(
-    {
-      tree,
-      store: store ?? 'sqlite',
-      notes: mdFiles.length,
-      cold_crawl_ms: cold.status === 0 ? cold.ms : `FAILED(exit ${cold.status})`,
-      warm_query_ms: warm?.ms ?? null,
-      bm25_search_ms: search?.ms ?? null,
-      find_ms: findR?.ms ?? null,
-      find_row_tokens: findRowTokens,
-      embed_supported: NEW_DIALECT,
-      cold_embed_ms: coldEmbedAttempt.status === 0 ? coldEmbedAttempt.ms : null,
-      cold_embed_error: coldEmbedAttempt.status === 0 ? undefined : coldEmbedAttempt.stderr.split('\n')[0],
-      semantic_find_ms: semanticR?.ms ?? null,
-      map_ms: mapR?.ms ?? null,
-      map_tokens: mapR ? Math.round(mapR.bytes / 4) : null,
-      peek_ms: peekR?.ms ?? null,
-      peek_tokens: peekR ? Math.round(peekR.bytes / 4) : null,
-      related_ms: relatedR?.ms ?? null,
-      related_tokens: relatedR ? Math.round(relatedR.bytes / 4) : null,
-      largest_note_tokens: Math.round(largest.size / 4),
-      bulk_files: BULK,
-      bulk_change_ms: bulkCold?.ms ?? null,
-      bulk_watch_ms: bulkWatch?.ms ?? null,
-      inproc,
-    },
-    null,
-    2
-  )
-);
+const result = {
+  tree: sourceTree,
+  work_tree: tree,
+  copy_ms: copyMs,
+  store: store ?? 'sqlite',
+  notes: mdFiles.length,
+  cold_crawl_ms: coldStatus === 0 ? coldMs : `FAILED(exit ${coldStatus})`,
+  cold_crawl_ms_samples: coldSamples,
+  warmed_bytes: warmedBytes,
+  version_canary_ms: versionCanary.status === 0 ? versionCanary.ms : null,
+  warm_query_ms: warm?.ms ?? null,
+  bm25_search_ms: search?.ms ?? null,
+  find_ms: findR?.ms ?? null,
+  find_row_tokens: findRowTokens,
+  embed_supported: NEW_DIALECT,
+  cold_embed_ms: coldEmbedAttempt.status === 0 ? coldEmbedAttempt.ms : null,
+  cold_embed_error: coldEmbedAttempt.status === 0 ? undefined : coldEmbedAttempt.stderr.split('\n')[0],
+  semantic_find_ms: semanticR?.ms ?? null,
+  map_ms: mapR?.ms ?? null,
+  map_tokens: mapR ? Math.round(mapR.bytes / 4) : null,
+  peek_ms: peekR?.ms ?? null,
+  peek_tokens: peekR ? Math.round(peekR.bytes / 4) : null,
+  related_ms: relatedR?.ms ?? null,
+  related_tokens: relatedR ? Math.round(relatedR.bytes / 4) : null,
+  largest_note_tokens: Math.round(largest.size / 4),
+  bulk_files: BULK,
+  bulk_change_ms: bulkColdMs,
+  bulk_change_ms_samples: bulkSamples,
+  bulk_watch_ms: bulkWatchMs,
+  bulk_watch_ms_samples: bulkWatchSamples,
+  inproc,
+};
+console.log(JSON.stringify(result, null, 2));
+writeOut(outArg, result);
+
+// The copy exists only for this run; the cached corpus was never touched.
+safeRmSync(tree, { recursive: true, force: true });

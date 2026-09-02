@@ -1,13 +1,14 @@
-// Model bake-off over an OpenAI-shaped HTTP endpoint (Ollama, LM Studio, ...), embedding docs/queries via the library's openai provider instead of a local safetensors matrix.
-// usage: node benchmark/bakeoff-http.mjs [corpus] --model <ollama tag> [--url http://localhost:11434/v1] [--queries N] [--k N]
+// Embeds a labeled corpus at each lever (f32 / dims / int8), scores cosine-only and bm25+vector RRF against the qrels, using src/commands.ts's pool and constant.
+// usage: node benchmark/tools/bakeoff.mjs [corpus] [--queries N] [--k N] [--model <hf id>]
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { corpusLabels, corpusPath } from './lib/corpus.mjs';
-import { leverVec } from './lib/embed.mjs';
-import { orBag, readLabels } from './lib/labels.mjs';
-import { mean, metrics, rrf, topN } from './lib/metrics.mjs';
+import { corpusLabels, corpusPath } from '../lib/corpus.mjs';
+import { leverVec, loadModel, MODELS } from '../lib/embed.mjs';
+import { orBag, readLabels } from '../lib/labels.mjs';
+import { mean, metrics, rrf, topN } from '../lib/metrics.mjs';
 
+// Mirror find's internals (src/commands.ts): candidate pool size and RRF constant.
 const RRF_K = 60;
 const WEIGHTED_BM25 = 'bm25(content, 10.0, 5.0, 1.0)';
 
@@ -24,12 +25,18 @@ const stringFlag = (name, dflt) => {
 const K = flag('k', 10);
 const MAX_QUERIES = flag('queries', Infinity);
 const FETCH = Math.max(K * 3, 30);
-const MODEL_ID = stringFlag('model', undefined);
-const URL_BASE = stringFlag('url', 'http://localhost:11434/v1');
-if (!MODEL_ID) {
-  console.error('usage: node benchmark/bakeoff-http.mjs [corpus] --model <tag> [--url <base>]');
-  process.exit(2);
-}
+// Any static model2vec id works; MODELS only names the ones this build defaults to.
+const MODEL_ID = stringFlag('model', MODELS[0].id);
+
+// Storage levers: docs are stored sliced (+re-normalized) and optionally int8-quantized;
+// queries are computed at query time and stay f32 at the lever's dims.
+const LEVERS = [
+  { name: 'f32-512', dims: 512, int8: false },
+  { name: 'f32-256', dims: 256, int8: false },
+  { name: 'f32-128', dims: 128, int8: false },
+  { name: 'int8-512', dims: 512, int8: true },
+  { name: 'int8-256', dims: 256, int8: true },
+];
 
 const tree = corpusPath(corpus);
 const labelsDir = corpusLabels(corpus);
@@ -40,49 +47,32 @@ if (!tree || !labelsDir) {
 
 const now = () => Number(process.hrtime.bigint()) / 1e6;
 
-const ROOT = join(new URL('.', import.meta.url).pathname, '..');
-const lib = await import(pathToFileURL(join(ROOT, 'dist', 'esm', 'index.js')).href);
-const { openaiProvider } = await import(pathToFileURL(join(ROOT, 'dist', 'esm', 'embed', 'openai.js')).href);
+const { embedFull, dims: nativeDims, loadMs, id, sha } = await loadModel(MODEL_ID);
+// A lever wider than the model's native output reads past the vector (garbage norm, noise ranking) - capped to what this model produces.
+// e.g. potion-base-8M is 256-dim native, so its widest lever is f32-256/int8-256, not the 512 the 32M model ships.
+const ACTIVE_LEVERS = LEVERS.filter((l) => l.dims <= nativeDims);
 
-const tLoad = now();
-const provider = await openaiProvider(MODEL_ID, URL_BASE, undefined);
-const loadMs = now() - tLoad;
-const nativeDims = provider.dims;
-
-// Storage levers: docs stored sliced (+re-normalized) and optionally int8-quantized; queries stay f32 at the lever's dims.
-// Capped to native dims - a wider lever would read past the vector.
-const ALL_LEVERS = [
-  { name: 'int8-256', dims: 256, int8: true },
-  { name: `f32-${nativeDims}`, dims: nativeDims, int8: false },
-];
-const LEVERS = ALL_LEVERS.filter((l) => l.dims <= nativeDims);
-
-// --- corpus: embed every doc once at native dims (title + body), batched at the provider cap ---
+// --- corpus: embed every doc once at full dims (title + body, the future chunk text) ---
 const files = readdirSync(tree)
   .filter((f) => f.endsWith('.md'))
   .sort();
 const docIds = files.map((f) => f.replace(/\.md$/, ''));
-const docTexts = files.map((f) => {
+const tEmbed = now();
+const docFull = [];
+for (const f of files) {
   const raw = readFileSync(join(tree, f), 'utf8');
   const m = raw.match(/^---\ntitle: (.*)\n---\n\n?/);
   let title = '';
   try {
     title = m ? JSON.parse(m[1]) : '';
   } catch {}
-  return `${title}\n${m ? raw.slice(m[0].length) : raw}`;
-});
-
-const tEmbed = now();
-const docFull = [];
-for (let i = 0; i < docTexts.length; i += provider.batchCap) {
-  const batch = docTexts.slice(i, i + provider.batchCap);
-  const vecs = await provider.embedDocuments(batch);
-  docFull.push(...vecs);
-  if ((i / provider.batchCap) % 10 === 0) console.error(`embedding docs: ${i}/${docTexts.length}`);
+  docFull.push(await embedFull(`${title}\n${m ? raw.slice(m[0].length) : raw}`));
 }
-const embedMsPerDoc = (now() - tEmbed) / docTexts.length;
+const embedMsPerDoc = (now() - tEmbed) / files.length;
 
 // --- bm25 candidate lists via the real index (identical SQL to find's candidate query) ---
+const ROOT = join(new URL('.', import.meta.url).pathname, '..', '..');
+const lib = await import(pathToFileURL(join(ROOT, 'dist', 'esm', 'index.js')).href);
 const cfg = { presets: { default: { include: ['**/*.md'], signals: { words: 1 } } }, queries: {}, features: { links: false, rank: false }, baseDir: tree, configPath: null };
 const { store } = await lib.open(cfg);
 const bm25Stmt = await store.prepare(`SELECT content.path AS path FROM content WHERE content MATCH ? ORDER BY ${WEIGHTED_BM25} LIMIT ${FETCH}`);
@@ -91,7 +81,6 @@ const { queries, qrels } = readLabels(labelsDir);
 const qids = [...qrels.keys()].sort().slice(0, MAX_QUERIES === Infinity ? undefined : MAX_QUERIES);
 
 let bm25Ms = 0;
-let qEmbedMs = 0;
 const perQuery = [];
 for (const qid of qids) {
   const text = queries.get(qid);
@@ -102,19 +91,15 @@ for (const qid of qids) {
     bm25 = bm25Stmt.all(orBag(text)).map((r) => r.path.replace(/\.md$/, ''));
   } catch {}
   bm25Ms += now() - t0;
-  const t1 = now();
-  const qFull = await provider.embedQuery(text);
-  qEmbedMs += now() - t1;
-  perQuery.push({ qid, bm25, qFull });
+  perQuery.push({ qid, bm25, qFull: await embedFull(text) });
 }
 await store.close();
 bm25Ms /= perQuery.length;
-qEmbedMs /= perQuery.length;
 
 const bm25Base = mean(perQuery.map((q) => metrics(q.bm25, qrels.get(q.qid), K)));
 
 const rows = [];
-for (const lever of LEVERS) {
+for (const lever of ACTIVE_LEVERS) {
   const docs = docFull.map((v) => leverVec(v, lever.dims, lever.int8));
   let vecMs = 0;
   const cos = [];
@@ -132,8 +117,8 @@ for (const lever of LEVERS) {
 }
 
 const f = (v) => v.toFixed(4);
-console.log(`corpus: ${corpus} | queries: ${perQuery.length} | k: ${K} | model: ${MODEL_ID} (${URL_BASE}) | native dims: ${nativeDims}`);
-console.log(`provider load (dim probe): ${loadMs.toFixed(0)} ms | embed: ${embedMsPerDoc.toFixed(2)} ms/doc | query embed: ${qEmbedMs.toFixed(1)} ms/query | bm25: ${bm25Ms.toFixed(1)} ms/query\n`);
+console.log(`corpus: ${corpus} | queries: ${perQuery.length} | k: ${K} | model: ${id}@${sha.slice(0, 8)} | native dims: ${nativeDims}`);
+console.log(`model load: ${loadMs.toFixed(0)} ms | embed: ${embedMsPerDoc.toFixed(2)} ms/doc | bm25: ${bm25Ms.toFixed(1)} ms/query\n`);
 console.log(`| variant | nDCG@${K} | MRR@${K} | hit@${K} | Δ nDCG | Δ hit | ms/query | vectors MB |`);
 console.log('|---|---|---|---|---|---|---|---|');
 console.log(`| bm25 (baseline) | ${f(bm25Base.ndcg)} | ${f(bm25Base.rr)} | ${f(bm25Base.hit)} | — | — | ${bm25Ms.toFixed(1)} | — |`);
@@ -142,4 +127,11 @@ for (const r of rows) {
 }
 for (const r of rows) {
   console.log(`| bm25+vec ${r.lever} | ${f(r.fused.ndcg)} | ${f(r.fused.rr)} | ${f(r.fused.hit)} | ${f(r.fused.ndcg - bm25Base.ndcg)} | ${f(r.fused.hit - bm25Base.hit)} | ${r.fusedMs.toFixed(1)} | ${r.bytes.toFixed(1)} |`);
+}
+
+// Silent-fusion thresholds, printed for reference only; explicit-expansion gates fusion today, judged against recall-when-invoked.
+console.log('\nsuperseded silent-fusion thresholds (nfcorpus: ΔnDCG ≥ +0.02, Δhit ≥ +0.03; latency ≤ 2× links-fused ms/query):');
+for (const r of rows) {
+  const q = r.fused.ndcg - bm25Base.ndcg >= 0.02 && r.fused.hit - bm25Base.hit >= 0.03;
+  console.log(`  ${r.lever}: quality ${q ? 'PASS' : 'FAIL'} (ΔnDCG ${f(r.fused.ndcg - bm25Base.ndcg)}, Δhit ${f(r.fused.hit - bm25Base.hit)}), fused ${r.fusedMs.toFixed(1)} ms/query`);
 }

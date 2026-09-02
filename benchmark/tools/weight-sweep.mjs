@@ -3,10 +3,10 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { corpusLabels, corpusPath } from './lib/corpus.mjs';
-import { leverVec, loadModel } from './lib/embed.mjs';
-import { orBag, readLabels } from './lib/labels.mjs';
-import { mean, metrics } from './lib/metrics.mjs';
+import { corpusLabels, corpusPath } from '../lib/corpus.mjs';
+import { leverVec, loadModel } from '../lib/embed.mjs';
+import { orBag, readLabels } from '../lib/labels.mjs';
+import { mean, metrics } from '../lib/metrics.mjs';
 
 const RRF_K = 60;
 const WEIGHTED_BM25 = 'bm25(content, 10.0, 5.0, 1.0)';
@@ -30,7 +30,7 @@ if (!tree || !labelsDir) {
   process.exit(2);
 }
 
-const ROOT = join(new URL('.', import.meta.url).pathname, '..');
+const ROOT = join(new URL('.', import.meta.url).pathname, '..', '..');
 const lib = await import(pathToFileURL(join(ROOT, 'dist', 'esm', 'index.js')).href);
 
 const files = readdirSync(tree)
