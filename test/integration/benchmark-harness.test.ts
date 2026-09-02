@@ -7,6 +7,7 @@ import { DIFF_MAP_PATHS } from '../../benchmark/lib/gates.mjs';
 import { warmFileCache } from '../../benchmark/lib/measure.mjs';
 import { INPROC_META_KEYS, ROW_BY_KEY, RUN_META_KEYS, RUN_METRIC_KEYS, rowValue } from '../../benchmark/lib/rows.mjs';
 import { classifyCompare, classifyCrossGroup, classifyEval } from '../../benchmark/lib/verdict.mjs';
+import { gate } from '../lib/gate.ts';
 import { packageRoot, scratchDir } from '../lib/scratch.ts';
 
 // benchmark-harness.test.ts: the release-gate instrument's own behavior (classification,
@@ -163,7 +164,7 @@ describe('catalog / run.mjs key agreement', () => {
   it('a run.mjs row on the 20-note synthetic corpus has exactly the catalog wall/inproc/tokens keys', function () {
     this.timeout(120_000);
     const corpus = join(packageRoot, '.tmp', 'cache', 'synthetic-n20-t500-h8-l5-f30-fpn8-s1-c63b9320');
-    assert.ok(existsSync(corpus), `${corpus} is not cached; run node benchmark/lib/corpus.mjs's synthetic builder first`);
+    gate(this, 'benchmark-corpus', existsSync(corpus), `${corpus} is not built; run a benchmark once on this machine to cache it`);
     const outPath = join(packageRoot, '.tmp', 'test', `harness-run-${Date.now()}.json`);
     execFileSync(process.execPath, [join(packageRoot, 'benchmark', 'steps', 'measure-tree.mjs'), packageRoot, corpus, '--out', outPath], { cwd: packageRoot, encoding: 'utf8' });
     const row = JSON.parse(readFileSync(outPath, 'utf8'));

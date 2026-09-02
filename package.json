@@ -75,7 +75,7 @@
     "benchmark": "node benchmark/gate.mjs",
     "build": "tsds build",
     "format": "tsds format",
-    "prepublishOnly": "tsds validate",
+    "prepublishOnly": "node scripts/prepublish.ts && tsds validate",
     "test": "tsds test:node --no-timeouts",
     "test:engines": "nvu engines tsds test:node --no-timeouts",
     "version": "tsds version"

@@ -288,6 +288,7 @@ describe('store key', () => {
 
   it('"sqlite" and "duckdb" are both accepted values', () => {
     assert.equal(withStore('"sqlite"').status, 0, withStore('"sqlite"').stderr);
+    assert.equal(withStore('"duckdb"').status, 0, withStore('"duckdb"').stderr);
   });
 
   it('an unknown store name is a named config error, not a silent fallback', () => {

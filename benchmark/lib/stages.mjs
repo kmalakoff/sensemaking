@@ -70,7 +70,10 @@ export function buildStages({ smoke = false } = {}) {
     {
       id: 'static',
       label: '0 static',
-      steps: [{ id: 'validate', argv: ['npx', 'tsds', 'validate'], timeout: 10 * MINUTES, quiet: false, owedBy: 'always' }],
+      steps: [
+        { id: 'prepublish', argv: ['node', 'scripts/prepublish.ts'], timeout: MINUTES, quiet: false, owedBy: 'always' },
+        { id: 'validate', argv: ['npx', 'tsds', 'validate'], timeout: 10 * MINUTES, quiet: false, owedBy: 'always' },
+      ],
     },
     {
       id: 'functional',

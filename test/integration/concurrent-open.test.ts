@@ -68,8 +68,8 @@ describe('concurrent commands on one tree', () => {
   // in full; the second, still trusting its stale "added" classification, then reruns bare
   // INSERTs against rows the first already created -- a primary-key race, not a lock, so a retry
   // would only mask it. 200 files: small counts don't reliably overlap the two reconciles.
-  it('sqlite: 3 simultaneous searches on a cold tree all succeed', async () => {
-    if (!hasCapability('sqlite', 'lexical')) return;
+  it('sqlite: 3 simultaneous searches on a cold tree all succeed', async function () {
+    if (!hasCapability('sqlite', 'lexical')) this.skip();
     const baseDir = tree('sqlite', 200);
 
     const results = await Promise.all(Array.from({ length: PARALLEL }, () => search(baseDir)));
