@@ -40,6 +40,8 @@ const NEW_DIALECT = /search/.test(HELP);
 const SQL_VERB = /\bsense sql\b/.test(HELP) ? 'sql' : 'query';
 // Both rows must measure the same files, differing only in vector participation: two presets
 // over one glob, so there is no config edit between rows to force a rebuild.
+// The default preset carries no `semantic: false`, so migrating this file to the current config
+// version turns embedding on with the default static model -- verified, not merely inferred.
 const TWO_SCOPES = {
   version: 3,
   presets: { default: { include: ['**/*.md'] }, lexical: { include: ['**/*.md'], semantic: false } },
@@ -65,7 +67,12 @@ const cold = timed(['status'], 1); // first open = full crawl
 const warm = fail(timed([SQL_VERB, 'SELECT COUNT(*) AS n FROM frontmatter']));
 const search = fail(timed([SQL_VERB, SEARCH, 'the']));
 const findR = fail(timed(lexicalArgs('the'), 3));
-// Non-null only on embed-enabled trees (vectors pre-built by the first run). The delta
+// Cold crawl and first embed together in one process: reconcile's chunk handoff (embed/handoff.ts)
+// only survives within a single CLI invocation, so this is the only measurement that can see it --
+// the `status` call above already reconciled (and exited) in its own process, discarding it.
+rmSync(join(tree, '.sense'), { recursive: true, force: true });
+const coldEmbedAttempt = timed(vectorArgs('the'), 1);
+// Non-null only on embed-enabled trees (vectors pre-built by the run above). The delta
 // vs find_ms is what vector participation pays per invocation: model load + query embed + scan.
 const semanticR = fail(timed(vectorArgs('the'), 3));
 const mapR = fail(timed(['map'], 3));
@@ -162,6 +169,9 @@ console.log(
       bm25_search_ms: search?.ms ?? null,
       find_ms: findR?.ms ?? null,
       find_row_tokens: findRowTokens,
+      embed_supported: NEW_DIALECT,
+      cold_embed_ms: coldEmbedAttempt.status === 0 ? coldEmbedAttempt.ms : null,
+      cold_embed_error: coldEmbedAttempt.status === 0 ? undefined : coldEmbedAttempt.stderr.split('\n')[0],
       semantic_find_ms: semanticR?.ms ?? null,
       map_ms: mapR?.ms ?? null,
       map_tokens: mapR ? Math.round(mapR.bytes / 4) : null,
