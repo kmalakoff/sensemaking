@@ -1,0 +1,591 @@
+---
+date: 2026-09-03
+title: 2026-09-03 release gate
+package_version: 0.21.0
+release_version: null
+chunk_version: chunk:v5
+schema_version:
+  sqlite: "19"
+  duckdb: "3"
+  turso: "4"
+machine: Apple M4 Pro
+node: v26.7.0
+corpora:
+  - /Users/kevin/Dev/OpenSource/ai/sensemaking/.tmp/cache/obsidian-hub-b11036f9
+  - /Users/kevin/Dev/OpenSource/ai/sensemaking/.tmp/cache/obsidian-hub-x2-x2-hub-1
+  - /Users/kevin/Dev/OpenSource/ai/sensemaking/.tmp/cache/obsidian-hub-x4-x4-hub-1
+  - /Users/kevin/Dev/OpenSource/ai/sensemaking/.tmp/cache/stress-stress-1
+  - nfcorpus
+  - fever
+embed_model: minishlab/potion-retrieval-32M
+verdict: PASS
+hub_cold_crawl_ms: 2018
+hub_version_canary_ms: 28
+hub_warm_query_ms: 114
+hub_find_ms: 164
+hub_find_row_tokens: 71
+hub_semantic_find_ms: 286
+hub_map_ms: 144
+hub_map_tokens: 535
+hub_peek_ms: 124
+hub_peek_tokens: 581
+hub_inproc_cold_build_ms: 1660
+hub_inproc_open_nochange_ms: 34.7
+scale_13k_cold_crawl_ms: 3711
+scale_13k_version_canary_ms: 26
+scale_13k_warm_query_ms: 170
+scale_13k_find_ms: 259
+scale_13k_find_row_tokens: 71
+scale_13k_semantic_find_ms: 468
+scale_13k_map_ms: 235
+scale_13k_map_tokens: 541
+scale_13k_peek_ms: 183
+scale_13k_peek_tokens: 692
+scale_13k_inproc_cold_build_ms: 3088
+scale_13k_inproc_open_nochange_ms: 71.8
+scale_26k_cold_crawl_ms: 7450
+scale_26k_version_canary_ms: 26
+scale_26k_warm_query_ms: 276
+scale_26k_find_ms: 424
+scale_26k_find_row_tokens: 70
+scale_26k_semantic_find_ms: 812
+scale_26k_map_ms: 402
+scale_26k_map_tokens: 541
+scale_26k_peek_ms: 311
+scale_26k_peek_tokens: 843
+scale_26k_inproc_cold_build_ms: 6919
+scale_26k_inproc_open_nochange_ms: 147.8
+stress_cold_crawl_ms: 5892
+stress_version_canary_ms: 25
+stress_warm_query_ms: 73
+stress_find_ms: 329
+stress_find_row_tokens: 59
+stress_semantic_find_ms: 933
+stress_map_ms: 103
+stress_map_tokens: 398
+stress_peek_ms: 93
+stress_peek_tokens: 476
+stress_inproc_cold_build_ms: 4926
+stress_inproc_open_nochange_ms: 11
+battery_duckdb_hub_cold_crawl_ms: 5230
+battery_duckdb_hub_version_canary_ms: 27
+battery_duckdb_hub_warm_query_ms: 146
+battery_duckdb_hub_find_ms: 547
+battery_duckdb_hub_find_row_tokens: 100
+battery_duckdb_hub_semantic_find_ms: 649
+battery_duckdb_hub_map_ms: 201
+battery_duckdb_hub_map_tokens: 566
+battery_duckdb_hub_peek_ms: 168
+battery_duckdb_hub_peek_tokens: 581
+battery_duckdb_hub_inproc_cold_build_ms: 3754
+battery_duckdb_hub_inproc_open_nochange_ms: 44
+battery_duckdb_13k_cold_crawl_ms: 10658
+battery_duckdb_13k_version_canary_ms: 25
+battery_duckdb_13k_warm_query_ms: 202
+battery_duckdb_13k_find_ms: 939
+battery_duckdb_13k_find_row_tokens: 101
+battery_duckdb_13k_semantic_find_ms: 1144
+battery_duckdb_13k_map_ms: 347
+battery_duckdb_13k_map_tokens: 573
+battery_duckdb_13k_peek_ms: 232
+battery_duckdb_13k_peek_tokens: 692
+battery_duckdb_13k_inproc_cold_build_ms: 7664
+battery_duckdb_13k_inproc_open_nochange_ms: 77.7
+battery_duckdb_26k_cold_crawl_ms: 22251
+battery_duckdb_26k_version_canary_ms: 26
+battery_duckdb_26k_warm_query_ms: 311
+battery_duckdb_26k_find_ms: 1727
+battery_duckdb_26k_find_row_tokens: 100
+battery_duckdb_26k_semantic_find_ms: 1995
+battery_duckdb_26k_map_ms: 523
+battery_duckdb_26k_map_tokens: 573
+battery_duckdb_26k_peek_ms: 364
+battery_duckdb_26k_peek_tokens: 843
+battery_duckdb_26k_inproc_cold_build_ms: 14552
+battery_duckdb_26k_inproc_open_nochange_ms: 155.2
+battery_duckdb_stress_cold_crawl_ms: 39839
+battery_duckdb_stress_version_canary_ms: 26
+battery_duckdb_stress_warm_query_ms: 107
+battery_duckdb_stress_find_ms: 1858
+battery_duckdb_stress_find_row_tokens: 89
+battery_duckdb_stress_semantic_find_ms: 1970
+battery_duckdb_stress_map_ms: 301
+battery_duckdb_stress_map_tokens: 435
+battery_duckdb_stress_peek_ms: 162
+battery_duckdb_stress_peek_tokens: 476
+battery_duckdb_stress_inproc_cold_build_ms: 29541
+battery_duckdb_stress_inproc_open_nochange_ms: 17.8
+battery_turso_hub_cold_crawl_ms: 4301
+battery_turso_hub_version_canary_ms: 26
+battery_turso_hub_warm_query_ms: 123
+battery_turso_hub_find_ms: 203
+battery_turso_hub_find_row_tokens: 100
+battery_turso_hub_semantic_find_ms: 486
+battery_turso_hub_map_ms: 287
+battery_turso_hub_map_tokens: 535
+battery_turso_hub_peek_ms: 142
+battery_turso_hub_peek_tokens: 581
+battery_turso_hub_inproc_cold_build_ms: 3464
+battery_turso_hub_inproc_open_nochange_ms: 46.4
+battery_turso_13k_cold_crawl_ms: 8314
+battery_turso_13k_version_canary_ms: 24
+battery_turso_13k_warm_query_ms: 179
+battery_turso_13k_find_ms: 334
+battery_turso_13k_find_row_tokens: 99
+battery_turso_13k_semantic_find_ms: 852
+battery_turso_13k_map_ms: 507
+battery_turso_13k_map_tokens: 541
+battery_turso_13k_peek_ms: 209
+battery_turso_13k_peek_tokens: 692
+battery_turso_13k_inproc_cold_build_ms: 6644
+battery_turso_13k_inproc_open_nochange_ms: 82
+battery_turso_26k_cold_crawl_ms: 16381
+battery_turso_26k_version_canary_ms: 25
+battery_turso_26k_warm_query_ms: 297
+battery_turso_26k_find_ms: 577
+battery_turso_26k_find_row_tokens: 100
+battery_turso_26k_semantic_find_ms: 1624
+battery_turso_26k_map_ms: 959
+battery_turso_26k_map_tokens: 541
+battery_turso_26k_peek_ms: 352
+battery_turso_26k_peek_tokens: 843
+battery_turso_26k_inproc_cold_build_ms: 13255
+battery_turso_26k_inproc_open_nochange_ms: 161.2
+battery_turso_stress_cold_crawl_ms: 22922
+battery_turso_stress_version_canary_ms: 25
+battery_turso_stress_warm_query_ms: 78
+battery_turso_stress_find_ms: 444
+battery_turso_stress_find_row_tokens: 89
+battery_turso_stress_semantic_find_ms: 2078
+battery_turso_stress_map_ms: 404
+battery_turso_stress_map_tokens: 398
+battery_turso_stress_peek_ms: 97
+battery_turso_stress_peek_tokens: 476
+battery_turso_stress_inproc_cold_build_ms: 18259
+battery_turso_stress_inproc_open_nochange_ms: 14.2
+eval_nfcorpus_ndcg: 0.3427
+eval_nfcorpus_hit: 0.7121
+eval_fever_ndcg: 0.9337
+eval_fever_hit: 0.9965
+---
+
+### 2026-09-03: release gate
+
+`node benchmark/gate.mjs`, Apple M4 Pro, Node v26.7.0. Baseline: 0.21.0. Last tag: v0.21.0.
+
+#### Verdict: PASS
+
+No BLOCK reason.
+
+A moved row localizes a cost; it does not identify its mechanism. Settling the mechanism means removing the suspected cause and re-measuring, or timing it directly -- never reading it off the delta.
+
+#### Moved inside band, judged noise
+
+
+#### Owner decisions
+
+- battery-duckdb-hub/bm25_search_ms: owner decision, 2026-09-03: Owner decision, 2026-09-03: "We have a record of the token regression and 'BM25 search' lack of parity" -- ship and investigate. Harness defect, not a product one; the row runs SQLite FTS5 syntax on every store and has failed on duckdb and turso since they existed (PLAN.md 3.16).
+- battery-duckdb-13k/bm25_search_ms: owner decision, 2026-09-03: Owner decision, 2026-09-03: "We have a record of the token regression and 'BM25 search' lack of parity" -- ship and investigate. Harness defect, not a product one; the row runs SQLite FTS5 syntax on every store and has failed on duckdb and turso since they existed (PLAN.md 3.16).
+- battery-duckdb-26k/bm25_search_ms: owner decision, 2026-09-03: Owner decision, 2026-09-03: "We have a record of the token regression and 'BM25 search' lack of parity" -- ship and investigate. Harness defect, not a product one; the row runs SQLite FTS5 syntax on every store and has failed on duckdb and turso since they existed (PLAN.md 3.16).
+- battery-duckdb-stress/bm25_search_ms: owner decision, 2026-09-03: Owner decision, 2026-09-03: "We have a record of the token regression and 'BM25 search' lack of parity" -- ship and investigate. Harness defect, not a product one; the row runs SQLite FTS5 syntax on every store and has failed on duckdb and turso since they existed (PLAN.md 3.16).
+- battery-turso-hub/bm25_search_ms: owner decision, 2026-09-03: Owner decision, 2026-09-03: "We have a record of the token regression and 'BM25 search' lack of parity" -- ship and investigate. Harness defect, not a product one; the row runs SQLite FTS5 syntax on every store and has failed on duckdb and turso since they existed (PLAN.md 3.16).
+- battery-turso-13k/bm25_search_ms: owner decision, 2026-09-03: Owner decision, 2026-09-03: "We have a record of the token regression and 'BM25 search' lack of parity" -- ship and investigate. Harness defect, not a product one; the row runs SQLite FTS5 syntax on every store and has failed on duckdb and turso since they existed (PLAN.md 3.16).
+- battery-turso-26k/bm25_search_ms: owner decision, 2026-09-03: Owner decision, 2026-09-03: "We have a record of the token regression and 'BM25 search' lack of parity" -- ship and investigate. Harness defect, not a product one; the row runs SQLite FTS5 syntax on every store and has failed on duckdb and turso since they existed (PLAN.md 3.16).
+- battery-turso-stress/bm25_search_ms: owner decision, 2026-09-03: Owner decision, 2026-09-03: "We have a record of the token regression and 'BM25 search' lack of parity" -- ship and investigate. Harness defect, not a product one; the row runs SQLite FTS5 syntax on every store and has failed on duckdb and turso since they existed (PLAN.md 3.16).
+- hub/map_tokens: owner decision, 2026-09-03: Owner decision, 2026-09-03: "We have a record of the token regression" -- ship and investigate. The prior of 496 is not reproducible: baseline and local both read 535 in this sitting, and 0.20.0 and 0.21.0 give byte-identical map output today (PLAN.md 3.17).
+- battery-duckdb-hub/map_tokens: owner decision, 2026-09-03: Owner decision, 2026-09-03: "We have a record of the token regression" -- ship and investigate. The prior of 496 is not reproducible: baseline and local both read 535 in this sitting, and 0.20.0 and 0.21.0 give byte-identical map output today (PLAN.md 3.17).
+
+#### Run summary
+
+- provenance: last tag `v0.21.0`, package version 0.21.0, 39 changed path(s) read to decide what was owed (no commit hash: RELEASING.md's rule, since a rebase or squash can orphan one)
+- owed: test-engines, store-dump, oracle, scale, fever, baseline, quality-baseline
+- ran: 19 step(s) ok, 1 not owed, 0 owed-unmet
+- compared: 291 row(s) against a prior, 0 with no prior recorded (a row with no prior is not a pass, it is an absent comparison)
+- priors read from: 2026-09-02-release-gate.json
+
+#### compare
+
+| row | prior | current | verdict | reason |
+|---|---|---|---|---|
+| cold_crawl_ms | 2029 | 2018 | flat | — |
+| version_canary_ms | 26 | 28 | flat | — |
+| cold_embed_ms | 11781 | 11593 | flat | — |
+| warm_query_ms | 135 | 114 | flat | — |
+| bm25_search_ms | 137 | 116 | flat | — |
+| find_ms | 185 | 164 | flat | — |
+| find_row_tokens | 71 | 71 | flat | — |
+| semantic_find_ms | 303 | 286 | flat | — |
+| map_ms | 163 | 144 | flat | — |
+| map_tokens | 535 | 535 | flat | — |
+| peek_ms | 144 | 124 | flat | — |
+| peek_tokens | 581 | 581 | flat | — |
+| related_ms | 361 | 338 | flat | — |
+| related_tokens | 183 | 183 | flat | — |
+| largest_note_tokens | 77274 | 77274 | flat | — |
+| bulk_change_ms | 593 | 578 | flat | — |
+| bulk_watch_ms | 169 | 146 | flat | — |
+| inproc.cold_build_ms | 1662 | 1660 | flat | — |
+| inproc.open_nochange_ms | 35.4 | 34.7 | flat | — |
+| inproc.update_1_file_ms | 41.2 | 38.2 | flat | — |
+| inproc.update_10_files_ms | 42.2 | 42.1 | flat | — |
+
+#### hub
+
+| row | prior | current | verdict | reason |
+|---|---|---|---|---|
+| cold_crawl_ms | 2086 | 2018 | flat | — |
+| version_canary_ms | 26 | 28 | flat | — |
+| cold_embed_ms | 11777 | 11593 | flat | — |
+| warm_query_ms | 131 | 114 | flat | — |
+| bm25_search_ms | 134 | 116 | flat | — |
+| find_ms | 185 | 164 | flat | — |
+| find_row_tokens | 71 | 71 | flat | — |
+| semantic_find_ms | 298 | 286 | flat | — |
+| map_ms | 164 | 144 | flat | — |
+| map_tokens | 496 | 535 | contract | `map` token count: token contract moved, 496 -> 535 |
+| peek_ms | 144 | 124 | flat | — |
+| peek_tokens | 581 | 581 | flat | — |
+| related_ms | 358 | 338 | flat | — |
+| related_tokens | 183 | 183 | flat | — |
+| largest_note_tokens | 77274 | 77274 | flat | — |
+| bulk_change_ms | 558 | 578 | flat | — |
+| bulk_watch_ms | 159 | 146 | flat | — |
+| inproc.cold_build_ms | 1838 | 1660 | flat | — |
+| inproc.open_nochange_ms | 35.3 | 34.7 | flat | — |
+| inproc.update_1_file_ms | 38.4 | 38.2 | flat | — |
+| inproc.update_10_files_ms | 41.7 | 42.1 | flat | — |
+
+#### scale-13k
+
+| row | prior | current | verdict | reason |
+|---|---|---|---|---|
+| cold_crawl_ms | 3933 | 3711 | flat | — |
+| version_canary_ms | 28 | 26 | flat | — |
+| cold_embed_ms | 22612 | 22868 | flat | — |
+| warm_query_ms | 187 | 170 | flat | — |
+| bm25_search_ms | 193 | 176 | flat | — |
+| find_ms | 275 | 259 | flat | — |
+| find_row_tokens | 71 | 71 | flat | — |
+| semantic_find_ms | 477 | 468 | flat | — |
+| map_ms | 249 | 235 | flat | — |
+| map_tokens | 541 | 541 | flat | — |
+| peek_ms | 200 | 183 | flat | — |
+| peek_tokens | 692 | 692 | flat | — |
+| related_ms | 648 | 630 | flat | — |
+| related_tokens | 164 | 164 | flat | — |
+| largest_note_tokens | 77274 | 77274 | flat | — |
+| bulk_change_ms | 646 | 615 | flat | — |
+| bulk_watch_ms | 213 | 211 | flat | — |
+| inproc.cold_build_ms | 3481 | 3088 | flat | — |
+| inproc.open_nochange_ms | 71.2 | 71.8 | flat | — |
+| inproc.update_1_file_ms | 78.5 | 76.9 | flat | — |
+| inproc.update_10_files_ms | 82.4 | 79.9 | flat | — |
+
+#### scale-26k
+
+| row | prior | current | verdict | reason |
+|---|---|---|---|---|
+| cold_crawl_ms | 7018 | 7450 | flat | — |
+| version_canary_ms | 30 | 26 | flat | — |
+| cold_embed_ms | 45168 | 46049 | flat | — |
+| warm_query_ms | 293 | 276 | flat | — |
+| bm25_search_ms | 300 | 281 | flat | — |
+| find_ms | 443 | 424 | flat | — |
+| find_row_tokens | 70 | 70 | flat | — |
+| semantic_find_ms | 828 | 812 | flat | — |
+| map_ms | 418 | 402 | flat | — |
+| map_tokens | 541 | 541 | flat | — |
+| peek_ms | 316 | 311 | flat | — |
+| peek_tokens | 843 | 843 | flat | — |
+| related_ms | 1207 | 1203 | flat | — |
+| related_tokens | 162 | 162 | flat | — |
+| largest_note_tokens | 77274 | 77274 | flat | — |
+| bulk_change_ms | 767 | 739 | flat | — |
+| bulk_watch_ms | 322 | 312 | flat | — |
+| inproc.cold_build_ms | 5965 | 6919 | flat | — |
+| inproc.open_nochange_ms | 149.6 | 147.8 | flat | — |
+| inproc.update_1_file_ms | 151.7 | 151.1 | flat | — |
+| inproc.update_10_files_ms | 157.2 | 158.3 | flat | — |
+
+#### stress
+
+| row | prior | current | verdict | reason |
+|---|---|---|---|---|
+| cold_crawl_ms | 6085 | 5892 | flat | — |
+| version_canary_ms | 28 | 25 | flat | — |
+| cold_embed_ms | 27945 | 27715 | flat | — |
+| warm_query_ms | 93 | 73 | flat | — |
+| bm25_search_ms | 8953 | 8904 | flat | — |
+| find_ms | 349 | 329 | flat | — |
+| find_row_tokens | 59 | 59 | flat | — |
+| semantic_find_ms | 953 | 933 | flat | — |
+| map_ms | 122 | 103 | flat | — |
+| map_tokens | 398 | 398 | flat | — |
+| peek_ms | 110 | 93 | flat | — |
+| peek_tokens | 476 | 476 | flat | — |
+| related_ms | 1530 | 1571 | flat | — |
+| related_tokens | 60 | 60 | flat | — |
+| largest_note_tokens | 254821 | 254821 | flat | — |
+| bulk_change_ms | 1820 | 1759 | flat | — |
+| bulk_watch_ms | 121 | 114 | flat | — |
+| inproc.cold_build_ms | 5579 | 4926 | flat | — |
+| inproc.open_nochange_ms | 11.3 | 11 | flat | — |
+| inproc.update_1_file_ms | 24.6 | 25.4 | flat | — |
+| inproc.update_10_files_ms | 89.1 | 89.9 | flat | — |
+
+#### battery-duckdb-hub
+
+| row | prior | current | verdict | reason |
+|---|---|---|---|---|
+| cold_crawl_ms | 5926 | 5230 | flat | — |
+| version_canary_ms | 27 | 27 | flat | — |
+| cold_embed_ms | 31545 | 31185 | flat | — |
+| warm_query_ms | 162 | 146 | flat | — |
+| bm25_search_ms | — | — | failed | BM25 search (canonical join): command failed on the working tree, exit 1: Parser Error: syntax error at or near "MATCH" |
+| find_ms | 562 | 547 | flat | — |
+| find_row_tokens | 100 | 100 | flat | — |
+| semantic_find_ms | 666 | 649 | flat | — |
+| map_ms | 216 | 201 | flat | — |
+| map_tokens | 563 | 566 | contract | `map` token count: token contract moved, 563 -> 566 |
+| peek_ms | 183 | 168 | flat | — |
+| peek_tokens | 581 | 581 | flat | — |
+| related_ms | 493 | 472 | flat | — |
+| related_tokens | 183 | 183 | flat | — |
+| largest_note_tokens | 77274 | 77274 | flat | — |
+| bulk_change_ms | 1225 | 1189 | flat | — |
+| bulk_watch_ms | 1207 | 1237 | flat | — |
+| inproc.cold_build_ms | 4390 | 3754 | flat | — |
+| inproc.open_nochange_ms | 44.1 | 44 | flat | — |
+| inproc.update_1_file_ms | 56.6 | 56.7 | flat | — |
+| inproc.update_10_files_ms | 75.2 | 68.9 | flat | — |
+
+#### battery-duckdb-13k
+
+| row | prior | current | verdict | reason |
+|---|---|---|---|---|
+| cold_crawl_ms | 11867 | 10658 | flat | — |
+| version_canary_ms | 26 | 25 | flat | — |
+| cold_embed_ms | 55689 | 54246 | flat | — |
+| warm_query_ms | 219 | 202 | flat | — |
+| bm25_search_ms | — | — | failed | BM25 search (canonical join): command failed on the working tree, exit 1: Parser Error: syntax error at or near "MATCH" |
+| find_ms | 958 | 939 | flat | — |
+| find_row_tokens | 101 | 101 | flat | — |
+| semantic_find_ms | 1172 | 1144 | flat | — |
+| map_ms | 365 | 347 | flat | — |
+| map_tokens | 573 | 573 | flat | — |
+| peek_ms | 253 | 232 | flat | — |
+| peek_tokens | 692 | 692 | flat | — |
+| related_ms | 867 | 845 | flat | — |
+| related_tokens | 164 | 164 | flat | — |
+| largest_note_tokens | 77274 | 77274 | flat | — |
+| bulk_change_ms | 1172 | 1104 | flat | — |
+| bulk_watch_ms | 1206 | 1186 | flat | — |
+| inproc.cold_build_ms | 8853 | 7664 | flat | — |
+| inproc.open_nochange_ms | 79.3 | 77.7 | flat | — |
+| inproc.update_1_file_ms | 99.8 | 106.7 | flat | — |
+| inproc.update_10_files_ms | 113.6 | 110.2 | flat | — |
+
+#### battery-duckdb-26k
+
+| row | prior | current | verdict | reason |
+|---|---|---|---|---|
+| cold_crawl_ms | 24461 | 22251 | flat | — |
+| version_canary_ms | 27 | 26 | flat | — |
+| cold_embed_ms | 107490 | 104564 | flat | — |
+| warm_query_ms | 329 | 311 | flat | — |
+| bm25_search_ms | — | — | failed | BM25 search (canonical join): command failed on the working tree, exit 1: Parser Error: syntax error at or near "MATCH" |
+| find_ms | 1753 | 1727 | flat | — |
+| find_row_tokens | 100 | 100 | flat | — |
+| semantic_find_ms | 2022 | 1995 | flat | — |
+| map_ms | 546 | 523 | flat | — |
+| map_tokens | 573 | 573 | flat | — |
+| peek_ms | 385 | 364 | flat | — |
+| peek_tokens | 843 | 843 | flat | — |
+| related_ms | 1111 | 1093 | flat | — |
+| related_tokens | 162 | 162 | flat | — |
+| largest_note_tokens | 77274 | 77274 | flat | — |
+| bulk_change_ms | 1409 | 1287 | flat | — |
+| bulk_watch_ms | 1396 | 1346 | flat | — |
+| inproc.cold_build_ms | 17363 | 14552 | flat | — |
+| inproc.open_nochange_ms | 156.5 | 155.2 | flat | — |
+| inproc.update_1_file_ms | 184 | 182.7 | flat | — |
+| inproc.update_10_files_ms | 200.1 | 200.3 | flat | — |
+
+#### battery-duckdb-stress
+
+| row | prior | current | verdict | reason |
+|---|---|---|---|---|
+| cold_crawl_ms | 47055 | 39839 | flat | — |
+| version_canary_ms | 28 | 26 | flat | — |
+| cold_embed_ms | 132173 | 125645 | flat | — |
+| warm_query_ms | 122 | 107 | flat | — |
+| bm25_search_ms | — | — | failed | BM25 search (canonical join): command failed on the working tree, exit 1: Parser Error: syntax error at or near "MATCH" |
+| find_ms | 1877 | 1858 | flat | — |
+| find_row_tokens | 89 | 89 | flat | — |
+| semantic_find_ms | 1993 | 1970 | flat | — |
+| map_ms | 312 | 301 | flat | — |
+| map_tokens | 435 | 435 | flat | — |
+| peek_ms | 177 | 162 | flat | — |
+| peek_tokens | 476 | 476 | flat | — |
+| related_ms | 712 | 695 | flat | — |
+| related_tokens | 60 | 60 | flat | — |
+| largest_note_tokens | 254821 | 254821 | flat | — |
+| bulk_change_ms | 11752 | 11851 | flat | — |
+| bulk_watch_ms | 11559 | 11488 | flat | — |
+| inproc.cold_build_ms | 36756 | 29541 | flat | — |
+| inproc.open_nochange_ms | 18.8 | 17.8 | flat | — |
+| inproc.update_1_file_ms | 270 | 282.3 | flat | — |
+| inproc.update_10_files_ms | 450.9 | 467.6 | flat | — |
+
+#### battery-turso-hub
+
+| row | prior | current | verdict | reason |
+|---|---|---|---|---|
+| cold_crawl_ms | 4424 | 4301 | flat | — |
+| version_canary_ms | 27 | 26 | flat | — |
+| cold_embed_ms | 16651 | 16786 | flat | — |
+| warm_query_ms | 139 | 123 | flat | — |
+| bm25_search_ms | — | — | failed | BM25 search (canonical join): command failed on the working tree, exit 1: prepare failed: Parse error: no such column: content -- searchable columns are title, summary, text; frontmatter fields are queried with --where or sense sql (list them with pragma_table_info('frontmatter')). |
+| find_ms | 220 | 203 | flat | — |
+| find_row_tokens | 100 | 100 | flat | — |
+| semantic_find_ms | 507 | 486 | flat | — |
+| map_ms | 302 | 287 | flat | — |
+| map_tokens | 535 | 535 | flat | — |
+| peek_ms | 159 | 142 | flat | — |
+| peek_tokens | 581 | 581 | flat | — |
+| related_ms | 633 | 611 | flat | — |
+| related_tokens | 183 | 183 | flat | — |
+| largest_note_tokens | 77274 | 77274 | flat | — |
+| bulk_change_ms | 836 | 819 | flat | — |
+| bulk_watch_ms | 891 | 884 | flat | — |
+| inproc.cold_build_ms | 3466 | 3464 | flat | — |
+| inproc.open_nochange_ms | 42.5 | 46.4 | flat | — |
+| inproc.update_1_file_ms | 54.7 | 55.1 | flat | — |
+| inproc.update_10_files_ms | 121.8 | 116 | flat | — |
+
+#### battery-turso-13k
+
+| row | prior | current | verdict | reason |
+|---|---|---|---|---|
+| cold_crawl_ms | 8415 | 8314 | flat | — |
+| version_canary_ms | 25 | 24 | flat | — |
+| cold_embed_ms | 33118 | 32728 | flat | — |
+| warm_query_ms | 197 | 179 | flat | — |
+| bm25_search_ms | — | — | failed | BM25 search (canonical join): command failed on the working tree, exit 1: prepare failed: Parse error: no such column: content -- searchable columns are title, summary, text; frontmatter fields are queried with --where or sense sql (list them with pragma_table_info('frontmatter')). |
+| find_ms | 344 | 334 | flat | — |
+| find_row_tokens | 99 | 99 | flat | — |
+| semantic_find_ms | 869 | 852 | flat | — |
+| map_ms | 525 | 507 | flat | — |
+| map_tokens | 541 | 541 | flat | — |
+| peek_ms | 227 | 209 | flat | — |
+| peek_tokens | 692 | 692 | flat | — |
+| related_ms | 1243 | 1219 | flat | — |
+| related_tokens | 164 | 164 | flat | — |
+| largest_note_tokens | 77274 | 77274 | flat | — |
+| bulk_change_ms | 1032 | 994 | flat | — |
+| bulk_watch_ms | 1026 | 1024 | flat | — |
+| inproc.cold_build_ms | 6240 | 6644 | flat | — |
+| inproc.open_nochange_ms | 82.2 | 82 | flat | — |
+| inproc.update_1_file_ms | 105.9 | 108.2 | flat | — |
+| inproc.update_10_files_ms | 236.2 | 241.4 | flat | — |
+
+#### battery-turso-26k
+
+| row | prior | current | verdict | reason |
+|---|---|---|---|---|
+| cold_crawl_ms | 16669 | 16381 | flat | — |
+| version_canary_ms | 28 | 25 | flat | — |
+| cold_embed_ms | 65864 | 65961 | flat | — |
+| warm_query_ms | 314 | 297 | flat | — |
+| bm25_search_ms | — | — | failed | BM25 search (canonical join): command failed on the working tree, exit 1: prepare failed: Parse error: no such column: content -- searchable columns are title, summary, text; frontmatter fields are queried with --where or sense sql (list them with pragma_table_info('frontmatter')). |
+| find_ms | 596 | 577 | flat | — |
+| find_row_tokens | 100 | 100 | flat | — |
+| semantic_find_ms | 1668 | 1624 | flat | — |
+| map_ms | 987 | 959 | flat | — |
+| map_tokens | 541 | 541 | flat | — |
+| peek_ms | 371 | 352 | flat | — |
+| peek_tokens | 843 | 843 | flat | — |
+| related_ms | 2470 | 2447 | flat | — |
+| related_tokens | 162 | 162 | flat | — |
+| largest_note_tokens | 77274 | 77274 | flat | — |
+| bulk_change_ms | 1371 | 1326 | flat | — |
+| bulk_watch_ms | 1415 | 1409 | flat | — |
+| inproc.cold_build_ms | 12308 | 13255 | flat | — |
+| inproc.open_nochange_ms | 170 | 161.2 | flat | — |
+| inproc.update_1_file_ms | 222.9 | 218.8 | flat | — |
+| inproc.update_10_files_ms | 644.6 | 575.8 | flat | — |
+
+#### battery-turso-stress
+
+| row | prior | current | verdict | reason |
+|---|---|---|---|---|
+| cold_crawl_ms | 23158 | 22922 | flat | — |
+| version_canary_ms | 27 | 25 | flat | — |
+| cold_embed_ms | 63484 | 63463 | flat | — |
+| warm_query_ms | 98 | 78 | flat | — |
+| bm25_search_ms | — | — | failed | BM25 search (canonical join): command failed on the working tree, exit 1: prepare failed: Parse error: no such column: content -- searchable columns are title, summary, text; frontmatter fields are queried with --where or sense sql (list them with pragma_table_info('frontmatter')). |
+| find_ms | 449 | 444 | flat | — |
+| find_row_tokens | 89 | 89 | flat | — |
+| semantic_find_ms | 2104 | 2078 | flat | — |
+| map_ms | 411 | 404 | flat | — |
+| map_tokens | 398 | 398 | flat | — |
+| peek_ms | 114 | 97 | flat | — |
+| peek_tokens | 476 | 476 | flat | — |
+| related_ms | 3526 | 3506 | flat | — |
+| related_tokens | 60 | 60 | flat | — |
+| largest_note_tokens | 254821 | 254821 | flat | — |
+| bulk_change_ms | 5500 | 5371 | flat | — |
+| bulk_watch_ms | 5585 | 5475 | flat | — |
+| inproc.cold_build_ms | 18425 | 18259 | flat | — |
+| inproc.open_nochange_ms | 14.3 | 14.2 | flat | — |
+| inproc.update_1_file_ms | 49 | 47.4 | flat | — |
+| inproc.update_10_files_ms | 302 | 269.8 | flat | — |
+
+#### eval-nfcorpus/bm25-only
+
+| row | prior | current | verdict | reason |
+|---|---|---|---|---|
+| ndcg | 0.32339782487130336 | 0.32339782487130336 | flat | — |
+| rr | 0.5183153963339723 | 0.5183153963339723 | flat | — |
+| hit | 0.6873065015479877 | 0.6873065015479877 | flat | — |
+
+#### eval-nfcorpus/fused
+
+| row | prior | current | verdict | reason |
+|---|---|---|---|---|
+| ndcg | 0.32339782487130336 | 0.32339782487130336 | flat | — |
+| rr | 0.5183153963339723 | 0.5183153963339723 | flat | — |
+| hit | 0.6873065015479877 | 0.6873065015479877 | flat | — |
+
+#### eval-nfcorpus/semantic
+
+| row | prior | current | verdict | reason |
+|---|---|---|---|---|
+| ndcg | 0.3427475423812081 | 0.3427475423812081 | flat | — |
+| rr | 0.5555014988451521 | 0.5555014988451521 | flat | — |
+| hit | 0.7120743034055728 | 0.7120743034055728 | flat | — |
+
+#### eval-fever/bm25-only
+
+| row | prior | current | verdict | reason |
+|---|---|---|---|---|
+| ndcg | 0.9435278650592086 | 0.9435278650592086 | flat | — |
+| rr | 0.9507565449643487 | 0.9507565449643487 | flat | — |
+| hit | 0.9969007483558848 | 0.9969007483558848 | flat | — |
+
+#### eval-fever/fused
+
+| row | prior | current | verdict | reason |
+|---|---|---|---|---|
+| ndcg | 0.936062899468175 | 0.936062899468175 | flat | — |
+| rr | 0.9381366934356592 | 0.9381366934356592 | flat | — |
+| hit | 0.9971275228664298 | 0.9971275228664298 | flat | — |
+
+#### eval-fever/semantic
+
+| row | prior | current | verdict | reason |
+|---|---|---|---|---|
+| ndcg | 0.9336523047847716 | 0.9336523047847716 | flat | — |
+| rr | 0.9343124532802529 | 0.9343124532802529 | flat | — |
+| hit | 0.9965227908383097 | 0.9965227908383097 | flat | — |
+
