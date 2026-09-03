@@ -17,7 +17,7 @@ import type { Connection, ReconcileDialect } from './types.ts';
 
 // Feature-owned columns (`_rank`) must stay out of the upsert: a reparse would null the last
 // computed value on every touch, not just the reconciles that recompute it.
-const CORE_FRONTMATTER_COLUMNS = new Set(['path', '_mtime', '_ctime', '_size', '_parse_error']);
+export const CORE_FRONTMATTER_COLUMNS = new Set(['path', '_mtime', '_ctime', '_size', '_parse_error']);
 
 export async function reconcile(conn: Connection, cfg: Config, baseDir: string, dialect: ReconcileDialect, pool?: ParsePool, forcedPaths?: ReadonlySet<string>): Promise<{ parsed: number; warnings: string[] }> {
   const files = listFiles(cfg, baseDir);
@@ -96,7 +96,7 @@ export async function reconcile(conn: Connection, cfg: Config, baseDir: string, 
       }
 
       if (parsedDocs.length > 0) {
-        const rows = parsedDocs.map((doc) =>
+        const toRow = (doc: (typeof parsedDocs)[number]) =>
           writableColumns.map((col) => {
             if (col === 'path') return doc.relPath;
             if (col === '_mtime') return doc.mtimeMs;
@@ -105,9 +105,17 @@ export async function reconcile(conn: Connection, cfg: Config, baseDir: string, 
             // Written per parse, unlike _rank, which a feature pass owns and the upsert skips.
             if (col === '_parse_error') return doc.parseError;
             return doc.data[col] ?? null;
-          })
-        );
-        await conn.runBatch(insertSql, rows);
+          });
+        // A path in `added` has no existing frontmatter row, so it can never conflict: where a
+        // dialect offers a faster append-only path (insertNew), only the rest go through the upsert.
+        if (dialect.insertNew) {
+          const newDocs = parsedDocs.filter((d) => addedSet.has(d.relPath));
+          const updateDocs = parsedDocs.filter((d) => !addedSet.has(d.relPath));
+          if (newDocs.length > 0) await dialect.insertNew(conn, 'frontmatter', writableColumns, newDocs.map(toRow));
+          if (updateDocs.length > 0) await conn.runBatch(insertSql, updateDocs.map(toRow));
+        } else {
+          await conn.runBatch(insertSql, parsedDocs.map(toRow));
+        }
       }
 
       // After the upsert, so every doc already has the frontmatter row sqlite's content rowid

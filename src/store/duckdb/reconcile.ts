@@ -1,9 +1,13 @@
+import type { DuckDBValue } from '@duckdb/node-api';
 import { SenseError } from '../../errors.ts';
 import type { ReconcileDelta } from '../../features/types.ts';
 import type { ParsedDoc } from '../../scan/index.ts';
+import { CORE_FRONTMATTER_COLUMNS } from '../reconcile.ts';
 import { quoteIdent } from '../shared.ts';
 import type { Connection, ReconcileDialect } from '../types.ts';
+import type { DuckdbConnection } from './connection.ts';
 import { markContentStale } from './lexical.ts';
+import { duckdbApi } from './native.ts';
 
 // This store's dialect (types.ts's ReconcileDialect) for the shared orchestration in
 // store/reconcile.ts. `content` is a plain table, not FTS-virtual, so rows are maintained here
@@ -44,6 +48,35 @@ async function addColumns(conn: Connection, names: string[]): Promise<void> {
   await conn.exec(names.map((name) => `ALTER TABLE frontmatter ADD COLUMN ${quoteIdent(name)} VARIANT`).join('; '));
 }
 
+// Appender path for rows that cannot conflict (reconcile.ts's `added`); no ON CONFLICT support, so
+// alignment reads the table's own physical column order fresh -- `columns` omits feature-owned reserved columns (e.g. "_rank") that still exist on the table, and get appendDefault().
+async function insertNew(conn: Connection, table: string, columns: string[], rows: unknown[][]): Promise<void> {
+  if (rows.length === 0) return;
+  const { variantValue } = await duckdbApi();
+  const infoStmt = await conn.prepare(`PRAGMA table_info(${quoteIdent(table)})`);
+  const physicalColumns = ((await infoStmt.all()) as Array<{ name: string }>).map((c) => c.name);
+  const rowIndexOf = new Map(columns.map((name, i) => [name, i]));
+
+  const native = (conn as DuckdbConnection).duckdb;
+  const appender = await native.createAppender(table);
+  try {
+    for (const row of rows) {
+      for (const name of physicalColumns) {
+        const idx = rowIndexOf.get(name);
+        const value = idx === undefined ? undefined : row[idx];
+        if (idx === undefined) appender.appendDefault();
+        else if (value === null || value === undefined) appender.appendNull();
+        else if (CORE_FRONTMATTER_COLUMNS.has(name)) appender.appendValue(value as DuckDBValue);
+        else appender.appendVariant(variantValue(value as DuckDBValue));
+      }
+      appender.endRow();
+    }
+    appender.flushSync();
+  } finally {
+    appender.closeSync();
+  }
+}
+
 export const duckdbDialect: ReconcileDialect = {
   beginMode: () => 'BEGIN',
   checkColumnLimit(count) {
@@ -53,4 +86,5 @@ export const duckdbDialect: ReconcileDialect = {
   },
   addColumns,
   reconcileContent,
+  insertNew,
 };

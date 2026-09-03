@@ -54,6 +54,9 @@ export interface ReconcileDialect {
   // Records this reconcile's write-transaction duration. sqlite/turso use it for open()'s derived
   // busy_timeout; duckdb has no such PRAGMA and omits it.
   recordDuration?(conn: Connection, ms: number): Promise<void>;
+  // Inserts rows whose path cannot already exist in `table` (no ON CONFLICT needed), through a
+  // faster append-only path. Optional: sqlite/turso omit it and every row goes through the upsert.
+  insertNew?(conn: Connection, table: string, columns: string[], rows: unknown[][]): Promise<void>;
 }
 
 // One open algorithm (src/store/open.ts), parameterised per engine. `Handle` is whatever this

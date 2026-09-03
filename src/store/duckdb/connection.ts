@@ -66,8 +66,15 @@ class DuckdbStatement implements Statement {
   }
 }
 
-export function createConnection(duckdb: DuckDBConnection): Connection {
-  const conn: Connection = {
+// Adds the native DuckDBConnection to the portable Connection, so duckdb's own dialect code
+// (reconcile.ts's insertNew) can reach createAppender(); sqlite/turso have no such member.
+export interface DuckdbConnection extends Connection {
+  readonly duckdb: DuckDBConnection;
+}
+
+export function createConnection(duckdb: DuckDBConnection): DuckdbConnection {
+  const conn: DuckdbConnection = {
+    duckdb,
     async exec(sql: string): Promise<void> {
       await duckdb.run(sql);
     },
