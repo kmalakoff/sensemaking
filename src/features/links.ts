@@ -1,5 +1,6 @@
 import posix from 'node:path/posix';
 import type { FileStat } from '../scan/index.ts';
+import { appendRows } from '../store/shared.ts';
 import type { Connection } from '../store/types.ts';
 import { maskRegions } from './fences.ts';
 import type { ExtractedDoc, Feature, ReconcileDelta } from './types.ts';
@@ -191,6 +192,11 @@ export async function linkEdges(db: Connection): Promise<[string, string][]> {
 // and dstChanged alone misses the reparsed-to-zero-links case. Keyed on delta so state dies with it.
 const removedWithLinks = new WeakMap<ReconcileDelta, boolean>();
 
+// dst is written by resolution, not by store(), so it is absent from the column list and takes the
+// table's default on the append path.
+const LINK_COLUMNS = ['src', 'target', 'target_base', 'embed'];
+const UPSERT_LINK_SQL = 'INSERT INTO links (src, target, target_base, dst, embed) VALUES (?, ?, ?, NULL, ?) ON CONFLICT(src, target, embed) DO UPDATE SET target_base = excluded.target_base';
+
 export const links: Feature = {
   name: 'links',
   async schema(db) {
@@ -234,13 +240,20 @@ export const links: Feature = {
 
     // Upsert preserves dst on surviving rows; only new rows start at NULL. A same-note anchor
     // gets no target_base, so SQL's `IN` excludes it from resolveIncremental's lookup.
+    // Split, unlike the other features: this hook has no remove() pass behind it (see above), so
+    // only a path in `added` is guaranteed to have no row yet. The rest genuinely conflict and the
+    // upsert is what preserves their `dst`.
+    const appendable: unknown[][] = [];
     const upsertRows: unknown[][] = [];
     for (const [path, targets] of byPath) {
-      for (const { target, embed } of targets) upsertRows.push([path, target, target.startsWith('#') ? null : baseKey(cleanTarget(target)), embed ? 1 : 0]);
+      for (const { target, embed } of targets) {
+        const row = [path, target, target.startsWith('#') ? null : baseKey(cleanTarget(target)), embed ? 1 : 0];
+        if (addedSet.has(path)) appendable.push(row);
+        else upsertRows.push(row);
+      }
     }
-    if (upsertRows.length > 0) {
-      await db.runBatch('INSERT INTO links (src, target, target_base, dst, embed) VALUES (?, ?, ?, NULL, ?) ON CONFLICT(src, target, embed) DO UPDATE SET target_base = excluded.target_base', upsertRows);
-    }
+    await appendRows(db, 'links', LINK_COLUMNS, UPSERT_LINK_SQL, appendable);
+    if (upsertRows.length > 0) await db.runBatch(UPSERT_LINK_SQL, upsertRows);
   },
   async afterReconcile(db, delta) {
     // Any deleted rows mean the edge set shrank -- whether the file vanished or was reparsed

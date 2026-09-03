@@ -34,6 +34,11 @@ export interface Connection {
   exec(sql: string): Promise<void>;
   prepare(sql: string): Promise<Statement>;
   runBatch(sql: string, paramRows: unknown[][]): Promise<void>;
+  // Bulk-inserts rows that cannot conflict, through a path that binds no per-value parameters.
+  // Optional: a store that has nothing faster than its own INSERT omits it and callers fall back
+  // (appendRows in shared.ts). `columns` names the values each row carries; a table column the
+  // caller does not write takes its default.
+  appendRows?(table: string, columns: string[], rows: unknown[][]): Promise<void>;
 }
 
 // One reconcile algorithm (src/store/reconcile.ts), parameterised per engine. reconcileContent is
@@ -54,9 +59,6 @@ export interface ReconcileDialect {
   // Records this reconcile's write-transaction duration. sqlite/turso use it for open()'s derived
   // busy_timeout; duckdb has no such PRAGMA and omits it.
   recordDuration?(conn: Connection, ms: number): Promise<void>;
-  // Inserts rows whose path cannot already exist in `table` (no ON CONFLICT needed), through a
-  // faster append-only path. Optional: sqlite/turso omit it and every row goes through the upsert.
-  insertNew?(conn: Connection, table: string, columns: string[], rows: unknown[][]): Promise<void>;
 }
 
 // One open algorithm (src/store/open.ts), parameterised per engine. `Handle` is whatever this

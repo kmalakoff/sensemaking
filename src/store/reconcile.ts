@@ -6,7 +6,7 @@ import { listFiles, RESERVED_COLUMNS } from '../scan/index.ts';
 import type { ParsePool } from '../scan/pool.ts';
 import { reparseFiles } from '../scan/reparse.ts';
 import { recordLockWaitMs } from './lock-wait.ts';
-import { getColumns, quoteIdent } from './shared.ts';
+import { appendRows, getColumns, quoteIdent } from './shared.ts';
 import { featureStage, type Stages, stageRecorder } from './stages.ts';
 import { withTransaction } from './transaction.ts';
 import type { Connection, ReconcileDialect } from './types.ts';
@@ -115,17 +115,13 @@ export async function reconcile(conn: Connection, cfg: Config, baseDir: string, 
             if (col === '_parse_error') return doc.parseError;
             return doc.data[col] ?? null;
           });
-        // A path in `added` has no existing frontmatter row, so it can never conflict: where a
-        // dialect offers a faster append-only path (insertNew), only the rest go through the upsert.
+        // A path in `added` has no existing frontmatter row, so it can never conflict; the rest
+        // genuinely can, and keep the upsert.
         await stages.time('fm-upsert', async () => {
-          if (dialect.insertNew) {
-            const newDocs = parsedDocs.filter((d) => addedSet.has(d.relPath));
-            const updateDocs = parsedDocs.filter((d) => !addedSet.has(d.relPath));
-            if (newDocs.length > 0) await dialect.insertNew(conn, 'frontmatter', writableColumns, newDocs.map(toRow));
-            if (updateDocs.length > 0) await conn.runBatch(insertSql, updateDocs.map(toRow));
-          } else {
-            await conn.runBatch(insertSql, parsedDocs.map(toRow));
-          }
+          const newDocs = parsedDocs.filter((d) => addedSet.has(d.relPath));
+          const updateDocs = parsedDocs.filter((d) => !addedSet.has(d.relPath));
+          await appendRows(conn, 'frontmatter', writableColumns, insertSql, newDocs.map(toRow));
+          if (updateDocs.length > 0) await conn.runBatch(insertSql, updateDocs.map(toRow));
         });
       }
 
@@ -146,7 +142,7 @@ export async function reconcile(conn: Connection, cfg: Config, baseDir: string, 
         // DO NOTHING, not a bare INSERT: the added/touched split above comes from a read taken
         // before this transaction's lock, so a path this process calls "added" can already have
         // its (path, preset) row committed by a concurrent reconcile -- the row would be identical either way.
-        if (presetRows.length > 0) await conn.runBatch('INSERT INTO preset_files ("path", preset) VALUES (?, ?) ON CONFLICT("path", preset) DO NOTHING', presetRows);
+        await appendRows(conn, 'preset_files', ['path', 'preset'], 'INSERT INTO preset_files ("path", preset) VALUES (?, ?) ON CONFLICT("path", preset) DO NOTHING', presetRows);
       });
 
       // Before the feature hooks, never after: rank's afterReconcile reads frontmatter as PageRank's

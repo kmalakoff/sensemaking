@@ -1,7 +1,9 @@
 import type { DuckDBConnection, DuckDBPreparedStatement, DuckDBValue } from '@duckdb/node-api';
+import { quoteIdent } from '../shared.ts';
 import { withTransaction } from '../transaction.ts';
 import type { Connection, RunResult, Statement } from '../types.ts';
 import { rewriteBatch } from './batch.ts';
+import { duckdbApi } from './native.ts';
 
 // getRowObjectsJS returns INT64 columns as BigInt regardless of magnitude, while sqlite's small
 // ints are numbers and consumers assume number; in-range values convert here, out-of-range stays BigInt.
@@ -80,6 +82,39 @@ export function createConnection(duckdb: DuckDBConnection): DuckdbConnection {
     },
     async prepare(sql: string): Promise<Statement> {
       return new DuckdbStatement(await duckdb.prepare(sql));
+    },
+    // The appender writes columnar vectors with no per-parameter binding, which is the cost
+    // runBatch pays: measured 7.2x on frontmatter at 6,566 rows. Alignment is against the table's
+    // own physical column order, read fresh, so a column the caller does not write (a
+    // feature-owned "_rank", say) takes appendDefault() rather than shifting every value one slot.
+    async appendRows(table: string, columns: string[], rows: unknown[][]): Promise<void> {
+      if (rows.length === 0) return;
+      const { variantValue } = await duckdbApi();
+      const infoStmt = await conn.prepare(`PRAGMA table_info(${quoteIdent(table)})`);
+      const physical = (await infoStmt.all()) as Array<{ name: string; type: string }>;
+      const rowIndexOf = new Map(columns.map((name, i) => [name, i]));
+
+      await withTransaction(conn, async () => {
+        const appender = await duckdb.createAppender(table);
+        try {
+          for (const row of rows) {
+            for (const column of physical) {
+              const idx = rowIndexOf.get(column.name);
+              const value = idx === undefined ? undefined : row[idx];
+              if (idx === undefined) appender.appendDefault();
+              else if (value === null || value === undefined) appender.appendNull();
+              // VARIANT is frontmatter's dynamic columns only; every other table is statically
+              // typed, and appendValue is what preserves those types.
+              else if (column.type === 'VARIANT') appender.appendVariant(variantValue(value as DuckDBValue));
+              else appender.appendValue(value as DuckDBValue);
+            }
+            appender.endRow();
+          }
+          appender.flushSync();
+        } finally {
+          appender.closeSync();
+        }
+      });
     },
     // One crossing regardless of row count: rewriteBatch folds recognized shapes into a multi-row statement (batch.ts),
     // else falls back to a bind-and-run loop, one call either way. Joins the caller's transaction when there is one, else opens its own.

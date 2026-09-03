@@ -167,6 +167,74 @@ describe('reconcile (duckdb)', () => {
     assert.deepEqual(coldRow, bindRow);
   });
 
+  // links is the strongest alignment case: `dst` sits between target_base and embed and store()
+  // never writes it, so an appender that ignored physical order would slide `embed` into `dst`.
+  it('a cold build appends links with the unwritten middle column (dst) defaulted, not shifted', async () => {
+    const baseDir = tmpTree();
+    writeNote(baseDir, 'a.md', { body: 'See [[b]] and ![[b]].' });
+    writeNote(baseDir, 'b.md', { body: 'target' });
+    const { store } = await duckdbTree(baseDir);
+    const rows = (await (await store.prepare('SELECT src, target, target_base, dst, embed FROM links WHERE src = ? ORDER BY embed')).all('a.md')) as Array<Record<string, unknown>>;
+    assert.deepEqual(rows, [
+      { src: 'a.md', target: 'b', target_base: 'b', dst: 'b.md', embed: 0 },
+      { src: 'a.md', target: 'b', target_base: 'b', dst: 'b.md', embed: 1 },
+    ]);
+    await store.close();
+  });
+
+  // embeddings' unwritten columns are trailing rather than interior, and NULL is what the embed
+  // pass looks for to know a chunk still needs a vector.
+  it('a cold build appends embedding rows with scale and vector left NULL for the embed pass', async () => {
+    const baseDir = tmpTree();
+    writeNote(baseDir, 'a.md', { body: '# One\n\nSome prose.\n\n# Two\n\nMore prose.' });
+    const { store } = await openConfig({ store: 'duckdb', presets: { default: { include: ['**/*.md'] } }, queries: {}, baseDir, configPath: null, embed: { model: 'minishlab/potion-retrieval-32M', provider: 'static' } } as Parameters<typeof openConfig>[0]);
+    const rows = (await (await store.prepare('SELECT "path", chunk, start_line, end_line, scale, vector FROM embeddings WHERE "path" = ? ORDER BY chunk')).all('a.md')) as Array<Record<string, unknown>>;
+    assert.ok(rows.length > 0, 'expected at least one chunk row');
+    for (const [i, row] of rows.entries()) {
+      assert.equal(row.path, 'a.md');
+      assert.equal(row.chunk, i, 'chunk index must land in its own column');
+      assert.equal(row.scale, null);
+      assert.equal(row.vector, null);
+      assert.ok(typeof row.start_line === 'number' && row.start_line > 0, `start_line: ${String(row.start_line)}`);
+      assert.ok((row.end_line as number) >= (row.start_line as number), 'end_line must not be a shifted value');
+    }
+    await store.close();
+  });
+
+  // Every table but frontmatter is statically typed, so the append path must choose appendValue by
+  // the column's own type; appendVariant everywhere would make these read back as variants.
+  it('appended rows on statically typed tables keep their declared types', async () => {
+    const baseDir = tmpTree();
+    writeNote(baseDir, 'a.md', { frontmatter: { tags: ['x'] }, body: '# Heading\n\nProse.' });
+    const { store } = await duckdbTree(baseDir);
+    const section = (await (await store.prepare('SELECT idx, level, heading, start_line, end_line, tokens FROM sections WHERE "path" = ?')).get('a.md')) as Record<string, unknown>;
+    for (const key of ['idx', 'level', 'start_line', 'end_line', 'tokens']) assert.equal(typeof section[key], 'number', `${key}: ${typeof section[key]}`);
+    assert.equal(section.heading, 'Heading');
+    const types = (await (await store.prepare("SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'sections'")).all()) as Array<{ column_name: string; data_type: string }>;
+    for (const t of types) assert.notEqual(t.data_type, 'VARIANT', `sections.${t.column_name} must not be VARIANT`);
+    await store.close();
+  });
+
+  // The reason links.store does not delete-and-reinsert: a reparse must not reset dst, or every
+  // touch looks like an edge change. The added/not-added split has to preserve that.
+  it('a reparse upserts links and preserves the resolved dst, while a new path appends', async () => {
+    const baseDir = tmpTree();
+    writeNote(baseDir, 'a.md', { body: 'See [[b]].' });
+    writeNote(baseDir, 'b.md', { body: 'target' });
+    const first = await duckdbTree(baseDir);
+    await first.store.close();
+
+    writeNote(baseDir, 'a.md', { frontmatter: { touched: 1 }, body: 'See [[b]].' });
+    writeNote(baseDir, 'c.md', { body: 'See [[b]].' });
+    const second = await duckdbTree(baseDir);
+    const rows = (await (await second.store.prepare('SELECT src, target, dst FROM links ORDER BY src')).all()) as Array<Record<string, unknown>>;
+    assert.deepEqual(rows, [
+      { src: 'a.md', target: 'b', dst: 'b.md' },
+      { src: 'c.md', target: 'b', dst: 'b.md' },
+    ]);
+    await second.store.close();
+  });
+
   it('a reconcile with both a new and an existing path in one call routes each correctly (appender for the new path, upsert for the existing one), with no duplication', async () => {
     const baseDir = tmpTree();
     writeNote(baseDir, 'a.md', { frontmatter: { title: 'A1' } });

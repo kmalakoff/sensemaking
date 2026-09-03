@@ -1,3 +1,4 @@
+import { appendRows } from '../store/shared.ts';
 import { maskRegions } from './fences.ts';
 import type { Feature } from './types.ts';
 
@@ -76,7 +77,8 @@ export const tags: Feature = {
   async store(db, docs) {
     const rows: unknown[][] = [];
     for (const { path, extracted } of docs) for (const tag of extracted as string[]) rows.push([path, tag]);
-    if (rows.length === 0) return;
-    await db.runBatch('INSERT OR IGNORE INTO tags ("path", tag) VALUES (?, ?)', rows);
+    // OR IGNORE guards the same concurrent-reconcile race sections.ts documents; remove() cleared
+    // every touched path above, so a store with an append path needs no guard.
+    await appendRows(db, 'tags', ['path', 'tag'], 'INSERT OR IGNORE INTO tags ("path", tag) VALUES (?, ?)', rows);
   },
 };

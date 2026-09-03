@@ -3,6 +3,15 @@ import type { Connection } from './types.ts';
 // SQL and meta-table primitives both stores' open()/reconcile() need. Engine-neutral: both
 // stores' Connection satisfies the same async exec/prepare/runBatch shape (types.ts).
 
+// Rows that cannot conflict, at whatever speed this connection offers: the append path where the
+// store has one, else `conflictSql` bound the ordinary way. `conflictSql` stays the caller's own
+// guarded statement, so a store without appendRows behaves exactly as it did before.
+export async function appendRows(conn: Connection, table: string, columns: string[], conflictSql: string, rows: unknown[][]): Promise<void> {
+  if (rows.length === 0) return;
+  if (conn.appendRows) await conn.appendRows(table, columns, rows);
+  else await conn.runBatch(conflictSql, rows);
+}
+
 export function quoteIdent(name: string): string {
   return `"${name.split('"').join('""')}"`;
 }

@@ -2,6 +2,15 @@
 
 All notable changes to sensemaking are documented here.
 
+## [0.22.1] - 2026-09-04
+
+### Changed
+
+- duckdb cold builds are faster. Every bulk insert now goes through the engine's appender, not
+  only the frontmatter rows: link, section and tag tables, preset membership and the text index.
+  On the 6,566-note hub corpus a cold build went from 4,051 ms to 2,539 ms, with the link and
+  section writes falling from about 650 ms each to about 55. sqlite and turso are unchanged.
+
 ## [0.22.0] - 2026-09-04
 
 ### Added

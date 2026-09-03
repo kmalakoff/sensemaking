@@ -1,6 +1,7 @@
 import type { Block } from '../chunk/index.ts';
 import { estimateTokens, parse } from '../chunk/index.ts';
 import { countLines } from '../scan/frontmatter.ts';
+import { appendRows } from '../store/shared.ts';
 import type { Feature } from './types.ts';
 
 // sections(path, idx, level, heading, start_line, end_line, tokens): the heading outline,
@@ -28,6 +29,8 @@ function sectionsFromBlocks(blocks: Block[], raw: string, body: string): Section
   return found;
 }
 
+const SECTION_COLUMNS = ['path', 'idx', 'level', 'heading', 'start_line', 'end_line', 'tokens'];
+
 export const sections: Feature = {
   name: 'sections',
   async schema(db) {
@@ -46,10 +49,10 @@ export const sections: Feature = {
   async store(db, docs) {
     const rows: unknown[][] = [];
     for (const { path, extracted } of docs) (extracted as Section[]).forEach((s, idx) => rows.push([path, idx, s.level, s.heading, s.startLine, s.endLine, s.tokens]));
-    if (rows.length === 0) return;
     // DO NOTHING, not a bare INSERT: reconcile's added/touched split is decided before this
     // write's lock, so a path called "added" here can already have this row from a concurrent
-    // reconcile that committed first -- same file, same parse, same row.
-    await db.runBatch('INSERT INTO sections ("path", idx, level, heading, start_line, end_line, tokens) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT("path", idx) DO NOTHING', rows);
+    // reconcile that committed first -- same file, same parse, same row. A store with an append
+    // path has no second writer, and remove() cleared every touched path above, so it skips the guard.
+    await appendRows(db, 'sections', SECTION_COLUMNS, 'INSERT INTO sections ("path", idx, level, heading, start_line, end_line, tokens) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT("path", idx) DO NOTHING', rows);
   },
 };

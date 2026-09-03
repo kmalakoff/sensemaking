@@ -4,6 +4,7 @@ import { embedConfig } from '../config/index.ts';
 import { stashChunkText } from '../embed/handoff.ts';
 import { modelIdentity } from '../embed/identity.ts';
 import { countLines } from '../scan/frontmatter.ts';
+import { appendRows } from '../store/shared.ts';
 import type { Feature } from './types.ts';
 
 // int8 vectors with a per-vector scale, NULL vector = not yet embedded: reconcile writes dirty
@@ -56,7 +57,9 @@ export const embed: Feature = {
       );
     }
     if (rows.length === 0) return;
-    await db.runBatch('INSERT INTO embeddings ("path", chunk, start_line, end_line, scale, vector) VALUES (?, ?, ?, ?, NULL, NULL)', rows);
+    // scale and vector are written by the embed pass, not here, so they are not in the column list
+    // and take the table's own default on the append path.
+    await appendRows(db, 'embeddings', ['path', 'chunk', 'start_line', 'end_line'], 'INSERT INTO embeddings ("path", chunk, start_line, end_line, scale, vector) VALUES (?, ?, ?, ?, NULL, NULL)', rows);
     // The text extract() just computed, handed to the embed pass that follows in this same
     // process rather than re-derived from the file there (src/embed/handoff.ts).
     stashChunkText(db, texts);
