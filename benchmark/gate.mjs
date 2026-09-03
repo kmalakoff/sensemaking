@@ -7,7 +7,7 @@
 // One store alone, or one tree, is `node benchmark/steps/measure-tree.mjs . <corpus> --store <name>`:
 // the steps run standalone, so the gate needs no flag for it.
 //
-// A report is always written to benchmark/reports/<date>-release-gate.{json,md} at the end
+// A report is always written to benchmark/reports/<date>-<version>-release-gate.{json,md} at the end
 // (report.mjs), including for a blocked sitting: a report is a record of what happened. The
 // verdict decides whether BENCHMARKING.md's numbers of record move, not a flag or a human call.
 import { spawn, spawnSync } from 'node:child_process';
@@ -21,6 +21,7 @@ import { owedReasons } from './lib/gates.mjs';
 import { quietMachineCheck } from './lib/quiet-machine.mjs';
 import { assertBuilt } from './lib/require-build.mjs';
 import { treeFingerprint } from './lib/tree-fingerprint.mjs';
+import { reportBase } from './report.mjs';
 
 // Dynamic, and after the check: stages.mjs reaches the built package, and a static import here
 // would fail at resolution before any guard could run.
@@ -325,7 +326,7 @@ if (reportResult.status !== 0) {
   console.error('report.mjs failed to render this sitting; see above');
   process.exit(1);
 }
-const reportJson = JSON.parse(readFileSync(join(reportsDir, `${sitting.date}-release-gate.json`), 'utf8'));
+const reportJson = JSON.parse(readFileSync(join(reportsDir, `${reportBase(sitting.date, sitting.baseline_version)}.json`), 'utf8'));
 
 console.log(`\n${reportJson.verdict}`);
 if (reportJson.verdict === 'BLOCK') for (const reason of reportJson.verdict_reasons) console.error(`  ${reason}`);
@@ -334,7 +335,7 @@ console.log(reportJson.verdict === 'PASS' ? 'numbers of record: updated to point
 const noPrior = reportJson.classifications.filter((c) => c.verdict === 'no-prior').length;
 console.log(`compared: ${reportJson.classifications.length - noPrior} row(s) against a prior, ${noPrior} with no prior (an uncompared row is not a pass)`);
 console.log(`sitting: ${sittingDir}`);
-console.log(`report: ${join(reportsDir, `${sitting.date}-release-gate.md`)}`);
+console.log(`report: ${join(reportsDir, `${reportBase(sitting.date, sitting.baseline_version)}.md`)}`);
 console.log(`default store for this pipeline: ${DEFAULT_STORE}; offered: ${OFFERED.join(', ')}`);
 
 process.exit(reportJson.verdict === 'BLOCK' ? 1 : 0);

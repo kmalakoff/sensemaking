@@ -40,17 +40,21 @@ export const ROWS = [
   { key: 'version_canary_ms', label: '`--version` canary', kind: 'wall', band: PROXY, cross: PROXY_CROSS, record: true, source: 'no dedicated spread measurement yet; proxied off the cold-row starting band pending a real sitting' },
   { key: 'cold_embed_ms', label: 'embed cold build (crawl + first vector-participating `search`, one process)', kind: 'wall', band: PROXY, cross: PROXY_CROSS, record: false, source: 'combines cold_crawl_ms with a first embed call; proxied off the cold-row starting band pending a real sitting' },
   { key: 'warm_query_ms', label: 'warm query (`COUNT(*)`)', kind: 'wall', band: PROXY, cross: PROXY_CROSS, record: true, source: 'no dedicated spread measurement yet; proxied off the cold-row starting band pending a real sitting' },
+  // Computed, not measured: the CLI's warm query minus the in-process open of the same work is what
+  // an invocation pays before doing any (PLAN.md 3.11). kind 'total', so it reports and never gates.
+  { key: 'setup_ms', label: 'invocation setup (warm query minus in-process open)', kind: 'total', band: PROXY, cross: PROXY_CROSS, record: false, source: 'derived from warm_query_ms and inproc.open_nochange_ms, both proxy-banded; no spread of its own has been measured, so it reports and does not gate' },
   { key: 'bm25_search_ms', label: 'BM25 search (canonical join)', kind: 'wall', band: PROXY, cross: PROXY_CROSS, record: false, source: 'no dedicated spread measurement yet; proxied off the cold-row starting band pending a real sitting' },
   { key: 'find_ms', label: 'lexical `search` (BM25 + link fusion)', kind: 'wall', band: PROXY, cross: PROXY_CROSS, record: true, source: 'no dedicated spread measurement yet; proxied off the cold-row starting band pending a real sitting' },
+  { key: 'words_ms', label: 'words-only `search` (BM25, no link fusion)', kind: 'wall', band: PROXY, cross: PROXY_CROSS, record: false, source: 'no dedicated spread measurement yet; proxied off the cold-row starting band pending a real sitting' },
   { key: 'find_row_tokens', label: '`search` row size (json)', kind: 'tokens', record: true },
   { key: 'semantic_find_ms', label: 'semantic `search` (steady state)', kind: 'wall', band: PROXY, cross: PROXY_CROSS, record: true, source: 'no dedicated spread measurement yet; proxied off the cold-row starting band pending a real sitting' },
   { key: 'map_ms', label: '`map` (orient)', kind: 'wall', band: PROXY, cross: PROXY_CROSS, record: true, source: 'no dedicated spread measurement yet; proxied off the cold-row starting band pending a real sitting' },
   { key: 'map_tokens', label: '`map` token count', kind: 'tokens', record: true },
   { key: 'peek_ms', label: '`peek` largest note', kind: 'wall', band: PROXY, cross: PROXY_CROSS, record: true, source: 'no dedicated spread measurement yet; proxied off the cold-row starting band pending a real sitting' },
   { key: 'peek_tokens', label: '`peek` token count', kind: 'tokens', record: true },
+  { key: 'path_ms', label: '`path` (graph traversal)', kind: 'wall', band: PROXY, cross: PROXY_CROSS, record: false, source: 'no dedicated spread measurement yet; proxied off the cold-row starting band pending a real sitting' },
   { key: 'related_ms', label: '`related` (similar-but-unlinked)', kind: 'wall', band: PROXY, cross: PROXY_CROSS, record: false, source: 'no dedicated spread measurement yet; proxied off the cold-row starting band pending a real sitting' },
   { key: 'related_tokens', label: '`related` token count', kind: 'tokens', record: false },
-  { key: 'largest_note_tokens', label: 'largest note (tokens)', kind: 'tokens', record: false },
   // kind 'total': informational, never gates (see classify.mjs). A row that varies 73% on
   // identical code cannot detect anything smaller than 73%; as a gate it would only produce
   // false positives. Do not promote this back to 'wall' without a fresh spread measurement.
@@ -91,8 +95,9 @@ export const SAMPLE_KEYS = ['cold_crawl_ms', 'bulk_change_ms', 'bulk_watch_ms', 
 
 // Every top-level run.mjs field that is not a measured metric: identifying/context fields and
 // the median rows' companion sample arrays.
-export const RUN_META_KEYS = ['measure_version', 'tree', 'work_tree', 'copy_ms', 'store', 'notes', 'embed_supported', 'cold_embed_error', 'errors', 'bulk_files', 'inproc', 'cold_crawl_ms_samples', 'bulk_change_ms_samples', 'bulk_watch_ms_samples', 'warmed_bytes'];
+export const RUN_META_KEYS = ['measure_version', 'tree', 'work_tree', 'copy_ms', 'store', 'notes', 'largest_note_tokens', 'embed_supported', 'cold_embed_error', 'errors', 'bulk_files', 'inproc', 'cold_crawl_ms_samples', 'bulk_change_ms_samples', 'bulk_watch_ms_samples', 'warmed_bytes'];
 
-// Same, for the nested inproc object: its own sample array and the error string a broken build
-// reports instead of every timing.
-export const INPROC_META_KEYS = ['cold_build_ms_samples', 'error'];
+// Same, for the nested inproc object: its own sample array, the error string a broken build
+// reports instead of every timing, and the cold build's per-stage split. `stages` is diagnostic
+// structure, not a gated metric: no stage has a measured spread yet, so none of them gates.
+export const INPROC_META_KEYS = ['cold_build_ms_samples', 'stages', 'error'];

@@ -15,8 +15,9 @@ export function hasUnspacedRun(text: string): boolean {
   return HAS_RUN.test(text);
 }
 // Grapheme clusters, ECMA-402/UAX #29: base char plus its marks, ZWJ sequences, Hangul jamo.
-// Built once (construction cost amortizes) and used for both index and query splitting.
-const GRAPHEME_SEGMENTER = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
+// Built on first use and kept: construction is 6.6 ms, and a tree with no unspaced-script run
+// never segments at all, so no command pays it at module load.
+let graphemeSegmenter: Intl.Segmenter | undefined;
 // unicode61 drops Unicode punctuation as a separator. Some of it (。、「」) has Script_Extensions
 // into an unspaced script, so RUN keeps it -- a grapheme matching this becomes a split point.
 const PUNCTUATION = /\p{P}/u;
@@ -25,7 +26,8 @@ const PUNCTUATION = /\p{P}/u;
 const BARRIER = 'ꟷ';
 
 function graphemes(run: string): string[] {
-  return Array.from(GRAPHEME_SEGMENTER.segment(run), (s) => s.segment);
+  graphemeSegmenter ??= new Intl.Segmenter(undefined, { granularity: 'grapheme' });
+  return Array.from(graphemeSegmenter.segment(run), (s) => s.segment);
 }
 
 // A run's graphemes, cut into punctuation-free groups at every punctuation grapheme (dropped,

@@ -15,6 +15,7 @@ import { classifyFeatureToggles, isFeatureOnlyChange } from './feature-scope.ts'
 import { forcedPresetPaths, isPresetOnlyChange } from './preset-scope.ts';
 import { getMeta, setMeta } from './shared.ts';
 import { changedSignatureKeys, embedIdentityAdopted, signatureDiff } from './signature.ts';
+import type { Stages } from './stages.ts';
 import type { Connection, OpenDialect, Store } from './types.ts';
 
 // One open algorithm shared by every store, parameterised by a per-engine OpenDialect (types.ts).
@@ -28,6 +29,9 @@ export interface OpenResult {
   dbPath: string;
   parsed: number;
   warnings: string[];
+  // Per-stage wall time for this open's build pass (stages.ts), not for any narrow embed or
+  // feature invalidation that ran beside it -- on a cold build there is none, so it is the whole cost.
+  stages: Stages;
 }
 
 interface ConnectResult<Handle> {
@@ -37,6 +41,7 @@ interface ConnectResult<Handle> {
   dbPath: string;
   parsed: number;
   warnings: string[];
+  stages: Stages;
   // Closed already unless `keepBuilderOpen` was set: a one-shot open reconciles once and is done
   // with it, a watcher keeps calling build() on the same instance across its whole run.
   builder: Builder;
@@ -168,11 +173,11 @@ async function connectWithDialect<Handle>(cfg: ResolvedConfig, dialect: OpenDial
     const embedParsed = embedInvalidate ? (await builder.invalidate(embedInvalidate)).parsed : 0;
     const featureParsed = featureToggles ? (await builder.invalidateFeatures(featureToggles)).parsed : 0;
 
-    const { parsed, warnings } = await builder.build(forcedPaths);
+    const { parsed, warnings, stages } = await builder.build(forcedPaths);
     // A one-shot open is done reconciling for good; a watcher keeps `builder` alive across its run.
     if (!keepBuilderOpen) await builder.close();
 
-    return { handle, conn, cfg, dbPath, parsed: parsed + embedParsed + featureParsed, warnings, builder };
+    return { handle, conn, cfg, dbPath, parsed: parsed + embedParsed + featureParsed, warnings, stages, builder };
   } catch (err) {
     await builder.close();
     if (!closed) await dialect.close(handle);
@@ -183,20 +188,20 @@ async function connectWithDialect<Handle>(cfg: ResolvedConfig, dialect: OpenDial
 // A store's open(): connects (see connectWithDialect above), then wraps the resulting connection
 // in the Store interface. The builder's pool closes right after the initial build.
 export async function openWithDialect<Handle>(cfg: ResolvedConfig, dialect: OpenDialect<Handle>): Promise<OpenResult> {
-  const { handle, conn, cfg: resolvedCfg, dbPath, parsed, warnings } = await connectWithDialect(cfg, dialect, false);
+  const { handle, conn, cfg: resolvedCfg, dbPath, parsed, warnings, stages } = await connectWithDialect(cfg, dialect, false);
   const store = dialect.createStore(handle, conn, resolvedCfg);
   // reconcile ran before this object existed, so its chunk text is keyed by the connection.
   rekeyChunkText(conn, store);
-  return { store, cfg: resolvedCfg, dbPath, parsed, warnings };
+  return { store, cfg: resolvedCfg, dbPath, parsed, warnings, stages };
 }
 
 // Same connect+build as openWithDialect, but keeps the builder's pool alive and hands it back
 // alongside the store, for a caller (a watcher) that reconciles repeatedly on this connection.
 export async function openWithBuilder<Handle>(cfg: ResolvedConfig, dialect: OpenDialect<Handle>): Promise<OpenResult & { builder: Builder }> {
-  const { handle, conn, cfg: resolvedCfg, dbPath, parsed, warnings, builder } = await connectWithDialect(cfg, dialect, true);
+  const { handle, conn, cfg: resolvedCfg, dbPath, parsed, warnings, stages, builder } = await connectWithDialect(cfg, dialect, true);
   const store = dialect.createStore(handle, conn, resolvedCfg);
   rekeyChunkText(conn, store);
-  return { store, cfg: resolvedCfg, dbPath, parsed, warnings, builder };
+  return { store, cfg: resolvedCfg, dbPath, parsed, warnings, stages, builder };
 }
 
 export async function docCount(store: Store): Promise<number> {

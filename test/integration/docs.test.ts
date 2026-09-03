@@ -132,7 +132,7 @@ function fixtureSitting(dir: string, date: string, findRowTokens: [number, numbe
 describe('benchmark release-gate: numbers of record', () => {
   it('the tracked numbers-of-record table equals a fresh render of the newest release-gate JSON, where one exists', async () => {
     const reportsDir = join(packageRoot, 'benchmark', 'reports');
-    const jsonFiles = existsSync(reportsDir) ? readdirSync(reportsDir).filter((f) => /^\d{4}-\d{2}-\d{2}-release-gate\.json$/.test(f)) : [];
+    const jsonFiles = existsSync(reportsDir) ? readdirSync(reportsDir).filter((f) => /^\d{4}-\d{2}-\d{2}(?:-[\w.+-]+)?-release-gate\.json$/.test(f)) : [];
     if (jsonFiles.length === 0) return; // no generated report has landed yet (phase 4 migration, out of scope here)
     const newest = jsonFiles.sort().at(-1) as string;
     const { updateNumbersOfRecord, parseNumbersTable, NUMBERS_START: START, NUMBERS_END: END } = await import('../../benchmark/report.mjs');
@@ -184,7 +184,8 @@ describe('benchmark release-gate: owner override needs a reason', () => {
     for (const blank of ['', '   ', '\n']) {
       assert.throws(() => acceptRow('compare/find_row_tokens', blank, { reportsDir, benchmarkingMdPath: mdPath }), /needs a reason/, `a reason of ${JSON.stringify(blank)} must be refused`);
     }
-    const stillBlocked = JSON.parse(readFileSync(join(reportsDir, '2099-06-03-release-gate.json'), 'utf8')) as { verdict: string; accepted: Record<string, unknown> };
+    const { reportBase } = await import('../../benchmark/report.mjs');
+    const stillBlocked = JSON.parse(readFileSync(join(reportsDir, `${reportBase('2099-06-03', '9.9.9')}.json`), 'utf8')) as { verdict: string; accepted: Record<string, unknown> };
     assert.equal(stillBlocked.verdict, 'BLOCK', 'a refused override must leave the verdict alone');
     assert.deepEqual(stillBlocked.accepted, {}, 'a refused override must record nothing');
   });
@@ -230,7 +231,7 @@ describe('benchmark release-gate: owner override needs a reason', () => {
     );
     const jsonFiles = existsSync(reportsDir)
       ? readdirSync(reportsDir)
-          .filter((f) => /^\d{4}-\d{2}-\d{2}-release-gate\.json$/.test(f) && tracked.has(f))
+          .filter((f) => /^\d{4}-\d{2}-\d{2}(?:-[\w.+-]+)?-release-gate\.json$/.test(f) && tracked.has(f))
           .sort()
       : [];
     for (let i = 0; i < jsonFiles.length; i++) {
@@ -270,7 +271,7 @@ describe('benchmark release-gate: generated report re-render is idempotent', () 
 
   it('every generated release-gate md tracked in the tree is byte-identical to its regeneration', async () => {
     const reportsDir = join(packageRoot, 'benchmark', 'reports');
-    const jsonFiles = existsSync(reportsDir) ? readdirSync(reportsDir).filter((f) => /^\d{4}-\d{2}-\d{2}-release-gate\.json$/.test(f)) : [];
+    const jsonFiles = existsSync(reportsDir) ? readdirSync(reportsDir).filter((f) => /^\d{4}-\d{2}-\d{2}(?:-[\w.+-]+)?-release-gate\.json$/.test(f)) : [];
     if (jsonFiles.length === 0) return; // no generated report has landed yet
     const { buildReport, persist } = await import('../../benchmark/report.mjs');
     for (const file of jsonFiles) {

@@ -1,4 +1,4 @@
-// Renders benchmark/reports/<date>-release-gate.{json,md} from a sitting directory under
+// Renders benchmark/reports/<date>-<version>-release-gate.{json,md} from a sitting directory under
 // .tmp/sittings/. Recomputes classification from the sitting's own step JSONs and the newest
 // earlier release-gate JSON every time, so re-running this against the same sitting is
 // idempotent: same inputs, same output, byte for byte. Never re-measures anything.
@@ -29,6 +29,13 @@ export const BENCHMARKING_MD = join(ROOT, 'BENCHMARKING.md');
 export const NUMBERS_START = '<!-- numbers -->';
 export const NUMBERS_END = '<!-- /numbers -->';
 
+// A report is named for the release it gates, falling back to the package version the sitting
+// measured against until `--release` names it. Two sittings never share a name unless they gate the
+// same release, which is the fix-and-rerun case where replacing the report is the point.
+export function reportBase(date, version) {
+  return version ? `${date}-${version}-release-gate` : `${date}-release-gate`;
+}
+
 const readJson = (p) => (existsSync(p) ? JSON.parse(readFileSync(p, 'utf8')) : null);
 
 function newestSittingDir(sittingsDir = SITTINGS_DIR) {
@@ -45,7 +52,7 @@ function newestSittingDir(sittingsDir = SITTINGS_DIR) {
 export function newestReportPath(reportsDir = REPORTS_DIR) {
   const files = existsSync(reportsDir)
     ? readdirSync(reportsDir)
-        .filter((f) => /^\d{4}-\d{2}-\d{2}-release-gate\.json$/.test(f))
+        .filter((f) => /^\d{4}-\d{2}-\d{2}(-[\w.+-]+)?-release-gate\.json$/.test(f))
         .sort()
     : [];
   if (files.length === 0) throw new Error(`no report under ${reportsDir} to accept a row against; run node benchmark/gate.mjs first`);
@@ -134,6 +141,19 @@ function classifySitting(sittingDir, sitting, priorLookup) {
   return { classifications, steps, priorFrom, priorHarnessMismatch };
 }
 
+// notes and largest note size per measured context: properties of the corpus, not measurements of
+// sensemaking, so they sit in the report header rather than gating as timing rows.
+function corpusShape(steps) {
+  const shape = {};
+  for (const [id, step] of Object.entries(steps)) {
+    // compare.json wraps one run row per version; every other step's JSON is the row itself.
+    const row = step?.results ? step.results[step.versions?.[1]] : step;
+    if (typeof row?.notes !== 'number') continue;
+    shape[id === 'compare' ? 'hub' : id] = { notes: row.notes, largest_note_tokens: row.largest_note_tokens ?? null };
+  }
+  return shape;
+}
+
 const CONTEXT_SLUG = (context) => context.replace(/[-/]/g, '_');
 
 // The fixed context list, independent of what any one sitting measures. Frontmatter carries a key
@@ -159,6 +179,18 @@ export function recordFields(classifications) {
     }
   }
   return fields;
+}
+
+// The report this sitting already produced, if any: same date and same baseline. Named by release
+// version once known, so the name alone cannot find it.
+function existingReportFor(reportsDir, sitting) {
+  if (!existsSync(reportsDir)) return null;
+  for (const name of readdirSync(reportsDir)) {
+    if (!name.endsWith('-release-gate.json') || !name.startsWith(sitting.date)) continue;
+    const r = readJson(join(reportsDir, name));
+    if (r?.package_version === sitting.baseline_version) return r;
+  }
+  return null;
 }
 
 export function renderMarkdown(report) {
@@ -247,8 +279,9 @@ export function changelogEntry(version, changelogPath = join(ROOT, 'CHANGELOG.md
 
 export function buildReport(sittingDir, { reportsDir = REPORTS_DIR, releaseVersionOverride } = {}) {
   const sitting = JSON.parse(readFileSync(join(sittingDir, 'sitting.json'), 'utf8'));
-  const jsonPath = join(reportsDir, `${sitting.date}-release-gate.json`);
-  const existing = readJson(jsonPath);
+  // A sitting's own report, found by what identifies it rather than by its name: the name carries
+  // the release version, which this sitting does not know until --release supplies it.
+  const existing = existingReportFor(reportsDir, sitting);
   const accepted = existing?.accepted ?? {};
 
   const priorReports = findPriorReports(reportsDir, sitting.date);
@@ -273,6 +306,7 @@ export function buildReport(sittingDir, { reportsDir = REPORTS_DIR, releaseVersi
           .filter(Boolean)
       ),
     ],
+    corpus_shape: corpusShape(steps),
     // eval.mjs's own --model default; eval.mjs's --out JSON does not record the model name it used.
     embed_model: Object.values(steps).some((s) => s?.variants?.semantic) ? 'minishlab/potion-retrieval-32M' : null,
     verdict,
@@ -302,8 +336,9 @@ export function buildReport(sittingDir, { reportsDir = REPORTS_DIR, releaseVersi
 // point for both a re-render and an acceptance, so they cannot produce different shapes.
 export function persist(report, { reportsDir = REPORTS_DIR, benchmarkingMdPath = BENCHMARKING_MD } = {}) {
   mkdirSync(reportsDir, { recursive: true });
-  const jsonPath = join(reportsDir, `${report.date}-release-gate.json`);
-  const mdPath = join(reportsDir, `${report.date}-release-gate.md`);
+  const base = reportBase(report.date, report.release_version ?? report.package_version);
+  const jsonPath = join(reportsDir, `${base}.json`);
+  const mdPath = join(reportsDir, `${base}.md`);
   writeFileSync(jsonPath, `${JSON.stringify(report, null, 2)}\n`);
   const frontmatter = {
     date: report.date,
@@ -315,6 +350,7 @@ export function persist(report, { reportsDir = REPORTS_DIR, benchmarkingMdPath =
     machine: report.machine,
     node: report.node,
     corpora: report.corpora,
+    corpus_shape: report.corpus_shape,
     embed_model: report.embed_model,
     verdict: report.verdict,
     ...report.record,
@@ -345,7 +381,7 @@ export function updateNumbersOfRecord(report, benchmarkingMdPath = BENCHMARKING_
   const end = md.indexOf(NUMBERS_END);
   if (start < 0 || end < 0) return; // markers not present yet in this tree; nothing to update
   const rows = parseNumbersTable(md, start + NUMBERS_START.length, end);
-  const link = `[${report.date} release gate](benchmark/reports/${report.date}-release-gate.md)`;
+  const link = `[${report.date} release gate](benchmark/reports/${reportBase(report.date, report.release_version ?? report.package_version)}.md)`;
   for (const [key, value] of Object.entries(report.record)) {
     if (value === null || value === undefined) continue;
     rows.set(key, [String(value), link]);
@@ -404,7 +440,7 @@ async function main() {
   }
   const report = buildReport(sittingDir, { releaseVersionOverride });
   persist(report);
-  console.log(`wrote benchmark/reports/${report.date}-release-gate.md`);
+  console.log(`wrote benchmark/reports/${reportBase(report.date, report.release_version ?? report.package_version)}.md`);
   console.log(`verdict: ${report.verdict}`);
   console.log(report.verdict === 'PASS' ? 'numbers of record: updated' : 'numbers of record: left as they were (BLOCK)');
 }

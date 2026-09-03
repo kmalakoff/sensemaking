@@ -77,5 +77,6 @@ export type { OpenResult } from './open.ts';
 export { docCount } from './open.ts';
 export { getMeta, setMeta } from './shared.ts';
 export { DB_FILENAME, SCHEMA_VERSION } from './sqlite/open.ts';
+export type { Stages } from './stages.ts';
 export type { Capability, Connection, DocumentStore, LexicalHit, LexicalIndex, LexicalQueryOptions, RawStatement, RunResult, SqlSession, Statement, Store, VectorCandidate, VectorSimilar, VectorStore, VectorWriteRow } from './types.ts';
 export { CAPABILITY_NAMES } from './types.ts';

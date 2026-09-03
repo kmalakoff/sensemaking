@@ -11,6 +11,7 @@ import type { FeatureToggle } from './feature-scope.ts';
 import { NARROW_FEATURE_TABLE } from './feature-scope.ts';
 import { reconcile } from './reconcile.ts';
 import { getColumns } from './shared.ts';
+import type { Stages } from './stages.ts';
 import { withTransaction } from './transaction.ts';
 import type { Connection, ReconcileDialect } from './types.ts';
 
@@ -18,7 +19,7 @@ import type { Connection, ReconcileDialect } from './types.ts';
 // carry. A one-shot open calls build() once; a watcher calls it repeatedly on the same instance.
 export interface Builder {
   // forcedPaths (open.ts's preset-only narrow rebuild) applies to this call alone, not future ones.
-  build(forcedPaths?: ReadonlySet<string>): Promise<{ parsed: number; warnings: string[] }>;
+  build(forcedPaths?: ReadonlySet<string>): Promise<{ parsed: number; warnings: string[]; stages: Stages }>;
   // Narrow embed invalidation (open.ts, embed-scope.ts's classifyEmbedChange): 'model' nulls every
   // vector/scale in place; 'chunk' rebuilds every embedding row. Neither touches another table.
   invalidate(kind: EmbedChangeKind): Promise<{ parsed: number }>;
