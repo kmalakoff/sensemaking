@@ -2,11 +2,14 @@
 // Every point runs against a working copy, strictly serially -- a shared CPU swamps the signal. usage: node benchmark/tools/sweep.mjs [dimension ...] [--quick] [--out file]
 import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { appendFileSync, cpSync, mkdirSync, rmSync, statSync, utimesSync } from 'node:fs';
+import { appendFileSync, mkdirSync, statSync, utimesSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { parseArgs } from 'node:util';
+import { safeRmSync } from 'fs-remove-compat';
 import { syntheticPath } from '../lib/corpus.mjs';
 import { futureDate, median, medianAsync, timedCli, walkMd } from '../lib/measure.mjs';
+import { copyTree } from '../lib/work-tree.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const CLI = join(ROOT, 'bin', 'cli.js');
@@ -14,18 +17,14 @@ const WORK_ROOT = join(ROOT, '.tmp', 'sweep-work');
 
 const DIMENSION_NAMES = ['fields', 'headings', 'links', 'filesize', 'notes', 'bulk', 'probes', 'presets'];
 
-const argv = process.argv.slice(2);
-const QUICK = argv.includes('--quick');
-let OUT = join(ROOT, '.tmp', 'sweep-results.jsonl');
-const requested = [];
-for (let i = 0; i < argv.length; i++) {
-  if (argv[i] === '--quick') continue;
-  if (argv[i] === '--out') {
-    OUT = resolve(argv[++i]);
-    continue;
-  }
-  requested.push(argv[i]);
-}
+const {
+  values: { quick: QUICK, out: outArg },
+  positionals: requested,
+} = parseArgs({
+  options: { quick: { type: 'boolean', default: false }, out: { type: 'string' } },
+  allowPositionals: true,
+});
+const OUT = outArg ? resolve(outArg) : join(ROOT, '.tmp', 'sweep-results.jsonl');
 for (const d of requested) {
   if (!DIMENSION_NAMES.includes(d)) {
     console.error(`unknown dimension: ${d} (choices: ${DIMENSION_NAMES.join(', ')})`);
@@ -51,8 +50,7 @@ function record(dimension, params, metrics) {
 // Cached corpus stays pristine: every measurement runs against a throwaway copy.
 function workingCopy(tree) {
   const dir = join(WORK_ROOT, randomBytes(6).toString('hex'));
-  cpSync(tree, dir, { recursive: true });
-  rmSync(join(dir, '.sense'), { recursive: true, force: true });
+  copyTree(tree, dir);
   return dir;
 }
 
@@ -103,7 +101,7 @@ async function measurePoint(spec) {
       find_ms: findR.ms,
     };
   } finally {
-    rmSync(work, { recursive: true, force: true });
+    safeRmSync(work, { recursive: true, force: true });
   }
 }
 
@@ -168,7 +166,7 @@ async function columnLimitProbe(dimension) {
       const r = runCli(work, ['status']);
       result = { status: r.status, stdout: (r.stdout ?? '').trim().slice(0, 500), stderr: (r.stderr ?? '').trim().slice(0, 500) };
     } finally {
-      rmSync(work, { recursive: true, force: true });
+      safeRmSync(work, { recursive: true, force: true });
     }
     record(dimension, { distinctFields, notes: 100 }, result);
     rows.push({ distinctFields, ...result });
@@ -196,7 +194,7 @@ async function adversarialProbe() {
     const timedOut = r.signal !== null || (r.error && r.error.code === 'ETIMEDOUT');
     result = timedOut ? { ms, status: 'TIMEOUT', signal: r.signal } : { ms, status: r.status, stderr: (r.stderr ?? '').trim().slice(0, 500) };
   } finally {
-    rmSync(work, { recursive: true, force: true });
+    safeRmSync(work, { recursive: true, force: true });
   }
   record('probes', { adversarial: true, notes: spec.notes }, result);
   console.log(`  crawl: ${JSON.stringify(result)}`);
@@ -226,7 +224,7 @@ async function semanticProbe() {
       record('probes', { semantic: true, notes }, result);
       rows.push({ notes, ...result });
     } finally {
-      rmSync(work, { recursive: true, force: true });
+      safeRmSync(work, { recursive: true, force: true });
     }
   }
   console.log('\n| notes | warmup_ms | semantic_find_ms (median of 3) |');
@@ -273,7 +271,7 @@ async function presetsProbe() {
     console.log(`| \`search --preset raw\` (semantic off) | ${rawR.ms} |`);
     console.log(`| \`search --include a/**/*.md\` (ad hoc scope override) | ${includeR.ms} |`);
   } finally {
-    rmSync(work, { recursive: true, force: true });
+    safeRmSync(work, { recursive: true, force: true });
   }
 }
 
@@ -310,7 +308,7 @@ for (const dimension of dimensions) {
         bulk_open_ms = Math.round(Number(process.hrtime.bigint() - t) / 1e6);
         await store2.close();
       } finally {
-        rmSync(work, { recursive: true, force: true });
+        safeRmSync(work, { recursive: true, force: true });
       }
       record('bulk', { notes: spec.notes, touchFiles }, { bulk_open_ms });
       points.push({ param: touchFiles, metrics: { bulk_open_ms } });

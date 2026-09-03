@@ -1,61 +1,45 @@
-// Release benchmark gate: node benchmark/gate.mjs [--dry-run] [--continue] [--resume <dir>] [--allow-busy] [--paths a,b,c] [--store <name>] [--smoke]
+// Release benchmark gate: node benchmark/gate.mjs [--dry-run]
 // Runs the staged pipeline benchmark/lib/stages.mjs defines, gated by what
 // benchmark/lib/gates.mjs says the diff since the last tag owes. A stage that fails stops the
-// run; --continue runs every stage regardless, for diagnosis. --dry-run prints what the diff owes
-// and exits without measuring. --resume <dir> reruns a sitting, skipping completed steps.
-// --paths overrides the git diff with an explicit comma-separated path list, for exercising
-// --dry-run against a hypothetical diff without committing anything.
-// --store <name> runs one store's tree battery alone, whatever the diff owes: the diagnostic run
-// for "is duckdb still slow at 26k", not a release gate.
+// run. --dry-run prints what the diff owes and exits without measuring. A run resumes by default:
+// the sitting is keyed on the tree it measures, so delete that directory for a clean run.
+//
+// One store alone, or one tree, is `node benchmark/steps/measure-tree.mjs . <corpus> --store <name>`:
+// the steps run standalone, so the gate needs no flag for it.
 //
 // A report is always written to benchmark/reports/<date>-release-gate.{json,md} at the end
 // (report.mjs), including for a blocked sitting: a report is a record of what happened. The
 // verdict decides whether BENCHMARKING.md's numbers of record move, not a flag or a human call.
 import { spawn, spawnSync } from 'node:child_process';
-import { createWriteStream, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { arch, cpus, loadavg } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { parseArgs } from 'node:util';
+import { safeRmSync } from 'fs-remove-compat';
 import { owedReasons } from './lib/gates.mjs';
 import { quietMachineCheck } from './lib/quiet-machine.mjs';
-import { buildStages, DEFAULT_STORE, MINUTES, OFFERED, ROOT } from './lib/stages.mjs';
+import { assertBuilt } from './lib/require-build.mjs';
+import { treeFingerprint } from './lib/tree-fingerprint.mjs';
+
+// Dynamic, and after the check: stages.mjs reaches the built package, and a static import here
+// would fail at resolution before any guard could run.
+assertBuilt();
+const { buildStages, DEFAULT_STORE, MINUTES, OFFERED, ROOT } = await import('./lib/stages.mjs');
+
 import { classifyCompare } from './lib/verdict.mjs';
 
-const argv = process.argv.slice(2);
-const dryRun = argv.includes('--dry-run');
-const continueMode = argv.includes('--continue');
-const allowBusy = argv.includes('--allow-busy');
-// Smoke: the whole pipeline against small synthetic trees, so the gate itself can be exercised in
-// minutes. Its numbers are not a sitting and the report says so.
-const smoke = argv.includes('--smoke');
-const STAGES = buildStages({ smoke });
-const resumeIdx = argv.indexOf('--resume');
-const resumeDir = resumeIdx >= 0 ? resolve(argv[resumeIdx + 1]) : null;
-const pathsIdx = argv.indexOf('--paths');
-const pathsOverride = pathsIdx >= 0 ? argv[pathsIdx + 1].split(',').filter(Boolean) : null;
-const storeIdx = argv.indexOf('--store');
-const store = storeIdx >= 0 ? argv[storeIdx + 1] : null;
-if (store && !OFFERED.includes(store)) {
-  console.error(`unknown store "${store}"; schema.json offers: ${OFFERED.join(', ')}`);
-  process.exit(2);
-}
-
-// One store's tree battery: the battery-<store>-* steps, or for the default store the timing steps
-// that measure it under their own names. Selecting a store is itself the request, so these run
-// whatever the diff owes.
-const STORE_BATTERY = { [DEFAULT_STORE]: ['compare', 'scale-13k', 'scale-26k', 'stress'] };
-const inStoreBattery = (step) => (STORE_BATTERY[store] ?? []).includes(step.id) || step.id.startsWith(`battery-${store}-`);
-
+const {
+  values: { 'dry-run': dryRun },
+} = parseArgs({ options: { 'dry-run': { type: 'boolean', default: false } } });
+const STAGES = buildStages();
 function packageVersion() {
   return JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).version ?? null;
 }
 
-// Paths changed since the last tag: what decides which gates are owed. Uncommitted changes count
-// too (`git diff` against a ref includes the working tree), which is what "will this diff owe a
-// gate if it ships" needs to answer before anything is committed. --paths substitutes a
-// hypothetical path list, for testing --dry-run without a real diff.
+// Paths changed since the last tag, which decide what is owed. Uncommitted changes count, so the
+// question answered is "will this diff owe a gate if it ships".
 function changedPaths() {
-  if (pathsOverride) return { lastTag: '(--paths override)', paths: pathsOverride };
   const tag = spawnSync('git', ['describe', '--tags', '--abbrev=0'], { cwd: ROOT, encoding: 'utf8' });
   if (tag.status !== 0) throw new Error(`git describe --tags failed: ${tag.stderr}`);
   const lastTag = tag.stdout.trim();
@@ -64,7 +48,7 @@ function changedPaths() {
   return { lastTag, paths: diff.stdout.split('\n').filter(Boolean) };
 }
 
-const owedFor = (step, owed) => (store ? inStoreBattery(step) : step.owedBy === 'always' || owed.has(step.owedBy));
+const owedFor = (step, owed) => step.owedBy === 'always' || owed.has(step.owedBy);
 
 if (dryRun) {
   const { lastTag, paths } = changedPaths();
@@ -76,7 +60,7 @@ if (dryRun) {
     console.log(`\n${stage.label}`);
     for (const step of stage.steps) {
       const isOwed = owedFor(step, owed);
-      const tag = !isOwed ? 'not owed' : step.manual ? `OWED, manual (${step.manual.reason})` : 'OWED';
+      const tag = !isOwed ? 'not owed' : 'OWED';
       console.log(`  ${step.id}: ${tag}`);
     }
   }
@@ -102,10 +86,35 @@ async function readBuiltVersions() {
   return { chunkVersion, schemaVersion };
 }
 
+// A short hash of HEAD plus the content of every tracked and untracked change. It names the
+// sitting, so an edit starts a fresh one instead of resuming onto stale numbers.
+function currentTreeFingerprint() {
+  const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT, encoding: 'utf8' }).stdout ?? '';
+  const diff = spawnSync('git', ['diff', 'HEAD'], { cwd: ROOT, encoding: 'utf8', maxBuffer: 64e6 }).stdout ?? '';
+  const untrackedOut = spawnSync('git', ['ls-files', '--others', '--exclude-standard', '-z'], { cwd: ROOT, encoding: 'utf8', maxBuffer: 64e6 }).stdout ?? '';
+  const untracked = untrackedOut
+    .split('\0')
+    .filter(Boolean)
+    .map((path) => ({ path, bytes: readFileSync(join(ROOT, path)) }));
+  return treeFingerprint({ head, diff, untracked });
+}
+
 const today = new Date().toISOString().slice(0, 10);
 const baselineVersion = packageVersion();
-const sittingDir = resumeDir ?? join(ROOT, '.tmp', 'sittings', `${today}-${baselineVersion}`);
+// Resuming is the default and needs no flag: a run that crashed or was interrupted picks up where
+// it stopped. Delete the directory the run prints to start clean.
+const sittingDir = join(ROOT, '.tmp', 'sittings', `${today}-${baselineVersion}-${currentTreeFingerprint()}`);
+const reportsDir = join(ROOT, 'benchmark', 'reports');
+const resuming = existsSync(join(sittingDir, 'sitting.json'));
 mkdirSync(sittingDir, { recursive: true });
+
+// A step killed by its timeout cannot clean up after itself, and each abandoned copy is hundreds
+// of MB. Anything left here at the start of a run is from an earlier one.
+for (const name of readdirSync(join(ROOT, '.tmp')).filter((n) => n.startsWith('run-'))) {
+  safeRmSync(join(ROOT, '.tmp', name), { recursive: true, force: true });
+  console.log(`swept abandoned work tree .tmp/${name}`);
+}
+if (resuming) console.log(`resuming ${sittingDir}; steps already finished are skipped. Delete that directory for a clean run.`);
 
 const priorSitting = existsSync(join(sittingDir, 'sitting.json')) ? JSON.parse(readFileSync(join(sittingDir, 'sitting.json'), 'utf8')) : null;
 
@@ -123,8 +132,6 @@ const sitting = {
   schema_version: priorSitting?.schema_version ?? null,
   changed_paths: paths,
   owed: Object.fromEntries(reasons),
-  continue: continueMode,
-  allow_busy: allowBusy,
   steps: priorSitting?.steps ?? {},
   failed_stage_reasons: priorSitting?.failed_stage_reasons ?? [],
 };
@@ -137,20 +144,33 @@ writeSitting();
 // A step's own output JSON (written via --out) is the resume signal for a measured step; a
 // functional step with no --out (npm test, the live suite) resumes off its own last recorded status.
 function alreadyDone(step) {
-  if (!resumeDir) return false;
+  if (!resuming) return false;
   if (step.out) return existsSync(join(sittingDir, `${step.id}.json`));
   return sitting.steps[step.id]?.status === 'ok';
 }
 
-// Cold-crawl numbers move with filesystem cache state, so whichever column a step measures
-// first tends to read high: a same-sitting A/B is necessary but not sufficient on its own. This
-// records which order compare.mjs (or its --reverse) actually spawned, straight off the step's
-// own --out JSON, so a reader of sitting.json can see it without opening the step JSON too.
+// Whichever column is measured first reads high on cache-sensitive rows, so sitting.json records
+// the order compare.mjs actually spawned.
 function recordColumnOrder(stepId) {
   const outPath = join(sittingDir, `${stepId}.json`);
   if (!existsSync(outPath)) return;
   const out = JSON.parse(readFileSync(outPath, 'utf8'));
   if (Array.isArray(out.versions)) sitting.steps[stepId] = { ...sitting.steps[stepId], column_order: out.versions };
+}
+
+// The running step, so an interrupt takes its group down with the gate. Each step is its own
+// group (runStep), which is what lets a timeout reap grandchildren and what Ctrl-C would miss.
+let running = null;
+for (const signal of ['SIGINT', 'SIGTERM']) {
+  process.on(signal, () => {
+    if (running) {
+      console.error(`\n${signal}: stopping ${running.id} and its children`);
+      try {
+        process.kill(-running.pid, 'SIGKILL');
+      } catch {}
+    }
+    process.exit(130);
+  });
 }
 
 function runStep(step) {
@@ -160,7 +180,23 @@ function runStep(step) {
     const logPath = join(sittingDir, `${step.id}.log`);
     const logStream = createWriteStream(logPath, { flags: 'w' });
     const started = Date.now();
-    const child = spawn(argv2[0], argv2.slice(1), { cwd: ROOT, env: { ...process.env, ...(step.env ?? {}) }, timeout: step.timeout, killSignal: 'SIGKILL' });
+    // detached, so the timeout kills the group: Node's own `timeout` signals the direct child
+    // only, leaving the spawned CLI running and contending with everything measured after it.
+    const child = spawn(argv2[0], argv2.slice(1), { cwd: ROOT, env: { ...process.env, ...(step.env ?? {}) }, detached: true });
+    let timedOutByUs = false;
+    const killGroup = () => {
+      timedOutByUs = true;
+      // Negative pid targets the whole group. ESRCH means it already exited; nothing else to do.
+      try {
+        process.kill(-child.pid, 'SIGKILL');
+      } catch {
+        try {
+          child.kill('SIGKILL');
+        } catch {}
+      }
+    };
+    const timer = step.timeout ? setTimeout(killGroup, step.timeout) : null;
+    running = { id: step.id, pid: child.pid };
     child.stdout.on('data', (d) => {
       process.stdout.write(d);
       logStream.write(d);
@@ -170,37 +206,46 @@ function runStep(step) {
       logStream.write(d);
     });
     child.on('error', (err) => {
+      if (timer) clearTimeout(timer);
       logStream.end();
       settle({ status: 'failed', elapsedMs: Date.now() - started, detail: String(err.message ?? err) });
     });
     child.on('close', (code, signal) => {
+      if (timer) clearTimeout(timer);
+      running = null;
       logStream.end();
-      const elapsedMs = Date.now() - started;
-      const timedOut = signal === 'SIGKILL' && elapsedMs >= step.timeout;
-      settle({ status: timedOut ? 'timeout' : code === 0 ? 'ok' : 'failed', elapsedMs, code, signal });
+      // timedOutByUs, not an elapsed-time guess: the kill is ours, so the flag is exact and a
+      // step killed by anything else reads as failed rather than as a timeout.
+      let status = timedOutByUs ? 'timeout' : code === 0 ? 'ok' : 'failed';
+      let detail;
+      if (status === 'ok' && step.failOnOutput && step.failOnOutput.pattern.test(readFileSync(logPath, 'utf8'))) {
+        status = 'failed';
+        detail = step.failOnOutput.why;
+        console.error(`${step.id}: ${detail}`);
+      }
+      settle({ status, elapsedMs: Date.now() - started, code, signal, detail });
     });
   });
 }
 
 const blockedStages = [];
 for (const stage of STAGES) {
-  if (blockedStages.length > 0 && !continueMode) break;
+  if (blockedStages.length > 0) break;
   console.log(`\n===== ${stage.label} =====`);
 
-  const owedSteps = stage.steps.filter((step) => owedFor(step, owed) && !step.manual && !alreadyDone(step));
+  const owedSteps = stage.steps.filter((step) => owedFor(step, owed) && !alreadyDone(step));
   const needsQuiet = owedSteps.some((step) => step.quiet);
   if (needsQuiet) {
     const cores = cpus().length;
     const load1 = loadavg()[0];
-    const { blocked, message } = quietMachineCheck(load1, cores, allowBusy);
+    const { blocked, message } = quietMachineCheck(load1, cores);
     if (message) console.error(message);
     if (blocked) {
       console.error(`BLOCKED entering ${stage.label}`);
       for (const step of owedSteps) sitting.steps[step.id] = { id: step.id, argv: step.argv, owed: true, status: 'blocked', timeout: step.timeout, load_entry: load1 };
       blockedStages.push(stage.id);
       writeSitting();
-      if (!continueMode) break;
-      continue;
+      break;
     }
   }
 
@@ -209,11 +254,6 @@ for (const stage of STAGES) {
     const isOwed = owedFor(step, owed);
     if (!isOwed) {
       sitting.steps[step.id] = { id: step.id, argv: step.argv, owed: false, status: 'not-owed' };
-      continue;
-    }
-    if (step.manual) {
-      console.log(`${step.id}: owed, unmet (${step.manual.reason})`);
-      sitting.steps[step.id] = { id: step.id, argv: step.argv, owed: true, status: 'owed-unmet', reason: step.manual.reason };
       continue;
     }
     if (alreadyDone(step)) {
@@ -235,18 +275,15 @@ for (const stage of STAGES) {
     } else if (result.status !== 'ok') {
       console.error(`${step.id}: ${result.status} after ${(result.elapsedMs / 1000).toFixed(1)}s`);
       stageFailed = true;
-      if (!continueMode) break;
+      break;
     } else {
       console.log(`${step.id}: ok in ${(result.elapsedMs / 1000).toFixed(1)}s`);
     }
   }
   if (stageFailed) blockedStages.push(stage.id);
 
-  // The remedy for a suspicious same-sitting delta (2026-08-21 methodology, PLAN.md 3.10): when
-  // compare.mjs shows any wall/inproc row beyond its band, re-run it with columns and run order
-  // swapped and keep both readings. classifyCompare(..., null) here is a cheap "is anything
-  // beyond band yet" probe, not the final classification -- report.mjs does that once, reading
-  // both files back.
+  // A row beyond band is re-run with the column order swapped, keeping both readings. This
+  // classify pass is only a "is anything beyond band" probe; report.mjs does the real one.
   if (stage.id === 'baseline' && !stageFailed) {
     const compareJsonPath = join(sittingDir, 'compare.json');
     const reversedJsonPath = join(sittingDir, 'compare-reversed.json');
@@ -265,9 +302,7 @@ for (const stage of STAGES) {
     }
   }
 
-  // The build a validated stage 0 produces is what every later version-of-record read comes
-  // from; re-read after each stage rather than once, since --resume can re-enter here after a
-  // rebuild.
+  // Re-read after each stage rather than once, since --resume can re-enter here after a rebuild.
   if (!sitting.chunk_version) {
     const versions = await readBuiltVersions();
     sitting.chunk_version = versions.chunkVersion;
@@ -281,9 +316,8 @@ const unmetSteps = Object.values(sitting.steps).filter((s) => s.status === 'owed
 sitting.failed_stage_reasons = failedSteps.map((s) => `${s.id}: ${s.status}`);
 writeSitting();
 
-// Always written, even for a blocked sitting: a report is a record of what happened.
-// report.mjs classifies every row (reading this sitting's own step JSONs plus the newest prior
-// report) and decides PASS/BLOCK; release.mjs only relays what it decided.
+// Always written, a blocked sitting included: a report records what happened. report.mjs decides
+// PASS/BLOCK from the step JSONs and the priors; this file only relays it.
 const reportResult = spawnSync(process.execPath, [join(ROOT, 'benchmark', 'report.mjs'), '--sitting', sittingDir], { cwd: ROOT, encoding: 'utf8' });
 process.stdout.write(reportResult.stdout ?? '');
 process.stderr.write(reportResult.stderr ?? '');
@@ -291,14 +325,16 @@ if (reportResult.status !== 0) {
   console.error('report.mjs failed to render this sitting; see above');
   process.exit(1);
 }
-const reportJson = JSON.parse(readFileSync(join(ROOT, 'benchmark', 'reports', `${sitting.date}-release-gate.json`), 'utf8'));
+const reportJson = JSON.parse(readFileSync(join(reportsDir, `${sitting.date}-release-gate.json`), 'utf8'));
 
 console.log(`\n${reportJson.verdict}`);
 if (reportJson.verdict === 'BLOCK') for (const reason of reportJson.verdict_reasons) console.error(`  ${reason}`);
 if (unmetSteps.length > 0) console.log(`owed and unmet (not a block): ${unmetSteps.map((s) => s.id).join(', ')}`);
 console.log(reportJson.verdict === 'PASS' ? 'numbers of record: updated to point at this sitting' : 'numbers of record: left as they were (BLOCK)');
+const noPrior = reportJson.classifications.filter((c) => c.verdict === 'no-prior').length;
+console.log(`compared: ${reportJson.classifications.length - noPrior} row(s) against a prior, ${noPrior} with no prior (an uncompared row is not a pass)`);
 console.log(`sitting: ${sittingDir}`);
-console.log(`report: benchmark/reports/${sitting.date}-release-gate.md`);
+console.log(`report: ${join(reportsDir, `${sitting.date}-release-gate.md`)}`);
 console.log(`default store for this pipeline: ${DEFAULT_STORE}; offered: ${OFFERED.join(', ')}`);
 
 process.exit(reportJson.verdict === 'BLOCK' ? 1 : 0);

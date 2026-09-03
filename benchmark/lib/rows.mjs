@@ -43,11 +43,11 @@ export const ROWS = [
   { key: 'bm25_search_ms', label: 'BM25 search (canonical join)', kind: 'wall', band: PROXY, cross: PROXY_CROSS, record: false, source: 'no dedicated spread measurement yet; proxied off the cold-row starting band pending a real sitting' },
   { key: 'find_ms', label: 'lexical `search` (BM25 + link fusion)', kind: 'wall', band: PROXY, cross: PROXY_CROSS, record: true, source: 'no dedicated spread measurement yet; proxied off the cold-row starting band pending a real sitting' },
   { key: 'find_row_tokens', label: '`search` row size (json)', kind: 'tokens', record: true },
-  { key: 'semantic_find_ms', label: 'semantic `search` (steady state)', kind: 'wall', band: PROXY, cross: PROXY_CROSS, record: false, source: 'no dedicated spread measurement yet; proxied off the cold-row starting band pending a real sitting' },
-  { key: 'map_ms', label: '`map` (orient)', kind: 'wall', band: PROXY, cross: PROXY_CROSS, record: false, source: 'no dedicated spread measurement yet; proxied off the cold-row starting band pending a real sitting' },
-  { key: 'map_tokens', label: '`map` token count', kind: 'tokens', record: false },
-  { key: 'peek_ms', label: '`peek` largest note', kind: 'wall', band: PROXY, cross: PROXY_CROSS, record: false, source: 'no dedicated spread measurement yet; proxied off the cold-row starting band pending a real sitting' },
-  { key: 'peek_tokens', label: '`peek` token count', kind: 'tokens', record: false },
+  { key: 'semantic_find_ms', label: 'semantic `search` (steady state)', kind: 'wall', band: PROXY, cross: PROXY_CROSS, record: true, source: 'no dedicated spread measurement yet; proxied off the cold-row starting band pending a real sitting' },
+  { key: 'map_ms', label: '`map` (orient)', kind: 'wall', band: PROXY, cross: PROXY_CROSS, record: true, source: 'no dedicated spread measurement yet; proxied off the cold-row starting band pending a real sitting' },
+  { key: 'map_tokens', label: '`map` token count', kind: 'tokens', record: true },
+  { key: 'peek_ms', label: '`peek` largest note', kind: 'wall', band: PROXY, cross: PROXY_CROSS, record: true, source: 'no dedicated spread measurement yet; proxied off the cold-row starting band pending a real sitting' },
+  { key: 'peek_tokens', label: '`peek` token count', kind: 'tokens', record: true },
   { key: 'related_ms', label: '`related` (similar-but-unlinked)', kind: 'wall', band: PROXY, cross: PROXY_CROSS, record: false, source: 'no dedicated spread measurement yet; proxied off the cold-row starting band pending a real sitting' },
   { key: 'related_tokens', label: '`related` token count', kind: 'tokens', record: false },
   { key: 'largest_note_tokens', label: 'largest note (tokens)', kind: 'tokens', record: false },
@@ -91,7 +91,7 @@ export const SAMPLE_KEYS = ['cold_crawl_ms', 'bulk_change_ms', 'bulk_watch_ms', 
 
 // Every top-level run.mjs field that is not a measured metric: identifying/context fields and
 // the median rows' companion sample arrays.
-export const RUN_META_KEYS = ['tree', 'work_tree', 'copy_ms', 'store', 'notes', 'embed_supported', 'cold_embed_error', 'bulk_files', 'inproc', 'cold_crawl_ms_samples', 'bulk_change_ms_samples', 'bulk_watch_ms_samples', 'warmed_bytes'];
+export const RUN_META_KEYS = ['measure_version', 'tree', 'work_tree', 'copy_ms', 'store', 'notes', 'embed_supported', 'cold_embed_error', 'errors', 'bulk_files', 'inproc', 'cold_crawl_ms_samples', 'bulk_change_ms_samples', 'bulk_watch_ms_samples', 'warmed_bytes'];
 
 // Same, for the nested inproc object: its own sample array and the error string a broken build
 // reports instead of every timing.

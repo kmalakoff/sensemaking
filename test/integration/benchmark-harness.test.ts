@@ -6,7 +6,8 @@ import { classify } from '../../benchmark/lib/classify.mjs';
 import { DIFF_MAP_PATHS } from '../../benchmark/lib/gates.mjs';
 import { warmFileCache } from '../../benchmark/lib/measure.mjs';
 import { INPROC_META_KEYS, ROW_BY_KEY, RUN_META_KEYS, RUN_METRIC_KEYS, rowValue } from '../../benchmark/lib/rows.mjs';
-import { classifyCompare, classifyCrossGroup, classifyEval } from '../../benchmark/lib/verdict.mjs';
+import { treeFingerprint } from '../../benchmark/lib/tree-fingerprint.mjs';
+import { aggregateVerdict, classifyCompare, classifyCrossGroup, classifyEval, priorStepLookup } from '../../benchmark/lib/verdict.mjs';
 import { gate } from '../lib/gate.ts';
 import { packageRoot, scratchDir } from '../lib/scratch.ts';
 
@@ -32,6 +33,27 @@ describe('classify: band edges', () => {
   it('no prior recorded is no-prior, not a block', () => {
     const c = classify(WALL_ROW, null, 100);
     assert.equal(c.verdict, 'no-prior');
+  });
+});
+
+describe('treeFingerprint: hashes content, not filenames or status letters', () => {
+  const untracked = (path: string, text: string) => [{ path, bytes: Buffer.from(text) }];
+
+  it('the same head with two different diffs produces two different keys', () => {
+    const a = treeFingerprint({ head: 'abc', diff: 'diff a', untracked: [] });
+    const b = treeFingerprint({ head: 'abc', diff: 'diff b', untracked: [] });
+    assert.notEqual(a, b);
+  });
+
+  it('identical inputs produce the same key twice', () => {
+    const inputs = { head: 'abc', diff: 'diff a', untracked: untracked('x.md', 'hello') };
+    assert.equal(treeFingerprint(inputs), treeFingerprint(inputs));
+  });
+
+  it('an untracked file whose bytes change produces a different key', () => {
+    const a = treeFingerprint({ head: 'abc', diff: '', untracked: untracked('x.md', 'hello') });
+    const b = treeFingerprint({ head: 'abc', diff: '', untracked: untracked('x.md', 'goodbye') });
+    assert.notEqual(a, b);
   });
 });
 
@@ -151,6 +173,56 @@ describe('classifyCompare: same-sitting compare.mjs JSON', () => {
   });
 });
 
+describe('classifyCompare / classifyCrossGroup: a failed command blocks instead of passing silently', () => {
+  it('a null current with an errors entry produces a failed classification, and aggregateVerdict blocks with it first', () => {
+    const compareJson = {
+      versions: ['0.1.0', 'local'],
+      results: {
+        '0.1.0': { map_ms: 80 },
+        local: { map_ms: null, errors: { map_ms: 'exit 1: boom' } },
+      },
+    };
+    const out = classifyCompare(compareJson, null);
+    const row = out.find((c) => c.key === 'map_ms');
+    assert.equal(row?.verdict, 'failed');
+    assert.match(row?.reason ?? '', /boom/);
+
+    const { verdict, reasons } = aggregateVerdict(out, []);
+    assert.equal(verdict, 'BLOCK');
+    assert.equal(reasons[0], row?.reason);
+  });
+
+  it('a null current with no errors entry is skipped, unchanged behaviour', () => {
+    const compareJson = {
+      versions: ['0.1.0', 'local'],
+      results: {
+        '0.1.0': { map_ms: 80 },
+        local: { map_ms: null },
+      },
+    };
+    const out = classifyCompare(compareJson, null);
+    assert.equal(
+      out.find((c) => c.key === 'map_ms'),
+      undefined
+    );
+  });
+
+  it('classifyCrossGroup: a null current with an errors entry on that step is failed', () => {
+    const out = classifyCrossGroup({ stress: { map_ms: null, errors: { map_ms: 'exit 2: kaboom' } } }, { stress: { map_ms: 80 } });
+    const row = out.find((c) => c.key === 'map_ms');
+    assert.equal(row?.verdict, 'failed');
+    assert.match(row?.reason ?? '', /kaboom/);
+  });
+
+  it('classifyCrossGroup: a null current with no errors entry is skipped', () => {
+    const out = classifyCrossGroup({ stress: { map_ms: null } }, { stress: { map_ms: 80 } });
+    assert.equal(
+      out.find((c) => c.key === 'map_ms'),
+      undefined
+    );
+  });
+});
+
 describe('diff map: every path exists in the tree', () => {
   it('every prefix or file the diff map names is a real path under this tree', () => {
     for (const p of DIFF_MAP_PATHS) {
@@ -174,5 +246,120 @@ describe('catalog / run.mjs key agreement', () => {
     assert.deepEqual(flattened, [...RUN_METRIC_KEYS].sort());
     // rowValue reaches every one of them, dotted paths included.
     for (const key of RUN_METRIC_KEYS) assert.notEqual(rowValue(row, key), undefined, `rowValue could not reach ${key}`);
+  });
+});
+
+describe('prior resolution: per step, never per report', () => {
+  // The defect this guards: one prior report for the whole run means a sitting that did not run a
+  // step blinds the next sitting that does, and every row of that step reads no-prior, which passes.
+  const metricRow = (n: number) => ({
+    cold_crawl_ms: n,
+    version_canary_ms: 20,
+    warm_query_ms: 50,
+    bm25_search_ms: 50,
+    find_ms: 60,
+    find_row_tokens: 71,
+    cold_embed_ms: 200,
+    semantic_find_ms: 70,
+    map_ms: 80,
+    map_tokens: 496,
+    peek_ms: 90,
+    peek_tokens: 581,
+    related_ms: 100,
+    related_tokens: 50,
+    largest_note_tokens: 1000,
+    bulk_change_ms: 500,
+    bulk_watch_ms: 150,
+    inproc: { cold_build_ms: n * 2, open_nochange_ms: 35, update_1_file_ms: 40, update_10_files_ms: 45 },
+  });
+
+  it('a step finds its prior in an older report when the newest report never ran it', async () => {
+    const reportsDir = scratchDir('prior-per-step-reports');
+    const sitting = scratchDir('prior-per-step-sitting');
+    const gateReport = (date: string, steps: Record<string, unknown>) => writeFileSync(join(reportsDir, `${date}-release-gate.json`), JSON.stringify({ date, verdict: 'PASS', generated: true, classifications: [], accepted: {}, steps }));
+    gateReport('2099-01-01', { stress: metricRow(100) });
+    gateReport('2099-01-02', {}); // a docs-only sitting: ran no measured step
+    writeFileSync(join(sitting, 'stress.json'), JSON.stringify(metricRow(101)));
+    writeFileSync(join(sitting, 'sitting.json'), JSON.stringify({ date: '2099-01-03', baseline_version: '9.9.9', last_tag: 'v9.9.8', machine: { cpu_model: 'Fixture' }, node: 'v99', changed_paths: ['src/x.ts'], owed: { baseline: ['src/x.ts'] }, steps: {}, failed_stage_reasons: [] }));
+
+    const { buildReport } = await import('../../benchmark/report.mjs');
+    const report = buildReport(sitting, { reportsDir });
+    const stress = report.classifications.filter((c: { context: string }) => c.context === 'stress');
+    assert.ok(stress.length > 0, 'the stress step must produce classifications');
+    assert.deepEqual(
+      stress.filter((c: { verdict: string }) => c.verdict === 'no-prior').map((c: { key: string }) => c.key),
+      [],
+      'every stress row must find its prior in the older report, across the docs-only sitting between'
+    );
+    assert.equal((report.prior_from as Record<string, string>).stress, '2099-01-01-release-gate.json');
+  });
+
+  it('a step no earlier report ever ran is a real no-prior', async () => {
+    const reportsDir = scratchDir('prior-none-reports');
+    const sitting = scratchDir('prior-none-sitting');
+    writeFileSync(join(reportsDir, '2099-01-01-release-gate.json'), JSON.stringify({ date: '2099-01-01', verdict: 'PASS', generated: true, classifications: [], accepted: {}, steps: {} }));
+    writeFileSync(join(sitting, 'stress.json'), JSON.stringify(metricRow(101)));
+    writeFileSync(join(sitting, 'sitting.json'), JSON.stringify({ date: '2099-01-03', baseline_version: '9.9.9', last_tag: 'v9.9.8', machine: { cpu_model: 'Fixture' }, node: 'v99', changed_paths: [], owed: {}, steps: {}, failed_stage_reasons: [] }));
+
+    const { buildReport } = await import('../../benchmark/report.mjs');
+    const report = buildReport(sitting, { reportsDir });
+    const stress = report.classifications.filter((c: { context: string }) => c.context === 'stress');
+    assert.ok(
+      stress.every((c: { verdict: string }) => c.verdict === 'no-prior'),
+      'with no earlier report carrying the step, every row is a real no-prior'
+    );
+    assert.equal((report.prior_from as Record<string, string>).stress, undefined);
+  });
+});
+
+describe('priorStepLookup: measure_version, the absent-stamp trap and a real mismatch', () => {
+  const metricRow = (n: number) => ({
+    cold_crawl_ms: n,
+    version_canary_ms: 20,
+    warm_query_ms: 50,
+    bm25_search_ms: 50,
+    find_ms: 60,
+    find_row_tokens: 71,
+    cold_embed_ms: 200,
+    semantic_find_ms: 70,
+    map_ms: 80,
+    map_tokens: 496,
+    peek_ms: 90,
+    peek_tokens: 581,
+    related_ms: 100,
+    related_tokens: 50,
+    largest_note_tokens: 1000,
+    bulk_change_ms: 500,
+    bulk_watch_ms: 150,
+    inproc: { cold_build_ms: n * 2, open_nochange_ms: 35, update_1_file_ms: 40, update_10_files_ms: 45 },
+  });
+
+  it('an older report whose step has no measure_version resolves as a prior against current m2 (must NOT be no-prior)', () => {
+    const priorReports = [{ name: 'old.json', report: { steps: { stress: { cold_crawl_ms: 100 } } } }];
+    const hit = priorStepLookup(priorReports, 'm2')('stress');
+    assert.deepEqual(hit, { step: { cold_crawl_ms: 100 }, from: 'old.json' });
+  });
+
+  it('a prior stamped m1 against current m2 resolves to no-prior, naming both versions', () => {
+    const priorReports = [{ name: 'old.json', report: { steps: { stress: { cold_crawl_ms: 100, measure_version: 'm1' } } } }];
+    const hit = priorStepLookup(priorReports, 'm2')('stress');
+    assert.deepEqual(hit, { step: null, from: 'old.json', mismatch: { prior: 'm1', current: 'm2' } });
+  });
+
+  it('fixture: a report-wide m1/m2 mismatch classifies every row no-prior and records prior_harness_mismatch', async () => {
+    const reportsDir = scratchDir('measure-version-mismatch-reports');
+    const sitting = scratchDir('measure-version-mismatch-sitting');
+    writeFileSync(join(reportsDir, '2099-01-01-release-gate.json'), JSON.stringify({ date: '2099-01-01', verdict: 'PASS', generated: true, classifications: [], accepted: {}, steps: { stress: { ...metricRow(100), measure_version: 'm1' } } }));
+    writeFileSync(join(sitting, 'stress.json'), JSON.stringify(metricRow(101)));
+    writeFileSync(join(sitting, 'sitting.json'), JSON.stringify({ date: '2099-01-03', baseline_version: '9.9.9', last_tag: 'v9.9.8', machine: { cpu_model: 'Fixture' }, node: 'v99', changed_paths: [], owed: {}, steps: {}, failed_stage_reasons: [] }));
+
+    const { buildReport } = await import('../../benchmark/report.mjs');
+    const report = buildReport(sitting, { reportsDir });
+    const stress = report.classifications.filter((c: { context: string }) => c.context === 'stress');
+    assert.ok(
+      stress.every((c: { verdict: string }) => c.verdict === 'no-prior'),
+      'a real harness-version mismatch must classify every row no-prior'
+    );
+    assert.deepEqual((report.prior_harness_mismatch as Record<string, unknown>).stress, { prior: 'm1', current: 'm2' });
   });
 });

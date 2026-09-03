@@ -8,9 +8,10 @@
 //   moved     beyond band with no reversing evidence, or a token/quality change the diff never owed.
 //   contract  a tokens-kind row whose value changed at all.
 //   fell      a quality-kind row that got worse.
+//   failed    the measuring command exited nonzero on the working tree; carries the stderr line.
 //   no-prior  nothing to compare against; never blocks.
-// moved, contract and fell are BLOCK reasons; flat, noise and no-prior never block.
-export const BLOCK_VERDICTS = new Set(['moved', 'contract', 'fell']);
+// moved, contract, fell and failed are BLOCK reasons; flat, noise and no-prior never block.
+export const BLOCK_VERDICTS = new Set(['moved', 'contract', 'fell', 'failed']);
 
 const pct = (delta) => `${(delta * 100).toFixed(1)}%`;
 
@@ -40,9 +41,8 @@ export function classify(row, prior, current, extra = {}) {
 
   if (row.kind === 'total') return { verdict: 'flat', reason: null };
 
-  // wall / inproc. A reason states only what was measured -- label, both values, the band
-  // exceeded, and whether the reversed re-run agreed -- and never names or guesses a cause: a
-  // wall-clock delta localizes a cost, it does not identify the mechanism behind it.
+  // wall / inproc. A reason states what was measured (label, both values, band, whether the
+  // reversed re-run agreed) and never a cause: a wall-clock delta localizes, it does not explain.
   const band = useCross ? row.cross : row.band;
   const delta = (current - prior) / prior;
   if (Math.abs(delta) <= band) return { verdict: 'flat', reason: null };

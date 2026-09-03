@@ -11,11 +11,11 @@ Subagents dispatched during a release are spawned with `model: sonnet`. Reviews 
    npm run benchmark -- --dry-run # what it would run, without measuring
    ```
 
-   Stages run in order and a failing one stops the run: static checks, then the functional suites, then the hub baseline, then scale and stress, then retrieval quality. A broken build is never benchmarked, and a basic regression is not paid for at 26k. Run it on a machine that is otherwise idle; it refuses to start a timing stage when the one-minute load is above half the core count, and `--allow-busy` overrides that while saying so in the output.
+   Stages run in order and a failing one stops the run: static checks, then the functional suites, then the hub baseline, then scale and stress, then retrieval quality. A broken build is never benchmarked, and a basic regression is not paid for at 26k. Run it on a machine that is otherwise idle: it refuses to start a timing stage when the one-minute load is above half the core count, and there is no override. Stop whatever else is running and run the gate again; the sitting resumes where it stopped, so a refusal costs nothing.
 
    **The diff picks the gates, not the person running it.** `benchmark/lib/gates.mjs` maps changed paths to the gates they owe: a change under `src/embed/` owes the live endpoint suite and the fever eval, a change under `src/chunk/` owes the Obsidian parity gate, a docs-only change owes the tests and nothing else. A gate the map owes cannot be skipped by a flag. This exists because the fever eval was skipped by every sitting from 0.6.0 until something forced it.
 
-   Two gates cannot run themselves and are reported as owed and unmet rather than skipped quietly. The Obsidian parity gate needs Obsidian running with the pinned corpus opened as a vault, and `store-dump`'s A/B needs a checkout and build of the last tag. Run those by hand when the gate says they are owed; [BENCHMARKING.md](BENCHMARKING.md) has both commands.
+   The gate runs every owed gate itself, the Obsidian parity check and the `store-dump` A/B included: the parity step opens the vault named by `SENSE_TEST_OBSIDIAN_VAULT`, and the A/B captures the last release from the npm install `compare-versions` already caches, so nothing is checked out or built twice. A step whose prerequisite is genuinely absent on the machine is reported owed-and-unmet rather than skipped quietly.
 
    `test/integration/live.test.ts` is the part CI cannot run: it talks to real endpoints, one gate variable per [INTEGRATIONS.md](INTEGRATIONS.md) row, read from `.env.test` (gitignored). The gate runs it when the diff owes it, and in that mode a gate this machine owes and lacks fails outright, naming the fix, rather than skipping silently.
 
@@ -64,7 +64,13 @@ The mechanical facts are tested in `test/integration/docs.test.ts`; the rest is 
 
 5. Commit steps 1-4, as one commit, or a few when the diff separates naturally (the code change, the benchmark tables). A release is not a trail of incremental work-in-progress commits; if the work accumulated as one, squash before the bump. Messages are short and factual, no Co-Authored-By trailer. Never start a pre-bump subject with the version number: the bump commit is a bare version number, so a subject leading with one reads as the release having already happened. Name the work and carry the version inside it, `Benchmarking for 0.19.2 release: full battery on all three stores`.
 
-6. Maintainer picks the version, then: `npm version <chosen>` → `npm publish` → `git push --follow-tags`. Confirm the tag reached the remote (`git ls-remote --tags origin`): a skipped push leaves a version on npm with no commit or tag behind it, and nothing downstream notices.
+6. Maintainer picks the version. Stamp it on the sitting's report first, which re-renders from the same data and measures nothing:
+
+   ```bash
+   node benchmark/report.mjs --release <chosen>
+   ```
+
+   Then: `npm version <chosen>` → `npm publish` → `git push --follow-tags`. Confirm the tag reached the remote (`git ls-remote --tags origin`): a skipped push leaves a version on npm with no commit or tag behind it, and nothing downstream notices.
 
 Run the three as separate commands, never chained with `&&`: a chain publishes with no point to stop and read what is about to ship.
 

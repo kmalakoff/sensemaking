@@ -3,16 +3,18 @@
 // links, unresolved md-intent links, and block extents. Requires Obsidian running with the vault open, the `obsidian` CLI on PATH, and `npm run build` first (block extents import the built dist/esm, not src/); the vault itself is never written to, only copied to a temp dir that's removed on exit.
 
 import { execFileSync, spawnSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { parseArgs } from 'node:util';
+import { safeRmSync } from 'fs-remove-compat';
 import { writeOut } from '../lib/out.mjs';
 
-const argv = process.argv.slice(2);
-const outIdx = argv.indexOf('--out');
-const outArg = outIdx >= 0 ? argv[outIdx + 1] : null;
 // One positional is the vault path; two are name then path. The name defaults to .env.test.
-const positionals = outIdx >= 0 ? argv.filter((_a, i) => i !== outIdx && i !== outIdx + 1) : argv;
+const {
+  values: { out: outArg },
+  positionals,
+} = parseArgs({ options: { out: { type: 'string' } }, allowPositionals: true });
 const [vaultArg, vaultPath] = positionals.length > 1 ? positionals : [undefined, positionals[0]];
 if (!vaultPath) {
   console.error('usage: node benchmark/steps/oracle.mjs [vault-name] <vault-path> [--out <file>]; the name defaults to SENSE_TEST_OBSIDIAN_VAULT');
@@ -495,5 +497,5 @@ try {
   });
   process.exit(parity ? 0 : 1);
 } finally {
-  rmSync(work, { recursive: true, force: true });
+  safeRmSync(work, { recursive: true, force: true });
 }

@@ -15,11 +15,13 @@
 // exercising this module never writes into the tracked benchmark/reports/ or BENCHMARKING.md.
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { parseArgs } from 'node:util';
 import { stringify } from 'yaml';
+import { MEASURE_VERSION } from './lib/measure.mjs';
 import { mdTable } from './lib/render.mjs';
 import { ROWS } from './lib/rows.mjs';
 import { DEFAULT_STORE, OFFERED, ROOT } from './lib/stages.mjs';
-import { aggregateVerdict, classifyCompare, classifyCrossGroup, classifyEval, findPriorReport } from './lib/verdict.mjs';
+import { aggregateVerdict, classifyCompare, classifyCrossGroup, classifyEval, findPriorReports, priorStepLookup } from './lib/verdict.mjs';
 
 export const REPORTS_DIR = join(ROOT, 'benchmark', 'reports');
 export const SITTINGS_DIR = join(ROOT, '.tmp', 'sittings');
@@ -50,11 +52,23 @@ export function newestReportPath(reportsDir = REPORTS_DIR) {
   return join(reportsDir, files[files.length - 1]);
 }
 
-// Every step JSON this sitting could have produced, classified into the compare-stage
-// same-sitting table, the hub/13k/26k consistent-growth group (default store), a lone group per
-// stress and per store battery, and one quality classification per eval corpus.
-function classifySitting(sittingDir, sitting, priorReport) {
-  const priorSteps = priorReport?.steps ?? {};
+// Every step JSON this sitting could have produced, grouped into the same-sitting compare table,
+// the hub/13k/26k growth group, a lone group per stress and per battery, and one per eval corpus.
+function classifySitting(sittingDir, sitting, priorLookup) {
+  // priorFrom records which report supplied each step's prior, for the run summary.
+  const priorFrom = {};
+  const priorHarnessMismatch = {};
+  const priorStep = (id) => {
+    const hit = priorLookup(id);
+    if (!hit) return null;
+    if (hit.mismatch) {
+      priorFrom[id] = `${hit.from} (harness ${hit.mismatch.prior}, current ${hit.mismatch.current}; not compared)`;
+      priorHarnessMismatch[id] = hit.mismatch;
+      return null;
+    }
+    priorFrom[id] = hit.from;
+    return hit.step;
+  };
   const loadStep = (id) => readJson(join(sittingDir, `${id}.json`));
 
   const compareJson = loadStep('compare');
@@ -76,14 +90,14 @@ function classifySitting(sittingDir, sitting, priorReport) {
     }
   }
   if (Object.keys(scaleGroup).length > 0) {
-    const priorScaleGroup = { hub: priorSteps.compare?.results?.local, 'scale-13k': priorSteps['scale-13k'], 'scale-26k': priorSteps['scale-26k'] };
+    const priorScaleGroup = { hub: priorStep('compare')?.results?.local, 'scale-13k': priorStep('scale-13k'), 'scale-26k': priorStep('scale-26k') };
     classifications.push(...classifyCrossGroup(scaleGroup, priorScaleGroup));
   }
 
   const stressJson = loadStep('stress');
   if (stressJson) {
     steps.stress = stressJson;
-    classifications.push(...classifyCrossGroup({ stress: stressJson }, { stress: priorSteps.stress }));
+    classifications.push(...classifyCrossGroup({ stress: stressJson }, { stress: priorStep('stress') }));
   }
 
   for (const store of OFFERED.filter((s) => s !== DEFAULT_STORE)) {
@@ -97,14 +111,14 @@ function classifySitting(sittingDir, sitting, priorReport) {
       }
     }
     if (Object.keys(group).length > 0) {
-      const priorGroup = Object.fromEntries(Object.keys(group).map((id) => [id, priorSteps[id]]));
+      const priorGroup = Object.fromEntries(Object.keys(group).map((id) => [id, priorStep(id)]));
       classifications.push(...classifyCrossGroup(group, priorGroup));
     }
     const stressId = `battery-${store}-stress`;
     const sj = loadStep(stressId);
     if (sj) {
       steps[stressId] = sj;
-      classifications.push(...classifyCrossGroup({ [stressId]: sj }, { [stressId]: priorSteps[stressId] }));
+      classifications.push(...classifyCrossGroup({ [stressId]: sj }, { [stressId]: priorStep(stressId) }));
     }
   }
 
@@ -113,19 +127,17 @@ function classifySitting(sittingDir, sitting, priorReport) {
     const j = loadStep(id);
     if (j) {
       steps[id] = j;
-      classifications.push(...classifyEval(id, j, priorSteps[id], retrievalOwed));
+      classifications.push(...classifyEval(id, j, priorStep(id), retrievalOwed));
     }
   }
 
-  return { classifications, steps };
+  return { classifications, steps, priorFrom, priorHarnessMismatch };
 }
 
 const CONTEXT_SLUG = (context) => context.replace(/[-/]/g, '_');
 
-// The full fixed context list, independent of what any one sitting measures: the default
-// store's hub/13k/26k/stress, every other offered store's own battery sizes, and the two eval
-// corpora's semantic pass. Frontmatter carries a key for every (context, record:true row) pair
-// from this list, null where a sitting did not measure it, never an absent key.
+// The fixed context list, independent of what any one sitting measures. Frontmatter carries a key
+// per (context, record row) pair from it, null where unmeasured, never an absent key.
 const DEFAULT_CONTEXTS = ['hub', 'scale-13k', 'scale-26k', 'stress'];
 const BATTERY_CONTEXTS = OFFERED.filter((s) => s !== DEFAULT_STORE).flatMap((store) => ['hub', '13k', '26k', 'stress'].map((size) => `battery-${store}-${size}`));
 const EVAL_CONTEXTS = ['eval-nfcorpus', 'eval-fever'];
@@ -139,7 +151,12 @@ export function recordFields(classifications) {
     for (const row of TIMING_RECORD_ROWS) fields[`${CONTEXT_SLUG(context)}_${row.key.replace(/\./g, '_')}`] = byId.get(`${context}/${row.key}`)?.current ?? null;
   }
   for (const context of EVAL_CONTEXTS) {
-    for (const row of QUALITY_RECORD_ROWS) fields[`${CONTEXT_SLUG(context)}_${row.key}`] = byId.get(`${context}/semantic/${row.key}`)?.current ?? null;
+    // 4 decimals is the precision these metrics are read and compared at; a raw float prints 16
+    // digits of noise nobody uses.
+    for (const row of QUALITY_RECORD_ROWS) {
+      const v = byId.get(`${context}/semantic/${row.key}`)?.current;
+      fields[`${CONTEXT_SLUG(context)}_${row.key}`] = typeof v === 'number' ? Number(v.toFixed(4)) : (v ?? null);
+    }
   }
   return fields;
 }
@@ -186,6 +203,15 @@ export function renderMarkdown(report) {
   lines.push(
     `- ran: ${Object.values(report.steps_status ?? {}).filter((s) => s.status === 'ok').length} step(s) ok, ${Object.values(report.steps_status ?? {}).filter((s) => s.status === 'not-owed').length} not owed, ${Object.values(report.steps_status ?? {}).filter((s) => s.status === 'owed-unmet').length} owed-unmet`
   );
+  // A row with no prior was not compared, and an uncompared row cannot block. Counting them here
+  // keeps a run that compared nothing from reading like a clean pass.
+  const noPrior = report.classifications.filter((c) => c.verdict === 'no-prior').length;
+  const compared = report.classifications.length - noPrior;
+  lines.push(`- compared: ${compared} row(s) against a prior, ${noPrior} with no prior recorded (a row with no prior is not a pass, it is an absent comparison)`);
+  const priorFrom = Object.entries(report.prior_from ?? {});
+  if (priorFrom.length > 0) lines.push(`- priors read from: ${[...new Set(priorFrom.map(([, from]) => from))].sort().join(', ')}`);
+  const mismatchIds = Object.keys(report.prior_harness_mismatch ?? {});
+  if (mismatchIds.length > 0) lines.push(`- ${mismatchIds.length} step(s) had a prior measured by a different harness version and were not compared: ${mismatchIds.join(', ')}`);
   lines.push('');
 
   const grouped = new Map();
@@ -207,14 +233,26 @@ export function renderMarkdown(report) {
   return `${lines.join('\n')}\n`;
 }
 
+// The CHANGELOG section for the version this sitting gates. Read here, not in the gate: the gate
+// runs before the entry is written, so only the --release re-render can see it.
+export function changelogEntry(version, changelogPath = join(ROOT, 'CHANGELOG.md')) {
+  if (!version || !existsSync(changelogPath)) return null;
+  const md = readFileSync(changelogPath, 'utf8');
+  const start = md.search(new RegExp(`^## \\[${version.replace(/\./g, '\\.')}\\]`, 'm'));
+  if (start < 0) return null;
+  const rest = md.slice(start);
+  const next = rest.slice(1).search(/^## /m);
+  return (next < 0 ? rest : rest.slice(0, next + 1)).trim();
+}
+
 export function buildReport(sittingDir, { reportsDir = REPORTS_DIR, releaseVersionOverride } = {}) {
   const sitting = JSON.parse(readFileSync(join(sittingDir, 'sitting.json'), 'utf8'));
   const jsonPath = join(reportsDir, `${sitting.date}-release-gate.json`);
   const existing = readJson(jsonPath);
   const accepted = existing?.accepted ?? {};
 
-  const priorReport = findPriorReport(reportsDir, sitting.date);
-  const { classifications, steps } = classifySitting(sittingDir, sitting, priorReport);
+  const priorReports = findPriorReports(reportsDir, sitting.date);
+  const { classifications, steps, priorFrom, priorHarnessMismatch } = classifySitting(sittingDir, sitting, priorStepLookup(priorReports, MEASURE_VERSION));
   const { verdict, reasons } = aggregateVerdict(classifications, sitting.failed_stage_reasons ?? [], accepted);
 
   const record = recordFields(classifications);
@@ -239,14 +277,19 @@ export function buildReport(sittingDir, { reportsDir = REPORTS_DIR, releaseVersi
     embed_model: Object.values(steps).some((s) => s?.variants?.semantic) ? 'minishlab/potion-retrieval-32M' : null,
     verdict,
     verdict_reasons: reasons,
-    // Provenance is the last tag (tags do not move) plus the path list the gate read to decide
-    // what was owed, never a commit hash: a rebase or squash can orphan a hash this report would
-    // otherwise depend on (RELEASING.md's own rule, and what happened to the 0.20.0 report).
+    // Provenance is the last tag plus the paths the gate read, never a commit hash: a rebase or
+    // squash orphans a hash, and it orphaned the one the 0.20.0 report cited.
     last_tag: sitting.last_tag ?? null,
+    // Which earlier report supplied the prior for each step. A step absent here had no prior in
+    // any earlier report, so its rows are a real no-prior rather than a lookup that missed.
+    prior_from: priorFrom,
+    // Steps whose only earlier report was measured by a different harness version: not compared,
+    // so their rows read no-prior rather than a (possibly false) delta across harnesses.
+    prior_harness_mismatch: priorHarnessMismatch,
     changed_paths: sitting.changed_paths ?? [],
     owed: sitting.owed ?? {},
     steps_status: sitting.steps ?? {},
-    changelog_entry: sitting.changelog_entry ?? null,
+    changelog_entry: changelogEntry(releaseVersionOverride ?? existing?.release_version ?? null),
     classifications,
     accepted,
     record,
@@ -255,9 +298,8 @@ export function buildReport(sittingDir, { reportsDir = REPORTS_DIR, releaseVersi
   };
 }
 
-// Writes the JSON, the frontmatter + generated body md, and -- only on PASS -- repoints
-// BENCHMARKING.md's numbers of record. The one place both writeReport and acceptRow land a
-// report, so a re-render and an acceptance always produce the same file shape.
+// Writes the JSON and md, and on PASS alone repoints the numbers of record. The single landing
+// point for both a re-render and an acceptance, so they cannot produce different shapes.
 export function persist(report, { reportsDir = REPORTS_DIR, benchmarkingMdPath = BENCHMARKING_MD } = {}) {
   mkdirSync(reportsDir, { recursive: true });
   const jsonPath = join(reportsDir, `${report.date}-release-gate.json`);
@@ -294,10 +336,8 @@ export function parseNumbersTable(md, start, end) {
   return rows;
 }
 
-// Regenerates the numbers-of-record table between the markers: every metric this report
-// measured is added or repointed at it, and every metric it did not measure keeps its previous
-// row untouched -- nothing is deleted. Never called when the sitting blocked: a blocked
-// sitting's numbers must never become the official ones.
+// Regenerates the numbers-of-record table: a measured metric is added or repointed, an unmeasured
+// one keeps its row, nothing is deleted. Never called for a BLOCK, whose numbers are not official.
 export function updateNumbersOfRecord(report, benchmarkingMdPath = BENCHMARKING_MD) {
   if (!existsSync(benchmarkingMdPath)) return;
   const md = readFileSync(benchmarkingMdPath, 'utf8');
@@ -341,12 +381,12 @@ export function acceptRow(rowId, reason, { reportsDir = REPORTS_DIR, benchmarkin
 }
 
 async function main() {
-  const argv = process.argv.slice(2);
-  const acceptIdx = argv.indexOf('--accept');
-  if (acceptIdx >= 0) {
-    const rowId = argv[acceptIdx + 1];
-    const reasonIdx = argv.indexOf('--reason');
-    const reason = reasonIdx >= 0 ? argv[reasonIdx + 1] : null;
+  const {
+    values: { accept: rowId, reason, sitting: sittingArg, release: releaseVersionOverride },
+  } = parseArgs({
+    options: { accept: { type: 'string' }, reason: { type: 'string' }, sitting: { type: 'string' }, release: { type: 'string' } },
+  });
+  if (rowId !== undefined) {
     if (!rowId || !reason) {
       console.error('usage: node benchmark/report.mjs --accept <row id> --reason "<owner words>"');
       process.exit(2);
@@ -357,15 +397,11 @@ async function main() {
     return;
   }
 
-  const sittingIdx = argv.indexOf('--sitting');
-  const sittingDir = sittingIdx >= 0 ? resolve(argv[sittingIdx + 1]) : newestSittingDir();
+  const sittingDir = sittingArg ? resolve(sittingArg) : newestSittingDir();
   if (!existsSync(join(sittingDir, 'sitting.json'))) {
     console.error(`no sitting.json under ${sittingDir}`);
     process.exit(2);
   }
-  const releaseIdx = argv.indexOf('--release');
-  const releaseVersionOverride = releaseIdx >= 0 ? argv[releaseIdx + 1] : undefined;
-
   const report = buildReport(sittingDir, { releaseVersionOverride });
   persist(report);
   console.log(`wrote benchmark/reports/${report.date}-release-gate.md`);

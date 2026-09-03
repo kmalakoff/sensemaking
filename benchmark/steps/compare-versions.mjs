@@ -1,14 +1,17 @@
 // Runs run.mjs per version against its own copy of the tree, prints a pasteable table. Baseline is package.json's version, so a bare run answers "did the working tree regress?".
 // usage: node benchmark/steps/compare-versions.mjs [corpus-or-dir] [version...] [--store <name>] [--reverse] [--out <file>]
 import { spawnSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parseArgs } from 'node:util';
+import { safeRmSync } from 'fs-remove-compat';
 import { cached } from '../lib/cache.mjs';
 import { corpusPath, writeTreeConfig } from '../lib/corpus.mjs';
 import { writeOut } from '../lib/out.mjs';
 import { renderRowsTable } from '../lib/render.mjs';
 import { ROWS, TIMING_KINDS } from '../lib/rows.mjs';
+import { copyTree } from '../lib/work-tree.mjs';
 
 const benchDir = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(benchDir, '..', '..');
@@ -22,18 +25,13 @@ function releasedBaseline() {
   return pkg.version;
 }
 
-// Extracts one `--flag value` pair, returning [value, argsWithoutIt].
-function takeFlag(args, flag) {
-  const idx = args.indexOf(flag);
-  return idx < 0 ? [null, args] : [args[idx + 1], args.filter((_a, i) => i !== idx && i !== idx + 1)];
-}
-
-const afterFlags0 = process.argv.slice(2);
-const [store, afterStore] = takeFlag(afterFlags0, '--store');
-const [outArg, afterOut] = takeFlag(afterStore, '--out');
-const reverse = afterOut.includes('--reverse');
-const positional = afterOut.filter((a) => a !== '--reverse');
-const [corpusArg, ...versionArgs] = positional;
+const {
+  values: { store, out: outArg, reverse },
+  positionals: [corpusArg, ...versionArgs],
+} = parseArgs({
+  options: { store: { type: 'string' }, out: { type: 'string' }, reverse: { type: 'boolean', default: false } },
+  allowPositionals: true,
+});
 const treeDir = corpusArg ? (corpusPath(corpusArg) ?? resolve(corpusArg)) : corpusPath('obsidian-hub');
 if (!existsSync(treeDir)) {
   console.error(`not a corpus name or directory: ${corpusArg}`);
@@ -62,7 +60,7 @@ function rootFor(version) {
 // The copy gets a v1 config (the lowest common denominator every version can read).
 function treeCopyFor(version) {
   const copy = join(work, `tree-${version}`);
-  cpSync(treeDir, copy, { recursive: true, filter: (src) => !/\/(\.sense|\.git|node_modules)(\/|$)/.test(src) });
+  copyTree(treeDir, copy);
   // No store key here: run.mjs rewrites the config for every new-dialect column (adding the
   // store when one is named), and old-dialect columns read the v1 shape as-is.
   writeTreeConfig(copy, { version: 1, scan: { include: ['**/*.md'] }, queries: {} });
@@ -105,4 +103,4 @@ console.log(renderRowsTable(printable, versions, resultsByColumn));
 
 writeOut(outArg, { corpus: treeDir, store: store ?? 'sqlite', versions, reversed: reverse, results: Object.fromEntries(results) });
 
-rmSync(work, { recursive: true, force: true });
+safeRmSync(work, { recursive: true, force: true });

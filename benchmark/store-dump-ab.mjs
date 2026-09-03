@@ -4,16 +4,18 @@
 // .tmp/cache, so nothing is checked out and nothing is built twice.
 // usage: node benchmark/store-dump-ab.mjs [--out <file>]
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parseArgs } from 'node:util';
+import { safeRmSync } from 'fs-remove-compat';
 import { cached } from './lib/cache.mjs';
 import { writeOut } from './lib/out.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
-const argv = process.argv.slice(2);
-const outIdx = argv.indexOf('--out');
-const outArg = outIdx >= 0 ? argv[outIdx + 1] : null;
+const {
+  values: { out: outArg },
+} = parseArgs({ options: { out: { type: 'string' } } });
 
 // The baseline is package.json's version, the convention compare-versions already uses: the bump
 // happens after a release, so that version names the last release until the moment you bump.
@@ -29,7 +31,7 @@ const oldPkg = join(installed, 'node_modules', 'sensemaking');
 if (!existsSync(join(oldPkg, 'dist', 'esm', 'index.js'))) throw new Error(`${oldPkg} carries no built dist to capture`);
 
 const work = join(ROOT, '.tmp', 'store-dump-ab');
-rmSync(work, { recursive: true, force: true });
+safeRmSync(work, { recursive: true, force: true });
 mkdirSync(work, { recursive: true });
 
 function capture(label, extra) {

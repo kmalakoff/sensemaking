@@ -1,31 +1,28 @@
 // Benchmark one package against one tree; prints a JSON row for BENCHMARKING.md. Wall-time metrics spawn the CLI (what an agent pays); in-process ones time the engine alone.
 // usage: node benchmark/steps/measure-tree.mjs <package-root> <notes-dir|corpus-name> [--store <name>] [--work <dir>] [--out <file>]
 import { spawn, spawnSync } from 'node:child_process';
-import { appendFileSync, mkdirSync, rmSync, statSync, utimesSync } from 'node:fs';
+import { appendFileSync, mkdirSync, statSync, utimesSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { parseArgs } from 'node:util';
 import { safeRmSync } from 'fs-remove-compat';
 import { CORPUS_NAMES, corpusPath, writeTreeConfig } from '../lib/corpus.mjs';
-import { futureDate, medianAsync, medianOf, timedCli, walkMd, warmFileCache } from '../lib/measure.mjs';
+import { futureDate, MEASURE_VERSION, medianAsync, medianOf, timedCli, walkMd, warmFileCache } from '../lib/measure.mjs';
 import { writeOut } from '../lib/out.mjs';
 import { copyTree, ephemeralWorkTree } from '../lib/work-tree.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
-// Extracts one `--flag value` pair, returning [value, argsWithoutIt]. Never mis-trims the
-// positionals when the flag is absent (idx -1), since it only touches indices when idx >= 0.
-function takeFlag(args, flag) {
-  const idx = args.indexOf(flag);
-  return idx < 0 ? [null, args] : [args[idx + 1], args.filter((_a, i) => i !== idx && i !== idx + 1)];
-}
-
-// The store is a config fact the harness writes into the tree. Pre-store packages have no `search` verb and read the config as-is, ignoring the flag.
-// Every old column of a compare run stays a valid sqlite measurement.
-const [store, afterStore] = takeFlag(process.argv.slice(2), '--store');
-// Where the measured copy goes. Defaults under this package's own .tmp/, not the tree's.
-const [workArg, afterWork] = takeFlag(afterStore, '--work');
-const [outArg, rest] = takeFlag(afterWork, '--out');
-const [pkgRootArg, treeArg] = rest;
+// store: a config fact the harness writes into the tree. Pre-store packages have no `search` verb
+// and read the config as-is, ignoring it, so every old column stays a valid sqlite measurement.
+// work: where the measured copy goes, defaulting under this package's own .tmp/, not the tree's.
+const {
+  values: { store, work: workArg, out: outArg },
+  positionals: [pkgRootArg, treeArg],
+} = parseArgs({
+  options: { store: { type: 'string' }, work: { type: 'string' }, out: { type: 'string' } },
+  allowPositionals: true,
+});
 if (!pkgRootArg || !treeArg) {
   console.error('usage: node bench/run.mjs <package-root> <notes-dir|corpus-name> [--store <name>] [--work <dir>] [--out <file>]');
   process.exit(2);
@@ -37,9 +34,8 @@ const pkgRoot = resolve(pkgRootArg);
 const sourceTree = CORPUS_NAMES.includes(treeArg) ? corpusPath(treeArg) : resolve(treeArg);
 const cli = join(pkgRoot, 'bin', 'cli.js');
 
-// A run measures a private copy, never the cached corpus: benchmark/lib/work-tree.mjs is the
-// same mechanism compare.mjs and store-dump.mjs use. Without this, run.mjs's in-place edits
-// below would drift the cache itself.
+// A run measures a private copy, never the cached corpus, which the in-place edits below would
+// otherwise drift. Same mechanism as compare-versions.mjs and store-dump.mjs.
 const copyStart = process.hrtime.bigint();
 let tree;
 if (workArg) {
@@ -51,11 +47,22 @@ if (workArg) {
 }
 const copyMs = Math.round(Number(process.hrtime.bigint() - copyStart) / 1e6);
 
+// Registered as soon as the copy exists, so a throw anywhere below still removes it: a hub copy is
+// hundreds of MB, and the happy-path-only cleanup this replaces leaked one per failed run.
+if (!workArg) process.on('exit', () => safeRmSync(tree, { recursive: true, force: true }));
+
 const run = (args) => spawnSync(process.execPath, [cli, ...args], { cwd: tree, encoding: 'utf8', maxBuffer: 64e6 });
 
 const timed = (args, runs = 5) => timedCli(() => run(args), runs);
 
-const fail = (r) => (r.status === 0 ? r : null);
+// A missing row reads as null either way, so the reason is recorded: an old version lacking a
+// command and the working tree failing one must not look alike.
+const errors = {};
+const fail = (r, row) => {
+  if (r.status === 0) return r;
+  errors[row] = `exit ${r.status}: ${(r.stderr ?? '').split('\n').find(Boolean) ?? 'no stderr'}`;
+  return null;
+};
 
 // Dialect detection: pre-rename packages have no `search` verb, so their --help never mentions it. Runs once.
 // Every row-mapping choice below reads off this one flag, so old and new packages land in the same JSON shape for compare.mjs.
@@ -64,10 +71,8 @@ const NEW_DIALECT = /search/.test(HELP);
 // Ad-hoc SQL was `query` until it became `sql`, which took the name back from the search
 // sense of "query". Read off --help so one harness measures every generation.
 const SQL_VERB = /\bsense sql\b/.test(HELP) ? 'sql' : 'query';
-// Both rows must measure the same files, differing only in vector participation: two presets
-// over one glob, so there is no config edit between rows to force a rebuild.
-// The default preset carries no `semantic: false`, so migrating this file to the current config
-// version turns embedding on with the default static model -- verified, not merely inferred.
+// Two presets over one glob, so both rows measure the same files and differ only in vector
+// participation, with no config edit between them to force a rebuild.
 const TWO_SCOPES = {
   version: 3,
   presets: { default: { include: ['**/*.md'] }, lexical: { include: ['**/*.md'], semantic: false } },
@@ -92,9 +97,8 @@ const SEARCH = `SELECT f.path, content.title, snippet(content, -1, '«', '»', '
 
 // --- wall-time (CLI) ---
 if (NEW_DIALECT) writeTreeConfig(tree, TWO_SCOPES, { store });
-// Every timed row measures a warm file cache, deliberately and identically in every sitting.
-// "Cold" here means the index is built from nothing, not that the disk is cold: the latter
-// depends on what the machine did minutes earlier and is not reproducible.
+// Every timed row measures a warm file cache, identically in every sitting. "Cold" means the
+// index is built from nothing, never that the disk is cold, which is not reproducible.
 const warmedBytes = warmFileCache(tree);
 // Median of 3, clearing .sense before each rep (PLAN.md 3.10: +21% same-code spread on one
 // sample). The last rep leaves .sense built, which warm/search/find below reuse.
@@ -102,24 +106,23 @@ const COLD_REPS = 3;
 const coldSamples = [];
 let coldStatus = 0;
 for (let i = 0; i < COLD_REPS; i++) {
-  rmSync(join(tree, '.sense'), { recursive: true, force: true });
+  safeRmSync(join(tree, '.sense'), { recursive: true, force: true });
   const r = timed(['status'], 1); // first open = full crawl
   coldSamples.push(r.ms);
   if (r.status !== 0) coldStatus = r.status;
 }
 const coldMs = medianOf(coldSamples);
-const warm = fail(timed([SQL_VERB, 'SELECT COUNT(*) AS n FROM frontmatter']));
-const search = fail(timed([SQL_VERB, SEARCH, 'the']));
-const findR = fail(timed(lexicalArgs('the'), 3));
-// Cold crawl and first embed together in one process: reconcile's chunk handoff (embed/handoff.ts)
-// only survives within a single CLI invocation, so this is the only measurement that can see it --
-// the `status` call above already reconciled (and exited) in its own process, discarding it.
-rmSync(join(tree, '.sense'), { recursive: true, force: true });
+const warm = fail(timed([SQL_VERB, 'SELECT COUNT(*) AS n FROM frontmatter']), 'warm_query_ms');
+const search = fail(timed([SQL_VERB, SEARCH, 'the']), 'bm25_search_ms');
+const findR = fail(timed(lexicalArgs('the'), 3), 'find_ms');
+// Cold crawl and first embed in one process: the chunk handoff survives only within a single CLI
+// invocation, and the `status` call above already reconciled and exited, discarding it.
+safeRmSync(join(tree, '.sense'), { recursive: true, force: true });
 const coldEmbedAttempt = timed(vectorArgs('the'), 1);
 // Non-null only on embed-enabled trees (vectors pre-built by the run above). The delta
 // vs find_ms is what vector participation pays per invocation: model load + query embed + scan.
-const semanticR = fail(timed(vectorArgs('the'), 3));
-const mapR = fail(timed(['map'], 3));
+const semanticR = fail(timed(vectorArgs('the'), 3), 'semantic_find_ms');
+const mapR = fail(timed(['map'], 3), 'map_ms');
 // A `find` row is an output contract like the map/peek token counts: a row is a reference, and its cost must not grow with the tree.
 // Measured in json (the shape an agent parses), per row actually returned.
 const findRowTokens = (() => {
@@ -132,10 +135,10 @@ const findRowTokens = (() => {
     return null;
   }
 })();
-const peekR = fail(timed(['peek', largest.rel], 3));
+const peekR = fail(timed(['peek', largest.rel], 3), 'peek_ms');
 // related_ms: the similar-but-unlinked command. Scans every embedding chunk in the tree per call (semantic-search cost class), unlike peek's cheap local queries.
 // Runs after the semantic search above, which has warmed the embeddings this scan reads.
-const relatedR = fail(timed(['related', largest.rel], 3));
+const relatedR = fail(timed(['related', largest.rel], 3), 'related_ms');
 
 // --- in-process (library) ---
 let inproc = null;
@@ -173,7 +176,7 @@ try {
   const COLD_BUILD_REPS = 3;
   const coldBuildSamples = [];
   for (let i = 0; i < COLD_BUILD_REPS; i++) {
-    rmSync(join(tree, '.sense'), { recursive: true, force: true });
+    safeRmSync(join(tree, '.sense'), { recursive: true, force: true });
     const t = process.hrtime.bigint();
     const opened = await lib.open(cfg);
     coldBuildSamples.push(Math.round(Number(process.hrtime.bigint() - t) / 1e6));
@@ -206,9 +209,8 @@ for (let i = 0; i < BULK_REPS; i++) {
 }
 const bulkColdMs = bulkStatus === 0 ? medianOf(bulkSamples) : null;
 
-// Same change with a watcher already running: it reparses in the background, so the
-// first query pays only the freshness check. One watcher for all 3 reps: startup is a fixed
-// cost the row is not measuring.
+// The same change with a watcher running, which reparses in the background so the query pays only
+// the freshness check. One watcher for all 3 reps: startup is not what this row measures.
 let bulkWatchMs = null;
 const bulkWatchSamples = [];
 try {
@@ -229,6 +231,7 @@ try {
 } catch {}
 
 const result = {
+  measure_version: MEASURE_VERSION,
   tree: sourceTree,
   work_tree: tree,
   copy_ms: copyMs,
@@ -259,9 +262,8 @@ const result = {
   bulk_watch_ms: bulkWatchMs,
   bulk_watch_ms_samples: bulkWatchSamples,
   inproc,
+  errors,
 };
+for (const [row, why] of Object.entries(errors)) console.error(`row ${row} produced no number: ${why}`);
 console.log(JSON.stringify(result, null, 2));
 writeOut(outArg, result);
-
-// The copy exists only for this run; the cached corpus was never touched.
-safeRmSync(tree, { recursive: true, force: true });

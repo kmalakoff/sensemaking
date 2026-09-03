@@ -7,8 +7,8 @@ import { type Config, STORE_NAMES, type StoreName } from './types.ts';
 const KNOWN_KEYS = new Set(['$schema', 'version', 'presets', 'features', 'embed', 'store', 'queries']);
 const KNOWN_PRESET_KEYS = new Set(['include', 'exclude', 'k', 'signals', 'where']);
 const KNOWN_FEATURE_KEYS = new Set(['links', 'sections', 'tags', 'rank']);
-// Exported so a docs test can assert every key here has a schema.json property -- one source
-// of truth for what the embed block accepts, checked against the other for drift.
+// The one source of truth for what the embed block accepts. schema.json carries an editor-facing
+// copy for autocomplete; nothing at runtime reads it.
 export const KNOWN_EMBED_KEYS = new Set(['model', 'provider', 'url', 'key', 'languages', 'chunkTokens']);
 const SAVED_SEARCH_KEYS = new Set(['search', 'preset', 'include', 'exclude', 'where', 'k']);
 

@@ -72,10 +72,10 @@
     "schema.json"
   ],
   "scripts": {
-    "benchmark": "node benchmark/gate.mjs",
+    "benchmark": "tsds build && node benchmark/gate.mjs",
     "build": "tsds build",
     "format": "tsds format",
-    "prepublishOnly": "node scripts/prepublish.ts && tsds validate",
+    "prepublishOnly": "tsds validate",
     "test": "tsds test:node --no-timeouts",
     "test:engines": "nvu engines tsds test:node --no-timeouts",
     "version": "tsds version"

@@ -1,9 +1,12 @@
 import assert from 'node:assert';
+import { execFileSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import cr from 'cr';
-import { SUPPORTED_CONFIG_VERSION } from 'sensemaking';
+import { STORE_NAMES, SUPPORTED_CONFIG_VERSION } from 'sensemaking';
+import { parse } from 'yaml';
+import { KNOWN_EMBED_KEYS } from '../../src/config/index.ts';
 import { packageRoot, scratchDir } from '../lib/scratch.ts';
 
 // Published surfaces drift silently: nothing fails when the README stops describing what
@@ -30,11 +33,46 @@ describe('published docs', () => {
   });
 });
 
-// Static, publish-blocking hygiene (README naming every dependency, package.json description
-// matching the README, schema.json staying in sync, shipped skills, no tracked file citing the
-// gitignored planning directory) moved to scripts/prepublish.ts: it has nothing to do with
-// behavior, and belongs in the fast fail-early pass before the test suite, not in it. See
-// prepublishOnly and benchmark/lib/stages.mjs stage 0.
+describe('shipped skills are well formed', () => {
+  // Not prose drift: these assert the artifacts this package ships are loadable at all. An
+  // unquoted `description:` containing ": " parses as a nested mapping and the installer skips
+  // the skill silently, so nothing else in the tree would notice.
+  it('every SKILL.md has frontmatter that parses, with a name matching its directory and a description', () => {
+    const dir = join(packageRoot, 'skills');
+    assert.ok(existsSync(dir), 'skills/ must exist; package.json ships it');
+    const names = readdirSync(dir, { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .map((d) => d.name);
+    assert.ok(names.length > 0, 'skills/ must contain at least one skill');
+    for (const name of names) {
+      const fm = /^---\n([\s\S]*?)\n---\n/.exec(read(dir, name, 'SKILL.md'));
+      assert.ok(fm, `${name}/SKILL.md has no frontmatter block`);
+      const parsed = parse(fm[1]) as { name?: string; description?: string };
+      assert.equal(parsed.name, name, `${name}/SKILL.md declares a name that is not its directory`);
+      assert.ok(parsed.description && parsed.description.length > 0, `${name}/SKILL.md has no description`);
+    }
+  });
+
+  it('package.json ships the skills directory, so a publish cannot drop it', () => {
+    const pkg = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8')) as { files: string[] };
+    assert.ok(pkg.files.includes('skills'), 'skills/ is not in package.json files');
+  });
+});
+
+describe('schema.json matches the code that decides what is valid', () => {
+  // schema.json ships in files and every generated config points $schema at it, so drift here
+  // makes an editor flag a valid key as invalid.
+  const schema = () => JSON.parse(readFileSync(join(packageRoot, 'schema.json'), 'utf8'));
+
+  it('the store enum equals STORE_NAMES', () => {
+    assert.deepEqual(schema().properties.store.enum, [...STORE_NAMES]);
+  });
+
+  it('every KNOWN_EMBED_KEYS key is a property under properties.embed.properties', () => {
+    const embedProps = Object.keys(schema().properties.embed.properties);
+    for (const key of KNOWN_EMBED_KEYS) assert.ok(embedProps.includes(key), `schema.json's embed properties is missing "${key}"`);
+  });
+});
 
 // The release-gate benchmark harness (benchmark/report.mjs and friends): generated numbers of
 // record, the owner-override contract, and idempotent re-rendering. See benchmark-automation.md.
@@ -55,7 +93,6 @@ function fixtureSitting(dir: string, date: string, findRowTokens: [number, numbe
       changed_paths: ['src/chunk/index.ts'],
       owed: { baseline: ['src/chunk/index.ts'] },
       continue: false,
-      allow_busy: true,
       steps: {},
       failed_stage_reasons: [],
     })
@@ -183,9 +220,17 @@ describe('benchmark release-gate: owner override needs a reason', () => {
 
   it('every BLOCK reason in a tracked release-gate JSON is either fixed by a later sitting or carries an owner decision', () => {
     const reportsDir = join(packageRoot, 'benchmark', 'reports');
+    // Tracked only: an uncommitted report the gate just wrote would fail this spec inside the
+    // gate's own stage-1 `npm test`, deadlocking the fix-and-rerun path RELEASING.md step 3 names.
+    const tracked = new Set(
+      execFileSync('git', ['ls-files', '--', 'benchmark/reports'], { cwd: packageRoot, encoding: 'utf8' })
+        .split('\n')
+        .filter(Boolean)
+        .map((p) => p.slice('benchmark/reports/'.length))
+    );
     const jsonFiles = existsSync(reportsDir)
       ? readdirSync(reportsDir)
-          .filter((f) => /^\d{4}-\d{2}-\d{2}-release-gate\.json$/.test(f))
+          .filter((f) => /^\d{4}-\d{2}-\d{2}-release-gate\.json$/.test(f) && tracked.has(f))
           .sort()
       : [];
     for (let i = 0; i < jsonFiles.length; i++) {

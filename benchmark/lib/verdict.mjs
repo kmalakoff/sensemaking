@@ -11,27 +11,52 @@ const QUALITY_ROWS = ROWS.filter((row) => row.kind === 'quality');
 
 const REPORT_JSON_RE = /^(\d{4}-\d{2}-\d{2})-release-gate\.json$/;
 
-// Newest earlier release-gate JSON by filename date. null (no-prior for every row) until a
-// second sitting has landed a report.
-export function findPriorReport(reportsDir, excludeDate) {
-  if (!existsSync(reportsDir)) return null;
-  const candidates = readdirSync(reportsDir)
+// Every earlier release-gate JSON, newest first. Plural because the prior resolves per step: one
+// report for the whole run lets a sitting that skipped a step blind the next sitting that runs it.
+export function findPriorReports(reportsDir, excludeDate) {
+  if (!existsSync(reportsDir)) return [];
+  return readdirSync(reportsDir)
     .map((name) => ({ name, date: REPORT_JSON_RE.exec(name)?.[1] }))
     .filter((c) => c.date && c.date < excludeDate)
-    .sort((a, b) => (a.date < b.date ? 1 : -1));
-  return candidates.length > 0 ? JSON.parse(readFileSync(join(reportsDir, candidates[0].name), 'utf8')) : null;
+    .sort((a, b) => (a.date < b.date ? 1 : -1))
+    .map((c) => ({ ...c, report: JSON.parse(readFileSync(join(reportsDir, c.name), 'utf8')) }));
 }
 
-// compare.mjs's own JSON: baseline column is prior, local column is current -- a same-sitting
-// comparison, gated on row.band. reversedJson (compare.mjs --reverse's output) supplies the
-// confirmation reading for a row beyond band.
+// stepId -> { step, from } from the newest earlier report carrying that step at currentVersion;
+// { step: null, from, mismatch } when only another harness version has it; null when none does.
+export function priorStepLookup(priorReports, currentVersion) {
+  return (stepId) => {
+    let mismatch = null;
+    for (const { name, report } of priorReports) {
+      const step = report.steps?.[stepId];
+      if (!step) continue;
+      const version = step.measure_version ?? 'm2'; // unstamped: the 2026-09-02 report predates the stamp, measured by m2
+      if (version === currentVersion) return { step, from: name };
+      mismatch ??= { step: null, from: name, mismatch: { prior: version, current: currentVersion } };
+    }
+    return mismatch;
+  };
+}
+
+// Newest earlier report, for the fields that are genuinely per-report rather than per-step.
+export function findPriorReport(reportsDir, excludeDate) {
+  return findPriorReports(reportsDir, excludeDate)[0]?.report ?? null;
+}
+
+// compare.mjs's JSON: baseline is prior, local is current, gated on row.band; reversedJson confirms
+// a row beyond band. A null current with an `errors` entry is a failed measurement, not an absence.
 export function classifyCompare(compareJson, reversedJson) {
   const [baseline, local] = compareJson.versions;
+  const localResult = compareJson.results[local];
   const out = [];
   for (const row of WALL_INPROC_TOKENS) {
-    const current = rowValue(compareJson.results[local], row.key);
-    if (current === null || current === undefined) continue;
+    const current = rowValue(localResult, row.key);
     const prior = rowValue(compareJson.results[baseline], row.key);
+    if (current === null || current === undefined) {
+      const error = localResult?.errors?.[row.key];
+      if (error) out.push({ id: `compare/${row.key}`, context: 'compare', key: row.key, verdict: 'failed', reason: `${row.label}: command failed on the working tree, ${error}`, prior, current: null });
+      continue;
+    }
     const reversed = reversedJson ? { prior: rowValue(reversedJson.results[baseline], row.key), current: rowValue(reversedJson.results[local], row.key) } : undefined;
     const c = classify(row, prior, current, { reversed, useCross: false });
     out.push({ id: `compare/${row.key}`, context: 'compare', key: row.key, ...c, prior, current });
@@ -39,10 +64,8 @@ export function classifyCompare(compareJson, reversedJson) {
   return out;
 }
 
-// A group of cross-sitting run.mjs-shaped readings sharing one row set (hub/13k/26k for the
-// "consistent, grows with size" rule; a lone group of one for stress or a store battery, which
-// gets the cross band with no consistency boost). runJsonByStep: { stepId: parsedRunJson }.
-// priorSteps: the same shape read from the prior report's own `steps` (or null).
+// Cross-sitting readings sharing one row set: hub/13k/26k feed the consistent-growth rule, while
+// stress and each store battery form a lone group gated on the cross band alone.
 export function classifyCrossGroup(runJsonByStep, priorSteps) {
   const stepIds = Object.keys(runJsonByStep);
   const deltas = {};
@@ -64,8 +87,12 @@ export function classifyCrossGroup(runJsonByStep, priorSteps) {
     const priorRun = priorSteps?.[stepId] ?? null;
     for (const row of WALL_INPROC_TOKENS) {
       const current = rowValue(runJson, row.key);
-      if (current === null || current === undefined) continue;
       const prior = priorRun ? rowValue(priorRun, row.key) : null;
+      if (current === null || current === undefined) {
+        const error = runJson?.errors?.[row.key];
+        if (error) out.push({ id: `${stepId}/${row.key}`, context: stepId, key: row.key, verdict: 'failed', reason: `${row.label}: command failed on the working tree, ${error}`, prior, current: null });
+        continue;
+      }
       const sizeDeltas =
         row.kind === 'tokens'
           ? []
@@ -96,17 +123,15 @@ export function classifyEval(stepId, evalJson, priorEvalJson, retrievalOwed) {
   return out;
 }
 
-// Plan's stated BLOCK order: the stage that failed; each token contract; each stress/scale row
-// beyond band; each quality metric that fell or moved without an owed retrieval change; each
-// timing row beyond band whose reversed re-run agreed. `accepted` is the report's own
-// { [rowId]: { reason, date } } override map -- an accepted row drops out of the reasons list
-// but stays in `classifications` for the report to show beside its override.
+// BLOCK reasons in the plan's order: failed stage, token contract, scale/stress, quality, timing.
+// An accepted row leaves the reasons list but stays in classifications, shown beside its override.
 export function aggregateVerdict(classifications, failedStageReasons, accepted = {}) {
   const blocking = classifications.filter((c) => BLOCK_VERDICTS.has(c.verdict) && !accepted[c.id]?.reason);
+  const failed = blocking.filter((c) => c.verdict === 'failed');
   const contracts = blocking.filter((c) => c.verdict === 'contract');
-  const quality = blocking.filter((c) => c.context.startsWith('eval-'));
-  const timing = blocking.filter((c) => c.context === 'compare' && c.verdict !== 'contract');
-  const scaleStress = blocking.filter((c) => !contracts.includes(c) && !quality.includes(c) && !timing.includes(c));
-  const reasons = [...failedStageReasons, ...contracts.map((c) => c.reason), ...scaleStress.map((c) => c.reason), ...quality.map((c) => c.reason), ...timing.map((c) => c.reason)];
+  const quality = blocking.filter((c) => c.verdict !== 'failed' && c.context.startsWith('eval-'));
+  const timing = blocking.filter((c) => c.verdict !== 'failed' && c.context === 'compare' && c.verdict !== 'contract');
+  const scaleStress = blocking.filter((c) => !failed.includes(c) && !contracts.includes(c) && !quality.includes(c) && !timing.includes(c));
+  const reasons = [...failedStageReasons, ...failed.map((c) => c.reason), ...contracts.map((c) => c.reason), ...scaleStress.map((c) => c.reason), ...quality.map((c) => c.reason), ...timing.map((c) => c.reason)];
   return { verdict: reasons.length > 0 ? 'BLOCK' : 'PASS', reasons };
 }

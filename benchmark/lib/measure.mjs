@@ -3,6 +3,12 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+// What this harness measures and how. Bump when an existing row starts being measured differently.
+//   m1  the shape before 2026-09-02
+//   m2  the corpus is copied before measuring, the file cache is warmed before timing, and cold
+//       crawl, in-process cold build and both bulk rows became medians of 3
+export const MEASURE_VERSION = 'm2';
+
 // Sorted relPaths of the .md files a crawl would see (dotfiles and node_modules skipped).
 export function walkMd(tree) {
   const out = [];
@@ -17,11 +23,8 @@ export function walkMd(tree) {
   return out.sort();
 }
 
-// Reads every indexed file once so the OS page cache holds the tree before anything is timed.
-// Without it the first timed run of a sitting pays disk reads the later ones do not, which is one
-// direction and large: measured -38% at 13k and -40% at 26k on one unchanged tree a day apart
-// (benchmark/reports/2026-08-29-0.18.0-release-gate.md), against -4.9% for the same pair's
-// in-process build, which never ran first and so was always warm.
+// Reads every indexed file once so the page cache is warm before anything is timed. Without it the
+// first timed run pays disk reads the later ones do not: -38% at 13k, -40% at 26k, one tree, a day apart.
 export function warmFileCache(tree) {
   let bytes = 0;
   for (const rel of walkMd(tree)) bytes += readFileSync(join(tree, rel)).length;
@@ -57,9 +60,8 @@ export function timedCli(spawnOnce, runs) {
 // mtimes in the near future so a touch always reads as newer than the indexed value.
 export const futureDate = () => new Date(Date.now() + 60_000 + Math.random() * 60_000);
 
-// Median of an already-collected sample array, same rounding as median()/medianAsync(): a caller
-// that must vary a side effect between reps (clearing .sense, re-touching files) builds the
-// array itself and reduces it here so every row's median uses one rule.
+// Median of a collected sample array, same rounding as median(): for callers that must vary a side
+// effect between reps (clearing .sense, re-touching) and so build the array themselves.
 export function medianOf(samples) {
   const sorted = [...samples].sort((a, b) => a - b);
   return Math.round(sorted[Math.floor(sorted.length / 2)] * 10) / 10;

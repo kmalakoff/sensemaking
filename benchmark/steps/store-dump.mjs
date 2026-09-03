@@ -12,6 +12,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { parseArgs } from 'node:util';
 import assert from 'assert';
 import { safeRmSync } from 'fs-remove-compat';
 import { CORPUS_NAMES, corpusPath, writeTreeConfig } from '../lib/corpus.mjs';
@@ -21,8 +22,14 @@ import { ephemeralWorkTree } from '../lib/work-tree.mjs';
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 // Which build to capture. Defaults to this checkout; --pkg-root points at an installed release so
 // one sitting can capture both sides without a second checkout.
-const pkgRootIdx = process.argv.indexOf('--pkg-root');
-const pkgRoot = pkgRootIdx >= 0 ? resolve(process.argv[pkgRootIdx + 1]) : repoRoot;
+const {
+  values: { 'pkg-root': pkgRootArg, corpus: corpusArg, store: storeArg, scenario: scenarioArg, out: outArg },
+  positionals: [mode, ...rest],
+} = parseArgs({
+  options: { 'pkg-root': { type: 'string' }, corpus: { type: 'string' }, store: { type: 'string' }, scenario: { type: 'string' }, out: { type: 'string' } },
+  allowPositionals: true,
+});
+const pkgRoot = pkgRootArg ? resolve(pkgRootArg) : repoRoot;
 const ALL_STORES = ['sqlite', 'duckdb', 'turso'];
 const SCENARIOS = ['cold', 'incremental', 'warm', 'schema-bump', 'signature', 'embed-identity'];
 
@@ -108,7 +115,7 @@ async function dumpStore(lib, featureEnabled, store, cfg, storeDir) {
 async function captureStore(lib, featureEnabled, embedDefaults, storeName, tree, outDir) {
   const storeDir = join(outDir, storeName);
   mkdirSync(storeDir, { recursive: true });
-  rmSync(join(tree, '.sense'), { recursive: true, force: true });
+  safeRmSync(join(tree, '.sense'), { recursive: true, force: true });
   const cfg = buildConfig(storeName, tree, embedDefaults);
 
   const { store } = await openOrThrow(lib, cfg, storeName);
@@ -117,7 +124,7 @@ async function captureStore(lib, featureEnabled, embedDefaults, storeName, tree,
   } finally {
     await store.close();
   }
-  rmSync(join(tree, '.sense'), { recursive: true, force: true });
+  safeRmSync(join(tree, '.sense'), { recursive: true, force: true });
 }
 
 // Below turso's FTS_REBUILD_THRESHOLD (250 changed files) so incremental capture exercises its
@@ -175,7 +182,7 @@ function assertKeyUnused(tree, mdFiles, key) {
 async function captureStoreIncremental(lib, featureEnabled, embedDefaults, storeName, tree, outDir) {
   const storeDir = join(outDir, storeName);
   mkdirSync(storeDir, { recursive: true });
-  rmSync(join(tree, '.sense'), { recursive: true, force: true });
+  safeRmSync(join(tree, '.sense'), { recursive: true, force: true });
   const cfg = buildConfig(storeName, tree, embedDefaults);
 
   const cold = await openOrThrow(lib, cfg, storeName);
@@ -225,7 +232,7 @@ async function captureStoreIncremental(lib, featureEnabled, embedDefaults, store
     console.error(msg);
     throw new Error(msg);
   }
-  rmSync(join(tree, '.sense'), { recursive: true, force: true });
+  safeRmSync(join(tree, '.sense'), { recursive: true, force: true });
 }
 
 // A chunk-size lever distinct from buildConfig's default (unset -> CHUNK_VERSION alone), so
@@ -287,7 +294,7 @@ const MUTATIONS = {
 async function captureStoreScenario(lib, featureEnabled, storeShared, embedDefaults, storeName, tree, outDir, scenario) {
   const storeDir = join(outDir, storeName);
   mkdirSync(storeDir, { recursive: true });
-  rmSync(join(tree, '.sense'), { recursive: true, force: true });
+  safeRmSync(join(tree, '.sense'), { recursive: true, force: true });
 
   const configPath = join(tree, 'sense.config.json');
   const hadConfig = existsSync(configPath);
@@ -326,7 +333,7 @@ async function captureStoreScenario(lib, featureEnabled, storeShared, embedDefau
     writeFileSync(join(storeDir, 'notices.txt'), `${notices.join('\n')}\n`);
   } finally {
     try {
-      rmSync(join(tree, '.sense'), { recursive: true, force: true });
+      safeRmSync(join(tree, '.sense'), { recursive: true, force: true });
       if (hadConfig) writeFileSync(configPath, originalConfig);
       else rmSync(configPath, { force: true });
     } catch (err) {
@@ -340,25 +347,20 @@ async function captureStoreScenario(lib, featureEnabled, storeShared, embedDefau
   }
 }
 
-async function runCapture(args) {
-  const outDirArg = args.find((a) => !a.startsWith('--'));
-  const flag = (name, dflt) => {
-    const i = args.indexOf(`--${name}`);
-    return i >= 0 ? args[i + 1] : dflt;
-  };
+async function runCapture(outDirArg) {
   if (!outDirArg) {
     console.error(`usage: node benchmark/steps/store-dump.mjs capture <outDir> [--corpus <name|path>] [--store sqlite,duckdb,turso] [--scenario ${SCENARIOS.join('|')}]`);
     process.exit(2);
   }
   const outDir = resolve(outDirArg);
-  const corpusArg = flag('corpus', 'obsidian-hub');
-  const sourceTree = CORPUS_NAMES.includes(corpusArg) ? corpusPath(corpusArg) : resolve(corpusArg);
+  const corpus = corpusArg ?? 'obsidian-hub';
+  const sourceTree = CORPUS_NAMES.includes(corpus) ? corpusPath(corpus) : resolve(corpus);
   assert(existsSync(sourceTree), `corpus tree not found: ${sourceTree}`);
-  const stores = flag('store', ALL_STORES.join(','))
+  const stores = (storeArg ?? ALL_STORES.join(','))
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean);
-  const scenario = flag('scenario', 'cold');
+  const scenario = scenarioArg ?? 'cold';
   assert(SCENARIOS.includes(scenario), `--scenario must be one of ${SCENARIOS.join(', ')}, got "${scenario}"`);
 
   const lib = await import(pathToFileURL(join(pkgRoot, 'dist', 'esm', 'index.js')).href);
@@ -442,10 +444,7 @@ function compareFile(label, pathA, pathB) {
   return compareLines(label, readFileSync(pathA, 'utf8').split('\n'), readFileSync(pathB, 'utf8').split('\n'));
 }
 
-function runCompare(args) {
-  const outIdx = args.indexOf('--out');
-  const outArg = outIdx >= 0 ? args[outIdx + 1] : null;
-  const [dirAArg, dirBArg] = outIdx >= 0 ? args.filter((_a, i) => i !== outIdx && i !== outIdx + 1) : args;
+function runCompare([dirAArg, dirBArg]) {
   if (!dirAArg || !dirBArg) {
     console.error('usage: node benchmark/steps/store-dump.mjs compare <dirA> <dirB> [--out <file>]');
     process.exit(2);
@@ -482,10 +481,8 @@ function runCompare(args) {
   process.exit(ok ? 0 : 1);
 }
 
-// --pkg-root is consumed above; keep it out of the positionals.
-const [mode, ...rest] = process.argv.slice(2).filter((a, i, all) => a !== '--pkg-root' && all[i - 1] !== '--pkg-root');
 if (mode === 'capture') {
-  await runCapture(rest);
+  await runCapture(rest[0]);
 } else if (mode === 'compare') {
   runCompare(rest);
 } else {

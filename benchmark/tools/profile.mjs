@@ -2,9 +2,10 @@
 // scenario's work, then sums self time by callFrame.url. usage: node benchmark/tools/profile.mjs <treePath> [scenario ...]
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, rmSync, utimesSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, utimesSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { safeRmSync } from 'fs-remove-compat';
 import { walkMd } from '../lib/measure.mjs';
 
 const THIS_FILE = fileURLToPath(import.meta.url);
@@ -92,7 +93,7 @@ function primeCache(tree) {
 
 function prepare(scenario, tree) {
   if (scenario === 'cold') {
-    rmSync(join(tree, '.sense'), { recursive: true, force: true });
+    safeRmSync(join(tree, '.sense'), { recursive: true, force: true });
     return;
   }
   primeCache(tree);
