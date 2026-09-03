@@ -14,8 +14,6 @@ which: `benchmark/gate.mjs` is the entry, `benchmark/steps/` is what the gate ru
 ```bash
 npm run benchmark                     # the gate: the stages the diff owes, a report, a verdict
 npm run benchmark -- --dry-run        # what it would run, measuring nothing
-npm run benchmark -- --smoke          # the whole pipeline on small trees, minutes rather than hours
-npm run benchmark -- --store duckdb   # one store's battery alone, for diagnosis
 node benchmark/report.mjs             # re-render a report from its sitting, measuring nothing
 ```
 
@@ -40,11 +38,13 @@ node benchmark/tools/sweep.mjs                  # the shape sweep behind the str
 node benchmark/tools/profile.mjs                # cold build by stage
 ```
 
+A run resumes by default. The sitting is keyed on the tree it measures, so an interrupted run picks up where it stopped and editing code starts a fresh one; delete the directory the run prints for a clean start. One store or one tree alone is `measure-tree.mjs`, below.
+
 The default run answers "did the working tree regress?" `local` is whatever is checked out. The working-tree column is labeled `local` until the release exists: regenerate the table at release time and the column gets its real number. Named corpora, dataset builds, and npm-installed comparison versions all cache through `benchmark/lib/cache.mjs` into `.tmp/cache/` (gitignored): fetched once, built atomically in a staging dir, safe to delete anytime. Corpus specs are pinned in `benchmark/lib/corpus.mjs`, the single source of truth. A directory path works in place of a corpus name.
 
-`compare.mjs` installs each npm version into a temp dir (`local` = this working tree), gives every version an isolated copy of the tree with a v1 config (the lowest common denominator every version can read; copies keep cache formats and config auto-migration from cross-contaminating), runs `benchmark/steps/measure-tree.mjs` per version, and prints the table. `run.mjs` can also run alone against any single package root + tree; it prints one JSON row.
+`compare-versions.mjs` installs each npm version into a temp dir (`local` = this working tree), gives every version an isolated copy of the tree with a v1 config (the lowest common denominator every version can read; copies keep cache formats and config auto-migration from cross-contaminating), runs `benchmark/steps/measure-tree.mjs` per version, and prints the table. `measure-tree.mjs` can also run alone against any single package root + tree; it prints one JSON row.
 
-`bakeoff.mjs` and `weight-sweep.mjs` measure one specific model/dims/weight choice against a labeled corpus's qrels, decision-support for a config default, not a release gate. `oracle.mjs` is the correctness gate against Obsidian's own metadataCache (RELEASING.md step 3), needs Obsidian running, and stores nothing.
+`bakeoff.mjs` and `weight-sweep.mjs` measure one specific model/dims/weight choice against a labeled corpus's qrels, decision-support for a config default, not a release gate. `oracle.mjs` is the correctness gate against Obsidian's own metadataCache; the gate runs it, opening the vault itself, and it stores nothing.
 
 `store-dump.mjs` is the refactor gate for anything touching the write path: capture before a change,
 capture after, compare. It records two things per store and both halves are required. Every logical
@@ -56,7 +56,7 @@ every file it checked rather than passing in silence.
 
 Two kinds of metric per version:
 
-- **Wall-time:** spawns the CLI per operation, so every number includes ~40 ms of Node startup. This is what a calling agent pays per invocation. On embed-enabled trees `run.mjs` also times `search` with vectors (`semantic_find_ms`); its delta over `find_ms` is the per-invocation semantic cost: model load, query embed, vector scan (null on trees without embed).
+- **Wall-time:** spawns the CLI per operation, so every number includes ~40 ms of Node startup. This is what a calling agent pays per invocation. On embed-enabled trees `measure-tree.mjs` also times `search` with vectors (`semantic_find_ms`); its delta over `find_ms` is the per-invocation semantic cost: model load, query embed, vector scan (null on trees without embed).
 - **In-process:** imports the version's `dist/esm/index.js` as a library and times the engine alone: cold index build, the no-change freshness check, and incremental updates (1 file touched, 10 files modified). Pure Node, no platform dependence.
 
 ## Maintaining
@@ -64,14 +64,27 @@ Two kinds of metric per version:
 - Regenerate **all** columns of a table in one sitting on one machine. Numbers are not comparable across machines or Node versions. Record machine + Node in the report's frontmatter.
 - Regenerate **before** the version bump, not after publishing: a benchmark run is only a release gate if a bad number can still stop the release. See [RELEASING.md](RELEASING.md).
 - The performance tables regenerate every release; the retrieval-quality tables regenerate when retrieval itself changes: fusion, ranking, the default model, tokenizer, chunking. A quality report older than the current version is expected, and says the ranking has not moved since; a retrieval change shipped without a fresh report is the gap to catch.
-- To add a metric: one measured field in `run.mjs`, one row in the `ROWS` table in `compare.mjs`. Versions lacking a command report `—` automatically; a version that errors reports the error.
+- To add a metric: one measured field in `measure-tree.mjs` and one row in `benchmark/lib/rows.mjs`, the single catalog every table and frontmatter key derives from. Versions lacking a command report `—` automatically; a version that errors records the error against the row.
 - Corpus pins live in `benchmark/lib/corpus.mjs`. If a pin must move (repo disappears, need a bigger corpus), regenerate every column at the new pin.
-- Each sitting is a new file in `benchmark/reports/`, never an edit to a previous one, and the previous terminal report is deleted when the new one lands: the directory holds the current terminal report and the thematic reports, git is the history. Update "Numbers of record" below to point at it. Add a "Methodology changelog" entry only when the change is about HOW something is measured (a new guard, a new corpus, a harness bug fix, a discipline rule); a numbers-only regeneration gets a report file and nothing else.
+- Each sitting is a new file in `benchmark/reports/`, never an edit to a previous one, and nothing is deleted: the gate resolves a row's prior from the newest earlier report that ran that step, so the history is what makes a comparison possible. "Numbers of record" below is repointed by `report.mjs` on a PASS, never by hand. Add a "Methodology changelog" entry only when the change is about HOW something is measured (a new guard, a new corpus, a harness bug fix, a discipline rule); a numbers-only regeneration gets a report file and nothing else.
+
+### Adding a check
+
+One rule: **a check goes in the earliest stage whose failure it can cause cheaply.** `benchmark/lib/stages.mjs` lists the stages in order and is the one obvious place a new step goes.
+
+| the check | stage | what it is |
+|---|---|---|
+| correctness or parity | 1 functional | a test, or a gate script with `--out` |
+| a contract or shape on the hub corpus | 2 baseline | a catalog row with `kind: 'tokens'`, or a band |
+| a scaling or shape cliff | 3 scale | a row measured at 13k, 26k or stress |
+| retrieval quality | 4 quality | a metric in `steps/quality.mjs` and a catalog row |
+
+A measured step needs one entry in `stages.mjs` plus one row in `benchmark/lib/rows.mjs`. The harness test asserts every step id has a catalog row or is a functional gate, and that a real `measure-tree.mjs` row carries exactly the catalog's keys.
 
 ## Interpreting
 
 - Timings are medians. Wall: 5 runs, cold crawl 3, bulk change 3, bulk change with a warm watcher 3. In-process: 5 no-change, 3 updates, cold build 3. Cold crawl, in-process cold build and both bulk-change rows stepped down from a single sample to a median of 3 on 2026-09-01 (see the methodology changelog); every other row was already a median.
-- Wall minus in-process ≈ per-invocation overhead: process spawn, Node/V8 startup, importing sense and its dependencies, argv parsing. The two move independently. If the in-process number grows, the engine (scan/reconcile/SQL) got slower; if the gap grows while in-process stays flat, startup got heavier, typically a new dependency imported at module top level, which every invocation pays for before any work happens. Commands lazy-load from `src/cli/` (cli.ts imports no tree code), so a heavy import belongs inside the one command that uses it; `version_canary_ms` is the canary, a median of 5 `--version` spawns: it should stay at bare Node startup.
+- Wall minus in-process ≈ per-invocation overhead: process spawn, Node/V8 startup, importing sense and its dependencies, argv parsing. The two move independently. If the in-process number grows, the engine (scan/reconcile/SQL) got slower; if the gap grows while in-process stays flat, startup got heavier, typically a new dependency imported at module top level, which every invocation pays for before any work happens. Commands lazy-load from `src/cli/` (cli.ts imports no tree code), so a heavy import belongs inside the one command that uses it. `version_canary_ms` is the bare-startup floor, a median of 5 `--version` spawns, and it is answered before any command loads: it cannot see import creep behind a command, which is what the wall-minus-in-process gap above is for (PLAN.md 3.11).
 - The update rows include everything reconcile does after re-parsing: link re-resolution across the whole table and a full PageRank pass. They are the numbers to watch as features add reconcile work.
 - The bulk-change pair measures `watch`: without a watcher, the first query after many files change pays the whole reparse; with one running, the reparse happened in the background and the query pays only the freshness check.
 - Token columns (`map`, `peek`, `search` row) are output-size contracts, not performance: they must stay roughly flat as trees grow. A token number that scales with tree size is a context-bloat regression even if timings look fine. The `search` row is measured in json, per row actually returned, and tracks summary and snippet length rather than tree size.
@@ -243,6 +256,23 @@ history; each entry names the commit that introduced the change.
   repoints it, a `BLOCK` sitting leaves it untouched, and `report.mjs --accept <row id> --reason
   "<words>"` is the sole owner override.
 
+- **2026-09-02 (staged gate renamed, priors resolved per step).** The harness directory is renamed
+  around what may be run: `benchmark/gate.mjs` is the entry, `steps/` is what the gate runs,
+  `tools/` is decision support that is never part of a release. Reports written before this date
+  name the old paths (`run.mjs`, `compare.mjs`, `eval.mjs`, `release.mjs`) and keep them: a dated
+  record states what was true that day. Two measurement changes travel with it. A row's prior now
+  comes from the newest earlier report that ran that step rather than from the newest report alone,
+  because one prior per report let a sitting that skipped a step blind the next sitting that ran it,
+  and every row of that step read `no-prior`, which never blocks; the report prints how many rows
+  were compared against how many had none. And every hub row measured before 2026-09-01 was taken
+  against a cached corpus that had drifted from its pinned commit, since the harness appended a
+  marker to the first ten notes on every invocation and never restored them. The drift is bounded
+  and measured: 6,750 bytes across ten of 6,566 notes, and a same-sitting A/B of the drifted corpus
+  against the same corpus stripped moved no row beyond noise, with the stripped arm reading slower
+  on cold crawl, which rules out a drift penalty. Those rows stand with their provenance now stated.
+  The Obsidian parity result is unaffected: `oracle.mjs` diffs our tags and links against Obsidian's
+  own metadataCache over the same files, so any drift is common-mode.
+
 ## Numbers of record
 
 The canonical digits a release gate compares against, each linking to the report that
@@ -254,21 +284,6 @@ generated by `benchmark/report.mjs`: a `PASS` sitting repoints it at the newest 
 
 | metric | value | report |
 |---|---|---|
-| cold crawl, obsidian-hub (wall, local) | 2758 ms | [2026-08-30](benchmark/reports/2026-08-30-0.20.0-release-gate.md) |
-| warm query (`COUNT(*)`) | 137 ms | [2026-08-30](benchmark/reports/2026-08-30-0.20.0-release-gate.md) |
-| lexical `search` | 184 ms | [2026-08-30](benchmark/reports/2026-08-30-0.20.0-release-gate.md) |
-| `search` row size | ~71 tokens | [2026-08-29](benchmark/reports/2026-08-29-0.18.0-release-gate.md) |
-| `map` | 166 ms / ~496 tokens | [2026-08-30](benchmark/reports/2026-08-30-0.20.0-release-gate.md) |
-| `peek` largest note | 146 ms / ~581 tokens | [2026-08-30](benchmark/reports/2026-08-30-0.20.0-release-gate.md) |
-| in-process: cold index build | 2130 ms | [2026-08-30](benchmark/reports/2026-08-30-0.20.0-release-gate.md) |
-| in-process: freshness check, no change | 35.8 ms | [2026-08-30](benchmark/reports/2026-08-30-0.20.0-release-gate.md) |
-| `--version` canary | 20 ms | [2026-08-29](benchmark/reports/2026-08-29-0.18.0-release-gate.md) |
-| scale, 13k: cold crawl (wall) | 4.50 s | [2026-08-30](benchmark/reports/2026-08-30-0.20.0-release-gate.md) |
-| scale, 26k: cold crawl (wall) | 9.11 s | [2026-08-30](benchmark/reports/2026-08-30-0.20.0-release-gate.md) |
-| stress: lexical `search` | 357 ms | [2026-08-30](benchmark/reports/2026-08-30-0.20.0-release-gate.md) |
-| stress: semantic `search` | 972 ms | [2026-08-30](benchmark/reports/2026-08-30-0.20.0-release-gate.md) |
-| nfcorpus semantic nDCG@10 / hit@10 | 0.3427 / 0.7121 | [2026-08-29](benchmark/reports/2026-08-29-0.18.0-release-gate.md) |
-| fever semantic nDCG@10 / hit@10 | 0.9337 / 0.9965 | [2026-08-29](benchmark/reports/2026-08-29-0.18.0-release-gate.md) |
 | chunker grouping (D3/D4/D9) | pgc, no overlap, raw text | [2026-08-27 chunking sweep (W4)](benchmark/reports/2026-08-27-chunking-sweep-w4.md) |
 | default static model | `minishlab/potion-retrieval-32M` | [2026-08-27 embedding model selection](benchmark/reports/2026-08-27-embedding-model-selection.md) |
 | storage lever | int8 @ 256 dims | [2026-08-13 static-model bake-off](benchmark/reports/2026-08-13-static-model-bakeoff.md) |
@@ -276,93 +291,153 @@ generated by `benchmark/report.mjs`: a `PASS` sitting repoints it at the newest 
 | duckdb: hub battery (total wall) | 68.6 s | [2026-08-30](benchmark/reports/2026-08-30-0.20.0-release-gate.md) |
 | turso: 13k tree battery (total wall) | 84.4 s | [2026-08-30](benchmark/reports/2026-08-30-0.20.0-release-gate.md) |
 | duckdb: 13k tree battery (total wall) | 119.3 s | [2026-08-30](benchmark/reports/2026-08-30-0.20.0-release-gate.md) |
-| hub_cold_crawl_ms | 2086 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| hub_version_canary_ms | 26 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| hub_warm_query_ms | 131 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| hub_find_ms | 185 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| hub_find_row_tokens | 71 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| hub_inproc_cold_build_ms | 1838 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| hub_inproc_open_nochange_ms | 35.3 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| scale_13k_cold_crawl_ms | 3933 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| scale_13k_version_canary_ms | 28 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| scale_13k_warm_query_ms | 187 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| scale_13k_find_ms | 275 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| scale_13k_find_row_tokens | 71 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| scale_13k_inproc_cold_build_ms | 3481 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| scale_13k_inproc_open_nochange_ms | 71.2 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| scale_26k_cold_crawl_ms | 7018 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| scale_26k_version_canary_ms | 30 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| scale_26k_warm_query_ms | 293 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| scale_26k_find_ms | 443 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| scale_26k_find_row_tokens | 70 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| scale_26k_inproc_cold_build_ms | 5965 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| scale_26k_inproc_open_nochange_ms | 149.6 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| stress_cold_crawl_ms | 6085 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| stress_version_canary_ms | 28 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| stress_warm_query_ms | 93 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| stress_find_ms | 349 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| stress_find_row_tokens | 59 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| stress_inproc_cold_build_ms | 5579 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| stress_inproc_open_nochange_ms | 11.3 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| battery_duckdb_hub_cold_crawl_ms | 5926 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| battery_duckdb_hub_version_canary_ms | 27 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| battery_duckdb_hub_warm_query_ms | 162 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| battery_duckdb_hub_find_ms | 562 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| battery_duckdb_hub_find_row_tokens | 100 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| battery_duckdb_hub_inproc_cold_build_ms | 4390 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| battery_duckdb_hub_inproc_open_nochange_ms | 44.1 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| battery_duckdb_13k_cold_crawl_ms | 11867 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| battery_duckdb_13k_version_canary_ms | 26 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| battery_duckdb_13k_warm_query_ms | 219 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| battery_duckdb_13k_find_ms | 958 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| battery_duckdb_13k_find_row_tokens | 101 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| battery_duckdb_13k_inproc_cold_build_ms | 8853 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| battery_duckdb_13k_inproc_open_nochange_ms | 79.3 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| battery_duckdb_26k_cold_crawl_ms | 24461 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| battery_duckdb_26k_version_canary_ms | 27 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| battery_duckdb_26k_warm_query_ms | 329 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| battery_duckdb_26k_find_ms | 1753 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| battery_duckdb_26k_find_row_tokens | 100 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| battery_duckdb_26k_inproc_cold_build_ms | 17363 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| battery_duckdb_26k_inproc_open_nochange_ms | 156.5 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| battery_duckdb_stress_cold_crawl_ms | 47055 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| battery_duckdb_stress_version_canary_ms | 28 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| battery_duckdb_stress_warm_query_ms | 122 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| battery_duckdb_stress_find_ms | 1877 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| battery_duckdb_stress_find_row_tokens | 89 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| battery_duckdb_stress_inproc_cold_build_ms | 36756 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| battery_duckdb_stress_inproc_open_nochange_ms | 18.8 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| battery_turso_hub_cold_crawl_ms | 4424 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| battery_turso_hub_version_canary_ms | 27 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| battery_turso_hub_warm_query_ms | 139 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| battery_turso_hub_find_ms | 220 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| battery_turso_hub_find_row_tokens | 100 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| battery_turso_hub_inproc_cold_build_ms | 3466 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| battery_turso_hub_inproc_open_nochange_ms | 42.5 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| battery_turso_13k_cold_crawl_ms | 8415 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| battery_turso_13k_version_canary_ms | 25 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| battery_turso_13k_warm_query_ms | 197 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| battery_turso_13k_find_ms | 344 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| battery_turso_13k_find_row_tokens | 99 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| battery_turso_13k_inproc_cold_build_ms | 6240 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| battery_turso_13k_inproc_open_nochange_ms | 82.2 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| battery_turso_26k_cold_crawl_ms | 16669 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| battery_turso_26k_version_canary_ms | 28 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| battery_turso_26k_warm_query_ms | 314 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| battery_turso_26k_find_ms | 596 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| battery_turso_26k_find_row_tokens | 100 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| battery_turso_26k_inproc_cold_build_ms | 12308 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| battery_turso_26k_inproc_open_nochange_ms | 170 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| battery_turso_stress_cold_crawl_ms | 23158 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| battery_turso_stress_version_canary_ms | 27 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| battery_turso_stress_warm_query_ms | 98 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| battery_turso_stress_find_ms | 449 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| battery_turso_stress_find_row_tokens | 89 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| battery_turso_stress_inproc_cold_build_ms | 18425 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| battery_turso_stress_inproc_open_nochange_ms | 14.3 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| eval_nfcorpus_ndcg | 0.3427475423812081 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| eval_nfcorpus_hit | 0.7120743034055728 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| eval_fever_ndcg | 0.9336523047847716 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
-| eval_fever_hit | 0.9965227908383097 | [2026-09-02 release gate](benchmark/reports/2026-09-02-release-gate.md) |
+| hub_cold_crawl_ms | 2018 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| hub_version_canary_ms | 28 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| hub_warm_query_ms | 114 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| hub_find_ms | 164 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| hub_find_row_tokens | 71 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| hub_inproc_cold_build_ms | 1660 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| hub_inproc_open_nochange_ms | 34.7 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| scale_13k_cold_crawl_ms | 3711 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| scale_13k_version_canary_ms | 26 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| scale_13k_warm_query_ms | 170 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| scale_13k_find_ms | 259 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| scale_13k_find_row_tokens | 71 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| scale_13k_inproc_cold_build_ms | 3088 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| scale_13k_inproc_open_nochange_ms | 71.8 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| scale_26k_cold_crawl_ms | 7450 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| scale_26k_version_canary_ms | 26 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| scale_26k_warm_query_ms | 276 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| scale_26k_find_ms | 424 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| scale_26k_find_row_tokens | 70 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| scale_26k_inproc_cold_build_ms | 6919 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| scale_26k_inproc_open_nochange_ms | 147.8 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| stress_cold_crawl_ms | 5892 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| stress_version_canary_ms | 25 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| stress_warm_query_ms | 73 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| stress_find_ms | 329 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| stress_find_row_tokens | 59 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| stress_inproc_cold_build_ms | 4926 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| stress_inproc_open_nochange_ms | 11 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_duckdb_hub_cold_crawl_ms | 5230 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_duckdb_hub_version_canary_ms | 27 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_duckdb_hub_warm_query_ms | 146 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_duckdb_hub_find_ms | 547 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_duckdb_hub_find_row_tokens | 100 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_duckdb_hub_inproc_cold_build_ms | 3754 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_duckdb_hub_inproc_open_nochange_ms | 44 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_duckdb_13k_cold_crawl_ms | 10658 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_duckdb_13k_version_canary_ms | 25 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_duckdb_13k_warm_query_ms | 202 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_duckdb_13k_find_ms | 939 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_duckdb_13k_find_row_tokens | 101 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_duckdb_13k_inproc_cold_build_ms | 7664 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_duckdb_13k_inproc_open_nochange_ms | 77.7 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_duckdb_26k_cold_crawl_ms | 22251 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_duckdb_26k_version_canary_ms | 26 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_duckdb_26k_warm_query_ms | 311 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_duckdb_26k_find_ms | 1727 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_duckdb_26k_find_row_tokens | 100 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_duckdb_26k_inproc_cold_build_ms | 14552 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_duckdb_26k_inproc_open_nochange_ms | 155.2 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_duckdb_stress_cold_crawl_ms | 39839 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_duckdb_stress_version_canary_ms | 26 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_duckdb_stress_warm_query_ms | 107 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_duckdb_stress_find_ms | 1858 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_duckdb_stress_find_row_tokens | 89 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_duckdb_stress_inproc_cold_build_ms | 29541 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_duckdb_stress_inproc_open_nochange_ms | 17.8 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_turso_hub_cold_crawl_ms | 4301 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_turso_hub_version_canary_ms | 26 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_turso_hub_warm_query_ms | 123 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_turso_hub_find_ms | 203 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_turso_hub_find_row_tokens | 100 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_turso_hub_inproc_cold_build_ms | 3464 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_turso_hub_inproc_open_nochange_ms | 46.4 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_turso_13k_cold_crawl_ms | 8314 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_turso_13k_version_canary_ms | 24 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_turso_13k_warm_query_ms | 179 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_turso_13k_find_ms | 334 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_turso_13k_find_row_tokens | 99 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_turso_13k_inproc_cold_build_ms | 6644 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_turso_13k_inproc_open_nochange_ms | 82 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_turso_26k_cold_crawl_ms | 16381 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_turso_26k_version_canary_ms | 25 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_turso_26k_warm_query_ms | 297 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_turso_26k_find_ms | 577 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_turso_26k_find_row_tokens | 100 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_turso_26k_inproc_cold_build_ms | 13255 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_turso_26k_inproc_open_nochange_ms | 161.2 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_turso_stress_cold_crawl_ms | 22922 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_turso_stress_version_canary_ms | 25 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_turso_stress_warm_query_ms | 78 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_turso_stress_find_ms | 444 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_turso_stress_find_row_tokens | 89 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_turso_stress_inproc_cold_build_ms | 18259 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_turso_stress_inproc_open_nochange_ms | 14.2 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| eval_nfcorpus_ndcg | 0.3427 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| eval_nfcorpus_hit | 0.7121 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| eval_fever_ndcg | 0.9337 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| eval_fever_hit | 0.9965 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| hub_semantic_find_ms | 286 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| hub_map_ms | 144 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| hub_map_tokens | 535 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| hub_peek_ms | 124 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| hub_peek_tokens | 581 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| scale_13k_semantic_find_ms | 468 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| scale_13k_map_ms | 235 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| scale_13k_map_tokens | 541 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| scale_13k_peek_ms | 183 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| scale_13k_peek_tokens | 692 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| scale_26k_semantic_find_ms | 812 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| scale_26k_map_ms | 402 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| scale_26k_map_tokens | 541 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| scale_26k_peek_ms | 311 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| scale_26k_peek_tokens | 843 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| stress_semantic_find_ms | 933 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| stress_map_ms | 103 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| stress_map_tokens | 398 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| stress_peek_ms | 93 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| stress_peek_tokens | 476 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_duckdb_hub_semantic_find_ms | 649 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_duckdb_hub_map_ms | 201 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_duckdb_hub_map_tokens | 566 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_duckdb_hub_peek_ms | 168 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_duckdb_hub_peek_tokens | 581 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_duckdb_13k_semantic_find_ms | 1144 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_duckdb_13k_map_ms | 347 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_duckdb_13k_map_tokens | 573 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_duckdb_13k_peek_ms | 232 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_duckdb_13k_peek_tokens | 692 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_duckdb_26k_semantic_find_ms | 1995 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_duckdb_26k_map_ms | 523 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_duckdb_26k_map_tokens | 573 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_duckdb_26k_peek_ms | 364 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_duckdb_26k_peek_tokens | 843 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_duckdb_stress_semantic_find_ms | 1970 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_duckdb_stress_map_ms | 301 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_duckdb_stress_map_tokens | 435 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_duckdb_stress_peek_ms | 162 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_duckdb_stress_peek_tokens | 476 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_turso_hub_semantic_find_ms | 486 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_turso_hub_map_ms | 287 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_turso_hub_map_tokens | 535 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_turso_hub_peek_ms | 142 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_turso_hub_peek_tokens | 581 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_turso_13k_semantic_find_ms | 852 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_turso_13k_map_ms | 507 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_turso_13k_map_tokens | 541 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_turso_13k_peek_ms | 209 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_turso_13k_peek_tokens | 692 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_turso_26k_semantic_find_ms | 1624 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_turso_26k_map_ms | 959 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_turso_26k_map_tokens | 541 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_turso_26k_peek_ms | 352 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_turso_26k_peek_tokens | 843 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_turso_stress_semantic_find_ms | 2078 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_turso_stress_map_ms | 404 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_turso_stress_map_tokens | 398 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_turso_stress_peek_ms | 97 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
+| battery_turso_stress_peek_tokens | 476 | [2026-09-03 release gate](benchmark/reports/2026-09-03-release-gate.md) |
 
 <!-- /numbers -->
