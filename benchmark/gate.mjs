@@ -7,7 +7,7 @@
 // One store alone, or one tree, is `node benchmark/steps/measure-tree.mjs . <corpus> --store <name>`:
 // the steps run standalone, so the gate needs no flag for it.
 //
-// A report is always written to benchmark/reports/<date>-release-gate.{json,md} at the end
+// A report is always written to benchmark/reports/<date>-<version>-release-gate.{json,md} at the end
 // (report.mjs), including for a blocked sitting: a report is a record of what happened. The
 // verdict decides whether BENCHMARKING.md's numbers of record move, not a flag or a human call.
 import { spawn, spawnSync } from 'node:child_process';
@@ -18,9 +18,10 @@ import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { safeRmSync } from 'fs-remove-compat';
 import { owedReasons } from './lib/gates.mjs';
-import { quietMachineCheck } from './lib/quiet-machine.mjs';
+import { describeLoad, topProcesses } from './lib/quiet-machine.mjs';
 import { assertBuilt } from './lib/require-build.mjs';
 import { treeFingerprint } from './lib/tree-fingerprint.mjs';
+import { SITTING_REPORT } from './report.mjs';
 
 // Dynamic, and after the check: stages.mjs reaches the built package, and a static import here
 // would fail at resolution before any guard could run.
@@ -104,7 +105,6 @@ const baselineVersion = packageVersion();
 // Resuming is the default and needs no flag: a run that crashed or was interrupted picks up where
 // it stopped. Delete the directory the run prints to start clean.
 const sittingDir = join(ROOT, '.tmp', 'sittings', `${today}-${baselineVersion}-${currentTreeFingerprint()}`);
-const reportsDir = join(ROOT, 'benchmark', 'reports');
 const resuming = existsSync(join(sittingDir, 'sitting.json'));
 mkdirSync(sittingDir, { recursive: true });
 
@@ -228,6 +228,31 @@ function runStep(step) {
   });
 }
 
+// The gate's own untimed stages run an hour at full CPU, and a one-minute load average still
+// carries that when the first timed stage starts, so waiting beats failing on the entry reading.
+const QUIET_WAIT_MS = 30 * MINUTES;
+const QUIET_POLL_MS = 30_000;
+const QUIET_REPORT_MS = 2 * MINUTES;
+
+// null once the machine is quiet; the last load reading if it never settled.
+async function waitForQuiet(label) {
+  const cores = cpus().length;
+  const deadline = Date.now() + QUIET_WAIT_MS;
+  let nextReport = 0;
+  for (;;) {
+    const load1 = loadavg()[0];
+    const { blocked, text } = describeLoad(load1, cores, topProcesses());
+    if (!blocked) return null;
+    if (Date.now() >= nextReport) {
+      console.error(`\nwaiting to enter ${label}: ${text}`);
+      console.error(`retrying every ${QUIET_POLL_MS / 1000}s until ${new Date(deadline).toLocaleTimeString()}`);
+      nextReport = Date.now() + QUIET_REPORT_MS;
+    }
+    if (Date.now() >= deadline) return load1;
+    await new Promise((r) => setTimeout(r, QUIET_POLL_MS));
+  }
+}
+
 const blockedStages = [];
 for (const stage of STAGES) {
   if (blockedStages.length > 0) break;
@@ -236,12 +261,9 @@ for (const stage of STAGES) {
   const owedSteps = stage.steps.filter((step) => owedFor(step, owed) && !alreadyDone(step));
   const needsQuiet = owedSteps.some((step) => step.quiet);
   if (needsQuiet) {
-    const cores = cpus().length;
-    const load1 = loadavg()[0];
-    const { blocked, message } = quietMachineCheck(load1, cores);
-    if (message) console.error(message);
-    if (blocked) {
-      console.error(`BLOCKED entering ${stage.label}`);
+    const load1 = await waitForQuiet(stage.label);
+    if (load1 !== null) {
+      console.error(`BLOCKED entering ${stage.label} after waiting ${QUIET_WAIT_MS / 60_000} minutes for the machine to settle`);
       for (const step of owedSteps) sitting.steps[step.id] = { id: step.id, argv: step.argv, owed: true, status: 'blocked', timeout: step.timeout, load_entry: load1 };
       blockedStages.push(stage.id);
       writeSitting();
@@ -325,16 +347,16 @@ if (reportResult.status !== 0) {
   console.error('report.mjs failed to render this sitting; see above');
   process.exit(1);
 }
-const reportJson = JSON.parse(readFileSync(join(reportsDir, `${sitting.date}-release-gate.json`), 'utf8'));
+const reportJson = JSON.parse(readFileSync(join(sittingDir, `${SITTING_REPORT}.json`), 'utf8'));
 
 console.log(`\n${reportJson.verdict}`);
 if (reportJson.verdict === 'BLOCK') for (const reason of reportJson.verdict_reasons) console.error(`  ${reason}`);
 if (unmetSteps.length > 0) console.log(`owed and unmet (not a block): ${unmetSteps.map((s) => s.id).join(', ')}`);
-console.log(reportJson.verdict === 'PASS' ? 'numbers of record: updated to point at this sitting' : 'numbers of record: left as they were (BLOCK)');
+console.log(reportJson.verdict === 'PASS' ? 'numbers of record: repointed once report.mjs --release names this sitting' : 'numbers of record: left as they were (BLOCK)');
 const noPrior = reportJson.classifications.filter((c) => c.verdict === 'no-prior').length;
 console.log(`compared: ${reportJson.classifications.length - noPrior} row(s) against a prior, ${noPrior} with no prior (an uncompared row is not a pass)`);
 console.log(`sitting: ${sittingDir}`);
-console.log(`report: ${join(reportsDir, `${sitting.date}-release-gate.md`)}`);
+console.log(`report: ${join(sittingDir, `${SITTING_REPORT}.md`)}`);
 console.log(`default store for this pipeline: ${DEFAULT_STORE}; offered: ${OFFERED.join(', ')}`);
 
 process.exit(reportJson.verdict === 'BLOCK' ? 1 : 0);

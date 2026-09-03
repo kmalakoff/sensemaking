@@ -7,7 +7,7 @@ import { fieldStats } from './fieldStats.ts';
 import { queryLexical } from './lexical.ts';
 import { scanCandidates, scanSimilar, writeVectorBatch } from './vectors.ts';
 
-export const CAPABILITIES: ReadonlySet<Capability> = new Set(['phrases', 'snippets', 'watch-concurrency', 'lexical', 'vectors', 'sql-functions']);
+export const CAPABILITIES: ReadonlySet<Capability> = new Set(['phrases', 'snippets', 'lexical', 'vectors', 'sql-functions']);
 
 // Wraps the synchronous DatabaseSync connection in the async Store interface, sharing one
 // Connection instance (conn) with the builder's own reconcile call so transaction depth is tracked against the same object everywhere.

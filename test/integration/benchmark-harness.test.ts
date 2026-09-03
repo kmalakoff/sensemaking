@@ -4,7 +4,8 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { classify } from '../../benchmark/lib/classify.mjs';
 import { DIFF_MAP_PATHS } from '../../benchmark/lib/gates.mjs';
-import { warmFileCache } from '../../benchmark/lib/measure.mjs';
+import { MEASURE_VERSION, warmFileCache } from '../../benchmark/lib/measure.mjs';
+import { describeLoad, parseTopProcesses, quietMachineCheck } from '../../benchmark/lib/quiet-machine.mjs';
 import { INPROC_META_KEYS, ROW_BY_KEY, RUN_META_KEYS, RUN_METRIC_KEYS, rowValue } from '../../benchmark/lib/rows.mjs';
 import { treeFingerprint } from '../../benchmark/lib/tree-fingerprint.mjs';
 import { aggregateVerdict, classifyCompare, classifyCrossGroup, classifyEval, priorStepLookup } from '../../benchmark/lib/verdict.mjs';
@@ -33,6 +34,41 @@ describe('classify: band edges', () => {
   it('no prior recorded is no-prior, not a block', () => {
     const c = classify(WALL_ROW, null, 100);
     assert.equal(c.verdict, 'no-prior');
+  });
+});
+
+describe('quiet machine: the gate names what is keeping it busy', () => {
+  const PS = ['%CPU COMM', ' 73.0 /System/Library/PrivateFrameworks/Ecosystem.framework/Support/ecosystemd', ' 40.0 /Users/x/.nvm/versions/node/bin/node', '  2.0 /usr/sbin/cupsd'].join('\n');
+
+  it('blocks above half the cores and passes at the limit', () => {
+    assert.equal(quietMachineCheck(7, 14).blocked, false, 'exactly at the limit is quiet');
+    assert.equal(quietMachineCheck(7.01, 14).blocked, true);
+    assert.equal(quietMachineCheck(1, 2).blocked, false, 'the limit scales with the machine');
+    assert.equal(quietMachineCheck(1.01, 2).blocked, true);
+  });
+
+  it('reports the busiest processes and drops the quiet ones', () => {
+    const top = parseTopProcesses(PS);
+    assert.deepEqual(
+      top.map((p) => p.percent),
+      [73, 40],
+      'cupsd at 2% is below the reporting floor'
+    );
+    assert.equal(top[0].system, true, "a /System/ path is not the reader's to stop");
+    assert.equal(top[1].system, false, 'a node process under /Users is');
+  });
+
+  it('tells a blocked reader what to stop, and says so when nothing is theirs', () => {
+    const mine = describeLoad(12, 14, parseTopProcesses(PS));
+    assert.equal(mine.blocked, true);
+    assert.match(mine.text, /stop these and run again: node/);
+    const systemOnly = describeLoad(
+      12,
+      14,
+      parseTopProcesses(PS).filter((p) => p.system)
+    );
+    assert.match(systemOnly.text, /nothing here is yours to stop/, 'a machine busy with its own daemons needs waiting, not a hunt');
+    assert.doesNotMatch(describeLoad(2, 14, []).text, /exceeds/, 'a quiet machine says so plainly');
   });
 });
 
@@ -246,6 +282,9 @@ describe('catalog / run.mjs key agreement', () => {
     assert.deepEqual(flattened, [...RUN_METRIC_KEYS].sort());
     // rowValue reaches every one of them, dotted paths included.
     for (const key of RUN_METRIC_KEYS) assert.notEqual(rowValue(row, key), undefined, `rowValue could not reach ${key}`);
+    // open() returns stages on every reconcile, not only the cold build: both update reps must carry theirs.
+    assert.ok(row.inproc.update_1_file_stages?.spans, 'update_1_file_ms must carry stages');
+    assert.ok(row.inproc.update_10_files_stages?.spans, 'update_10_files_ms must carry stages');
   });
 });
 
@@ -256,7 +295,6 @@ describe('prior resolution: per step, never per report', () => {
     cold_crawl_ms: n,
     version_canary_ms: 20,
     warm_query_ms: 50,
-    bm25_search_ms: 50,
     find_ms: 60,
     find_row_tokens: 71,
     cold_embed_ms: 200,
@@ -276,7 +314,8 @@ describe('prior resolution: per step, never per report', () => {
   it('a step finds its prior in an older report when the newest report never ran it', async () => {
     const reportsDir = scratchDir('prior-per-step-reports');
     const sitting = scratchDir('prior-per-step-sitting');
-    const gateReport = (date: string, steps: Record<string, unknown>) => writeFileSync(join(reportsDir, `${date}-release-gate.json`), JSON.stringify({ date, verdict: 'PASS', generated: true, classifications: [], accepted: {}, steps }));
+    const stamp = (steps: Record<string, unknown>) => Object.fromEntries(Object.entries(steps).map(([k, v]) => [k, { ...(v as object), measure_version: MEASURE_VERSION }]));
+    const gateReport = (date: string, steps: Record<string, unknown>) => writeFileSync(join(reportsDir, `${date}-9.9.8-release-gate.json`), JSON.stringify({ date, verdict: 'PASS', generated: true, classifications: [], accepted: {}, steps: stamp(steps) }));
     gateReport('2099-01-01', { stress: metricRow(100) });
     gateReport('2099-01-02', {}); // a docs-only sitting: ran no measured step
     writeFileSync(join(sitting, 'stress.json'), JSON.stringify(metricRow(101)));
@@ -291,13 +330,13 @@ describe('prior resolution: per step, never per report', () => {
       [],
       'every stress row must find its prior in the older report, across the docs-only sitting between'
     );
-    assert.equal((report.prior_from as Record<string, string>).stress, '2099-01-01-release-gate.json');
+    assert.equal((report.prior_from as Record<string, string>).stress, '2099-01-01-9.9.8-release-gate.json');
   });
 
   it('a step no earlier report ever ran is a real no-prior', async () => {
     const reportsDir = scratchDir('prior-none-reports');
     const sitting = scratchDir('prior-none-sitting');
-    writeFileSync(join(reportsDir, '2099-01-01-release-gate.json'), JSON.stringify({ date: '2099-01-01', verdict: 'PASS', generated: true, classifications: [], accepted: {}, steps: {} }));
+    writeFileSync(join(reportsDir, '2099-01-01-9.9.8-release-gate.json'), JSON.stringify({ date: '2099-01-01', verdict: 'PASS', generated: true, classifications: [], accepted: {}, steps: {} }));
     writeFileSync(join(sitting, 'stress.json'), JSON.stringify(metricRow(101)));
     writeFileSync(join(sitting, 'sitting.json'), JSON.stringify({ date: '2099-01-03', baseline_version: '9.9.9', last_tag: 'v9.9.8', machine: { cpu_model: 'Fixture' }, node: 'v99', changed_paths: [], owed: {}, steps: {}, failed_stage_reasons: [] }));
 
@@ -317,7 +356,6 @@ describe('priorStepLookup: measure_version, the absent-stamp trap and a real mis
     cold_crawl_ms: n,
     version_canary_ms: 20,
     warm_query_ms: 50,
-    bm25_search_ms: 50,
     find_ms: 60,
     find_row_tokens: 71,
     cold_embed_ms: 200,
@@ -346,10 +384,26 @@ describe('priorStepLookup: measure_version, the absent-stamp trap and a real mis
     assert.deepEqual(hit, { step: null, from: 'old.json', mismatch: { prior: 'm1', current: 'm2' } });
   });
 
+  it('fixture: a step that started and never settled blocks the sitting, named in the verdict', async () => {
+    const reportsDir = scratchDir('interrupted-reports');
+    const sitting = scratchDir('interrupted-sitting');
+    writeFileSync(join(sitting, 'stress.json'), JSON.stringify(metricRow(100)));
+    writeFileSync(join(sitting, 'battery-turso-hub.log'), 'partial output, then the kill\n'); // the log exists, the status never got written
+    writeFileSync(join(sitting, 'sitting.json'), JSON.stringify({ date: '2099-01-03', baseline_version: '9.9.9', last_tag: 'v9.9.8', machine: { cpu_model: 'Fixture' }, node: 'v99', changed_paths: [], owed: {}, steps: { stress: { status: 'ok' } }, failed_stage_reasons: [] }));
+
+    const { buildReport } = await import('../../benchmark/report.mjs');
+    const report = buildReport(sitting, { reportsDir });
+    assert.equal(report.verdict, 'BLOCK', 'an interrupted sitting measured nothing past the kill and must not pass');
+    assert.ok(
+      (report.verdict_reasons as string[]).some((r) => r.startsWith('battery-turso-hub: started, never finished')),
+      `the unfinished step is named: ${JSON.stringify(report.verdict_reasons)}`
+    );
+  });
+
   it('fixture: a report-wide m1/m2 mismatch classifies every row no-prior and records prior_harness_mismatch', async () => {
     const reportsDir = scratchDir('measure-version-mismatch-reports');
     const sitting = scratchDir('measure-version-mismatch-sitting');
-    writeFileSync(join(reportsDir, '2099-01-01-release-gate.json'), JSON.stringify({ date: '2099-01-01', verdict: 'PASS', generated: true, classifications: [], accepted: {}, steps: { stress: { ...metricRow(100), measure_version: 'm1' } } }));
+    writeFileSync(join(reportsDir, '2099-01-01-9.9.8-release-gate.json'), JSON.stringify({ date: '2099-01-01', verdict: 'PASS', generated: true, classifications: [], accepted: {}, steps: { stress: { ...metricRow(100), measure_version: 'm1' } } }));
     writeFileSync(join(sitting, 'stress.json'), JSON.stringify(metricRow(101)));
     writeFileSync(join(sitting, 'sitting.json'), JSON.stringify({ date: '2099-01-03', baseline_version: '9.9.9', last_tag: 'v9.9.8', machine: { cpu_model: 'Fixture' }, node: 'v99', changed_paths: [], owed: {}, steps: {}, failed_stage_reasons: [] }));
 
@@ -360,6 +414,6 @@ describe('priorStepLookup: measure_version, the absent-stamp trap and a real mis
       stress.every((c: { verdict: string }) => c.verdict === 'no-prior'),
       'a real harness-version mismatch must classify every row no-prior'
     );
-    assert.deepEqual((report.prior_harness_mismatch as Record<string, unknown>).stress, { prior: 'm1', current: 'm2' });
+    assert.deepEqual((report.prior_harness_mismatch as Record<string, unknown>).stress, { prior: 'm1', current: MEASURE_VERSION });
   });
 });

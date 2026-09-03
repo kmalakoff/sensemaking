@@ -2,7 +2,7 @@
   "date": "2026-09-02",
   "title": "2026-09-02 release gate",
   "package_version": "0.20.0",
-  "release_version": null,
+  "release_version": "0.21.0",
   "chunk_version": "chunk:v5",
   "schema_version": {
     "sqlite": "19",
@@ -120,7 +120,14 @@
     "test/unit/text/segment.test.ts"
   ],
   "owed": {
-    "test-engines": ["package.json", "src/store/sqlite/lexical.ts", "src/store/sqlite/open.ts", "src/store/sqlite/reconcile.ts", "src/store/sqlite/sql-functions.ts", "src/store/sqlite/store.ts"],
+    "test-engines": [
+      "package.json",
+      "src/store/sqlite/lexical.ts",
+      "src/store/sqlite/open.ts",
+      "src/store/sqlite/reconcile.ts",
+      "src/store/sqlite/sql-functions.ts",
+      "src/store/sqlite/store.ts"
+    ],
     "store-dump": [
       "src/features/links.ts",
       "src/features/sections.ts",
@@ -142,7 +149,10 @@
       "src/store/turso/reconcile.ts",
       "src/store/types.ts"
     ],
-    "oracle": ["src/features/links.ts", "src/features/sections.ts"],
+    "oracle": [
+      "src/features/links.ts",
+      "src/features/sections.ts"
+    ],
     "scale": [
       "src/features/links.ts",
       "src/features/sections.ts",
@@ -164,7 +174,10 @@
       "src/store/turso/reconcile.ts",
       "src/store/types.ts"
     ],
-    "fever": ["src/features/links.ts", "src/features/sections.ts"],
+    "fever": [
+      "src/features/links.ts",
+      "src/features/sections.ts"
+    ],
     "baseline": [
       "benchmark/bakeoff-http.mjs",
       "benchmark/chunk-sweep.mjs",
@@ -264,7 +277,11 @@
   "steps_status": {
     "validate": {
       "id": "validate",
-      "argv": ["npx", "tsds", "validate"],
+      "argv": [
+        "npx",
+        "tsds",
+        "validate"
+      ],
       "owed": true,
       "timeout": 600000,
       "started": "2026-09-02T13:22:54.609Z",
@@ -275,7 +292,10 @@
     },
     "npm-test": {
       "id": "npm-test",
-      "argv": ["npm", "test"],
+      "argv": [
+        "npm",
+        "test"
+      ],
       "owed": true,
       "timeout": 600000,
       "started": "2026-09-02T13:22:58.097Z",
@@ -286,7 +306,11 @@
     },
     "test-engines": {
       "id": "test-engines",
-      "argv": ["npm", "run", "test:engines"],
+      "argv": [
+        "npm",
+        "run",
+        "test:engines"
+      ],
       "owed": true,
       "timeout": 900000,
       "started": "2026-09-02T13:24:10.061Z",
@@ -297,7 +321,10 @@
     },
     "prepublish": {
       "id": "prepublish",
-      "argv": ["node", "scripts/prepublish.ts"],
+      "argv": [
+        "node",
+        "scripts/prepublish.ts"
+      ],
       "owed": true,
       "timeout": 60000,
       "started": "2026-09-02T13:22:54.490Z",
@@ -308,27 +335,39 @@
     },
     "live-suite": {
       "id": "live-suite",
-      "argv": ["npm", "test"],
+      "argv": [
+        "npm",
+        "test"
+      ],
       "owed": false,
       "status": "not-owed"
     },
     "store-dump": {
       "id": "store-dump",
-      "argv": ["node", "benchmark/steps/store-dump.mjs"],
+      "argv": [
+        "node",
+        "benchmark/steps/store-dump.mjs"
+      ],
       "owed": true,
       "status": "owed-unmet",
       "reason": "A/B against the last tag needs a checkout and build of that tag; not yet automated, run the capture/compare pair by hand (BENCHMARKING.md)"
     },
     "oracle": {
       "id": "oracle",
-      "argv": ["node", "benchmark/steps/oracle.mjs"],
+      "argv": [
+        "node",
+        "benchmark/steps/oracle.mjs"
+      ],
       "owed": true,
       "status": "owed-unmet",
       "reason": "needs Obsidian running with the vault open (RELEASING.md step 3)"
     },
     "compare": {
       "id": "compare",
-      "argv": ["node", "benchmark/steps/compare-versions.mjs"],
+      "argv": [
+        "node",
+        "benchmark/steps/compare-versions.mjs"
+      ],
       "owed": true,
       "timeout": 1800000,
       "started": "2026-09-02T13:27:20.829Z",
@@ -336,11 +375,21 @@
       "status": "ok",
       "load_entry": 3.82080078125,
       "load_exit": 5.10205078125,
-      "column_order": ["0.20.0", "local"]
+      "column_order": [
+        "0.20.0",
+        "local"
+      ]
     },
     "battery-duckdb-hub": {
       "id": "battery-duckdb-hub",
-      "argv": ["node", "benchmark/steps/measure-tree.mjs", ".", "obsidian-hub", "--store", "duckdb"],
+      "argv": [
+        "node",
+        "benchmark/steps/measure-tree.mjs",
+        ".",
+        "obsidian-hub",
+        "--store",
+        "duckdb"
+      ],
       "owed": true,
       "timeout": 1200000,
       "started": "2026-09-02T13:28:53.951Z",
@@ -351,7 +400,14 @@
     },
     "battery-turso-hub": {
       "id": "battery-turso-hub",
-      "argv": ["node", "benchmark/steps/measure-tree.mjs", ".", "obsidian-hub", "--store", "turso"],
+      "argv": [
+        "node",
+        "benchmark/steps/measure-tree.mjs",
+        ".",
+        "obsidian-hub",
+        "--store",
+        "turso"
+      ],
       "owed": true,
       "timeout": 1200000,
       "started": "2026-09-02T13:30:36.750Z",
@@ -362,7 +418,12 @@
     },
     "scale-13k": {
       "id": "scale-13k",
-      "argv": ["node", "benchmark/steps/measure-tree.mjs", ".", ".tmp/cache/obsidian-hub-x2-x2-hub-1"],
+      "argv": [
+        "node",
+        "benchmark/steps/measure-tree.mjs",
+        ".",
+        ".tmp/cache/obsidian-hub-x2-x2-hub-1"
+      ],
       "owed": true,
       "timeout": 1800000,
       "started": "2026-09-02T13:31:49.497Z",
@@ -373,7 +434,12 @@
     },
     "scale-26k": {
       "id": "scale-26k",
-      "argv": ["node", "benchmark/steps/measure-tree.mjs", ".", ".tmp/cache/obsidian-hub-x4-x4-hub-1"],
+      "argv": [
+        "node",
+        "benchmark/steps/measure-tree.mjs",
+        ".",
+        ".tmp/cache/obsidian-hub-x4-x4-hub-1"
+      ],
       "owed": true,
       "timeout": 2700000,
       "started": "2026-09-02T13:33:04.759Z",
@@ -384,7 +450,12 @@
     },
     "stress": {
       "id": "stress",
-      "argv": ["node", "benchmark/steps/measure-tree.mjs", ".", ".tmp/cache/stress-stress-1"],
+      "argv": [
+        "node",
+        "benchmark/steps/measure-tree.mjs",
+        ".",
+        ".tmp/cache/stress-stress-1"
+      ],
       "owed": true,
       "timeout": 1800000,
       "started": "2026-09-02T13:35:15.683Z",
@@ -395,7 +466,14 @@
     },
     "battery-duckdb-13k": {
       "id": "battery-duckdb-13k",
-      "argv": ["node", "benchmark/steps/measure-tree.mjs", ".", ".tmp/cache/obsidian-hub-x2-x2-hub-1", "--store", "duckdb"],
+      "argv": [
+        "node",
+        "benchmark/steps/measure-tree.mjs",
+        ".",
+        ".tmp/cache/obsidian-hub-x2-x2-hub-1",
+        "--store",
+        "duckdb"
+      ],
       "owed": true,
       "timeout": 1800000,
       "started": "2026-09-02T13:37:46.780Z",
@@ -406,7 +484,14 @@
     },
     "battery-duckdb-26k": {
       "id": "battery-duckdb-26k",
-      "argv": ["node", "benchmark/steps/measure-tree.mjs", ".", ".tmp/cache/obsidian-hub-x4-x4-hub-1", "--store", "duckdb"],
+      "argv": [
+        "node",
+        "benchmark/steps/measure-tree.mjs",
+        ".",
+        ".tmp/cache/obsidian-hub-x4-x4-hub-1",
+        "--store",
+        "duckdb"
+      ],
       "owed": true,
       "timeout": 2700000,
       "started": "2026-09-02T13:40:42.259Z",
@@ -417,7 +502,14 @@
     },
     "battery-duckdb-stress": {
       "id": "battery-duckdb-stress",
-      "argv": ["node", "benchmark/steps/measure-tree.mjs", ".", ".tmp/cache/stress-stress-1", "--store", "duckdb"],
+      "argv": [
+        "node",
+        "benchmark/steps/measure-tree.mjs",
+        ".",
+        ".tmp/cache/stress-stress-1",
+        "--store",
+        "duckdb"
+      ],
       "owed": true,
       "timeout": 1800000,
       "started": "2026-09-02T13:46:09.135Z",
@@ -428,7 +520,14 @@
     },
     "battery-turso-13k": {
       "id": "battery-turso-13k",
-      "argv": ["node", "benchmark/steps/measure-tree.mjs", ".", ".tmp/cache/obsidian-hub-x2-x2-hub-1", "--store", "turso"],
+      "argv": [
+        "node",
+        "benchmark/steps/measure-tree.mjs",
+        ".",
+        ".tmp/cache/obsidian-hub-x2-x2-hub-1",
+        "--store",
+        "turso"
+      ],
       "owed": true,
       "timeout": 1800000,
       "started": "2026-09-02T13:56:30.428Z",
@@ -439,7 +538,14 @@
     },
     "battery-turso-26k": {
       "id": "battery-turso-26k",
-      "argv": ["node", "benchmark/steps/measure-tree.mjs", ".", ".tmp/cache/obsidian-hub-x4-x4-hub-1", "--store", "turso"],
+      "argv": [
+        "node",
+        "benchmark/steps/measure-tree.mjs",
+        ".",
+        ".tmp/cache/obsidian-hub-x4-x4-hub-1",
+        "--store",
+        "turso"
+      ],
       "owed": true,
       "timeout": 2700000,
       "started": "2026-09-02T13:58:36.047Z",
@@ -450,7 +556,14 @@
     },
     "battery-turso-stress": {
       "id": "battery-turso-stress",
-      "argv": ["node", "benchmark/steps/measure-tree.mjs", ".", ".tmp/cache/stress-stress-1", "--store", "turso"],
+      "argv": [
+        "node",
+        "benchmark/steps/measure-tree.mjs",
+        ".",
+        ".tmp/cache/stress-stress-1",
+        "--store",
+        "turso"
+      ],
       "owed": true,
       "timeout": 1800000,
       "started": "2026-09-02T14:02:30.380Z",
@@ -461,7 +574,11 @@
     },
     "eval-nfcorpus": {
       "id": "eval-nfcorpus",
-      "argv": ["node", "benchmark/steps/quality.mjs", "nfcorpus"],
+      "argv": [
+        "node",
+        "benchmark/steps/quality.mjs",
+        "nfcorpus"
+      ],
       "owed": true,
       "timeout": 1200000,
       "started": "2026-09-02T14:07:47.532Z",
@@ -472,7 +589,11 @@
     },
     "eval-fever": {
       "id": "eval-fever",
-      "argv": ["node", "benchmark/steps/quality.mjs", "fever"],
+      "argv": [
+        "node",
+        "benchmark/steps/quality.mjs",
+        "fever"
+      ],
       "owed": true,
       "timeout": 2700000,
       "started": "2026-09-02T14:08:01.277Z",
@@ -3205,7 +3326,10 @@
     "compare": {
       "corpus": "/Users/kevin/Dev/OpenSource/ai/sensemaking/.tmp/cache/obsidian-hub-b11036f9",
       "store": "sqlite",
-      "versions": ["0.20.0", "local"],
+      "versions": [
+        "0.20.0",
+        "local"
+      ],
       "reversed": false,
       "results": {
         "0.20.0": {
@@ -3215,7 +3339,11 @@
           "store": "sqlite",
           "notes": 6566,
           "cold_crawl_ms": 1944,
-          "cold_crawl_ms_samples": [2155, 1903, 1944],
+          "cold_crawl_ms_samples": [
+            2155,
+            1903,
+            1944
+          ],
           "warmed_bytes": 14749122,
           "version_canary_ms": 28,
           "warm_query_ms": 131,
@@ -3234,12 +3362,24 @@
           "largest_note_tokens": 77274,
           "bulk_files": 500,
           "bulk_change_ms": 585,
-          "bulk_change_ms_samples": [573, 585, 606],
+          "bulk_change_ms_samples": [
+            573,
+            585,
+            606
+          ],
           "bulk_watch_ms": 158,
-          "bulk_watch_ms_samples": [163, 158, 152],
+          "bulk_watch_ms_samples": [
+            163,
+            158,
+            152
+          ],
           "inproc": {
             "cold_build_ms": 1808,
-            "cold_build_ms_samples": [1755, 1811, 1808],
+            "cold_build_ms_samples": [
+              1755,
+              1811,
+              1808
+            ],
             "open_nochange_ms": 35.2,
             "update_1_file_ms": 37.5,
             "update_10_files_ms": 43.1
@@ -3252,7 +3392,11 @@
           "store": "sqlite",
           "notes": 6566,
           "cold_crawl_ms": 2086,
-          "cold_crawl_ms_samples": [2086, 2382, 2063],
+          "cold_crawl_ms_samples": [
+            2086,
+            2382,
+            2063
+          ],
           "warmed_bytes": 14749122,
           "version_canary_ms": 26,
           "warm_query_ms": 131,
@@ -3271,12 +3415,24 @@
           "largest_note_tokens": 77274,
           "bulk_files": 500,
           "bulk_change_ms": 558,
-          "bulk_change_ms_samples": [558, 553, 586],
+          "bulk_change_ms_samples": [
+            558,
+            553,
+            586
+          ],
           "bulk_watch_ms": 159,
-          "bulk_watch_ms_samples": [159, 160, 159],
+          "bulk_watch_ms_samples": [
+            159,
+            160,
+            159
+          ],
           "inproc": {
             "cold_build_ms": 1838,
-            "cold_build_ms_samples": [1843, 1829, 1838],
+            "cold_build_ms_samples": [
+              1843,
+              1829,
+              1838
+            ],
             "open_nochange_ms": 35.3,
             "update_1_file_ms": 38.4,
             "update_10_files_ms": 41.7
@@ -3291,7 +3447,11 @@
       "store": "sqlite",
       "notes": 13132,
       "cold_crawl_ms": 3933,
-      "cold_crawl_ms_samples": [3933, 3975, 3571],
+      "cold_crawl_ms_samples": [
+        3933,
+        3975,
+        3571
+      ],
       "warmed_bytes": 29498244,
       "version_canary_ms": 28,
       "warm_query_ms": 187,
@@ -3310,12 +3470,24 @@
       "largest_note_tokens": 77274,
       "bulk_files": 500,
       "bulk_change_ms": 646,
-      "bulk_change_ms_samples": [646, 637, 650],
+      "bulk_change_ms_samples": [
+        646,
+        637,
+        650
+      ],
       "bulk_watch_ms": 213,
-      "bulk_watch_ms_samples": [214, 197, 213],
+      "bulk_watch_ms_samples": [
+        214,
+        197,
+        213
+      ],
       "inproc": {
         "cold_build_ms": 3481,
-        "cold_build_ms_samples": [3365, 3481, 3572],
+        "cold_build_ms_samples": [
+          3365,
+          3481,
+          3572
+        ],
         "open_nochange_ms": 71.2,
         "update_1_file_ms": 78.5,
         "update_10_files_ms": 82.4
@@ -3328,7 +3500,11 @@
       "store": "sqlite",
       "notes": 26264,
       "cold_crawl_ms": 7018,
-      "cold_crawl_ms_samples": [7218, 7018, 6865],
+      "cold_crawl_ms_samples": [
+        7218,
+        7018,
+        6865
+      ],
       "warmed_bytes": 58996488,
       "version_canary_ms": 30,
       "warm_query_ms": 293,
@@ -3347,12 +3523,24 @@
       "largest_note_tokens": 77274,
       "bulk_files": 500,
       "bulk_change_ms": 767,
-      "bulk_change_ms_samples": [759, 767, 774],
+      "bulk_change_ms_samples": [
+        759,
+        767,
+        774
+      ],
       "bulk_watch_ms": 322,
-      "bulk_watch_ms_samples": [322, 329, 320],
+      "bulk_watch_ms_samples": [
+        322,
+        329,
+        320
+      ],
       "inproc": {
         "cold_build_ms": 5965,
-        "cold_build_ms_samples": [5850, 6055, 5965],
+        "cold_build_ms_samples": [
+          5850,
+          6055,
+          5965
+        ],
         "open_nochange_ms": 149.6,
         "update_1_file_ms": 151.7,
         "update_10_files_ms": 157.2
@@ -3365,7 +3553,11 @@
       "store": "sqlite",
       "notes": 2000,
       "cold_crawl_ms": 6085,
-      "cold_crawl_ms_samples": [6085, 6120, 6046],
+      "cold_crawl_ms_samples": [
+        6085,
+        6120,
+        6046
+      ],
       "warmed_bytes": 17915080,
       "version_canary_ms": 28,
       "warm_query_ms": 93,
@@ -3384,12 +3576,24 @@
       "largest_note_tokens": 254821,
       "bulk_files": 500,
       "bulk_change_ms": 1820,
-      "bulk_change_ms_samples": [1842, 1820, 1762],
+      "bulk_change_ms_samples": [
+        1842,
+        1820,
+        1762
+      ],
       "bulk_watch_ms": 121,
-      "bulk_watch_ms_samples": [124, 121, 116],
+      "bulk_watch_ms_samples": [
+        124,
+        121,
+        116
+      ],
       "inproc": {
         "cold_build_ms": 5579,
-        "cold_build_ms_samples": [5579, 5614, 5473],
+        "cold_build_ms_samples": [
+          5579,
+          5614,
+          5473
+        ],
         "open_nochange_ms": 11.3,
         "update_1_file_ms": 24.6,
         "update_10_files_ms": 89.1
@@ -3402,7 +3606,11 @@
       "store": "duckdb",
       "notes": 6566,
       "cold_crawl_ms": 5926,
-      "cold_crawl_ms_samples": [6093, 5912, 5926],
+      "cold_crawl_ms_samples": [
+        6093,
+        5912,
+        5926
+      ],
       "warmed_bytes": 14749122,
       "version_canary_ms": 27,
       "warm_query_ms": 162,
@@ -3421,12 +3629,24 @@
       "largest_note_tokens": 77274,
       "bulk_files": 500,
       "bulk_change_ms": 1225,
-      "bulk_change_ms_samples": [1225, 1159, 1237],
+      "bulk_change_ms_samples": [
+        1225,
+        1159,
+        1237
+      ],
       "bulk_watch_ms": 1207,
-      "bulk_watch_ms_samples": [1207, 1204, 1221],
+      "bulk_watch_ms_samples": [
+        1207,
+        1204,
+        1221
+      ],
       "inproc": {
         "cold_build_ms": 4390,
-        "cold_build_ms_samples": [4390, 4357, 4399],
+        "cold_build_ms_samples": [
+          4390,
+          4357,
+          4399
+        ],
         "open_nochange_ms": 44.1,
         "update_1_file_ms": 56.6,
         "update_10_files_ms": 75.2
@@ -3439,7 +3659,11 @@
       "store": "duckdb",
       "notes": 13132,
       "cold_crawl_ms": 11867,
-      "cold_crawl_ms_samples": [11867, 11716, 11922],
+      "cold_crawl_ms_samples": [
+        11867,
+        11716,
+        11922
+      ],
       "warmed_bytes": 29498244,
       "version_canary_ms": 26,
       "warm_query_ms": 219,
@@ -3458,12 +3682,24 @@
       "largest_note_tokens": 77274,
       "bulk_files": 500,
       "bulk_change_ms": 1172,
-      "bulk_change_ms_samples": [1445, 1146, 1172],
+      "bulk_change_ms_samples": [
+        1445,
+        1146,
+        1172
+      ],
       "bulk_watch_ms": 1206,
-      "bulk_watch_ms_samples": [1177, 1206, 1206],
+      "bulk_watch_ms_samples": [
+        1177,
+        1206,
+        1206
+      ],
       "inproc": {
         "cold_build_ms": 8853,
-        "cold_build_ms_samples": [8839, 8894, 8853],
+        "cold_build_ms_samples": [
+          8839,
+          8894,
+          8853
+        ],
         "open_nochange_ms": 79.3,
         "update_1_file_ms": 99.8,
         "update_10_files_ms": 113.6
@@ -3476,7 +3712,11 @@
       "store": "duckdb",
       "notes": 26264,
       "cold_crawl_ms": 24461,
-      "cold_crawl_ms_samples": [25096, 24119, 24461],
+      "cold_crawl_ms_samples": [
+        25096,
+        24119,
+        24461
+      ],
       "warmed_bytes": 58996488,
       "version_canary_ms": 27,
       "warm_query_ms": 329,
@@ -3495,12 +3735,24 @@
       "largest_note_tokens": 77274,
       "bulk_files": 500,
       "bulk_change_ms": 1409,
-      "bulk_change_ms_samples": [1714, 1409, 1367],
+      "bulk_change_ms_samples": [
+        1714,
+        1409,
+        1367
+      ],
       "bulk_watch_ms": 1396,
-      "bulk_watch_ms_samples": [1396, 1388, 1403],
+      "bulk_watch_ms_samples": [
+        1396,
+        1388,
+        1403
+      ],
       "inproc": {
         "cold_build_ms": 17363,
-        "cold_build_ms_samples": [17435, 17358, 17363],
+        "cold_build_ms_samples": [
+          17435,
+          17358,
+          17363
+        ],
         "open_nochange_ms": 156.5,
         "update_1_file_ms": 184,
         "update_10_files_ms": 200.1
@@ -3513,7 +3765,11 @@
       "store": "duckdb",
       "notes": 2000,
       "cold_crawl_ms": 47055,
-      "cold_crawl_ms_samples": [47055, 47520, 46718],
+      "cold_crawl_ms_samples": [
+        47055,
+        47520,
+        46718
+      ],
       "warmed_bytes": 17915080,
       "version_canary_ms": 28,
       "warm_query_ms": 122,
@@ -3532,12 +3788,24 @@
       "largest_note_tokens": 254821,
       "bulk_files": 500,
       "bulk_change_ms": 11752,
-      "bulk_change_ms_samples": [12081, 11752, 11709],
+      "bulk_change_ms_samples": [
+        12081,
+        11752,
+        11709
+      ],
       "bulk_watch_ms": 11559,
-      "bulk_watch_ms_samples": [11434, 11559, 11566],
+      "bulk_watch_ms_samples": [
+        11434,
+        11559,
+        11566
+      ],
       "inproc": {
         "cold_build_ms": 36756,
-        "cold_build_ms_samples": [36756, 36450, 37150],
+        "cold_build_ms_samples": [
+          36756,
+          36450,
+          37150
+        ],
         "open_nochange_ms": 18.8,
         "update_1_file_ms": 270,
         "update_10_files_ms": 450.9
@@ -3550,7 +3818,11 @@
       "store": "turso",
       "notes": 6566,
       "cold_crawl_ms": 4424,
-      "cold_crawl_ms_samples": [4524, 4424, 4392],
+      "cold_crawl_ms_samples": [
+        4524,
+        4424,
+        4392
+      ],
       "warmed_bytes": 14749122,
       "version_canary_ms": 27,
       "warm_query_ms": 139,
@@ -3569,12 +3841,24 @@
       "largest_note_tokens": 77274,
       "bulk_files": 500,
       "bulk_change_ms": 836,
-      "bulk_change_ms_samples": [827, 836, 867],
+      "bulk_change_ms_samples": [
+        827,
+        836,
+        867
+      ],
       "bulk_watch_ms": 891,
-      "bulk_watch_ms_samples": [862, 900, 891],
+      "bulk_watch_ms_samples": [
+        862,
+        900,
+        891
+      ],
       "inproc": {
         "cold_build_ms": 3466,
-        "cold_build_ms_samples": [3466, 3479, 3434],
+        "cold_build_ms_samples": [
+          3466,
+          3479,
+          3434
+        ],
         "open_nochange_ms": 42.5,
         "update_1_file_ms": 54.7,
         "update_10_files_ms": 121.8
@@ -3587,7 +3871,11 @@
       "store": "turso",
       "notes": 13132,
       "cold_crawl_ms": 8415,
-      "cold_crawl_ms_samples": [8602, 8415, 8181],
+      "cold_crawl_ms_samples": [
+        8602,
+        8415,
+        8181
+      ],
       "warmed_bytes": 29498244,
       "version_canary_ms": 25,
       "warm_query_ms": 197,
@@ -3606,12 +3894,24 @@
       "largest_note_tokens": 77274,
       "bulk_files": 500,
       "bulk_change_ms": 1032,
-      "bulk_change_ms_samples": [1027, 1032, 1045],
+      "bulk_change_ms_samples": [
+        1027,
+        1032,
+        1045
+      ],
       "bulk_watch_ms": 1026,
-      "bulk_watch_ms_samples": [1025, 1026, 1064],
+      "bulk_watch_ms_samples": [
+        1025,
+        1026,
+        1064
+      ],
       "inproc": {
         "cold_build_ms": 6240,
-        "cold_build_ms_samples": [6266, 6240, 6212],
+        "cold_build_ms_samples": [
+          6266,
+          6240,
+          6212
+        ],
         "open_nochange_ms": 82.2,
         "update_1_file_ms": 105.9,
         "update_10_files_ms": 236.2
@@ -3624,7 +3924,11 @@
       "store": "turso",
       "notes": 26264,
       "cold_crawl_ms": 16669,
-      "cold_crawl_ms_samples": [16291, 16669, 16888],
+      "cold_crawl_ms_samples": [
+        16291,
+        16669,
+        16888
+      ],
       "warmed_bytes": 58996488,
       "version_canary_ms": 28,
       "warm_query_ms": 314,
@@ -3643,12 +3947,24 @@
       "largest_note_tokens": 77274,
       "bulk_files": 500,
       "bulk_change_ms": 1371,
-      "bulk_change_ms_samples": [1330, 1385, 1371],
+      "bulk_change_ms_samples": [
+        1330,
+        1385,
+        1371
+      ],
       "bulk_watch_ms": 1415,
-      "bulk_watch_ms_samples": [1386, 1415, 1439],
+      "bulk_watch_ms_samples": [
+        1386,
+        1415,
+        1439
+      ],
       "inproc": {
         "cold_build_ms": 12308,
-        "cold_build_ms_samples": [12409, 12308, 12254],
+        "cold_build_ms_samples": [
+          12409,
+          12308,
+          12254
+        ],
         "open_nochange_ms": 170,
         "update_1_file_ms": 222.9,
         "update_10_files_ms": 644.6
@@ -3661,7 +3977,11 @@
       "store": "turso",
       "notes": 2000,
       "cold_crawl_ms": 23158,
-      "cold_crawl_ms_samples": [23055, 23158, 23233],
+      "cold_crawl_ms_samples": [
+        23055,
+        23158,
+        23233
+      ],
       "warmed_bytes": 17915080,
       "version_canary_ms": 27,
       "warm_query_ms": 98,
@@ -3680,12 +4000,24 @@
       "largest_note_tokens": 254821,
       "bulk_files": 500,
       "bulk_change_ms": 5500,
-      "bulk_change_ms_samples": [5500, 5500, 5553],
+      "bulk_change_ms_samples": [
+        5500,
+        5500,
+        5553
+      ],
       "bulk_watch_ms": 5585,
-      "bulk_watch_ms_samples": [5559, 5585, 5609],
+      "bulk_watch_ms_samples": [
+        5559,
+        5585,
+        5609
+      ],
       "inproc": {
         "cold_build_ms": 18425,
-        "cold_build_ms_samples": [18425, 18624, 18329],
+        "cold_build_ms_samples": [
+          18425,
+          18624,
+          18329
+        ],
         "open_nochange_ms": 14.3,
         "update_1_file_ms": 49,
         "update_10_files_ms": 302

@@ -1,4 +1,4 @@
-import { existsSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import assert from 'assert';
 import { safeRmSync } from 'fs-remove-compat';
@@ -7,6 +7,7 @@ import { SenseError } from '../../src/errors.ts';
 import { getMeta, openStore, setMeta } from '../../src/store/index.ts';
 import type { WatchEvent, WatchOptions } from '../../src/watch.ts';
 import { runWatch } from '../../src/watch.ts';
+import { runCli } from '../lib/cli.ts';
 import { tmpTree, writeNote } from '../lib/tree.ts';
 
 const dirs: string[] = [];
@@ -190,19 +191,6 @@ describe('runWatch', () => {
     assert.equal(await readMeta(cfg, 'watch_heartbeat'), null);
   });
 
-  it('a store without watch-concurrency errors before opening, naming the config fix', async () => {
-    const baseDir = tree();
-    writeNote(baseDir, 'a.md');
-    const cfg = { ...cfgFor(baseDir), store: 'duckdb' } as ResolvedConfig;
-    await assert.rejects(runWatch(cfg, {}), (err: unknown) => {
-      assert.ok(err instanceof SenseError);
-      assert.equal(err.code, 'STORE_CAPABILITY_MISSING');
-      assert.match(err.message, /"store" to "sqlite"/);
-      return true;
-    });
-    assert.equal(existsSync(join(baseDir, STATE_DIR)), false, 'the check runs before open, so no cache exists');
-  });
-
   it('WATCH_ACTIVE throws when a fresh heartbeat exists; force overrides it', async () => {
     const baseDir = tree();
     const cfg = cfgFor(baseDir);
@@ -219,6 +207,24 @@ describe('runWatch', () => {
     const controller = new AbortController();
     const { done, ready } = startWatch(cfg, { signal: controller.signal, force: true });
     await ready;
+    controller.abort();
+    await done;
+  });
+
+  // duckdb locks its cache file per connection; the watcher must hold nothing between events, or
+  // this second process would fail with STORE_BUSY.
+  it('a second command succeeds while a watcher idles on a duckdb tree', async () => {
+    const baseDir = tree();
+    writeNote(baseDir, 'a.md');
+    writeFileSync(join(baseDir, 'sense.config.json'), JSON.stringify({ version: 5, store: 'duckdb', presets: { default: { include: ['**/*.md'] } }, queries: {} }));
+    const cfg = { ...cfgFor(baseDir), store: 'duckdb' } as ResolvedConfig;
+    const controller = new AbortController();
+    const { done, ready } = startWatch(cfg, { signal: controller.signal });
+    await ready;
+
+    const result = runCli(['status'], { cwd: baseDir });
+    assert.equal(result.status, 0, result.stderr);
+
     controller.abort();
     await done;
   });

@@ -49,7 +49,7 @@ describe('reconcile orchestration', () => {
     });
     const result = await reconcile(conn, cfg, baseDir, dialect);
 
-    assert.deepEqual(result, { parsed: 0, warnings: [] });
+    assert.deepEqual({ parsed: result.parsed, warnings: result.warnings }, { parsed: 0, warnings: [] });
     assert.equal(beginCalls, 0, 'a no-change reconcile must never open a write transaction');
     db.close();
   });

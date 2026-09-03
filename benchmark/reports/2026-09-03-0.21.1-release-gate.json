@@ -2,7 +2,7 @@
   "date": "2026-09-03",
   "title": "2026-09-03 release gate",
   "package_version": "0.21.0",
-  "release_version": null,
+  "release_version": "0.21.1",
   "chunk_version": "chunk:v5",
   "schema_version": {
     "sqlite": "19",
@@ -19,25 +19,75 @@
     "nfcorpus",
     "fever"
   ],
+  "corpus_shape": {
+    "hub": {
+      "notes": 6566,
+      "largest_note_tokens": 77274
+    },
+    "scale-13k": {
+      "notes": 13132,
+      "largest_note_tokens": 77274
+    },
+    "scale-26k": {
+      "notes": 26264,
+      "largest_note_tokens": 77274
+    },
+    "stress": {
+      "notes": 2000,
+      "largest_note_tokens": 254821
+    },
+    "battery-duckdb-hub": {
+      "notes": 6566,
+      "largest_note_tokens": 77274
+    },
+    "battery-duckdb-13k": {
+      "notes": 13132,
+      "largest_note_tokens": 77274
+    },
+    "battery-duckdb-26k": {
+      "notes": 26264,
+      "largest_note_tokens": 77274
+    },
+    "battery-duckdb-stress": {
+      "notes": 2000,
+      "largest_note_tokens": 254821
+    },
+    "battery-turso-hub": {
+      "notes": 6566,
+      "largest_note_tokens": 77274
+    },
+    "battery-turso-13k": {
+      "notes": 13132,
+      "largest_note_tokens": 77274
+    },
+    "battery-turso-26k": {
+      "notes": 26264,
+      "largest_note_tokens": 77274
+    },
+    "battery-turso-stress": {
+      "notes": 2000,
+      "largest_note_tokens": 254821
+    }
+  },
   "embed_model": "minishlab/potion-retrieval-32M",
   "verdict": "PASS",
   "verdict_reasons": [],
   "last_tag": "v0.21.0",
   "prior_from": {
-    "compare": "2026-09-02-release-gate.json",
-    "scale-13k": "2026-09-02-release-gate.json",
-    "scale-26k": "2026-09-02-release-gate.json",
-    "stress": "2026-09-02-release-gate.json",
-    "battery-duckdb-hub": "2026-09-02-release-gate.json",
-    "battery-duckdb-13k": "2026-09-02-release-gate.json",
-    "battery-duckdb-26k": "2026-09-02-release-gate.json",
-    "battery-duckdb-stress": "2026-09-02-release-gate.json",
-    "battery-turso-hub": "2026-09-02-release-gate.json",
-    "battery-turso-13k": "2026-09-02-release-gate.json",
-    "battery-turso-26k": "2026-09-02-release-gate.json",
-    "battery-turso-stress": "2026-09-02-release-gate.json",
-    "eval-nfcorpus": "2026-09-02-release-gate.json",
-    "eval-fever": "2026-09-02-release-gate.json"
+    "compare": "2026-09-02-0.21.0-release-gate.json",
+    "scale-13k": "2026-09-02-0.21.0-release-gate.json",
+    "scale-26k": "2026-09-02-0.21.0-release-gate.json",
+    "stress": "2026-09-02-0.21.0-release-gate.json",
+    "battery-duckdb-hub": "2026-09-02-0.21.0-release-gate.json",
+    "battery-duckdb-13k": "2026-09-02-0.21.0-release-gate.json",
+    "battery-duckdb-26k": "2026-09-02-0.21.0-release-gate.json",
+    "battery-duckdb-stress": "2026-09-02-0.21.0-release-gate.json",
+    "battery-turso-hub": "2026-09-02-0.21.0-release-gate.json",
+    "battery-turso-13k": "2026-09-02-0.21.0-release-gate.json",
+    "battery-turso-26k": "2026-09-02-0.21.0-release-gate.json",
+    "battery-turso-stress": "2026-09-02-0.21.0-release-gate.json",
+    "eval-nfcorpus": "2026-09-02-0.21.0-release-gate.json",
+    "eval-fever": "2026-09-02-0.21.0-release-gate.json"
   },
   "prior_harness_mismatch": {},
   "changed_paths": [
@@ -615,15 +665,6 @@
       "current": 183
     },
     {
-      "id": "compare/largest_note_tokens",
-      "context": "compare",
-      "key": "largest_note_tokens",
-      "verdict": "flat",
-      "reason": null,
-      "prior": 77274,
-      "current": 77274
-    },
-    {
       "id": "compare/bulk_change_ms",
       "context": "compare",
       "key": "bulk_change_ms",
@@ -802,15 +843,6 @@
       "reason": null,
       "prior": 183,
       "current": 183
-    },
-    {
-      "id": "hub/largest_note_tokens",
-      "context": "hub",
-      "key": "largest_note_tokens",
-      "verdict": "flat",
-      "reason": null,
-      "prior": 77274,
-      "current": 77274
     },
     {
       "id": "hub/bulk_change_ms",
@@ -993,15 +1025,6 @@
       "current": 164
     },
     {
-      "id": "scale-13k/largest_note_tokens",
-      "context": "scale-13k",
-      "key": "largest_note_tokens",
-      "verdict": "flat",
-      "reason": null,
-      "prior": 77274,
-      "current": 77274
-    },
-    {
       "id": "scale-13k/bulk_change_ms",
       "context": "scale-13k",
       "key": "bulk_change_ms",
@@ -1180,15 +1203,6 @@
       "reason": null,
       "prior": 162,
       "current": 162
-    },
-    {
-      "id": "scale-26k/largest_note_tokens",
-      "context": "scale-26k",
-      "key": "largest_note_tokens",
-      "verdict": "flat",
-      "reason": null,
-      "prior": 77274,
-      "current": 77274
     },
     {
       "id": "scale-26k/bulk_change_ms",
@@ -1371,15 +1385,6 @@
       "current": 60
     },
     {
-      "id": "stress/largest_note_tokens",
-      "context": "stress",
-      "key": "largest_note_tokens",
-      "verdict": "flat",
-      "reason": null,
-      "prior": 254821,
-      "current": 254821
-    },
-    {
       "id": "stress/bulk_change_ms",
       "context": "stress",
       "key": "bulk_change_ms",
@@ -1558,15 +1563,6 @@
       "reason": null,
       "prior": 183,
       "current": 183
-    },
-    {
-      "id": "battery-duckdb-hub/largest_note_tokens",
-      "context": "battery-duckdb-hub",
-      "key": "largest_note_tokens",
-      "verdict": "flat",
-      "reason": null,
-      "prior": 77274,
-      "current": 77274
     },
     {
       "id": "battery-duckdb-hub/bulk_change_ms",
@@ -1749,15 +1745,6 @@
       "current": 164
     },
     {
-      "id": "battery-duckdb-13k/largest_note_tokens",
-      "context": "battery-duckdb-13k",
-      "key": "largest_note_tokens",
-      "verdict": "flat",
-      "reason": null,
-      "prior": 77274,
-      "current": 77274
-    },
-    {
       "id": "battery-duckdb-13k/bulk_change_ms",
       "context": "battery-duckdb-13k",
       "key": "bulk_change_ms",
@@ -1936,15 +1923,6 @@
       "reason": null,
       "prior": 162,
       "current": 162
-    },
-    {
-      "id": "battery-duckdb-26k/largest_note_tokens",
-      "context": "battery-duckdb-26k",
-      "key": "largest_note_tokens",
-      "verdict": "flat",
-      "reason": null,
-      "prior": 77274,
-      "current": 77274
     },
     {
       "id": "battery-duckdb-26k/bulk_change_ms",
@@ -2127,15 +2105,6 @@
       "current": 60
     },
     {
-      "id": "battery-duckdb-stress/largest_note_tokens",
-      "context": "battery-duckdb-stress",
-      "key": "largest_note_tokens",
-      "verdict": "flat",
-      "reason": null,
-      "prior": 254821,
-      "current": 254821
-    },
-    {
       "id": "battery-duckdb-stress/bulk_change_ms",
       "context": "battery-duckdb-stress",
       "key": "bulk_change_ms",
@@ -2314,15 +2283,6 @@
       "reason": null,
       "prior": 183,
       "current": 183
-    },
-    {
-      "id": "battery-turso-hub/largest_note_tokens",
-      "context": "battery-turso-hub",
-      "key": "largest_note_tokens",
-      "verdict": "flat",
-      "reason": null,
-      "prior": 77274,
-      "current": 77274
     },
     {
       "id": "battery-turso-hub/bulk_change_ms",
@@ -2505,15 +2465,6 @@
       "current": 164
     },
     {
-      "id": "battery-turso-13k/largest_note_tokens",
-      "context": "battery-turso-13k",
-      "key": "largest_note_tokens",
-      "verdict": "flat",
-      "reason": null,
-      "prior": 77274,
-      "current": 77274
-    },
-    {
       "id": "battery-turso-13k/bulk_change_ms",
       "context": "battery-turso-13k",
       "key": "bulk_change_ms",
@@ -2694,15 +2645,6 @@
       "current": 162
     },
     {
-      "id": "battery-turso-26k/largest_note_tokens",
-      "context": "battery-turso-26k",
-      "key": "largest_note_tokens",
-      "verdict": "flat",
-      "reason": null,
-      "prior": 77274,
-      "current": 77274
-    },
-    {
       "id": "battery-turso-26k/bulk_change_ms",
       "context": "battery-turso-26k",
       "key": "bulk_change_ms",
@@ -2881,15 +2823,6 @@
       "reason": null,
       "prior": 60,
       "current": 60
-    },
-    {
-      "id": "battery-turso-stress/largest_note_tokens",
-      "context": "battery-turso-stress",
-      "key": "largest_note_tokens",
-      "verdict": "flat",
-      "reason": null,
-      "prior": 254821,
-      "current": 254821
     },
     {
       "id": "battery-turso-stress/bulk_change_ms",

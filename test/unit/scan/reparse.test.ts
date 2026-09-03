@@ -94,7 +94,7 @@ describe('reparseFiles', () => {
     const result = await reparseFiles([], [], cfg, new Set(), () => {
       called = true;
     });
-    assert.deepEqual(result, { docs: [], warnings: [], newColumns: [] });
+    assert.deepEqual(result, { docs: [], warnings: [], newColumns: [], workerParseMs: 0 });
     assert.equal(called, false);
   });
 

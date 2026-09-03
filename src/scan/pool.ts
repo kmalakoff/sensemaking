@@ -30,7 +30,8 @@ function resolveWorkerFile(): string {
   throw new Error('cannot locate the sensemaking package root, so the parse worker cannot be found; run npm run build');
 }
 
-export type FileResult = { doc: ParsedDoc; warnings: string[] };
+// parseMs is worker-side only (see workers/parse.ts); absent on the serial path.
+export type FileResult = { doc: ParsedDoc; warnings: string[]; parseMs?: number };
 
 // One Tinypool per instance, created lazily on first dispatch and reused by every later call:
 // a builder owns one of these for its whole lifetime instead of paying pool startup per reconcile.
@@ -64,7 +65,7 @@ export class ParsePool {
         const result = (await pool.run(file as ParseTask)) as ParseTaskResult;
         if (!result.ok) throw reviveError(result.error);
         onParsed?.(++done);
-        return { doc: result.doc, warnings: result.warnings };
+        return { doc: result.doc, warnings: result.warnings, parseMs: result.parseMs };
       })
     );
   }

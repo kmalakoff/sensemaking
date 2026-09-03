@@ -1,20 +1,20 @@
-// Renders benchmark/reports/<date>-release-gate.{json,md} from a sitting directory under
-// .tmp/sittings/. Recomputes classification from the sitting's own step JSONs and the newest
-// earlier release-gate JSON every time, so re-running this against the same sitting is
-// idempotent: same inputs, same output, byte for byte. Never re-measures anything.
+// Renders a sitting's release-gate.{json,md} into the sitting directory under .tmp/sittings/, and
+// with --release <version> also the record benchmark/reports/<date>-<version>-release-gate.{json,md}.
+// Recomputes classification from the sitting's own step JSONs and the earlier records every time,
+// so re-running this against the same sitting is idempotent, byte for byte. Never re-measures.
 //
 // usage: node benchmark/report.mjs [--sitting <dir>] [--release <version>]
 //        node benchmark/report.mjs --accept <row id> --reason "<owner's words>"
 //
-// On PASS (or once every blocking row from the newest report carries an accepted override),
-// BENCHMARKING.md's numbers-of-record table is repointed at this report; on BLOCK it is left
-// exactly as it was, because a blocked sitting's numbers must never become the official ones.
+// Releasing a PASS (or a BLOCK whose every blocking row carries an accepted override) repoints
+// BENCHMARKING.md's numbers-of-record table at the record; a BLOCK, or an unreleased sitting,
+// leaves it exactly as it was, so numbers that never shipped never become the official ones.
 //
 // Every exported function takes its target paths through an options object, defaulted to the
 // real repo locations -- test/integration/docs.test.ts points them at scratch instead, so
 // exercising this module never writes into the tracked benchmark/reports/ or BENCHMARKING.md.
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { basename, join, relative, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { stringify } from 'yaml';
 import { MEASURE_VERSION } from './lib/measure.mjs';
@@ -29,6 +29,13 @@ export const BENCHMARKING_MD = join(ROOT, 'BENCHMARKING.md');
 export const NUMBERS_START = '<!-- numbers -->';
 export const NUMBERS_END = '<!-- /numbers -->';
 
+// A record is named for the release it gates. Until --release names one, the sitting's report
+// lives beside its data as <sitting>/release-gate.{json,md}, so two sittings can never collide.
+export const SITTING_REPORT = 'release-gate';
+export function reportBase(date, version) {
+  return `${date}-${version}-release-gate`;
+}
+
 const readJson = (p) => (existsSync(p) ? JSON.parse(readFileSync(p, 'utf8')) : null);
 
 function newestSittingDir(sittingsDir = SITTINGS_DIR) {
@@ -40,16 +47,6 @@ function newestSittingDir(sittingsDir = SITTINGS_DIR) {
     : [];
   if (dirs.length === 0) throw new Error(`no sitting under ${sittingsDir}; run node benchmark/gate.mjs first`);
   return join(sittingsDir, dirs[dirs.length - 1]);
-}
-
-export function newestReportPath(reportsDir = REPORTS_DIR) {
-  const files = existsSync(reportsDir)
-    ? readdirSync(reportsDir)
-        .filter((f) => /^\d{4}-\d{2}-\d{2}-release-gate\.json$/.test(f))
-        .sort()
-    : [];
-  if (files.length === 0) throw new Error(`no report under ${reportsDir} to accept a row against; run node benchmark/gate.mjs first`);
-  return join(reportsDir, files[files.length - 1]);
 }
 
 // Every step JSON this sitting could have produced, grouped into the same-sitting compare table,
@@ -123,7 +120,8 @@ function classifySitting(sittingDir, sitting, priorLookup) {
   }
 
   const retrievalOwed = !!sitting.owed?.fever;
-  for (const id of ['eval-nfcorpus', 'eval-fever']) {
+  const evalIds = ['eval-nfcorpus', 'eval-fever'];
+  for (const id of evalIds) {
     const j = loadStep(id);
     if (j) {
       steps[id] = j;
@@ -132,6 +130,19 @@ function classifySitting(sittingDir, sitting, priorLookup) {
   }
 
   return { classifications, steps, priorFrom, priorHarnessMismatch };
+}
+
+// notes and largest note size per measured context: properties of the corpus, not measurements of
+// sensemaking, so they sit in the report header rather than gating as timing rows.
+function corpusShape(steps) {
+  const shape = {};
+  for (const [id, step] of Object.entries(steps)) {
+    // compare.json wraps one run row per version; every other step's JSON is the row itself.
+    const row = step?.results ? step.results[step.versions?.[1]] : step;
+    if (typeof row?.notes !== 'number') continue;
+    shape[id === 'compare' ? 'hub' : id] = { notes: row.notes, largest_note_tokens: row.largest_note_tokens ?? null };
+  }
+  return shape;
 }
 
 const CONTEXT_SLUG = (context) => context.replace(/[-/]/g, '_');
@@ -160,6 +171,9 @@ export function recordFields(classifications) {
   }
   return fields;
 }
+
+// The report this sitting already rendered, if any: its accepted rows and release version carry forward.
+const existingSittingReport = (sittingDir) => readJson(join(sittingDir, `${SITTING_REPORT}.json`));
 
 export function renderMarkdown(report) {
   const lines = [];
@@ -245,15 +259,25 @@ export function changelogEntry(version, changelogPath = join(ROOT, 'CHANGELOG.md
   return (next < 0 ? rest : rest.slice(0, next + 1)).trim();
 }
 
+// A step whose log exists but whose status was never written started and was interrupted: the
+// sitting measured nothing past it, so it cannot pass until it is resumed and finishes.
+export function interruptedSteps(sittingDir, sitting) {
+  return readdirSync(sittingDir)
+    .filter((f) => f.endsWith('.log'))
+    .map((f) => f.slice(0, -'.log'.length))
+    .filter((id) => !sitting.steps?.[id]?.status)
+    .map((id) => `${id}: started, never finished (sitting interrupted); run the gate again to resume it`);
+}
+
+/** @param {string} sittingDir @param {{ reportsDir?: string, releaseVersionOverride?: string }} [opts] */
 export function buildReport(sittingDir, { reportsDir = REPORTS_DIR, releaseVersionOverride } = {}) {
   const sitting = JSON.parse(readFileSync(join(sittingDir, 'sitting.json'), 'utf8'));
-  const jsonPath = join(reportsDir, `${sitting.date}-release-gate.json`);
-  const existing = readJson(jsonPath);
+  const existing = existingSittingReport(sittingDir);
   const accepted = existing?.accepted ?? {};
 
   const priorReports = findPriorReports(reportsDir, sitting.date);
   const { classifications, steps, priorFrom, priorHarnessMismatch } = classifySitting(sittingDir, sitting, priorStepLookup(priorReports, MEASURE_VERSION));
-  const { verdict, reasons } = aggregateVerdict(classifications, sitting.failed_stage_reasons ?? [], accepted);
+  const { verdict, reasons } = aggregateVerdict(classifications, [...(sitting.failed_stage_reasons ?? []), ...interruptedSteps(sittingDir, sitting)], accepted);
 
   const record = recordFields(classifications);
 
@@ -273,6 +297,7 @@ export function buildReport(sittingDir, { reportsDir = REPORTS_DIR, releaseVersi
           .filter(Boolean)
       ),
     ],
+    corpus_shape: corpusShape(steps),
     // eval.mjs's own --model default; eval.mjs's --out JSON does not record the model name it used.
     embed_model: Object.values(steps).some((s) => s?.variants?.semantic) ? 'minishlab/potion-retrieval-32M' : null,
     verdict,
@@ -280,6 +305,12 @@ export function buildReport(sittingDir, { reportsDir = REPORTS_DIR, releaseVersi
     // Provenance is the last tag plus the paths the gate read, never a commit hash: a rebase or
     // squash orphans a hash, and it orphaned the one the 0.20.0 report cited.
     last_tag: sitting.last_tag ?? null,
+    // Which sitting produced this, so a re-render reaches the same data rather than guessing
+    // between two runs that share a date and a baseline.
+    sitting: basename(sittingDir),
+    // The harness that classified this. A later bump refuses these priors by name, so a report from
+    // an older harness cannot re-render byte for byte and is not expected to.
+    measure_version: MEASURE_VERSION,
     // Which earlier report supplied the prior for each step. A step absent here had no prior in
     // any earlier report, so its rows are a real no-prior rather than a lookup that missed.
     prior_from: priorFrom,
@@ -298,13 +329,14 @@ export function buildReport(sittingDir, { reportsDir = REPORTS_DIR, releaseVersi
   };
 }
 
-// Writes the JSON and md, and on PASS alone repoints the numbers of record. The single landing
-// point for both a re-render and an acceptance, so they cannot produce different shapes.
-export function persist(report, { reportsDir = REPORTS_DIR, benchmarkingMdPath = BENCHMARKING_MD } = {}) {
-  mkdirSync(reportsDir, { recursive: true });
-  const jsonPath = join(reportsDir, `${report.date}-release-gate.json`);
-  const mdPath = join(reportsDir, `${report.date}-release-gate.md`);
-  writeFileSync(jsonPath, `${JSON.stringify(report, null, 2)}\n`);
+// Writes the sitting's own release-gate.{json,md}; once --release has named it, the record under
+// reportsDir too, and on PASS repoints the numbers of record. The one landing point for every writer.
+export function persist(report, { sittingDir, reportsDir = REPORTS_DIR, benchmarkingMdPath = BENCHMARKING_MD }) {
+  const targets = [[sittingDir, SITTING_REPORT]];
+  if (report.release_version) {
+    mkdirSync(reportsDir, { recursive: true });
+    targets.push([reportsDir, reportBase(report.date, report.release_version)]);
+  }
   const frontmatter = {
     date: report.date,
     title: report.title,
@@ -315,13 +347,19 @@ export function persist(report, { reportsDir = REPORTS_DIR, benchmarkingMdPath =
     machine: report.machine,
     node: report.node,
     corpora: report.corpora,
+    corpus_shape: report.corpus_shape,
     embed_model: report.embed_model,
     verdict: report.verdict,
     ...report.record,
   };
-  writeFileSync(mdPath, `---\n${stringify(frontmatter)}---\n\n${renderMarkdown(report)}`);
-  if (report.verdict === 'PASS') updateNumbersOfRecord(report, benchmarkingMdPath);
-  return { jsonPath, mdPath };
+  const md = `---\n${stringify(frontmatter)}---\n\n${renderMarkdown(report)}`;
+  const paths = targets.map(([dir, base]) => ({ jsonPath: join(dir, `${base}.json`), mdPath: join(dir, `${base}.md`) }));
+  for (const { jsonPath, mdPath } of paths) {
+    writeFileSync(jsonPath, `${JSON.stringify(report, null, 2)}\n`);
+    writeFileSync(mdPath, md);
+  }
+  if (report.release_version && report.verdict === 'PASS') updateNumbersOfRecord(report, benchmarkingMdPath);
+  return paths[paths.length - 1]; // the record when released, else the sitting's own
 }
 
 // Every `| metric | value | report |` row currently between the markers, keyed by its metric
@@ -345,7 +383,7 @@ export function updateNumbersOfRecord(report, benchmarkingMdPath = BENCHMARKING_
   const end = md.indexOf(NUMBERS_END);
   if (start < 0 || end < 0) return; // markers not present yet in this tree; nothing to update
   const rows = parseNumbersTable(md, start + NUMBERS_START.length, end);
-  const link = `[${report.date} release gate](benchmark/reports/${report.date}-release-gate.md)`;
+  const link = `[${report.date} release gate](benchmark/reports/${reportBase(report.date, report.release_version)}.md)`;
   for (const [key, value] of Object.entries(report.record)) {
     if (value === null || value === undefined) continue;
     rows.set(key, [String(value), link]);
@@ -357,13 +395,14 @@ export function updateNumbersOfRecord(report, benchmarkingMdPath = BENCHMARKING_
   writeFileSync(benchmarkingMdPath, `${md.slice(0, start)}${NUMBERS_START}\n\n${table}\n\n${md.slice(end)}`);
 }
 
-export function acceptRow(rowId, reason, { reportsDir = REPORTS_DIR, benchmarkingMdPath = BENCHMARKING_MD } = {}) {
+export function acceptRow(rowId, reason, { sittingDir = newestSittingDir(), reportsDir = REPORTS_DIR, benchmarkingMdPath = BENCHMARKING_MD } = {}) {
   // This is the only path that turns a BLOCK into a PASS, so a blank reason is refused here
   // rather than only at the CLI: an override with nothing written in it records no decision.
   if (typeof reason !== 'string' || reason.trim() === '') {
     throw new Error(`accepting "${rowId}" needs a reason in the owner's own words; an override with no reason records no decision`);
   }
-  const jsonPath = newestReportPath(reportsDir);
+  const jsonPath = join(sittingDir, `${SITTING_REPORT}.json`);
+  if (!existsSync(jsonPath)) throw new Error(`no report under ${sittingDir} to accept a row against; run node benchmark/gate.mjs first`);
   const report = JSON.parse(readFileSync(jsonPath, 'utf8'));
   const match = report.classifications.find((c) => c.id === rowId);
   if (!match) {
@@ -376,7 +415,7 @@ export function acceptRow(rowId, reason, { reportsDir = REPORTS_DIR, benchmarkin
   const { verdict, reasons } = aggregateVerdict(report.classifications, stageReasons, report.accepted);
   report.verdict = verdict;
   report.verdict_reasons = reasons;
-  persist(report, { reportsDir, benchmarkingMdPath });
+  persist(report, { sittingDir, reportsDir, benchmarkingMdPath });
   return report;
 }
 
@@ -403,10 +442,11 @@ async function main() {
     process.exit(2);
   }
   const report = buildReport(sittingDir, { releaseVersionOverride });
-  persist(report);
-  console.log(`wrote benchmark/reports/${report.date}-release-gate.md`);
+  const { mdPath } = persist(report, { sittingDir });
+  console.log(`wrote ${relative(ROOT, mdPath)}`);
   console.log(`verdict: ${report.verdict}`);
-  console.log(report.verdict === 'PASS' ? 'numbers of record: updated' : 'numbers of record: left as they were (BLOCK)');
+  const repointed = report.release_version && report.verdict === 'PASS';
+  console.log(repointed ? 'numbers of record: updated' : `numbers of record: left as they were (${report.release_version ? 'BLOCK' : 'not released'})`);
 }
 
 // Only run the CLI when this file is the entry point; report.mjs's functions are also imported

@@ -2,6 +2,51 @@
 
 All notable changes to sensemaking are documented here.
 
+## [0.22.0] - 2026-09-04
+
+### Added
+
+- `open()` reports where a cold index build spent its time. The result carries per-stage wall time
+  for the work a build does: listing files, parsing them, writing frontmatter, building the text
+  index, applying presets, and each feature's own hooks. Stage names describe work rather than the
+  code doing it, and the set is a function of config alone, so a cold build and an incremental one
+  report the same keys. The span names are diagnostic and are versioned by `STAGES_VERSION`, which
+  is `s1`; treat a change in that marker as a change in the vocabulary. A build with no timers
+  reports nothing rather than zeros.
+
+### Known limitations
+
+- `sense search` with a boolean `OR` still works only on sqlite. duckdb and turso refuse it, naming
+  the gap. This is unchanged in this release and is recorded here because benchmarking found it: a
+  query a user would expect to work everywhere works on one store of three.
+
+### Fixed
+
+- `sense watch` runs on duckdb and turso. It used to refuse both, because it held the store open
+  for its whole run and those engines give the cache file to one process at a time, so every other
+  command on the tree failed while a watcher ran. The watcher now opens, reconciles and closes on
+  each change and holds nothing in between, at about 7 ms per change. A command that finds the file
+  held waits for as long as that tree's longest recorded rebuild, not a fixed five seconds, and then
+  says which process has it.
+
+### Changed
+
+- Commands start faster. Three `Intl.Segmenter` objects were built when their module loaded, one
+  for graphemes and two for sentences and words, so every command that reached the chunking code
+  paid for all three even when it used none of them. Each is now built on first use and kept.
+  Whole-invocation compile time on the built package went from 28.9 ms to 21.5 ms over three
+  repeats.
+
+## [0.21.1] - 2026-09-03
+
+### Changed
+
+- Markdown parsing loads its parser on first use rather than when the module loads, so a command
+  that never parses a file does not pay for the parser at all.
+- Building a duckdb index writes frontmatter rows through the engine's bulk appender instead of
+  binding each value as a parameter. Cost had scaled with the number of columns, since every
+  parameter was bound individually. Type fidelity is unchanged.
+
 ## [0.21.0] - 2026-09-02
 
 ### Removed

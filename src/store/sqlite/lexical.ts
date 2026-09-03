@@ -2,7 +2,7 @@ import { segmentMatch } from '../../text/segment.ts';
 import type { Connection, LexicalHit, LexicalQueryOptions } from '../types.ts';
 
 // snippet() re-tokenizes each candidate doc, superlinearly: ~10s for one 1MB doc
-// (benchmark/reports/2026-08-23-hub-release-battery.md); past this bound, hit stays NULL for the caller's JS excerpt fallback.
+// (benchmark/reports/2026-08-23-0.13.2-hub-release-battery.md); past this bound, hit stays NULL for the caller's JS excerpt fallback.
 const SNIPPET_BOUND = 16_384;
 const WEIGHTED_BM25 = 'bm25(content, 10.0, 5.0, 1.0, 0, 10.0, 5.0, 1.0)';
 

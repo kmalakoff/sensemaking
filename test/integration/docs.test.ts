@@ -6,6 +6,8 @@ import { pathToFileURL } from 'node:url';
 import cr from 'cr';
 import { STORE_NAMES, SUPPORTED_CONFIG_VERSION } from 'sensemaking';
 import { parse } from 'yaml';
+import { MEASURE_VERSION } from '../../benchmark/lib/measure.mjs';
+import { REPORT_JSON_RE } from '../../benchmark/lib/verdict.mjs';
 import { KNOWN_EMBED_KEYS } from '../../src/config/index.ts';
 import { packageRoot, scratchDir } from '../lib/scratch.ts';
 
@@ -101,7 +103,6 @@ function fixtureSitting(dir: string, date: string, findRowTokens: [number, numbe
     cold_crawl_ms: 100,
     version_canary_ms: 20,
     warm_query_ms: 50,
-    bm25_search_ms: 50,
     find_ms: 60,
     find_row_tokens: tokens,
     cold_embed_ms: 200,
@@ -132,7 +133,7 @@ function fixtureSitting(dir: string, date: string, findRowTokens: [number, numbe
 describe('benchmark release-gate: numbers of record', () => {
   it('the tracked numbers-of-record table equals a fresh render of the newest release-gate JSON, where one exists', async () => {
     const reportsDir = join(packageRoot, 'benchmark', 'reports');
-    const jsonFiles = existsSync(reportsDir) ? readdirSync(reportsDir).filter((f) => /^\d{4}-\d{2}-\d{2}-release-gate\.json$/.test(f)) : [];
+    const jsonFiles = existsSync(reportsDir) ? readdirSync(reportsDir).filter((f) => REPORT_JSON_RE.test(f)) : [];
     if (jsonFiles.length === 0) return; // no generated report has landed yet (phase 4 migration, out of scope here)
     const newest = jsonFiles.sort().at(-1) as string;
     const { updateNumbersOfRecord, parseNumbersTable, NUMBERS_START: START, NUMBERS_END: END } = await import('../../benchmark/report.mjs');
@@ -160,9 +161,9 @@ describe('benchmark release-gate: numbers of record', () => {
     const reportsDir = scratchDir('numbers-fixture-reports');
     const mdPath = join(scratchDir('numbers-fixture-md'), 'BENCHMARKING.md');
     writeFileSync(mdPath, `# Benchmarks\n\n${'<!-- numbers -->'}\n\n| metric | value | report |\n|---|---|---|\n| pre_existing_metric | 42 ms | [old](old.md) |\n\n${'<!-- /numbers -->'}\n`);
-    const report = buildReport(sitting, { reportsDir });
+    const report = buildReport(sitting, { reportsDir, releaseVersionOverride: '9.9.10' }); // released: only a record repoints the numbers
     assert.equal(report.verdict, 'PASS');
-    persist(report, { reportsDir, benchmarkingMdPath: mdPath });
+    persist(report, { sittingDir: sitting, reportsDir, benchmarkingMdPath: mdPath });
     const after = readFileSync(mdPath, 'utf8');
     assert.match(after, /pre_existing_metric \| 42 ms/, 'a metric this sitting never measured must survive a PASS regeneration');
     assert.match(after, /hub_find_row_tokens \| 71/, 'a metric this sitting measured must be added');
@@ -177,14 +178,15 @@ describe('benchmark release-gate: owner override needs a reason', () => {
     const reportsDir = scratchDir('accept-blank-reports');
     const mdPath = join(scratchDir('accept-blank-md'), 'BENCHMARKING.md');
     writeFileSync(mdPath, `# Benchmarks\n\n${'<!-- numbers -->'}\n\n<!-- /numbers -->\n`);
-    persist(buildReport(sitting, { reportsDir }), { reportsDir, benchmarkingMdPath: mdPath });
+    persist(buildReport(sitting, { reportsDir }), { sittingDir: sitting, reportsDir, benchmarkingMdPath: mdPath });
 
     // The CLI already refuses a missing --reason. These reach acceptRow anyway, which is the only
     // path that can turn a BLOCK into a PASS.
     for (const blank of ['', '   ', '\n']) {
-      assert.throws(() => acceptRow('compare/find_row_tokens', blank, { reportsDir, benchmarkingMdPath: mdPath }), /needs a reason/, `a reason of ${JSON.stringify(blank)} must be refused`);
+      assert.throws(() => acceptRow('compare/find_row_tokens', blank, { sittingDir: sitting, reportsDir, benchmarkingMdPath: mdPath }), /needs a reason/, `a reason of ${JSON.stringify(blank)} must be refused`);
     }
-    const stillBlocked = JSON.parse(readFileSync(join(reportsDir, '2099-06-03-release-gate.json'), 'utf8')) as { verdict: string; accepted: Record<string, unknown> };
+    const { SITTING_REPORT } = await import('../../benchmark/report.mjs');
+    const stillBlocked = JSON.parse(readFileSync(join(sitting, `${SITTING_REPORT}.json`), 'utf8')) as { verdict: string; accepted: Record<string, unknown> };
     assert.equal(stillBlocked.verdict, 'BLOCK', 'a refused override must leave the verdict alone');
     assert.deepEqual(stillBlocked.accepted, {}, 'a refused override must record nothing');
   });
@@ -198,8 +200,8 @@ describe('benchmark release-gate: owner override needs a reason', () => {
     writeFileSync(mdPath, `# Benchmarks\n\n${'<!-- numbers -->'}\n\n<!-- /numbers -->\n`);
     const report = buildReport(sitting, { reportsDir });
     assert.equal(report.verdict, 'BLOCK');
-    persist(report, { reportsDir, benchmarkingMdPath: mdPath });
-    const accepted = acceptRow('compare/find_row_tokens', 'fixture: exercising the override', { reportsDir, benchmarkingMdPath: mdPath });
+    persist(report, { sittingDir: sitting, reportsDir, benchmarkingMdPath: mdPath });
+    const accepted = acceptRow('compare/find_row_tokens', 'fixture: exercising the override', { sittingDir: sitting, reportsDir, benchmarkingMdPath: mdPath });
     assert.equal(accepted.verdict, 'PASS');
     assert.equal(accepted.accepted['compare/find_row_tokens'].reason, 'fixture: exercising the override');
     // Every accepted entry the module ever writes carries a non-empty reason: acceptRow has no
@@ -230,7 +232,7 @@ describe('benchmark release-gate: owner override needs a reason', () => {
     );
     const jsonFiles = existsSync(reportsDir)
       ? readdirSync(reportsDir)
-          .filter((f) => /^\d{4}-\d{2}-\d{2}-release-gate\.json$/.test(f) && tracked.has(f))
+          .filter((f) => REPORT_JSON_RE.test(f) && tracked.has(f))
           .sort()
       : [];
     for (let i = 0; i < jsonFiles.length; i++) {
@@ -258,33 +260,35 @@ describe('benchmark release-gate: generated report re-render is idempotent', () 
     const mdPath = join(scratchDir('idempotent-fixture-md'), 'BENCHMARKING.md');
     writeFileSync(mdPath, `# Benchmarks\n\n${'<!-- numbers -->'}\n\n<!-- /numbers -->\n`);
     const first = buildReport(sitting, { reportsDir });
-    const { jsonPath, mdPath: reportMdPath } = persist(first, { reportsDir, benchmarkingMdPath: mdPath });
+    const { jsonPath, mdPath: reportMdPath } = persist(first, { sittingDir: sitting, reportsDir, benchmarkingMdPath: mdPath });
     const jsonAfterFirst = readFileSync(jsonPath, 'utf8');
     const mdAfterFirst = readFileSync(reportMdPath, 'utf8');
 
     const second = buildReport(sitting, { reportsDir });
-    persist(second, { reportsDir, benchmarkingMdPath: mdPath });
+    persist(second, { sittingDir: sitting, reportsDir, benchmarkingMdPath: mdPath });
     assert.equal(readFileSync(jsonPath, 'utf8'), jsonAfterFirst, 'release-gate JSON must be byte-identical on re-render');
     assert.equal(readFileSync(reportMdPath, 'utf8'), mdAfterFirst, 'release-gate md must be byte-identical on re-render');
   });
 
   it('every generated release-gate md tracked in the tree is byte-identical to its regeneration', async () => {
     const reportsDir = join(packageRoot, 'benchmark', 'reports');
-    const jsonFiles = existsSync(reportsDir) ? readdirSync(reportsDir).filter((f) => /^\d{4}-\d{2}-\d{2}-release-gate\.json$/.test(f)) : [];
+    const jsonFiles = existsSync(reportsDir) ? readdirSync(reportsDir).filter((f) => REPORT_JSON_RE.test(f)) : [];
     if (jsonFiles.length === 0) return; // no generated report has landed yet
     const { buildReport, persist } = await import('../../benchmark/report.mjs');
     for (const file of jsonFiles) {
-      const report = JSON.parse(readFileSync(join(reportsDir, file), 'utf8')) as { generated?: boolean; date: string };
+      const report = JSON.parse(readFileSync(join(reportsDir, file), 'utf8')) as { generated?: boolean; date: string; package_version?: string; release_version?: string | null; sitting?: string; measure_version?: string };
       if (!report.generated) continue;
+      if ((report.measure_version ?? 'm2') !== MEASURE_VERSION) continue; // classified by an older harness; its priors are refused now
       const sittingDate = report.date;
       const sittingsDir = join(packageRoot, '.tmp', 'sittings');
-      const candidates = existsSync(sittingsDir) ? readdirSync(sittingsDir).filter((d) => d.startsWith(sittingDate)) : [];
+      // The report names its own sitting; older ones predate that and fall back to date + baseline.
+      const candidates = existsSync(sittingsDir) ? readdirSync(sittingsDir).filter((d) => (report.sitting ? d === report.sitting : d.startsWith(`${sittingDate}-${report.package_version}`))) : [];
       if (candidates.length === 0) continue; // the sitting that produced this report was cleaned from .tmp
       const scratch = scratchDir('regen-check-reports');
-      const rebuilt = buildReport(join(sittingsDir, candidates[0]), { reportsDir: join(packageRoot, 'benchmark', 'reports') });
+      const rebuilt = buildReport(join(sittingsDir, candidates[0]), { reportsDir: join(packageRoot, 'benchmark', 'reports'), releaseVersionOverride: report.release_version ?? undefined });
       const scratchMd = join(scratchDir('regen-check-md'), 'BENCHMARKING.md');
       writeFileSync(scratchMd, readFileSync(join(packageRoot, 'BENCHMARKING.md'), 'utf8'));
-      persist(rebuilt, { reportsDir: scratch, benchmarkingMdPath: scratchMd });
+      persist(rebuilt, { sittingDir: scratch, reportsDir: scratch, benchmarkingMdPath: scratchMd }); // never back into the real sitting
       const trackedMd = readFileSync(join(reportsDir, file.replace(/\.json$/, '.md')), 'utf8');
       const regeneratedMd = readFileSync(join(scratch, file.replace(/\.json$/, '.md')), 'utf8');
       assert.equal(regeneratedMd, trackedMd, `${file.replace(/\.json$/, '.md')} is not byte-identical to its regeneration`);

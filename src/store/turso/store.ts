@@ -9,7 +9,7 @@ import { queryLexical } from './lexical.ts';
 import { scanCandidates, scanSimilar, writeVectorBatch } from './vectors.ts';
 
 // No 'snippets': fts_highlight returns the whole column, not a bounded window, so hits use
-// the caller's JS excerpt. No 'watch-concurrency': single-process by default, as on duckdb.
+// the caller's JS excerpt.
 export const CAPABILITIES: ReadonlySet<Capability> = new Set(['lexical', 'phrases', 'vectors']);
 
 // Shares one Connection instance (conn) with the builder's own reconcile call so transaction depth

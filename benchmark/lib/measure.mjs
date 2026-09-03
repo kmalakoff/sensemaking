@@ -7,7 +7,9 @@ import { join } from 'node:path';
 //   m1  the shape before 2026-09-02
 //   m2  the corpus is copied before measuring, the file cache is warmed before timing, and cold
 //       crawl, in-process cold build and both bulk rows became medians of 3
-export const MEASURE_VERSION = 'm2';
+//   m3  a third preset joins the measured tree, so a cold build indexes one more preset-membership
+//       row per note and `map` prints one more line: every token row shifts against an m2 prior
+export const MEASURE_VERSION = 'm3';
 
 // Sorted relPaths of the .md files a crawl would see (dotfiles and node_modules skipped).
 export function walkMd(tree) {

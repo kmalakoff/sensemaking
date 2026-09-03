@@ -51,10 +51,16 @@ function finalize(parts: Part[]): (Chunk & { final?: boolean }) | undefined {
 }
 
 const NEWLINE_TOKENS = estimateTokens('\n');
-const SENTENCE_SEGMENTER = new Intl.Segmenter(undefined, { granularity: 'sentence' });
-const WORD_SEGMENTER = new Intl.Segmenter(undefined, { granularity: 'word' });
+// Built on first use and kept: each construction is ~3.5 ms, and only an oversize block is ever
+// split, so no command pays for a segmenter it never reaches.
+const SEGMENTERS = new Map<string, Intl.Segmenter>();
 
-function segmentsOf(text: string, segmenter: Intl.Segmenter): string[] {
+function segmentsOf(text: string, granularity: 'sentence' | 'word'): string[] {
+  let segmenter = SEGMENTERS.get(granularity);
+  if (!segmenter) {
+    segmenter = new Intl.Segmenter(undefined, { granularity });
+    SEGMENTERS.set(granularity, segmenter);
+  }
   return Array.from(segmenter.segment(text), (s) => s.segment);
 }
 
@@ -81,7 +87,7 @@ function pack(segments: string[], working: number): string[] {
 // Line-split alone can't shrink a lone dense line (the CJK case): falls back to sentence then
 // word boundaries (Intl.Segmenter, the same grapheme-safe engine as segment.ts), mode-agnostic on `text`.
 function splitLineText(text: string, working: number): string[] {
-  const sentences = segmentsOf(text, SENTENCE_SEGMENTER);
+  const sentences = segmentsOf(text, 'sentence');
   const out: string[] = [];
   let current = '';
   let tokens = 0;
@@ -96,7 +102,7 @@ function splitLineText(text: string, working: number): string[] {
     const sentenceTokens = estimateTokens(sentence);
     if (sentenceTokens > working) {
       flush();
-      out.push(...pack(segmentsOf(sentence, WORD_SEGMENTER), working));
+      out.push(...pack(segmentsOf(sentence, 'word'), working));
       continue;
     }
     if (current.length > 0 && tokens + sentenceTokens > working) flush();

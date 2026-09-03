@@ -1,0 +1,5631 @@
+{
+  "date": "2026-09-04",
+  "title": "2026-09-04 release gate",
+  "package_version": "0.21.1",
+  "release_version": "0.22.0",
+  "chunk_version": "chunk:v5",
+  "schema_version": {
+    "sqlite": "19",
+    "duckdb": "3",
+    "turso": "4"
+  },
+  "machine": "Apple M4 Pro",
+  "node": "v26.7.0",
+  "corpora": [
+    "/Users/kevin/Dev/OpenSource/ai/sensemaking/.tmp/cache/obsidian-hub-b11036f9",
+    "/Users/kevin/Dev/OpenSource/ai/sensemaking/.tmp/cache/obsidian-hub-x2-x2-hub-1",
+    "/Users/kevin/Dev/OpenSource/ai/sensemaking/.tmp/cache/obsidian-hub-x4-x4-hub-1",
+    "/Users/kevin/Dev/OpenSource/ai/sensemaking/.tmp/cache/stress-stress-1",
+    "nfcorpus",
+    "fever"
+  ],
+  "corpus_shape": {
+    "hub": {
+      "notes": 6566,
+      "largest_note_tokens": 77274
+    },
+    "scale-13k": {
+      "notes": 13132,
+      "largest_note_tokens": 77274
+    },
+    "scale-26k": {
+      "notes": 26264,
+      "largest_note_tokens": 77274
+    },
+    "stress": {
+      "notes": 2000,
+      "largest_note_tokens": 254821
+    },
+    "battery-duckdb-hub": {
+      "notes": 6566,
+      "largest_note_tokens": 77274
+    },
+    "battery-duckdb-13k": {
+      "notes": 13132,
+      "largest_note_tokens": 77274
+    },
+    "battery-duckdb-26k": {
+      "notes": 26264,
+      "largest_note_tokens": 77274
+    },
+    "battery-duckdb-stress": {
+      "notes": 2000,
+      "largest_note_tokens": 254821
+    },
+    "battery-turso-hub": {
+      "notes": 6566,
+      "largest_note_tokens": 77274
+    },
+    "battery-turso-13k": {
+      "notes": 13132,
+      "largest_note_tokens": 77274
+    },
+    "battery-turso-26k": {
+      "notes": 26264,
+      "largest_note_tokens": 77274
+    },
+    "battery-turso-stress": {
+      "notes": 2000,
+      "largest_note_tokens": 254821
+    }
+  },
+  "embed_model": "minishlab/potion-retrieval-32M",
+  "verdict": "PASS",
+  "verdict_reasons": [],
+  "last_tag": "v0.21.1",
+  "sitting": "2026-09-04-0.21.1-fb781fc4",
+  "measure_version": "m3",
+  "prior_from": {
+    "compare": "2026-09-03-0.21.1-release-gate.json (harness m2, current m3; not compared)",
+    "scale-13k": "2026-09-03-0.21.1-release-gate.json (harness m2, current m3; not compared)",
+    "scale-26k": "2026-09-03-0.21.1-release-gate.json (harness m2, current m3; not compared)",
+    "stress": "2026-09-03-0.21.1-release-gate.json (harness m2, current m3; not compared)",
+    "battery-duckdb-hub": "2026-09-03-0.21.1-release-gate.json (harness m2, current m3; not compared)",
+    "battery-duckdb-13k": "2026-09-03-0.21.1-release-gate.json (harness m2, current m3; not compared)",
+    "battery-duckdb-26k": "2026-09-03-0.21.1-release-gate.json (harness m2, current m3; not compared)",
+    "battery-duckdb-stress": "2026-09-03-0.21.1-release-gate.json (harness m2, current m3; not compared)",
+    "battery-turso-hub": "2026-09-03-0.21.1-release-gate.json (harness m2, current m3; not compared)",
+    "battery-turso-13k": "2026-09-03-0.21.1-release-gate.json (harness m2, current m3; not compared)",
+    "battery-turso-26k": "2026-09-03-0.21.1-release-gate.json (harness m2, current m3; not compared)",
+    "battery-turso-stress": "2026-09-03-0.21.1-release-gate.json (harness m2, current m3; not compared)",
+    "eval-nfcorpus": "2026-09-03-0.21.1-release-gate.json (harness m2, current m3; not compared)",
+    "eval-fever": "2026-09-03-0.21.1-release-gate.json (harness m2, current m3; not compared)"
+  },
+  "prior_harness_mismatch": {
+    "compare": {
+      "prior": "m2",
+      "current": "m3"
+    },
+    "scale-13k": {
+      "prior": "m2",
+      "current": "m3"
+    },
+    "scale-26k": {
+      "prior": "m2",
+      "current": "m3"
+    },
+    "stress": {
+      "prior": "m2",
+      "current": "m3"
+    },
+    "battery-duckdb-hub": {
+      "prior": "m2",
+      "current": "m3"
+    },
+    "battery-duckdb-13k": {
+      "prior": "m2",
+      "current": "m3"
+    },
+    "battery-duckdb-26k": {
+      "prior": "m2",
+      "current": "m3"
+    },
+    "battery-duckdb-stress": {
+      "prior": "m2",
+      "current": "m3"
+    },
+    "battery-turso-hub": {
+      "prior": "m2",
+      "current": "m3"
+    },
+    "battery-turso-13k": {
+      "prior": "m2",
+      "current": "m3"
+    },
+    "battery-turso-26k": {
+      "prior": "m2",
+      "current": "m3"
+    },
+    "battery-turso-stress": {
+      "prior": "m2",
+      "current": "m3"
+    },
+    "eval-nfcorpus": {
+      "prior": "m2",
+      "current": "m3"
+    },
+    "eval-fever": {
+      "prior": "m2",
+      "current": "m3"
+    }
+  },
+  "changed_paths": [
+    "BENCHMARKING.md",
+    "CHANGELOG.md",
+    "README.md",
+    "RELEASING.md",
+    "benchmark/gate.mjs",
+    "benchmark/lib/measure.mjs",
+    "benchmark/lib/quiet-machine.mjs",
+    "benchmark/lib/rows.mjs",
+    "benchmark/lib/verdict.mjs",
+    "benchmark/quiet.mjs",
+    "benchmark/report.mjs",
+    "benchmark/reports/2026-08-12-0.3.0-vs-0.2.1.json",
+    "benchmark/reports/2026-08-12-0.3.0-vs-0.2.1.md",
+    "benchmark/reports/2026-08-23-0.13.2-hub-release-battery.json",
+    "benchmark/reports/2026-08-23-0.13.2-hub-release-battery.md",
+    "benchmark/reports/2026-08-27-0.16.0-release-gate.json",
+    "benchmark/reports/2026-08-27-0.16.0-release-gate.md",
+    "benchmark/reports/2026-08-29-0.17.1-duckdb-lexical.md",
+    "benchmark/reports/2026-08-29-0.17.1-duckdb-vectors.md",
+    "benchmark/reports/2026-08-29-0.18.2-release-gate.md",
+    "benchmark/reports/2026-09-02-0.21.0-release-gate.json",
+    "benchmark/reports/2026-09-02-0.21.0-release-gate.md",
+    "benchmark/reports/2026-09-03-0.21.1-release-gate.json",
+    "benchmark/reports/2026-09-03-0.21.1-release-gate.md",
+    "benchmark/steps/measure-tree.mjs",
+    "benchmark/steps/quality.mjs",
+    "biome.json",
+    "skills/sense-setup/SKILL.md",
+    "skills/sense/SKILL.md",
+    "src/chunk/group.ts",
+    "src/commands/search.ts",
+    "src/index.ts",
+    "src/scan/pool.ts",
+    "src/scan/reparse.ts",
+    "src/store/builder.ts",
+    "src/store/index.ts",
+    "src/store/lock-wait.ts",
+    "src/store/open.ts",
+    "src/store/reconcile.ts",
+    "src/store/sqlite/lexical.ts",
+    "src/store/sqlite/store.ts",
+    "src/store/stages.ts",
+    "src/store/turso/store.ts",
+    "src/store/types.ts",
+    "src/text/segment.ts",
+    "src/watch.ts",
+    "src/workers/parse.ts",
+    "test/integration/benchmark-harness.test.ts",
+    "test/integration/docs.test.ts",
+    "test/unit/cli/watch.test.ts",
+    "test/unit/scan/reparse.test.ts",
+    "test/unit/store/reconcile.test.ts",
+    "test/unit/store/stages.test.ts",
+    "test/unit/watch.test.ts"
+  ],
+  "owed": {
+    "test-engines": [
+      "src/scan/pool.ts",
+      "src/scan/reparse.ts",
+      "src/store/sqlite/lexical.ts",
+      "src/store/sqlite/store.ts",
+      "src/watch.ts",
+      "src/workers/parse.ts"
+    ],
+    "store-dump": [
+      "src/chunk/group.ts",
+      "src/store/builder.ts",
+      "src/store/index.ts",
+      "src/store/lock-wait.ts",
+      "src/store/open.ts",
+      "src/store/reconcile.ts",
+      "src/store/sqlite/lexical.ts",
+      "src/store/sqlite/store.ts",
+      "src/store/stages.ts",
+      "src/store/turso/store.ts",
+      "src/store/types.ts"
+    ],
+    "oracle": [
+      "src/chunk/group.ts",
+      "src/text/segment.ts"
+    ],
+    "scale": [
+      "src/chunk/group.ts",
+      "src/scan/pool.ts",
+      "src/scan/reparse.ts",
+      "src/store/builder.ts",
+      "src/store/index.ts",
+      "src/store/lock-wait.ts",
+      "src/store/open.ts",
+      "src/store/reconcile.ts",
+      "src/store/sqlite/lexical.ts",
+      "src/store/sqlite/store.ts",
+      "src/store/stages.ts",
+      "src/store/turso/store.ts",
+      "src/store/types.ts"
+    ],
+    "fever": [
+      "src/chunk/group.ts",
+      "src/commands/search.ts",
+      "src/text/segment.ts"
+    ],
+    "baseline": [
+      "benchmark/gate.mjs",
+      "benchmark/lib/measure.mjs",
+      "benchmark/lib/quiet-machine.mjs",
+      "benchmark/lib/rows.mjs",
+      "benchmark/lib/verdict.mjs",
+      "benchmark/quiet.mjs",
+      "benchmark/report.mjs",
+      "benchmark/reports/2026-08-12-0.3.0-vs-0.2.1.json",
+      "benchmark/reports/2026-08-12-0.3.0-vs-0.2.1.md",
+      "benchmark/reports/2026-08-23-0.13.2-hub-release-battery.json",
+      "benchmark/reports/2026-08-23-0.13.2-hub-release-battery.md",
+      "benchmark/reports/2026-08-27-0.16.0-release-gate.json",
+      "benchmark/reports/2026-08-27-0.16.0-release-gate.md",
+      "benchmark/reports/2026-08-29-0.17.1-duckdb-lexical.md",
+      "benchmark/reports/2026-08-29-0.17.1-duckdb-vectors.md",
+      "benchmark/reports/2026-08-29-0.18.2-release-gate.md",
+      "benchmark/reports/2026-09-02-0.21.0-release-gate.json",
+      "benchmark/reports/2026-09-02-0.21.0-release-gate.md",
+      "benchmark/reports/2026-09-03-0.21.1-release-gate.json",
+      "benchmark/reports/2026-09-03-0.21.1-release-gate.md",
+      "benchmark/steps/measure-tree.mjs",
+      "benchmark/steps/quality.mjs",
+      "src/chunk/group.ts",
+      "src/commands/search.ts",
+      "src/index.ts",
+      "src/scan/pool.ts",
+      "src/scan/reparse.ts",
+      "src/store/builder.ts",
+      "src/store/index.ts",
+      "src/store/lock-wait.ts",
+      "src/store/open.ts",
+      "src/store/reconcile.ts",
+      "src/store/sqlite/lexical.ts",
+      "src/store/sqlite/store.ts",
+      "src/store/stages.ts",
+      "src/store/turso/store.ts",
+      "src/store/types.ts",
+      "src/text/segment.ts",
+      "src/watch.ts",
+      "src/workers/parse.ts"
+    ],
+    "quality-baseline": [
+      "src/chunk/group.ts",
+      "src/commands/search.ts",
+      "src/index.ts",
+      "src/scan/pool.ts",
+      "src/scan/reparse.ts",
+      "src/store/builder.ts",
+      "src/store/index.ts",
+      "src/store/lock-wait.ts",
+      "src/store/open.ts",
+      "src/store/reconcile.ts",
+      "src/store/sqlite/lexical.ts",
+      "src/store/sqlite/store.ts",
+      "src/store/stages.ts",
+      "src/store/turso/store.ts",
+      "src/store/types.ts",
+      "src/text/segment.ts",
+      "src/watch.ts",
+      "src/workers/parse.ts"
+    ]
+  },
+  "steps_status": {
+    "validate": {
+      "id": "validate",
+      "argv": [
+        "npx",
+        "tsds",
+        "validate"
+      ],
+      "owed": true,
+      "timeout": 600000,
+      "started": "2026-09-04T17:56:43.549Z",
+      "elapsed_ms": 3554,
+      "status": "ok",
+      "load_entry": 6.453125,
+      "load_exit": 6.453125
+    },
+    "npm-test": {
+      "id": "npm-test",
+      "argv": [
+        "npm",
+        "test"
+      ],
+      "owed": true,
+      "timeout": 600000,
+      "started": "2026-09-04T17:56:47.103Z",
+      "elapsed_ms": 57913,
+      "status": "ok",
+      "load_entry": 6.453125,
+      "load_exit": 5.3076171875
+    },
+    "test-engines": {
+      "id": "test-engines",
+      "argv": [
+        "npm",
+        "run",
+        "test:engines"
+      ],
+      "owed": true,
+      "timeout": 900000,
+      "started": "2026-09-04T17:57:45.016Z",
+      "elapsed_ms": 154339,
+      "status": "ok",
+      "load_entry": 5.3076171875,
+      "load_exit": 2.681640625
+    },
+    "live-suite": {
+      "id": "live-suite",
+      "argv": [
+        "npm",
+        "test"
+      ],
+      "owed": false,
+      "status": "not-owed"
+    },
+    "store-dump": {
+      "id": "store-dump",
+      "argv": [
+        "node",
+        "benchmark/store-dump-ab.mjs"
+      ],
+      "owed": true,
+      "timeout": 1800000,
+      "started": "2026-09-04T18:00:19.355Z",
+      "elapsed_ms": 137605,
+      "status": "ok",
+      "load_entry": 2.681640625,
+      "load_exit": 5.076171875
+    },
+    "oracle": {
+      "id": "oracle",
+      "argv": [
+        "node",
+        "benchmark/steps/oracle.mjs",
+        ".tmp/cache/obsidian-hub-b11036f9"
+      ],
+      "owed": true,
+      "timeout": 1200000,
+      "started": "2026-09-04T18:02:36.961Z",
+      "elapsed_ms": 7716,
+      "status": "ok",
+      "load_entry": 5.076171875,
+      "load_exit": 5.4931640625
+    },
+    "compare": {
+      "id": "compare",
+      "argv": [
+        "node",
+        "benchmark/steps/compare-versions.mjs"
+      ],
+      "owed": true,
+      "timeout": 1800000,
+      "started": "2026-09-04T18:02:44.697Z",
+      "elapsed_ms": 90963,
+      "status": "ok",
+      "load_entry": 5.4931640625,
+      "load_exit": 5.81298828125,
+      "column_order": [
+        "0.21.1",
+        "local"
+      ]
+    },
+    "battery-duckdb-hub": {
+      "id": "battery-duckdb-hub",
+      "argv": [
+        "node",
+        "benchmark/steps/measure-tree.mjs",
+        ".",
+        "obsidian-hub",
+        "--store",
+        "duckdb"
+      ],
+      "owed": true,
+      "timeout": 1200000,
+      "started": "2026-09-04T18:04:15.661Z",
+      "elapsed_ms": 94370,
+      "status": "ok",
+      "load_entry": 5.81298828125,
+      "load_exit": 4.38525390625
+    },
+    "battery-turso-hub": {
+      "id": "battery-turso-hub",
+      "argv": [
+        "node",
+        "benchmark/steps/measure-tree.mjs",
+        ".",
+        "obsidian-hub",
+        "--store",
+        "turso"
+      ],
+      "owed": true,
+      "timeout": 1200000,
+      "started": "2026-09-04T18:05:50.031Z",
+      "elapsed_ms": 69440,
+      "status": "ok",
+      "load_entry": 4.38525390625,
+      "load_exit": 3.1572265625
+    },
+    "scale-13k": {
+      "id": "scale-13k",
+      "argv": [
+        "node",
+        "benchmark/steps/measure-tree.mjs",
+        ".",
+        ".tmp/cache/obsidian-hub-x2-x2-hub-1"
+      ],
+      "owed": true,
+      "timeout": 1800000,
+      "started": "2026-09-04T18:06:59.490Z",
+      "elapsed_ms": 72824,
+      "status": "ok",
+      "load_entry": 3.1572265625,
+      "load_exit": 4.66064453125
+    },
+    "scale-26k": {
+      "id": "scale-26k",
+      "argv": [
+        "node",
+        "benchmark/steps/measure-tree.mjs",
+        ".",
+        ".tmp/cache/obsidian-hub-x4-x4-hub-1"
+      ],
+      "owed": true,
+      "timeout": 2700000,
+      "started": "2026-09-04T18:08:12.314Z",
+      "elapsed_ms": 135160,
+      "status": "ok",
+      "load_entry": 4.66064453125,
+      "load_exit": 5.42919921875
+    },
+    "stress": {
+      "id": "stress",
+      "argv": [
+        "node",
+        "benchmark/steps/measure-tree.mjs",
+        ".",
+        ".tmp/cache/stress-stress-1"
+      ],
+      "owed": true,
+      "timeout": 1800000,
+      "started": "2026-09-04T18:10:27.474Z",
+      "elapsed_ms": 103527,
+      "status": "ok",
+      "load_entry": 5.42919921875,
+      "load_exit": 6.7607421875
+    },
+    "battery-duckdb-13k": {
+      "id": "battery-duckdb-13k",
+      "argv": [
+        "node",
+        "benchmark/steps/measure-tree.mjs",
+        ".",
+        ".tmp/cache/obsidian-hub-x2-x2-hub-1",
+        "--store",
+        "duckdb"
+      ],
+      "owed": true,
+      "timeout": 1800000,
+      "started": "2026-09-04T18:12:11.001Z",
+      "elapsed_ms": 162999,
+      "status": "ok",
+      "load_entry": 6.7607421875,
+      "load_exit": 3.69921875
+    },
+    "battery-duckdb-26k": {
+      "id": "battery-duckdb-26k",
+      "argv": [
+        "node",
+        "benchmark/steps/measure-tree.mjs",
+        ".",
+        ".tmp/cache/obsidian-hub-x4-x4-hub-1",
+        "--store",
+        "duckdb"
+      ],
+      "owed": true,
+      "timeout": 2700000,
+      "started": "2026-09-04T18:14:54.000Z",
+      "elapsed_ms": 305334,
+      "status": "ok",
+      "load_entry": 3.69921875,
+      "load_exit": 3.58154296875
+    },
+    "battery-duckdb-stress": {
+      "id": "battery-duckdb-stress",
+      "argv": [
+        "node",
+        "benchmark/steps/measure-tree.mjs",
+        ".",
+        ".tmp/cache/stress-stress-1",
+        "--store",
+        "duckdb"
+      ],
+      "owed": true,
+      "timeout": 1800000,
+      "started": "2026-09-04T18:19:59.334Z",
+      "elapsed_ms": 528292,
+      "status": "ok",
+      "load_entry": 3.58154296875,
+      "load_exit": 1.830078125
+    },
+    "battery-turso-13k": {
+      "id": "battery-turso-13k",
+      "argv": [
+        "node",
+        "benchmark/steps/measure-tree.mjs",
+        ".",
+        ".tmp/cache/obsidian-hub-x2-x2-hub-1",
+        "--store",
+        "turso"
+      ],
+      "owed": true,
+      "timeout": 1800000,
+      "started": "2026-09-04T18:28:47.627Z",
+      "elapsed_ms": 125992,
+      "status": "ok",
+      "load_entry": 1.830078125,
+      "load_exit": 3.22265625
+    },
+    "battery-turso-26k": {
+      "id": "battery-turso-26k",
+      "argv": [
+        "node",
+        "benchmark/steps/measure-tree.mjs",
+        ".",
+        ".tmp/cache/obsidian-hub-x4-x4-hub-1",
+        "--store",
+        "turso"
+      ],
+      "owed": true,
+      "timeout": 2700000,
+      "started": "2026-09-04T18:30:53.619Z",
+      "elapsed_ms": 239943,
+      "status": "ok",
+      "load_entry": 3.22265625,
+      "load_exit": 3.23828125
+    },
+    "battery-turso-stress": {
+      "id": "battery-turso-stress",
+      "argv": [
+        "node",
+        "benchmark/steps/measure-tree.mjs",
+        ".",
+        ".tmp/cache/stress-stress-1",
+        "--store",
+        "turso"
+      ],
+      "owed": true,
+      "timeout": 1800000,
+      "started": "2026-09-04T18:34:53.562Z",
+      "elapsed_ms": 300349,
+      "status": "ok",
+      "load_entry": 3.23828125,
+      "load_exit": 3.08154296875
+    },
+    "eval-nfcorpus": {
+      "id": "eval-nfcorpus",
+      "argv": [
+        "node",
+        "benchmark/steps/quality.mjs",
+        "nfcorpus"
+      ],
+      "owed": true,
+      "timeout": 1200000,
+      "started": "2026-09-04T18:39:53.911Z",
+      "elapsed_ms": 12684,
+      "status": "ok",
+      "load_entry": 3.08154296875,
+      "load_exit": 2.76123046875
+    },
+    "eval-fever": {
+      "id": "eval-fever",
+      "argv": [
+        "node",
+        "benchmark/steps/quality.mjs",
+        "fever"
+      ],
+      "owed": true,
+      "timeout": 2700000,
+      "started": "2026-09-04T18:40:06.595Z",
+      "elapsed_ms": 901856,
+      "status": "ok",
+      "load_entry": 2.76123046875,
+      "load_exit": 1.5498046875
+    }
+  },
+  "changelog_entry": "## [0.22.0] - 2026-09-04\n\n### Added\n\n- `open()` reports where a cold index build spent its time. The result carries per-stage wall time\n  for the work a build does: listing files, parsing them, writing frontmatter, building the text\n  index, applying presets, and each feature's own hooks. Stage names describe work rather than the\n  code doing it, and the set is a function of config alone, so a cold build and an incremental one\n  report the same keys. The span names are diagnostic and are versioned by `STAGES_VERSION`, which\n  is `s1`; treat a change in that marker as a change in the vocabulary. A build with no timers\n  reports nothing rather than zeros.\n\n### Known limitations\n\n- `sense search` with a boolean `OR` still works only on sqlite. duckdb and turso refuse it, naming\n  the gap. This is unchanged in this release and is recorded here because benchmarking found it: a\n  query a user would expect to work everywhere works on one store of three.\n\n### Fixed\n\n- `sense watch` runs on duckdb and turso. It used to refuse both, because it held the store open\n  for its whole run and those engines give the cache file to one process at a time, so every other\n  command on the tree failed while a watcher ran. The watcher now opens, reconciles and closes on\n  each change and holds nothing in between, at about 7 ms per change. A command that finds the file\n  held waits for as long as that tree's longest recorded rebuild, not a fixed five seconds, and then\n  says which process has it.\n\n### Changed\n\n- Commands start faster. Three `Intl.Segmenter` objects were built when their module loaded, one\n  for graphemes and two for sentences and words, so every command that reached the chunking code\n  paid for all three even when it used none of them. Each is now built on first use and kept.\n  Whole-invocation compile time on the built package went from 28.9 ms to 21.5 ms over three\n  repeats.",
+  "classifications": [
+    {
+      "id": "compare/cold_crawl_ms",
+      "context": "compare",
+      "key": "cold_crawl_ms",
+      "verdict": "flat",
+      "reason": null,
+      "prior": 1967,
+      "current": 2000
+    },
+    {
+      "id": "compare/version_canary_ms",
+      "context": "compare",
+      "key": "version_canary_ms",
+      "verdict": "flat",
+      "reason": null,
+      "prior": 27,
+      "current": 27
+    },
+    {
+      "id": "compare/cold_embed_ms",
+      "context": "compare",
+      "key": "cold_embed_ms",
+      "verdict": "flat",
+      "reason": null,
+      "prior": 11579,
+      "current": 11462
+    },
+    {
+      "id": "compare/warm_query_ms",
+      "context": "compare",
+      "key": "warm_query_ms",
+      "verdict": "flat",
+      "reason": null,
+      "prior": 128,
+      "current": 121
+    },
+    {
+      "id": "compare/setup_ms",
+      "context": "compare",
+      "key": "setup_ms",
+      "verdict": "flat",
+      "reason": null,
+      "prior": 93.6,
+      "current": 86.4
+    },
+    {
+      "id": "compare/find_ms",
+      "context": "compare",
+      "key": "find_ms",
+      "verdict": "flat",
+      "reason": null,
+      "prior": 177,
+      "current": 168
+    },
+    {
+      "id": "compare/words_ms",
+      "context": "compare",
+      "key": "words_ms",
+      "verdict": "flat",
+      "reason": null,
+      "prior": 141,
+      "current": 135
+    },
+    {
+      "id": "compare/find_row_tokens",
+      "context": "compare",
+      "key": "find_row_tokens",
+      "verdict": "flat",
+      "reason": null,
+      "prior": 71,
+      "current": 71
+    },
+    {
+      "id": "compare/semantic_find_ms",
+      "context": "compare",
+      "key": "semantic_find_ms",
+      "verdict": "flat",
+      "reason": null,
+      "prior": 291,
+      "current": 284
+    },
+    {
+      "id": "compare/map_ms",
+      "context": "compare",
+      "key": "map_ms",
+      "verdict": "flat",
+      "reason": null,
+      "prior": 163,
+      "current": 157
+    },
+    {
+      "id": "compare/map_tokens",
+      "context": "compare",
+      "key": "map_tokens",
+      "verdict": "flat",
+      "reason": null,
+      "prior": 548,
+      "current": 548
+    },
+    {
+      "id": "compare/peek_ms",
+      "context": "compare",
+      "key": "peek_ms",
+      "verdict": "flat",
+      "reason": null,
+      "prior": 137,
+      "current": 129
+    },
+    {
+      "id": "compare/peek_tokens",
+      "context": "compare",
+      "key": "peek_tokens",
+      "verdict": "flat",
+      "reason": null,
+      "prior": 581,
+      "current": 581
+    },
+    {
+      "id": "compare/path_ms",
+      "context": "compare",
+      "key": "path_ms",
+      "verdict": "flat",
+      "reason": null,
+      "prior": 137,
+      "current": 131
+    },
+    {
+      "id": "compare/related_ms",
+      "context": "compare",
+      "key": "related_ms",
+      "verdict": "flat",
+      "reason": null,
+      "prior": 350,
+      "current": 341
+    },
+    {
+      "id": "compare/related_tokens",
+      "context": "compare",
+      "key": "related_tokens",
+      "verdict": "flat",
+      "reason": null,
+      "prior": 183,
+      "current": 183
+    },
+    {
+      "id": "compare/bulk_change_ms",
+      "context": "compare",
+      "key": "bulk_change_ms",
+      "verdict": "flat",
+      "reason": null,
+      "prior": 542,
+      "current": 545
+    },
+    {
+      "id": "compare/bulk_watch_ms",
+      "context": "compare",
+      "key": "bulk_watch_ms",
+      "verdict": "flat",
+      "reason": null,
+      "prior": 171,
+      "current": 165
+    },
+    {
+      "id": "compare/inproc.cold_build_ms",
+      "context": "compare",
+      "key": "inproc.cold_build_ms",
+      "verdict": "flat",
+      "reason": null,
+      "prior": 1851,
+      "current": 1811
+    },
+    {
+      "id": "compare/inproc.unaccounted_ms",
+      "context": "compare",
+      "key": "inproc.unaccounted_ms",
+      "verdict": "no-prior",
+      "reason": "in-process: cold build residual (unaccounted for by any stage): no prior recorded",
+      "prior": null,
+      "current": 32.8
+    },
+    {
+      "id": "compare/inproc.open_nochange_ms",
+      "context": "compare",
+      "key": "inproc.open_nochange_ms",
+      "verdict": "flat",
+      "reason": null,
+      "prior": 34.4,
+      "current": 34.6
+    },
+    {
+      "id": "compare/inproc.update_1_file_ms",
+      "context": "compare",
+      "key": "inproc.update_1_file_ms",
+      "verdict": "flat",
+      "reason": null,
+      "prior": 38,
+      "current": 39
+    },
+    {
+      "id": "compare/inproc.update_10_files_ms",
+      "context": "compare",
+      "key": "inproc.update_10_files_ms",
+      "verdict": "flat",
+      "reason": null,
+      "prior": 42,
+      "current": 42
+    },
+    {
+      "id": "hub/cold_crawl_ms",
+      "context": "hub",
+      "key": "cold_crawl_ms",
+      "verdict": "no-prior",
+      "reason": "cold crawl (wall): no prior recorded",
+      "prior": null,
+      "current": 2000
+    },
+    {
+      "id": "hub/version_canary_ms",
+      "context": "hub",
+      "key": "version_canary_ms",
+      "verdict": "no-prior",
+      "reason": "`--version` canary: no prior recorded",
+      "prior": null,
+      "current": 27
+    },
+    {
+      "id": "hub/cold_embed_ms",
+      "context": "hub",
+      "key": "cold_embed_ms",
+      "verdict": "no-prior",
+      "reason": "embed cold build (crawl + first vector-participating `search`, one process): no prior recorded",
+      "prior": null,
+      "current": 11462
+    },
+    {
+      "id": "hub/warm_query_ms",
+      "context": "hub",
+      "key": "warm_query_ms",
+      "verdict": "no-prior",
+      "reason": "warm query (`COUNT(*)`): no prior recorded",
+      "prior": null,
+      "current": 121
+    },
+    {
+      "id": "hub/setup_ms",
+      "context": "hub",
+      "key": "setup_ms",
+      "verdict": "no-prior",
+      "reason": "invocation setup (warm query minus in-process open): no prior recorded",
+      "prior": null,
+      "current": 86.4
+    },
+    {
+      "id": "hub/find_ms",
+      "context": "hub",
+      "key": "find_ms",
+      "verdict": "no-prior",
+      "reason": "lexical `search` (BM25 + link fusion): no prior recorded",
+      "prior": null,
+      "current": 168
+    },
+    {
+      "id": "hub/words_ms",
+      "context": "hub",
+      "key": "words_ms",
+      "verdict": "no-prior",
+      "reason": "words-only `search` (BM25, no link fusion): no prior recorded",
+      "prior": null,
+      "current": 135
+    },
+    {
+      "id": "hub/find_row_tokens",
+      "context": "hub",
+      "key": "find_row_tokens",
+      "verdict": "no-prior",
+      "reason": "`search` row size (json): no prior recorded",
+      "prior": null,
+      "current": 71
+    },
+    {
+      "id": "hub/semantic_find_ms",
+      "context": "hub",
+      "key": "semantic_find_ms",
+      "verdict": "no-prior",
+      "reason": "semantic `search` (steady state): no prior recorded",
+      "prior": null,
+      "current": 284
+    },
+    {
+      "id": "hub/map_ms",
+      "context": "hub",
+      "key": "map_ms",
+      "verdict": "no-prior",
+      "reason": "`map` (orient): no prior recorded",
+      "prior": null,
+      "current": 157
+    },
+    {
+      "id": "hub/map_tokens",
+      "context": "hub",
+      "key": "map_tokens",
+      "verdict": "no-prior",
+      "reason": "`map` token count: no prior recorded",
+      "prior": null,
+      "current": 548
+    },
+    {
+      "id": "hub/peek_ms",
+      "context": "hub",
+      "key": "peek_ms",
+      "verdict": "no-prior",
+      "reason": "`peek` largest note: no prior recorded",
+      "prior": null,
+      "current": 129
+    },
+    {
+      "id": "hub/peek_tokens",
+      "context": "hub",
+      "key": "peek_tokens",
+      "verdict": "no-prior",
+      "reason": "`peek` token count: no prior recorded",
+      "prior": null,
+      "current": 581
+    },
+    {
+      "id": "hub/path_ms",
+      "context": "hub",
+      "key": "path_ms",
+      "verdict": "no-prior",
+      "reason": "`path` (graph traversal): no prior recorded",
+      "prior": null,
+      "current": 131
+    },
+    {
+      "id": "hub/related_ms",
+      "context": "hub",
+      "key": "related_ms",
+      "verdict": "no-prior",
+      "reason": "`related` (similar-but-unlinked): no prior recorded",
+      "prior": null,
+      "current": 341
+    },
+    {
+      "id": "hub/related_tokens",
+      "context": "hub",
+      "key": "related_tokens",
+      "verdict": "no-prior",
+      "reason": "`related` token count: no prior recorded",
+      "prior": null,
+      "current": 183
+    },
+    {
+      "id": "hub/bulk_change_ms",
+      "context": "hub",
+      "key": "bulk_change_ms",
+      "verdict": "no-prior",
+      "reason": "bulk change: first query: no prior recorded",
+      "prior": null,
+      "current": 545
+    },
+    {
+      "id": "hub/bulk_watch_ms",
+      "context": "hub",
+      "key": "bulk_watch_ms",
+      "verdict": "no-prior",
+      "reason": "bulk change: with warm watcher: no prior recorded",
+      "prior": null,
+      "current": 165
+    },
+    {
+      "id": "hub/inproc.cold_build_ms",
+      "context": "hub",
+      "key": "inproc.cold_build_ms",
+      "verdict": "no-prior",
+      "reason": "in-process: cold index build: no prior recorded",
+      "prior": null,
+      "current": 1811
+    },
+    {
+      "id": "hub/inproc.unaccounted_ms",
+      "context": "hub",
+      "key": "inproc.unaccounted_ms",
+      "verdict": "no-prior",
+      "reason": "in-process: cold build residual (unaccounted for by any stage): no prior recorded",
+      "prior": null,
+      "current": 32.8
+    },
+    {
+      "id": "hub/inproc.open_nochange_ms",
+      "context": "hub",
+      "key": "inproc.open_nochange_ms",
+      "verdict": "no-prior",
+      "reason": "in-process: freshness check, no change: no prior recorded",
+      "prior": null,
+      "current": 34.6
+    },
+    {
+      "id": "hub/inproc.update_1_file_ms",
+      "context": "hub",
+      "key": "inproc.update_1_file_ms",
+      "verdict": "no-prior",
+      "reason": "in-process: update, 1 file touched: no prior recorded",
+      "prior": null,
+      "current": 39
+    },
+    {
+      "id": "hub/inproc.update_10_files_ms",
+      "context": "hub",
+      "key": "inproc.update_10_files_ms",
+      "verdict": "no-prior",
+      "reason": "in-process: update, 10 files modified: no prior recorded",
+      "prior": null,
+      "current": 42
+    },
+    {
+      "id": "scale-13k/cold_crawl_ms",
+      "context": "scale-13k",
+      "key": "cold_crawl_ms",
+      "verdict": "no-prior",
+      "reason": "cold crawl (wall): no prior recorded",
+      "prior": null,
+      "current": 3641
+    },
+    {
+      "id": "scale-13k/version_canary_ms",
+      "context": "scale-13k",
+      "key": "version_canary_ms",
+      "verdict": "no-prior",
+      "reason": "`--version` canary: no prior recorded",
+      "prior": null,
+      "current": 25
+    },
+    {
+      "id": "scale-13k/cold_embed_ms",
+      "context": "scale-13k",
+      "key": "cold_embed_ms",
+      "verdict": "no-prior",
+      "reason": "embed cold build (crawl + first vector-participating `search`, one process): no prior recorded",
+      "prior": null,
+      "current": 22657
+    },
+    {
+      "id": "scale-13k/warm_query_ms",
+      "context": "scale-13k",
+      "key": "warm_query_ms",
+      "verdict": "no-prior",
+      "reason": "warm query (`COUNT(*)`): no prior recorded",
+      "prior": null,
+      "current": 193
+    },
+    {
+      "id": "scale-13k/setup_ms",
+      "context": "scale-13k",
+      "key": "setup_ms",
+      "verdict": "no-prior",
+      "reason": "invocation setup (warm query minus in-process open): no prior recorded",
+      "prior": null,
+      "current": 122.2
+    },
+    {
+      "id": "scale-13k/find_ms",
+      "context": "scale-13k",
+      "key": "find_ms",
+      "verdict": "no-prior",
+      "reason": "lexical `search` (BM25 + link fusion): no prior recorded",
+      "prior": null,
+      "current": 280
+    },
+    {
+      "id": "scale-13k/words_ms",
+      "context": "scale-13k",
+      "key": "words_ms",
+      "verdict": "no-prior",
+      "reason": "words-only `search` (BM25, no link fusion): no prior recorded",
+      "prior": null,
+      "current": 212
+    },
+    {
+      "id": "scale-13k/find_row_tokens",
+      "context": "scale-13k",
+      "key": "find_row_tokens",
+      "verdict": "no-prior",
+      "reason": "`search` row size (json): no prior recorded",
+      "prior": null,
+      "current": 71
+    },
+    {
+      "id": "scale-13k/semantic_find_ms",
+      "context": "scale-13k",
+      "key": "semantic_find_ms",
+      "verdict": "no-prior",
+      "reason": "semantic `search` (steady state): no prior recorded",
+      "prior": null,
+      "current": 481
+    },
+    {
+      "id": "scale-13k/map_ms",
+      "context": "scale-13k",
+      "key": "map_ms",
+      "verdict": "no-prior",
+      "reason": "`map` (orient): no prior recorded",
+      "prior": null,
+      "current": 268
+    },
+    {
+      "id": "scale-13k/map_tokens",
+      "context": "scale-13k",
+      "key": "map_tokens",
+      "verdict": "no-prior",
+      "reason": "`map` token count: no prior recorded",
+      "prior": null,
+      "current": 555
+    },
+    {
+      "id": "scale-13k/peek_ms",
+      "context": "scale-13k",
+      "key": "peek_ms",
+      "verdict": "no-prior",
+      "reason": "`peek` largest note: no prior recorded",
+      "prior": null,
+      "current": 204
+    },
+    {
+      "id": "scale-13k/peek_tokens",
+      "context": "scale-13k",
+      "key": "peek_tokens",
+      "verdict": "no-prior",
+      "reason": "`peek` token count: no prior recorded",
+      "prior": null,
+      "current": 692
+    },
+    {
+      "id": "scale-13k/path_ms",
+      "context": "scale-13k",
+      "key": "path_ms",
+      "verdict": "no-prior",
+      "reason": "`path` (graph traversal): no prior recorded",
+      "prior": null,
+      "current": 210
+    },
+    {
+      "id": "scale-13k/related_ms",
+      "context": "scale-13k",
+      "key": "related_ms",
+      "verdict": "no-prior",
+      "reason": "`related` (similar-but-unlinked): no prior recorded",
+      "prior": null,
+      "current": 657
+    },
+    {
+      "id": "scale-13k/related_tokens",
+      "context": "scale-13k",
+      "key": "related_tokens",
+      "verdict": "no-prior",
+      "reason": "`related` token count: no prior recorded",
+      "prior": null,
+      "current": 164
+    },
+    {
+      "id": "scale-13k/bulk_change_ms",
+      "context": "scale-13k",
+      "key": "bulk_change_ms",
+      "verdict": "no-prior",
+      "reason": "bulk change: first query: no prior recorded",
+      "prior": null,
+      "current": 640
+    },
+    {
+      "id": "scale-13k/bulk_watch_ms",
+      "context": "scale-13k",
+      "key": "bulk_watch_ms",
+      "verdict": "no-prior",
+      "reason": "bulk change: with warm watcher: no prior recorded",
+      "prior": null,
+      "current": 237
+    },
+    {
+      "id": "scale-13k/inproc.cold_build_ms",
+      "context": "scale-13k",
+      "key": "inproc.cold_build_ms",
+      "verdict": "no-prior",
+      "reason": "in-process: cold index build: no prior recorded",
+      "prior": null,
+      "current": 3011
+    },
+    {
+      "id": "scale-13k/inproc.unaccounted_ms",
+      "context": "scale-13k",
+      "key": "inproc.unaccounted_ms",
+      "verdict": "no-prior",
+      "reason": "in-process: cold build residual (unaccounted for by any stage): no prior recorded",
+      "prior": null,
+      "current": 61.5
+    },
+    {
+      "id": "scale-13k/inproc.open_nochange_ms",
+      "context": "scale-13k",
+      "key": "inproc.open_nochange_ms",
+      "verdict": "no-prior",
+      "reason": "in-process: freshness check, no change: no prior recorded",
+      "prior": null,
+      "current": 70.8
+    },
+    {
+      "id": "scale-13k/inproc.update_1_file_ms",
+      "context": "scale-13k",
+      "key": "inproc.update_1_file_ms",
+      "verdict": "no-prior",
+      "reason": "in-process: update, 1 file touched: no prior recorded",
+      "prior": null,
+      "current": 76
+    },
+    {
+      "id": "scale-13k/inproc.update_10_files_ms",
+      "context": "scale-13k",
+      "key": "inproc.update_10_files_ms",
+      "verdict": "no-prior",
+      "reason": "in-process: update, 10 files modified: no prior recorded",
+      "prior": null,
+      "current": 81
+    },
+    {
+      "id": "scale-26k/cold_crawl_ms",
+      "context": "scale-26k",
+      "key": "cold_crawl_ms",
+      "verdict": "no-prior",
+      "reason": "cold crawl (wall): no prior recorded",
+      "prior": null,
+      "current": 7228
+    },
+    {
+      "id": "scale-26k/version_canary_ms",
+      "context": "scale-26k",
+      "key": "version_canary_ms",
+      "verdict": "no-prior",
+      "reason": "`--version` canary: no prior recorded",
+      "prior": null,
+      "current": 26
+    },
+    {
+      "id": "scale-26k/cold_embed_ms",
+      "context": "scale-26k",
+      "key": "cold_embed_ms",
+      "verdict": "no-prior",
+      "reason": "embed cold build (crawl + first vector-participating `search`, one process): no prior recorded",
+      "prior": null,
+      "current": 45457
+    },
+    {
+      "id": "scale-26k/warm_query_ms",
+      "context": "scale-26k",
+      "key": "warm_query_ms",
+      "verdict": "no-prior",
+      "reason": "warm query (`COUNT(*)`): no prior recorded",
+      "prior": null,
+      "current": 327
+    },
+    {
+      "id": "scale-26k/setup_ms",
+      "context": "scale-26k",
+      "key": "setup_ms",
+      "verdict": "no-prior",
+      "reason": "invocation setup (warm query minus in-process open): no prior recorded",
+      "prior": null,
+      "current": 180.5
+    },
+    {
+      "id": "scale-26k/find_ms",
+      "context": "scale-26k",
+      "key": "find_ms",
+      "verdict": "no-prior",
+      "reason": "lexical `search` (BM25 + link fusion): no prior recorded",
+      "prior": null,
+      "current": 476
+    },
+    {
+      "id": "scale-26k/words_ms",
+      "context": "scale-26k",
+      "key": "words_ms",
+      "verdict": "no-prior",
+      "reason": "words-only `search` (BM25, no link fusion): no prior recorded",
+      "prior": null,
+      "current": 360
+    },
+    {
+      "id": "scale-26k/find_row_tokens",
+      "context": "scale-26k",
+      "key": "find_row_tokens",
+      "verdict": "no-prior",
+      "reason": "`search` row size (json): no prior recorded",
+      "prior": null,
+      "current": 70
+    },
+    {
+      "id": "scale-26k/semantic_find_ms",
+      "context": "scale-26k",
+      "key": "semantic_find_ms",
+      "verdict": "no-prior",
+      "reason": "semantic `search` (steady state): no prior recorded",
+      "prior": null,
+      "current": 858
+    },
+    {
+      "id": "scale-26k/map_ms",
+      "context": "scale-26k",
+      "key": "map_ms",
+      "verdict": "no-prior",
+      "reason": "`map` (orient): no prior recorded",
+      "prior": null,
+      "current": 480
+    },
+    {
+      "id": "scale-26k/map_tokens",
+      "context": "scale-26k",
+      "key": "map_tokens",
+      "verdict": "no-prior",
+      "reason": "`map` token count: no prior recorded",
+      "prior": null,
+      "current": 555
+    },
+    {
+      "id": "scale-26k/peek_ms",
+      "context": "scale-26k",
+      "key": "peek_ms",
+      "verdict": "no-prior",
+      "reason": "`peek` largest note: no prior recorded",
+      "prior": null,
+      "current": 351
+    },
+    {
+      "id": "scale-26k/peek_tokens",
+      "context": "scale-26k",
+      "key": "peek_tokens",
+      "verdict": "no-prior",
+      "reason": "`peek` token count: no prior recorded",
+      "prior": null,
+      "current": 843
+    },
+    {
+      "id": "scale-26k/path_ms",
+      "context": "scale-26k",
+      "key": "path_ms",
+      "verdict": "no-prior",
+      "reason": "`path` (graph traversal): no prior recorded",
+      "prior": null,
+      "current": 370
+    },
+    {
+      "id": "scale-26k/related_ms",
+      "context": "scale-26k",
+      "key": "related_ms",
+      "verdict": "no-prior",
+      "reason": "`related` (similar-but-unlinked): no prior recorded",
+      "prior": null,
+      "current": 1248
+    },
+    {
+      "id": "scale-26k/related_tokens",
+      "context": "scale-26k",
+      "key": "related_tokens",
+      "verdict": "no-prior",
+      "reason": "`related` token count: no prior recorded",
+      "prior": null,
+      "current": 162
+    },
+    {
+      "id": "scale-26k/bulk_change_ms",
+      "context": "scale-26k",
+      "key": "bulk_change_ms",
+      "verdict": "no-prior",
+      "reason": "bulk change: first query: no prior recorded",
+      "prior": null,
+      "current": 785
+    },
+    {
+      "id": "scale-26k/bulk_watch_ms",
+      "context": "scale-26k",
+      "key": "bulk_watch_ms",
+      "verdict": "no-prior",
+      "reason": "bulk change: with warm watcher: no prior recorded",
+      "prior": null,
+      "current": 372
+    },
+    {
+      "id": "scale-26k/inproc.cold_build_ms",
+      "context": "scale-26k",
+      "key": "inproc.cold_build_ms",
+      "verdict": "no-prior",
+      "reason": "in-process: cold index build: no prior recorded",
+      "prior": null,
+      "current": 6848
+    },
+    {
+      "id": "scale-26k/inproc.unaccounted_ms",
+      "context": "scale-26k",
+      "key": "inproc.unaccounted_ms",
+      "verdict": "no-prior",
+      "reason": "in-process: cold build residual (unaccounted for by any stage): no prior recorded",
+      "prior": null,
+      "current": 120.5
+    },
+    {
+      "id": "scale-26k/inproc.open_nochange_ms",
+      "context": "scale-26k",
+      "key": "inproc.open_nochange_ms",
+      "verdict": "no-prior",
+      "reason": "in-process: freshness check, no change: no prior recorded",
+      "prior": null,
+      "current": 146.5
+    },
+    {
+      "id": "scale-26k/inproc.update_1_file_ms",
+      "context": "scale-26k",
+      "key": "inproc.update_1_file_ms",
+      "verdict": "no-prior",
+      "reason": "in-process: update, 1 file touched: no prior recorded",
+      "prior": null,
+      "current": 148
+    },
+    {
+      "id": "scale-26k/inproc.update_10_files_ms",
+      "context": "scale-26k",
+      "key": "inproc.update_10_files_ms",
+      "verdict": "no-prior",
+      "reason": "in-process: update, 10 files modified: no prior recorded",
+      "prior": null,
+      "current": 158
+    },
+    {
+      "id": "stress/cold_crawl_ms",
+      "context": "stress",
+      "key": "cold_crawl_ms",
+      "verdict": "no-prior",
+      "reason": "cold crawl (wall): no prior recorded",
+      "prior": null,
+      "current": 5989
+    },
+    {
+      "id": "stress/version_canary_ms",
+      "context": "stress",
+      "key": "version_canary_ms",
+      "verdict": "no-prior",
+      "reason": "`--version` canary: no prior recorded",
+      "prior": null,
+      "current": 26
+    },
+    {
+      "id": "stress/cold_embed_ms",
+      "context": "stress",
+      "key": "cold_embed_ms",
+      "verdict": "no-prior",
+      "reason": "embed cold build (crawl + first vector-participating `search`, one process): no prior recorded",
+      "prior": null,
+      "current": 28113
+    },
+    {
+      "id": "stress/warm_query_ms",
+      "context": "stress",
+      "key": "warm_query_ms",
+      "verdict": "no-prior",
+      "reason": "warm query (`COUNT(*)`): no prior recorded",
+      "prior": null,
+      "current": 72
+    },
+    {
+      "id": "stress/setup_ms",
+      "context": "stress",
+      "key": "setup_ms",
+      "verdict": "no-prior",
+      "reason": "invocation setup (warm query minus in-process open): no prior recorded",
+      "prior": null,
+      "current": 60.8
+    },
+    {
+      "id": "stress/find_ms",
+      "context": "stress",
+      "key": "find_ms",
+      "verdict": "no-prior",
+      "reason": "lexical `search` (BM25 + link fusion): no prior recorded",
+      "prior": null,
+      "current": 317
+    },
+    {
+      "id": "stress/words_ms",
+      "context": "stress",
+      "key": "words_ms",
+      "verdict": "no-prior",
+      "reason": "words-only `search` (BM25, no link fusion): no prior recorded",
+      "prior": null,
+      "current": 151
+    },
+    {
+      "id": "stress/find_row_tokens",
+      "context": "stress",
+      "key": "find_row_tokens",
+      "verdict": "no-prior",
+      "reason": "`search` row size (json): no prior recorded",
+      "prior": null,
+      "current": 59
+    },
+    {
+      "id": "stress/semantic_find_ms",
+      "context": "stress",
+      "key": "semantic_find_ms",
+      "verdict": "no-prior",
+      "reason": "semantic `search` (steady state): no prior recorded",
+      "prior": null,
+      "current": 922
+    },
+    {
+      "id": "stress/map_ms",
+      "context": "stress",
+      "key": "map_ms",
+      "verdict": "no-prior",
+      "reason": "`map` (orient): no prior recorded",
+      "prior": null,
+      "current": 105
+    },
+    {
+      "id": "stress/map_tokens",
+      "context": "stress",
+      "key": "map_tokens",
+      "verdict": "no-prior",
+      "reason": "`map` token count: no prior recorded",
+      "prior": null,
+      "current": 411
+    },
+    {
+      "id": "stress/peek_ms",
+      "context": "stress",
+      "key": "peek_ms",
+      "verdict": "no-prior",
+      "reason": "`peek` largest note: no prior recorded",
+      "prior": null,
+      "current": 91
+    },
+    {
+      "id": "stress/peek_tokens",
+      "context": "stress",
+      "key": "peek_tokens",
+      "verdict": "no-prior",
+      "reason": "`peek` token count: no prior recorded",
+      "prior": null,
+      "current": 476
+    },
+    {
+      "id": "stress/path_ms",
+      "context": "stress",
+      "key": "path_ms",
+      "verdict": "no-prior",
+      "reason": "`path` (graph traversal): no prior recorded",
+      "prior": null,
+      "current": 116
+    },
+    {
+      "id": "stress/related_ms",
+      "context": "stress",
+      "key": "related_ms",
+      "verdict": "no-prior",
+      "reason": "`related` (similar-but-unlinked): no prior recorded",
+      "prior": null,
+      "current": 1553
+    },
+    {
+      "id": "stress/related_tokens",
+      "context": "stress",
+      "key": "related_tokens",
+      "verdict": "no-prior",
+      "reason": "`related` token count: no prior recorded",
+      "prior": null,
+      "current": 60
+    },
+    {
+      "id": "stress/bulk_change_ms",
+      "context": "stress",
+      "key": "bulk_change_ms",
+      "verdict": "no-prior",
+      "reason": "bulk change: first query: no prior recorded",
+      "prior": null,
+      "current": 1779
+    },
+    {
+      "id": "stress/bulk_watch_ms",
+      "context": "stress",
+      "key": "bulk_watch_ms",
+      "verdict": "no-prior",
+      "reason": "bulk change: with warm watcher: no prior recorded",
+      "prior": null,
+      "current": 116
+    },
+    {
+      "id": "stress/inproc.cold_build_ms",
+      "context": "stress",
+      "key": "inproc.cold_build_ms",
+      "verdict": "no-prior",
+      "reason": "in-process: cold index build: no prior recorded",
+      "prior": null,
+      "current": 4991
+    },
+    {
+      "id": "stress/inproc.unaccounted_ms",
+      "context": "stress",
+      "key": "inproc.unaccounted_ms",
+      "verdict": "no-prior",
+      "reason": "in-process: cold build residual (unaccounted for by any stage): no prior recorded",
+      "prior": null,
+      "current": 105.1
+    },
+    {
+      "id": "stress/inproc.open_nochange_ms",
+      "context": "stress",
+      "key": "inproc.open_nochange_ms",
+      "verdict": "no-prior",
+      "reason": "in-process: freshness check, no change: no prior recorded",
+      "prior": null,
+      "current": 11.2
+    },
+    {
+      "id": "stress/inproc.update_1_file_ms",
+      "context": "stress",
+      "key": "inproc.update_1_file_ms",
+      "verdict": "no-prior",
+      "reason": "in-process: update, 1 file touched: no prior recorded",
+      "prior": null,
+      "current": 25
+    },
+    {
+      "id": "stress/inproc.update_10_files_ms",
+      "context": "stress",
+      "key": "inproc.update_10_files_ms",
+      "verdict": "no-prior",
+      "reason": "in-process: update, 10 files modified: no prior recorded",
+      "prior": null,
+      "current": 95
+    },
+    {
+      "id": "battery-duckdb-hub/cold_crawl_ms",
+      "context": "battery-duckdb-hub",
+      "key": "cold_crawl_ms",
+      "verdict": "no-prior",
+      "reason": "cold crawl (wall): no prior recorded",
+      "prior": null,
+      "current": 5339
+    },
+    {
+      "id": "battery-duckdb-hub/version_canary_ms",
+      "context": "battery-duckdb-hub",
+      "key": "version_canary_ms",
+      "verdict": "no-prior",
+      "reason": "`--version` canary: no prior recorded",
+      "prior": null,
+      "current": 26
+    },
+    {
+      "id": "battery-duckdb-hub/cold_embed_ms",
+      "context": "battery-duckdb-hub",
+      "key": "cold_embed_ms",
+      "verdict": "no-prior",
+      "reason": "embed cold build (crawl + first vector-participating `search`, one process): no prior recorded",
+      "prior": null,
+      "current": 30773
+    },
+    {
+      "id": "battery-duckdb-hub/warm_query_ms",
+      "context": "battery-duckdb-hub",
+      "key": "warm_query_ms",
+      "verdict": "no-prior",
+      "reason": "warm query (`COUNT(*)`): no prior recorded",
+      "prior": null,
+      "current": 153
+    },
+    {
+      "id": "battery-duckdb-hub/setup_ms",
+      "context": "battery-duckdb-hub",
+      "key": "setup_ms",
+      "verdict": "no-prior",
+      "reason": "invocation setup (warm query minus in-process open): no prior recorded",
+      "prior": null,
+      "current": 110.9
+    },
+    {
+      "id": "battery-duckdb-hub/find_ms",
+      "context": "battery-duckdb-hub",
+      "key": "find_ms",
+      "verdict": "no-prior",
+      "reason": "lexical `search` (BM25 + link fusion): no prior recorded",
+      "prior": null,
+      "current": 549
+    },
+    {
+      "id": "battery-duckdb-hub/words_ms",
+      "context": "battery-duckdb-hub",
+      "key": "words_ms",
+      "verdict": "no-prior",
+      "reason": "words-only `search` (BM25, no link fusion): no prior recorded",
+      "prior": null,
+      "current": 501
+    },
+    {
+      "id": "battery-duckdb-hub/find_row_tokens",
+      "context": "battery-duckdb-hub",
+      "key": "find_row_tokens",
+      "verdict": "no-prior",
+      "reason": "`search` row size (json): no prior recorded",
+      "prior": null,
+      "current": 100
+    },
+    {
+      "id": "battery-duckdb-hub/semantic_find_ms",
+      "context": "battery-duckdb-hub",
+      "key": "semantic_find_ms",
+      "verdict": "no-prior",
+      "reason": "semantic `search` (steady state): no prior recorded",
+      "prior": null,
+      "current": 645
+    },
+    {
+      "id": "battery-duckdb-hub/map_ms",
+      "context": "battery-duckdb-hub",
+      "key": "map_ms",
+      "verdict": "no-prior",
+      "reason": "`map` (orient): no prior recorded",
+      "prior": null,
+      "current": 211
+    },
+    {
+      "id": "battery-duckdb-hub/map_tokens",
+      "context": "battery-duckdb-hub",
+      "key": "map_tokens",
+      "verdict": "no-prior",
+      "reason": "`map` token count: no prior recorded",
+      "prior": null,
+      "current": 580
+    },
+    {
+      "id": "battery-duckdb-hub/peek_ms",
+      "context": "battery-duckdb-hub",
+      "key": "peek_ms",
+      "verdict": "no-prior",
+      "reason": "`peek` largest note: no prior recorded",
+      "prior": null,
+      "current": 174
+    },
+    {
+      "id": "battery-duckdb-hub/peek_tokens",
+      "context": "battery-duckdb-hub",
+      "key": "peek_tokens",
+      "verdict": "no-prior",
+      "reason": "`peek` token count: no prior recorded",
+      "prior": null,
+      "current": 581
+    },
+    {
+      "id": "battery-duckdb-hub/path_ms",
+      "context": "battery-duckdb-hub",
+      "key": "path_ms",
+      "verdict": "no-prior",
+      "reason": "`path` (graph traversal): no prior recorded",
+      "prior": null,
+      "current": 194
+    },
+    {
+      "id": "battery-duckdb-hub/related_ms",
+      "context": "battery-duckdb-hub",
+      "key": "related_ms",
+      "verdict": "no-prior",
+      "reason": "`related` (similar-but-unlinked): no prior recorded",
+      "prior": null,
+      "current": 477
+    },
+    {
+      "id": "battery-duckdb-hub/related_tokens",
+      "context": "battery-duckdb-hub",
+      "key": "related_tokens",
+      "verdict": "no-prior",
+      "reason": "`related` token count: no prior recorded",
+      "prior": null,
+      "current": 183
+    },
+    {
+      "id": "battery-duckdb-hub/bulk_change_ms",
+      "context": "battery-duckdb-hub",
+      "key": "bulk_change_ms",
+      "verdict": "no-prior",
+      "reason": "bulk change: first query: no prior recorded",
+      "prior": null,
+      "current": 1169
+    },
+    {
+      "id": "battery-duckdb-hub/bulk_watch_ms",
+      "context": "battery-duckdb-hub",
+      "key": "bulk_watch_ms",
+      "verdict": "no-prior",
+      "reason": "bulk change: with warm watcher: no prior recorded",
+      "prior": null,
+      "current": 193
+    },
+    {
+      "id": "battery-duckdb-hub/inproc.cold_build_ms",
+      "context": "battery-duckdb-hub",
+      "key": "inproc.cold_build_ms",
+      "verdict": "no-prior",
+      "reason": "in-process: cold index build: no prior recorded",
+      "prior": null,
+      "current": 3703
+    },
+    {
+      "id": "battery-duckdb-hub/inproc.unaccounted_ms",
+      "context": "battery-duckdb-hub",
+      "key": "inproc.unaccounted_ms",
+      "verdict": "no-prior",
+      "reason": "in-process: cold build residual (unaccounted for by any stage): no prior recorded",
+      "prior": null,
+      "current": 56.7
+    },
+    {
+      "id": "battery-duckdb-hub/inproc.open_nochange_ms",
+      "context": "battery-duckdb-hub",
+      "key": "inproc.open_nochange_ms",
+      "verdict": "no-prior",
+      "reason": "in-process: freshness check, no change: no prior recorded",
+      "prior": null,
+      "current": 42.1
+    },
+    {
+      "id": "battery-duckdb-hub/inproc.update_1_file_ms",
+      "context": "battery-duckdb-hub",
+      "key": "inproc.update_1_file_ms",
+      "verdict": "no-prior",
+      "reason": "in-process: update, 1 file touched: no prior recorded",
+      "prior": null,
+      "current": 57
+    },
+    {
+      "id": "battery-duckdb-hub/inproc.update_10_files_ms",
+      "context": "battery-duckdb-hub",
+      "key": "inproc.update_10_files_ms",
+      "verdict": "no-prior",
+      "reason": "in-process: update, 10 files modified: no prior recorded",
+      "prior": null,
+      "current": 68
+    },
+    {
+      "id": "battery-duckdb-13k/cold_crawl_ms",
+      "context": "battery-duckdb-13k",
+      "key": "cold_crawl_ms",
+      "verdict": "no-prior",
+      "reason": "cold crawl (wall): no prior recorded",
+      "prior": null,
+      "current": 10845
+    },
+    {
+      "id": "battery-duckdb-13k/version_canary_ms",
+      "context": "battery-duckdb-13k",
+      "key": "version_canary_ms",
+      "verdict": "no-prior",
+      "reason": "`--version` canary: no prior recorded",
+      "prior": null,
+      "current": 25
+    },
+    {
+      "id": "battery-duckdb-13k/cold_embed_ms",
+      "context": "battery-duckdb-13k",
+      "key": "cold_embed_ms",
+      "verdict": "no-prior",
+      "reason": "embed cold build (crawl + first vector-participating `search`, one process): no prior recorded",
+      "prior": null,
+      "current": 54785
+    },
+    {
+      "id": "battery-duckdb-13k/warm_query_ms",
+      "context": "battery-duckdb-13k",
+      "key": "warm_query_ms",
+      "verdict": "no-prior",
+      "reason": "warm query (`COUNT(*)`): no prior recorded",
+      "prior": null,
+      "current": 227
+    },
+    {
+      "id": "battery-duckdb-13k/setup_ms",
+      "context": "battery-duckdb-13k",
+      "key": "setup_ms",
+      "verdict": "no-prior",
+      "reason": "invocation setup (warm query minus in-process open): no prior recorded",
+      "prior": null,
+      "current": 148.9
+    },
+    {
+      "id": "battery-duckdb-13k/find_ms",
+      "context": "battery-duckdb-13k",
+      "key": "find_ms",
+      "verdict": "no-prior",
+      "reason": "lexical `search` (BM25 + link fusion): no prior recorded",
+      "prior": null,
+      "current": 964
+    },
+    {
+      "id": "battery-duckdb-13k/words_ms",
+      "context": "battery-duckdb-13k",
+      "key": "words_ms",
+      "verdict": "no-prior",
+      "reason": "words-only `search` (BM25, no link fusion): no prior recorded",
+      "prior": null,
+      "current": 873
+    },
+    {
+      "id": "battery-duckdb-13k/find_row_tokens",
+      "context": "battery-duckdb-13k",
+      "key": "find_row_tokens",
+      "verdict": "no-prior",
+      "reason": "`search` row size (json): no prior recorded",
+      "prior": null,
+      "current": 101
+    },
+    {
+      "id": "battery-duckdb-13k/semantic_find_ms",
+      "context": "battery-duckdb-13k",
+      "key": "semantic_find_ms",
+      "verdict": "no-prior",
+      "reason": "semantic `search` (steady state): no prior recorded",
+      "prior": null,
+      "current": 1174
+    },
+    {
+      "id": "battery-duckdb-13k/map_ms",
+      "context": "battery-duckdb-13k",
+      "key": "map_ms",
+      "verdict": "no-prior",
+      "reason": "`map` (orient): no prior recorded",
+      "prior": null,
+      "current": 406
+    },
+    {
+      "id": "battery-duckdb-13k/map_tokens",
+      "context": "battery-duckdb-13k",
+      "key": "map_tokens",
+      "verdict": "no-prior",
+      "reason": "`map` token count: no prior recorded",
+      "prior": null,
+      "current": 587
+    },
+    {
+      "id": "battery-duckdb-13k/peek_ms",
+      "context": "battery-duckdb-13k",
+      "key": "peek_ms",
+      "verdict": "no-prior",
+      "reason": "`peek` largest note: no prior recorded",
+      "prior": null,
+      "current": 257
+    },
+    {
+      "id": "battery-duckdb-13k/peek_tokens",
+      "context": "battery-duckdb-13k",
+      "key": "peek_tokens",
+      "verdict": "no-prior",
+      "reason": "`peek` token count: no prior recorded",
+      "prior": null,
+      "current": 692
+    },
+    {
+      "id": "battery-duckdb-13k/path_ms",
+      "context": "battery-duckdb-13k",
+      "key": "path_ms",
+      "verdict": "no-prior",
+      "reason": "`path` (graph traversal): no prior recorded",
+      "prior": null,
+      "current": 300
+    },
+    {
+      "id": "battery-duckdb-13k/related_ms",
+      "context": "battery-duckdb-13k",
+      "key": "related_ms",
+      "verdict": "no-prior",
+      "reason": "`related` (similar-but-unlinked): no prior recorded",
+      "prior": null,
+      "current": 876
+    },
+    {
+      "id": "battery-duckdb-13k/related_tokens",
+      "context": "battery-duckdb-13k",
+      "key": "related_tokens",
+      "verdict": "no-prior",
+      "reason": "`related` token count: no prior recorded",
+      "prior": null,
+      "current": 164
+    },
+    {
+      "id": "battery-duckdb-13k/bulk_change_ms",
+      "context": "battery-duckdb-13k",
+      "key": "bulk_change_ms",
+      "verdict": "no-prior",
+      "reason": "bulk change: first query: no prior recorded",
+      "prior": null,
+      "current": 1150
+    },
+    {
+      "id": "battery-duckdb-13k/bulk_watch_ms",
+      "context": "battery-duckdb-13k",
+      "key": "bulk_watch_ms",
+      "verdict": "no-prior",
+      "reason": "bulk change: with warm watcher: no prior recorded",
+      "prior": null,
+      "current": 271
+    },
+    {
+      "id": "battery-duckdb-13k/inproc.cold_build_ms",
+      "context": "battery-duckdb-13k",
+      "key": "inproc.cold_build_ms",
+      "verdict": "no-prior",
+      "reason": "in-process: cold index build: no prior recorded",
+      "prior": null,
+      "current": 7163
+    },
+    {
+      "id": "battery-duckdb-13k/inproc.unaccounted_ms",
+      "context": "battery-duckdb-13k",
+      "key": "inproc.unaccounted_ms",
+      "verdict": "no-prior",
+      "reason": "in-process: cold build residual (unaccounted for by any stage): no prior recorded",
+      "prior": null,
+      "current": 152.1
+    },
+    {
+      "id": "battery-duckdb-13k/inproc.open_nochange_ms",
+      "context": "battery-duckdb-13k",
+      "key": "inproc.open_nochange_ms",
+      "verdict": "no-prior",
+      "reason": "in-process: freshness check, no change: no prior recorded",
+      "prior": null,
+      "current": 78.1
+    },
+    {
+      "id": "battery-duckdb-13k/inproc.update_1_file_ms",
+      "context": "battery-duckdb-13k",
+      "key": "inproc.update_1_file_ms",
+      "verdict": "no-prior",
+      "reason": "in-process: update, 1 file touched: no prior recorded",
+      "prior": null,
+      "current": 105
+    },
+    {
+      "id": "battery-duckdb-13k/inproc.update_10_files_ms",
+      "context": "battery-duckdb-13k",
+      "key": "inproc.update_10_files_ms",
+      "verdict": "no-prior",
+      "reason": "in-process: update, 10 files modified: no prior recorded",
+      "prior": null,
+      "current": 112
+    },
+    {
+      "id": "battery-duckdb-26k/cold_crawl_ms",
+      "context": "battery-duckdb-26k",
+      "key": "cold_crawl_ms",
+      "verdict": "no-prior",
+      "reason": "cold crawl (wall): no prior recorded",
+      "prior": null,
+      "current": 22359
+    },
+    {
+      "id": "battery-duckdb-26k/version_canary_ms",
+      "context": "battery-duckdb-26k",
+      "key": "version_canary_ms",
+      "verdict": "no-prior",
+      "reason": "`--version` canary: no prior recorded",
+      "prior": null,
+      "current": 26
+    },
+    {
+      "id": "battery-duckdb-26k/cold_embed_ms",
+      "context": "battery-duckdb-26k",
+      "key": "cold_embed_ms",
+      "verdict": "no-prior",
+      "reason": "embed cold build (crawl + first vector-participating `search`, one process): no prior recorded",
+      "prior": null,
+      "current": 104079
+    },
+    {
+      "id": "battery-duckdb-26k/warm_query_ms",
+      "context": "battery-duckdb-26k",
+      "key": "warm_query_ms",
+      "verdict": "no-prior",
+      "reason": "warm query (`COUNT(*)`): no prior recorded",
+      "prior": null,
+      "current": 364
+    },
+    {
+      "id": "battery-duckdb-26k/setup_ms",
+      "context": "battery-duckdb-26k",
+      "key": "setup_ms",
+      "verdict": "no-prior",
+      "reason": "invocation setup (warm query minus in-process open): no prior recorded",
+      "prior": null,
+      "current": 214.2
+    },
+    {
+      "id": "battery-duckdb-26k/find_ms",
+      "context": "battery-duckdb-26k",
+      "key": "find_ms",
+      "verdict": "no-prior",
+      "reason": "lexical `search` (BM25 + link fusion): no prior recorded",
+      "prior": null,
+      "current": 1781
+    },
+    {
+      "id": "battery-duckdb-26k/words_ms",
+      "context": "battery-duckdb-26k",
+      "key": "words_ms",
+      "verdict": "no-prior",
+      "reason": "words-only `search` (BM25, no link fusion): no prior recorded",
+      "prior": null,
+      "current": 1619
+    },
+    {
+      "id": "battery-duckdb-26k/find_row_tokens",
+      "context": "battery-duckdb-26k",
+      "key": "find_row_tokens",
+      "verdict": "no-prior",
+      "reason": "`search` row size (json): no prior recorded",
+      "prior": null,
+      "current": 100
+    },
+    {
+      "id": "battery-duckdb-26k/semantic_find_ms",
+      "context": "battery-duckdb-26k",
+      "key": "semantic_find_ms",
+      "verdict": "no-prior",
+      "reason": "semantic `search` (steady state): no prior recorded",
+      "prior": null,
+      "current": 2041
+    },
+    {
+      "id": "battery-duckdb-26k/map_ms",
+      "context": "battery-duckdb-26k",
+      "key": "map_ms",
+      "verdict": "no-prior",
+      "reason": "`map` (orient): no prior recorded",
+      "prior": null,
+      "current": 620
+    },
+    {
+      "id": "battery-duckdb-26k/map_tokens",
+      "context": "battery-duckdb-26k",
+      "key": "map_tokens",
+      "verdict": "no-prior",
+      "reason": "`map` token count: no prior recorded",
+      "prior": null,
+      "current": 587
+    },
+    {
+      "id": "battery-duckdb-26k/peek_ms",
+      "context": "battery-duckdb-26k",
+      "key": "peek_ms",
+      "verdict": "no-prior",
+      "reason": "`peek` largest note: no prior recorded",
+      "prior": null,
+      "current": 420
+    },
+    {
+      "id": "battery-duckdb-26k/peek_tokens",
+      "context": "battery-duckdb-26k",
+      "key": "peek_tokens",
+      "verdict": "no-prior",
+      "reason": "`peek` token count: no prior recorded",
+      "prior": null,
+      "current": 843
+    },
+    {
+      "id": "battery-duckdb-26k/path_ms",
+      "context": "battery-duckdb-26k",
+      "key": "path_ms",
+      "verdict": "no-prior",
+      "reason": "`path` (graph traversal): no prior recorded",
+      "prior": null,
+      "current": 504
+    },
+    {
+      "id": "battery-duckdb-26k/related_ms",
+      "context": "battery-duckdb-26k",
+      "key": "related_ms",
+      "verdict": "no-prior",
+      "reason": "`related` (similar-but-unlinked): no prior recorded",
+      "prior": null,
+      "current": 1143
+    },
+    {
+      "id": "battery-duckdb-26k/related_tokens",
+      "context": "battery-duckdb-26k",
+      "key": "related_tokens",
+      "verdict": "no-prior",
+      "reason": "`related` token count: no prior recorded",
+      "prior": null,
+      "current": 162
+    },
+    {
+      "id": "battery-duckdb-26k/bulk_change_ms",
+      "context": "battery-duckdb-26k",
+      "key": "bulk_change_ms",
+      "verdict": "no-prior",
+      "reason": "bulk change: first query: no prior recorded",
+      "prior": null,
+      "current": 1357
+    },
+    {
+      "id": "battery-duckdb-26k/bulk_watch_ms",
+      "context": "battery-duckdb-26k",
+      "key": "bulk_watch_ms",
+      "verdict": "no-prior",
+      "reason": "bulk change: with warm watcher: no prior recorded",
+      "prior": null,
+      "current": 397
+    },
+    {
+      "id": "battery-duckdb-26k/inproc.cold_build_ms",
+      "context": "battery-duckdb-26k",
+      "key": "inproc.cold_build_ms",
+      "verdict": "no-prior",
+      "reason": "in-process: cold index build: no prior recorded",
+      "prior": null,
+      "current": 14472
+    },
+    {
+      "id": "battery-duckdb-26k/inproc.unaccounted_ms",
+      "context": "battery-duckdb-26k",
+      "key": "inproc.unaccounted_ms",
+      "verdict": "no-prior",
+      "reason": "in-process: cold build residual (unaccounted for by any stage): no prior recorded",
+      "prior": null,
+      "current": 306.9
+    },
+    {
+      "id": "battery-duckdb-26k/inproc.open_nochange_ms",
+      "context": "battery-duckdb-26k",
+      "key": "inproc.open_nochange_ms",
+      "verdict": "no-prior",
+      "reason": "in-process: freshness check, no change: no prior recorded",
+      "prior": null,
+      "current": 149.8
+    },
+    {
+      "id": "battery-duckdb-26k/inproc.update_1_file_ms",
+      "context": "battery-duckdb-26k",
+      "key": "inproc.update_1_file_ms",
+      "verdict": "no-prior",
+      "reason": "in-process: update, 1 file touched: no prior recorded",
+      "prior": null,
+      "current": 179
+    },
+    {
+      "id": "battery-duckdb-26k/inproc.update_10_files_ms",
+      "context": "battery-duckdb-26k",
+      "key": "inproc.update_10_files_ms",
+      "verdict": "no-prior",
+      "reason": "in-process: update, 10 files modified: no prior recorded",
+      "prior": null,
+      "current": 196
+    },
+    {
+      "id": "battery-duckdb-stress/cold_crawl_ms",
+      "context": "battery-duckdb-stress",
+      "key": "cold_crawl_ms",
+      "verdict": "no-prior",
+      "reason": "cold crawl (wall): no prior recorded",
+      "prior": null,
+      "current": 40016
+    },
+    {
+      "id": "battery-duckdb-stress/version_canary_ms",
+      "context": "battery-duckdb-stress",
+      "key": "version_canary_ms",
+      "verdict": "no-prior",
+      "reason": "`--version` canary: no prior recorded",
+      "prior": null,
+      "current": 26
+    },
+    {
+      "id": "battery-duckdb-stress/cold_embed_ms",
+      "context": "battery-duckdb-stress",
+      "key": "cold_embed_ms",
+      "verdict": "no-prior",
+      "reason": "embed cold build (crawl + first vector-participating `search`, one process): no prior recorded",
+      "prior": null,
+      "current": 125749
+    },
+    {
+      "id": "battery-duckdb-stress/warm_query_ms",
+      "context": "battery-duckdb-stress",
+      "key": "warm_query_ms",
+      "verdict": "no-prior",
+      "reason": "warm query (`COUNT(*)`): no prior recorded",
+      "prior": null,
+      "current": 107
+    },
+    {
+      "id": "battery-duckdb-stress/setup_ms",
+      "context": "battery-duckdb-stress",
+      "key": "setup_ms",
+      "verdict": "no-prior",
+      "reason": "invocation setup (warm query minus in-process open): no prior recorded",
+      "prior": null,
+      "current": 88.8
+    },
+    {
+      "id": "battery-duckdb-stress/find_ms",
+      "context": "battery-duckdb-stress",
+      "key": "find_ms",
+      "verdict": "no-prior",
+      "reason": "lexical `search` (BM25 + link fusion): no prior recorded",
+      "prior": null,
+      "current": 1857
+    },
+    {
+      "id": "battery-duckdb-stress/words_ms",
+      "context": "battery-duckdb-stress",
+      "key": "words_ms",
+      "verdict": "no-prior",
+      "reason": "words-only `search` (BM25, no link fusion): no prior recorded",
+      "prior": null,
+      "current": 1575
+    },
+    {
+      "id": "battery-duckdb-stress/find_row_tokens",
+      "context": "battery-duckdb-stress",
+      "key": "find_row_tokens",
+      "verdict": "no-prior",
+      "reason": "`search` row size (json): no prior recorded",
+      "prior": null,
+      "current": 89
+    },
+    {
+      "id": "battery-duckdb-stress/semantic_find_ms",
+      "context": "battery-duckdb-stress",
+      "key": "semantic_find_ms",
+      "verdict": "no-prior",
+      "reason": "semantic `search` (steady state): no prior recorded",
+      "prior": null,
+      "current": 1964
+    },
+    {
+      "id": "battery-duckdb-stress/map_ms",
+      "context": "battery-duckdb-stress",
+      "key": "map_ms",
+      "verdict": "no-prior",
+      "reason": "`map` (orient): no prior recorded",
+      "prior": null,
+      "current": 318
+    },
+    {
+      "id": "battery-duckdb-stress/map_tokens",
+      "context": "battery-duckdb-stress",
+      "key": "map_tokens",
+      "verdict": "no-prior",
+      "reason": "`map` token count: no prior recorded",
+      "prior": null,
+      "current": 449
+    },
+    {
+      "id": "battery-duckdb-stress/peek_ms",
+      "context": "battery-duckdb-stress",
+      "key": "peek_ms",
+      "verdict": "no-prior",
+      "reason": "`peek` largest note: no prior recorded",
+      "prior": null,
+      "current": 162
+    },
+    {
+      "id": "battery-duckdb-stress/peek_tokens",
+      "context": "battery-duckdb-stress",
+      "key": "peek_tokens",
+      "verdict": "no-prior",
+      "reason": "`peek` token count: no prior recorded",
+      "prior": null,
+      "current": 476
+    },
+    {
+      "id": "battery-duckdb-stress/path_ms",
+      "context": "battery-duckdb-stress",
+      "key": "path_ms",
+      "verdict": "no-prior",
+      "reason": "`path` (graph traversal): no prior recorded",
+      "prior": null,
+      "current": 182
+    },
+    {
+      "id": "battery-duckdb-stress/related_ms",
+      "context": "battery-duckdb-stress",
+      "key": "related_ms",
+      "verdict": "no-prior",
+      "reason": "`related` (similar-but-unlinked): no prior recorded",
+      "prior": null,
+      "current": 695
+    },
+    {
+      "id": "battery-duckdb-stress/related_tokens",
+      "context": "battery-duckdb-stress",
+      "key": "related_tokens",
+      "verdict": "no-prior",
+      "reason": "`related` token count: no prior recorded",
+      "prior": null,
+      "current": 60
+    },
+    {
+      "id": "battery-duckdb-stress/bulk_change_ms",
+      "context": "battery-duckdb-stress",
+      "key": "bulk_change_ms",
+      "verdict": "no-prior",
+      "reason": "bulk change: first query: no prior recorded",
+      "prior": null,
+      "current": 11877
+    },
+    {
+      "id": "battery-duckdb-stress/bulk_watch_ms",
+      "context": "battery-duckdb-stress",
+      "key": "bulk_watch_ms",
+      "verdict": "no-prior",
+      "reason": "bulk change: with warm watcher: no prior recorded",
+      "prior": null,
+      "current": 148
+    },
+    {
+      "id": "battery-duckdb-stress/inproc.cold_build_ms",
+      "context": "battery-duckdb-stress",
+      "key": "inproc.cold_build_ms",
+      "verdict": "no-prior",
+      "reason": "in-process: cold index build: no prior recorded",
+      "prior": null,
+      "current": 29787
+    },
+    {
+      "id": "battery-duckdb-stress/inproc.unaccounted_ms",
+      "context": "battery-duckdb-stress",
+      "key": "inproc.unaccounted_ms",
+      "verdict": "no-prior",
+      "reason": "in-process: cold build residual (unaccounted for by any stage): no prior recorded",
+      "prior": null,
+      "current": 412.6
+    },
+    {
+      "id": "battery-duckdb-stress/inproc.open_nochange_ms",
+      "context": "battery-duckdb-stress",
+      "key": "inproc.open_nochange_ms",
+      "verdict": "no-prior",
+      "reason": "in-process: freshness check, no change: no prior recorded",
+      "prior": null,
+      "current": 18.2
+    },
+    {
+      "id": "battery-duckdb-stress/inproc.update_1_file_ms",
+      "context": "battery-duckdb-stress",
+      "key": "inproc.update_1_file_ms",
+      "verdict": "no-prior",
+      "reason": "in-process: update, 1 file touched: no prior recorded",
+      "prior": null,
+      "current": 272
+    },
+    {
+      "id": "battery-duckdb-stress/inproc.update_10_files_ms",
+      "context": "battery-duckdb-stress",
+      "key": "inproc.update_10_files_ms",
+      "verdict": "no-prior",
+      "reason": "in-process: update, 10 files modified: no prior recorded",
+      "prior": null,
+      "current": 433
+    },
+    {
+      "id": "battery-turso-hub/cold_crawl_ms",
+      "context": "battery-turso-hub",
+      "key": "cold_crawl_ms",
+      "verdict": "no-prior",
+      "reason": "cold crawl (wall): no prior recorded",
+      "prior": null,
+      "current": 4436
+    },
+    {
+      "id": "battery-turso-hub/version_canary_ms",
+      "context": "battery-turso-hub",
+      "key": "version_canary_ms",
+      "verdict": "no-prior",
+      "reason": "`--version` canary: no prior recorded",
+      "prior": null,
+      "current": 26
+    },
+    {
+      "id": "battery-turso-hub/cold_embed_ms",
+      "context": "battery-turso-hub",
+      "key": "cold_embed_ms",
+      "verdict": "no-prior",
+      "reason": "embed cold build (crawl + first vector-participating `search`, one process): no prior recorded",
+      "prior": null,
+      "current": 16477
+    },
+    {
+      "id": "battery-turso-hub/warm_query_ms",
+      "context": "battery-turso-hub",
+      "key": "warm_query_ms",
+      "verdict": "no-prior",
+      "reason": "warm query (`COUNT(*)`): no prior recorded",
+      "prior": null,
+      "current": 129
+    },
+    {
+      "id": "battery-turso-hub/setup_ms",
+      "context": "battery-turso-hub",
+      "key": "setup_ms",
+      "verdict": "no-prior",
+      "reason": "invocation setup (warm query minus in-process open): no prior recorded",
+      "prior": null,
+      "current": 87.2
+    },
+    {
+      "id": "battery-turso-hub/find_ms",
+      "context": "battery-turso-hub",
+      "key": "find_ms",
+      "verdict": "no-prior",
+      "reason": "lexical `search` (BM25 + link fusion): no prior recorded",
+      "prior": null,
+      "current": 208
+    },
+    {
+      "id": "battery-turso-hub/words_ms",
+      "context": "battery-turso-hub",
+      "key": "words_ms",
+      "verdict": "no-prior",
+      "reason": "words-only `search` (BM25, no link fusion): no prior recorded",
+      "prior": null,
+      "current": 155
+    },
+    {
+      "id": "battery-turso-hub/find_row_tokens",
+      "context": "battery-turso-hub",
+      "key": "find_row_tokens",
+      "verdict": "no-prior",
+      "reason": "`search` row size (json): no prior recorded",
+      "prior": null,
+      "current": 100
+    },
+    {
+      "id": "battery-turso-hub/semantic_find_ms",
+      "context": "battery-turso-hub",
+      "key": "semantic_find_ms",
+      "verdict": "no-prior",
+      "reason": "semantic `search` (steady state): no prior recorded",
+      "prior": null,
+      "current": 493
+    },
+    {
+      "id": "battery-turso-hub/map_ms",
+      "context": "battery-turso-hub",
+      "key": "map_ms",
+      "verdict": "no-prior",
+      "reason": "`map` (orient): no prior recorded",
+      "prior": null,
+      "current": 306
+    },
+    {
+      "id": "battery-turso-hub/map_tokens",
+      "context": "battery-turso-hub",
+      "key": "map_tokens",
+      "verdict": "no-prior",
+      "reason": "`map` token count: no prior recorded",
+      "prior": null,
+      "current": 548
+    },
+    {
+      "id": "battery-turso-hub/peek_ms",
+      "context": "battery-turso-hub",
+      "key": "peek_ms",
+      "verdict": "no-prior",
+      "reason": "`peek` largest note: no prior recorded",
+      "prior": null,
+      "current": 149
+    },
+    {
+      "id": "battery-turso-hub/peek_tokens",
+      "context": "battery-turso-hub",
+      "key": "peek_tokens",
+      "verdict": "no-prior",
+      "reason": "`peek` token count: no prior recorded",
+      "prior": null,
+      "current": 581
+    },
+    {
+      "id": "battery-turso-hub/path_ms",
+      "context": "battery-turso-hub",
+      "key": "path_ms",
+      "verdict": "no-prior",
+      "reason": "`path` (graph traversal): no prior recorded",
+      "prior": null,
+      "current": 198
+    },
+    {
+      "id": "battery-turso-hub/related_ms",
+      "context": "battery-turso-hub",
+      "key": "related_ms",
+      "verdict": "no-prior",
+      "reason": "`related` (similar-but-unlinked): no prior recorded",
+      "prior": null,
+      "current": 619
+    },
+    {
+      "id": "battery-turso-hub/related_tokens",
+      "context": "battery-turso-hub",
+      "key": "related_tokens",
+      "verdict": "no-prior",
+      "reason": "`related` token count: no prior recorded",
+      "prior": null,
+      "current": 183
+    },
+    {
+      "id": "battery-turso-hub/bulk_change_ms",
+      "context": "battery-turso-hub",
+      "key": "bulk_change_ms",
+      "verdict": "no-prior",
+      "reason": "bulk change: first query: no prior recorded",
+      "prior": null,
+      "current": 840
+    },
+    {
+      "id": "battery-turso-hub/bulk_watch_ms",
+      "context": "battery-turso-hub",
+      "key": "bulk_watch_ms",
+      "verdict": "no-prior",
+      "reason": "bulk change: with warm watcher: no prior recorded",
+      "prior": null,
+      "current": 164
+    },
+    {
+      "id": "battery-turso-hub/inproc.cold_build_ms",
+      "context": "battery-turso-hub",
+      "key": "inproc.cold_build_ms",
+      "verdict": "no-prior",
+      "reason": "in-process: cold index build: no prior recorded",
+      "prior": null,
+      "current": 3186
+    },
+    {
+      "id": "battery-turso-hub/inproc.unaccounted_ms",
+      "context": "battery-turso-hub",
+      "key": "inproc.unaccounted_ms",
+      "verdict": "no-prior",
+      "reason": "in-process: cold build residual (unaccounted for by any stage): no prior recorded",
+      "prior": null,
+      "current": 27.9
+    },
+    {
+      "id": "battery-turso-hub/inproc.open_nochange_ms",
+      "context": "battery-turso-hub",
+      "key": "inproc.open_nochange_ms",
+      "verdict": "no-prior",
+      "reason": "in-process: freshness check, no change: no prior recorded",
+      "prior": null,
+      "current": 41.8
+    },
+    {
+      "id": "battery-turso-hub/inproc.update_1_file_ms",
+      "context": "battery-turso-hub",
+      "key": "inproc.update_1_file_ms",
+      "verdict": "no-prior",
+      "reason": "in-process: update, 1 file touched: no prior recorded",
+      "prior": null,
+      "current": 53
+    },
+    {
+      "id": "battery-turso-hub/inproc.update_10_files_ms",
+      "context": "battery-turso-hub",
+      "key": "inproc.update_10_files_ms",
+      "verdict": "no-prior",
+      "reason": "in-process: update, 10 files modified: no prior recorded",
+      "prior": null,
+      "current": 128
+    },
+    {
+      "id": "battery-turso-13k/cold_crawl_ms",
+      "context": "battery-turso-13k",
+      "key": "cold_crawl_ms",
+      "verdict": "no-prior",
+      "reason": "cold crawl (wall): no prior recorded",
+      "prior": null,
+      "current": 8604
+    },
+    {
+      "id": "battery-turso-13k/version_canary_ms",
+      "context": "battery-turso-13k",
+      "key": "version_canary_ms",
+      "verdict": "no-prior",
+      "reason": "`--version` canary: no prior recorded",
+      "prior": null,
+      "current": 26
+    },
+    {
+      "id": "battery-turso-13k/cold_embed_ms",
+      "context": "battery-turso-13k",
+      "key": "cold_embed_ms",
+      "verdict": "no-prior",
+      "reason": "embed cold build (crawl + first vector-participating `search`, one process): no prior recorded",
+      "prior": null,
+      "current": 33257
+    },
+    {
+      "id": "battery-turso-13k/warm_query_ms",
+      "context": "battery-turso-13k",
+      "key": "warm_query_ms",
+      "verdict": "no-prior",
+      "reason": "warm query (`COUNT(*)`): no prior recorded",
+      "prior": null,
+      "current": 205
+    },
+    {
+      "id": "battery-turso-13k/setup_ms",
+      "context": "battery-turso-13k",
+      "key": "setup_ms",
+      "verdict": "no-prior",
+      "reason": "invocation setup (warm query minus in-process open): no prior recorded",
+      "prior": null,
+      "current": 122.7
+    },
+    {
+      "id": "battery-turso-13k/find_ms",
+      "context": "battery-turso-13k",
+      "key": "find_ms",
+      "verdict": "no-prior",
+      "reason": "lexical `search` (BM25 + link fusion): no prior recorded",
+      "prior": null,
+      "current": 358
+    },
+    {
+      "id": "battery-turso-13k/words_ms",
+      "context": "battery-turso-13k",
+      "key": "words_ms",
+      "verdict": "no-prior",
+      "reason": "words-only `search` (BM25, no link fusion): no prior recorded",
+      "prior": null,
+      "current": 250
+    },
+    {
+      "id": "battery-turso-13k/find_row_tokens",
+      "context": "battery-turso-13k",
+      "key": "find_row_tokens",
+      "verdict": "no-prior",
+      "reason": "`search` row size (json): no prior recorded",
+      "prior": null,
+      "current": 99
+    },
+    {
+      "id": "battery-turso-13k/semantic_find_ms",
+      "context": "battery-turso-13k",
+      "key": "semantic_find_ms",
+      "verdict": "no-prior",
+      "reason": "semantic `search` (steady state): no prior recorded",
+      "prior": null,
+      "current": 884
+    },
+    {
+      "id": "battery-turso-13k/map_ms",
+      "context": "battery-turso-13k",
+      "key": "map_ms",
+      "verdict": "no-prior",
+      "reason": "`map` (orient): no prior recorded",
+      "prior": null,
+      "current": 571
+    },
+    {
+      "id": "battery-turso-13k/map_tokens",
+      "context": "battery-turso-13k",
+      "key": "map_tokens",
+      "verdict": "no-prior",
+      "reason": "`map` token count: no prior recorded",
+      "prior": null,
+      "current": 555
+    },
+    {
+      "id": "battery-turso-13k/peek_ms",
+      "context": "battery-turso-13k",
+      "key": "peek_ms",
+      "verdict": "no-prior",
+      "reason": "`peek` largest note: no prior recorded",
+      "prior": null,
+      "current": 236
+    },
+    {
+      "id": "battery-turso-13k/peek_tokens",
+      "context": "battery-turso-13k",
+      "key": "peek_tokens",
+      "verdict": "no-prior",
+      "reason": "`peek` token count: no prior recorded",
+      "prior": null,
+      "current": 692
+    },
+    {
+      "id": "battery-turso-13k/path_ms",
+      "context": "battery-turso-13k",
+      "key": "path_ms",
+      "verdict": "no-prior",
+      "reason": "`path` (graph traversal): no prior recorded",
+      "prior": null,
+      "current": 340
+    },
+    {
+      "id": "battery-turso-13k/related_ms",
+      "context": "battery-turso-13k",
+      "key": "related_ms",
+      "verdict": "no-prior",
+      "reason": "`related` (similar-but-unlinked): no prior recorded",
+      "prior": null,
+      "current": 1238
+    },
+    {
+      "id": "battery-turso-13k/related_tokens",
+      "context": "battery-turso-13k",
+      "key": "related_tokens",
+      "verdict": "no-prior",
+      "reason": "`related` token count: no prior recorded",
+      "prior": null,
+      "current": 164
+    },
+    {
+      "id": "battery-turso-13k/bulk_change_ms",
+      "context": "battery-turso-13k",
+      "key": "bulk_change_ms",
+      "verdict": "no-prior",
+      "reason": "bulk change: first query: no prior recorded",
+      "prior": null,
+      "current": 1005
+    },
+    {
+      "id": "battery-turso-13k/bulk_watch_ms",
+      "context": "battery-turso-13k",
+      "key": "bulk_watch_ms",
+      "verdict": "no-prior",
+      "reason": "bulk change: with warm watcher: no prior recorded",
+      "prior": null,
+      "current": 247
+    },
+    {
+      "id": "battery-turso-13k/inproc.cold_build_ms",
+      "context": "battery-turso-13k",
+      "key": "inproc.cold_build_ms",
+      "verdict": "no-prior",
+      "reason": "in-process: cold index build: no prior recorded",
+      "prior": null,
+      "current": 6647
+    },
+    {
+      "id": "battery-turso-13k/inproc.unaccounted_ms",
+      "context": "battery-turso-13k",
+      "key": "inproc.unaccounted_ms",
+      "verdict": "no-prior",
+      "reason": "in-process: cold build residual (unaccounted for by any stage): no prior recorded",
+      "prior": null,
+      "current": 54.9
+    },
+    {
+      "id": "battery-turso-13k/inproc.open_nochange_ms",
+      "context": "battery-turso-13k",
+      "key": "inproc.open_nochange_ms",
+      "verdict": "no-prior",
+      "reason": "in-process: freshness check, no change: no prior recorded",
+      "prior": null,
+      "current": 82.3
+    },
+    {
+      "id": "battery-turso-13k/inproc.update_1_file_ms",
+      "context": "battery-turso-13k",
+      "key": "inproc.update_1_file_ms",
+      "verdict": "no-prior",
+      "reason": "in-process: update, 1 file touched: no prior recorded",
+      "prior": null,
+      "current": 107
+    },
+    {
+      "id": "battery-turso-13k/inproc.update_10_files_ms",
+      "context": "battery-turso-13k",
+      "key": "inproc.update_10_files_ms",
+      "verdict": "no-prior",
+      "reason": "in-process: update, 10 files modified: no prior recorded",
+      "prior": null,
+      "current": 248
+    },
+    {
+      "id": "battery-turso-26k/cold_crawl_ms",
+      "context": "battery-turso-26k",
+      "key": "cold_crawl_ms",
+      "verdict": "no-prior",
+      "reason": "cold crawl (wall): no prior recorded",
+      "prior": null,
+      "current": 17110
+    },
+    {
+      "id": "battery-turso-26k/version_canary_ms",
+      "context": "battery-turso-26k",
+      "key": "version_canary_ms",
+      "verdict": "no-prior",
+      "reason": "`--version` canary: no prior recorded",
+      "prior": null,
+      "current": 26
+    },
+    {
+      "id": "battery-turso-26k/cold_embed_ms",
+      "context": "battery-turso-26k",
+      "key": "cold_embed_ms",
+      "verdict": "no-prior",
+      "reason": "embed cold build (crawl + first vector-participating `search`, one process): no prior recorded",
+      "prior": null,
+      "current": 66210
+    },
+    {
+      "id": "battery-turso-26k/warm_query_ms",
+      "context": "battery-turso-26k",
+      "key": "warm_query_ms",
+      "verdict": "no-prior",
+      "reason": "warm query (`COUNT(*)`): no prior recorded",
+      "prior": null,
+      "current": 351
+    },
+    {
+      "id": "battery-turso-26k/setup_ms",
+      "context": "battery-turso-26k",
+      "key": "setup_ms",
+      "verdict": "no-prior",
+      "reason": "invocation setup (warm query minus in-process open): no prior recorded",
+      "prior": null,
+      "current": 191
+    },
+    {
+      "id": "battery-turso-26k/find_ms",
+      "context": "battery-turso-26k",
+      "key": "find_ms",
+      "verdict": "no-prior",
+      "reason": "lexical `search` (BM25 + link fusion): no prior recorded",
+      "prior": null,
+      "current": 632
+    },
+    {
+      "id": "battery-turso-26k/words_ms",
+      "context": "battery-turso-26k",
+      "key": "words_ms",
+      "verdict": "no-prior",
+      "reason": "words-only `search` (BM25, no link fusion): no prior recorded",
+      "prior": null,
+      "current": 437
+    },
+    {
+      "id": "battery-turso-26k/find_row_tokens",
+      "context": "battery-turso-26k",
+      "key": "find_row_tokens",
+      "verdict": "no-prior",
+      "reason": "`search` row size (json): no prior recorded",
+      "prior": null,
+      "current": 100
+    },
+    {
+      "id": "battery-turso-26k/semantic_find_ms",
+      "context": "battery-turso-26k",
+      "key": "semantic_find_ms",
+      "verdict": "no-prior",
+      "reason": "semantic `search` (steady state): no prior recorded",
+      "prior": null,
+      "current": 1663
+    },
+    {
+      "id": "battery-turso-26k/map_ms",
+      "context": "battery-turso-26k",
+      "key": "map_ms",
+      "verdict": "no-prior",
+      "reason": "`map` (orient): no prior recorded",
+      "prior": null,
+      "current": 1095
+    },
+    {
+      "id": "battery-turso-26k/map_tokens",
+      "context": "battery-turso-26k",
+      "key": "map_tokens",
+      "verdict": "no-prior",
+      "reason": "`map` token count: no prior recorded",
+      "prior": null,
+      "current": 555
+    },
+    {
+      "id": "battery-turso-26k/peek_ms",
+      "context": "battery-turso-26k",
+      "key": "peek_ms",
+      "verdict": "no-prior",
+      "reason": "`peek` largest note: no prior recorded",
+      "prior": null,
+      "current": 407
+    },
+    {
+      "id": "battery-turso-26k/peek_tokens",
+      "context": "battery-turso-26k",
+      "key": "peek_tokens",
+      "verdict": "no-prior",
+      "reason": "`peek` token count: no prior recorded",
+      "prior": null,
+      "current": 843
+    },
+    {
+      "id": "battery-turso-26k/path_ms",
+      "context": "battery-turso-26k",
+      "key": "path_ms",
+      "verdict": "no-prior",
+      "reason": "`path` (graph traversal): no prior recorded",
+      "prior": null,
+      "current": 608
+    },
+    {
+      "id": "battery-turso-26k/related_ms",
+      "context": "battery-turso-26k",
+      "key": "related_ms",
+      "verdict": "no-prior",
+      "reason": "`related` (similar-but-unlinked): no prior recorded",
+      "prior": null,
+      "current": 2499
+    },
+    {
+      "id": "battery-turso-26k/related_tokens",
+      "context": "battery-turso-26k",
+      "key": "related_tokens",
+      "verdict": "no-prior",
+      "reason": "`related` token count: no prior recorded",
+      "prior": null,
+      "current": 162
+    },
+    {
+      "id": "battery-turso-26k/bulk_change_ms",
+      "context": "battery-turso-26k",
+      "key": "bulk_change_ms",
+      "verdict": "no-prior",
+      "reason": "bulk change: first query: no prior recorded",
+      "prior": null,
+      "current": 1404
+    },
+    {
+      "id": "battery-turso-26k/bulk_watch_ms",
+      "context": "battery-turso-26k",
+      "key": "bulk_watch_ms",
+      "verdict": "no-prior",
+      "reason": "bulk change: with warm watcher: no prior recorded",
+      "prior": null,
+      "current": 394
+    },
+    {
+      "id": "battery-turso-26k/inproc.cold_build_ms",
+      "context": "battery-turso-26k",
+      "key": "inproc.cold_build_ms",
+      "verdict": "no-prior",
+      "reason": "in-process: cold index build: no prior recorded",
+      "prior": null,
+      "current": 13432
+    },
+    {
+      "id": "battery-turso-26k/inproc.unaccounted_ms",
+      "context": "battery-turso-26k",
+      "key": "inproc.unaccounted_ms",
+      "verdict": "no-prior",
+      "reason": "in-process: cold build residual (unaccounted for by any stage): no prior recorded",
+      "prior": null,
+      "current": 139.8
+    },
+    {
+      "id": "battery-turso-26k/inproc.open_nochange_ms",
+      "context": "battery-turso-26k",
+      "key": "inproc.open_nochange_ms",
+      "verdict": "no-prior",
+      "reason": "in-process: freshness check, no change: no prior recorded",
+      "prior": null,
+      "current": 160
+    },
+    {
+      "id": "battery-turso-26k/inproc.update_1_file_ms",
+      "context": "battery-turso-26k",
+      "key": "inproc.update_1_file_ms",
+      "verdict": "no-prior",
+      "reason": "in-process: update, 1 file touched: no prior recorded",
+      "prior": null,
+      "current": 227
+    },
+    {
+      "id": "battery-turso-26k/inproc.update_10_files_ms",
+      "context": "battery-turso-26k",
+      "key": "inproc.update_10_files_ms",
+      "verdict": "no-prior",
+      "reason": "in-process: update, 10 files modified: no prior recorded",
+      "prior": null,
+      "current": 693
+    },
+    {
+      "id": "battery-turso-stress/cold_crawl_ms",
+      "context": "battery-turso-stress",
+      "key": "cold_crawl_ms",
+      "verdict": "no-prior",
+      "reason": "cold crawl (wall): no prior recorded",
+      "prior": null,
+      "current": 23111
+    },
+    {
+      "id": "battery-turso-stress/version_canary_ms",
+      "context": "battery-turso-stress",
+      "key": "version_canary_ms",
+      "verdict": "no-prior",
+      "reason": "`--version` canary: no prior recorded",
+      "prior": null,
+      "current": 27
+    },
+    {
+      "id": "battery-turso-stress/cold_embed_ms",
+      "context": "battery-turso-stress",
+      "key": "cold_embed_ms",
+      "verdict": "no-prior",
+      "reason": "embed cold build (crawl + first vector-participating `search`, one process): no prior recorded",
+      "prior": null,
+      "current": 63474
+    },
+    {
+      "id": "battery-turso-stress/warm_query_ms",
+      "context": "battery-turso-stress",
+      "key": "warm_query_ms",
+      "verdict": "no-prior",
+      "reason": "warm query (`COUNT(*)`): no prior recorded",
+      "prior": null,
+      "current": 77
+    },
+    {
+      "id": "battery-turso-stress/setup_ms",
+      "context": "battery-turso-stress",
+      "key": "setup_ms",
+      "verdict": "no-prior",
+      "reason": "invocation setup (warm query minus in-process open): no prior recorded",
+      "prior": null,
+      "current": 64
+    },
+    {
+      "id": "battery-turso-stress/find_ms",
+      "context": "battery-turso-stress",
+      "key": "find_ms",
+      "verdict": "no-prior",
+      "reason": "lexical `search` (BM25 + link fusion): no prior recorded",
+      "prior": null,
+      "current": 440
+    },
+    {
+      "id": "battery-turso-stress/words_ms",
+      "context": "battery-turso-stress",
+      "key": "words_ms",
+      "verdict": "no-prior",
+      "reason": "words-only `search` (BM25, no link fusion): no prior recorded",
+      "prior": null,
+      "current": 104
+    },
+    {
+      "id": "battery-turso-stress/find_row_tokens",
+      "context": "battery-turso-stress",
+      "key": "find_row_tokens",
+      "verdict": "no-prior",
+      "reason": "`search` row size (json): no prior recorded",
+      "prior": null,
+      "current": 89
+    },
+    {
+      "id": "battery-turso-stress/semantic_find_ms",
+      "context": "battery-turso-stress",
+      "key": "semantic_find_ms",
+      "verdict": "no-prior",
+      "reason": "semantic `search` (steady state): no prior recorded",
+      "prior": null,
+      "current": 2081
+    },
+    {
+      "id": "battery-turso-stress/map_ms",
+      "context": "battery-turso-stress",
+      "key": "map_ms",
+      "verdict": "no-prior",
+      "reason": "`map` (orient): no prior recorded",
+      "prior": null,
+      "current": 396
+    },
+    {
+      "id": "battery-turso-stress/map_tokens",
+      "context": "battery-turso-stress",
+      "key": "map_tokens",
+      "verdict": "no-prior",
+      "reason": "`map` token count: no prior recorded",
+      "prior": null,
+      "current": 411
+    },
+    {
+      "id": "battery-turso-stress/peek_ms",
+      "context": "battery-turso-stress",
+      "key": "peek_ms",
+      "verdict": "no-prior",
+      "reason": "`peek` largest note: no prior recorded",
+      "prior": null,
+      "current": 96
+    },
+    {
+      "id": "battery-turso-stress/peek_tokens",
+      "context": "battery-turso-stress",
+      "key": "peek_tokens",
+      "verdict": "no-prior",
+      "reason": "`peek` token count: no prior recorded",
+      "prior": null,
+      "current": 476
+    },
+    {
+      "id": "battery-turso-stress/path_ms",
+      "context": "battery-turso-stress",
+      "key": "path_ms",
+      "verdict": "no-prior",
+      "reason": "`path` (graph traversal): no prior recorded",
+      "prior": null,
+      "current": 189
+    },
+    {
+      "id": "battery-turso-stress/related_ms",
+      "context": "battery-turso-stress",
+      "key": "related_ms",
+      "verdict": "no-prior",
+      "reason": "`related` (similar-but-unlinked): no prior recorded",
+      "prior": null,
+      "current": 3533
+    },
+    {
+      "id": "battery-turso-stress/related_tokens",
+      "context": "battery-turso-stress",
+      "key": "related_tokens",
+      "verdict": "no-prior",
+      "reason": "`related` token count: no prior recorded",
+      "prior": null,
+      "current": 60
+    },
+    {
+      "id": "battery-turso-stress/bulk_change_ms",
+      "context": "battery-turso-stress",
+      "key": "bulk_change_ms",
+      "verdict": "no-prior",
+      "reason": "bulk change: first query: no prior recorded",
+      "prior": null,
+      "current": 5479
+    },
+    {
+      "id": "battery-turso-stress/bulk_watch_ms",
+      "context": "battery-turso-stress",
+      "key": "bulk_watch_ms",
+      "verdict": "no-prior",
+      "reason": "bulk change: with warm watcher: no prior recorded",
+      "prior": null,
+      "current": 122
+    },
+    {
+      "id": "battery-turso-stress/inproc.cold_build_ms",
+      "context": "battery-turso-stress",
+      "key": "inproc.cold_build_ms",
+      "verdict": "no-prior",
+      "reason": "in-process: cold index build: no prior recorded",
+      "prior": null,
+      "current": 18388
+    },
+    {
+      "id": "battery-turso-stress/inproc.unaccounted_ms",
+      "context": "battery-turso-stress",
+      "key": "inproc.unaccounted_ms",
+      "verdict": "no-prior",
+      "reason": "in-process: cold build residual (unaccounted for by any stage): no prior recorded",
+      "prior": null,
+      "current": 88.3
+    },
+    {
+      "id": "battery-turso-stress/inproc.open_nochange_ms",
+      "context": "battery-turso-stress",
+      "key": "inproc.open_nochange_ms",
+      "verdict": "no-prior",
+      "reason": "in-process: freshness check, no change: no prior recorded",
+      "prior": null,
+      "current": 13
+    },
+    {
+      "id": "battery-turso-stress/inproc.update_1_file_ms",
+      "context": "battery-turso-stress",
+      "key": "inproc.update_1_file_ms",
+      "verdict": "no-prior",
+      "reason": "in-process: update, 1 file touched: no prior recorded",
+      "prior": null,
+      "current": 49
+    },
+    {
+      "id": "battery-turso-stress/inproc.update_10_files_ms",
+      "context": "battery-turso-stress",
+      "key": "inproc.update_10_files_ms",
+      "verdict": "no-prior",
+      "reason": "in-process: update, 10 files modified: no prior recorded",
+      "prior": null,
+      "current": 281
+    },
+    {
+      "id": "eval-nfcorpus/bm25-only/ndcg",
+      "context": "eval-nfcorpus/bm25-only",
+      "key": "ndcg",
+      "variant": "bm25-only",
+      "verdict": "no-prior",
+      "reason": "nDCG@10: no prior recorded",
+      "prior": null,
+      "current": 0.32339782487130336
+    },
+    {
+      "id": "eval-nfcorpus/bm25-only/rr",
+      "context": "eval-nfcorpus/bm25-only",
+      "key": "rr",
+      "variant": "bm25-only",
+      "verdict": "no-prior",
+      "reason": "MRR@10: no prior recorded",
+      "prior": null,
+      "current": 0.5183153963339723
+    },
+    {
+      "id": "eval-nfcorpus/bm25-only/hit",
+      "context": "eval-nfcorpus/bm25-only",
+      "key": "hit",
+      "variant": "bm25-only",
+      "verdict": "no-prior",
+      "reason": "hit@10: no prior recorded",
+      "prior": null,
+      "current": 0.6873065015479877
+    },
+    {
+      "id": "eval-nfcorpus/fused/ndcg",
+      "context": "eval-nfcorpus/fused",
+      "key": "ndcg",
+      "variant": "fused",
+      "verdict": "no-prior",
+      "reason": "nDCG@10: no prior recorded",
+      "prior": null,
+      "current": 0.32339782487130336
+    },
+    {
+      "id": "eval-nfcorpus/fused/rr",
+      "context": "eval-nfcorpus/fused",
+      "key": "rr",
+      "variant": "fused",
+      "verdict": "no-prior",
+      "reason": "MRR@10: no prior recorded",
+      "prior": null,
+      "current": 0.5183153963339723
+    },
+    {
+      "id": "eval-nfcorpus/fused/hit",
+      "context": "eval-nfcorpus/fused",
+      "key": "hit",
+      "variant": "fused",
+      "verdict": "no-prior",
+      "reason": "hit@10: no prior recorded",
+      "prior": null,
+      "current": 0.6873065015479877
+    },
+    {
+      "id": "eval-nfcorpus/semantic/ndcg",
+      "context": "eval-nfcorpus/semantic",
+      "key": "ndcg",
+      "variant": "semantic",
+      "verdict": "no-prior",
+      "reason": "nDCG@10: no prior recorded",
+      "prior": null,
+      "current": 0.3427475423812081
+    },
+    {
+      "id": "eval-nfcorpus/semantic/rr",
+      "context": "eval-nfcorpus/semantic",
+      "key": "rr",
+      "variant": "semantic",
+      "verdict": "no-prior",
+      "reason": "MRR@10: no prior recorded",
+      "prior": null,
+      "current": 0.5555014988451521
+    },
+    {
+      "id": "eval-nfcorpus/semantic/hit",
+      "context": "eval-nfcorpus/semantic",
+      "key": "hit",
+      "variant": "semantic",
+      "verdict": "no-prior",
+      "reason": "hit@10: no prior recorded",
+      "prior": null,
+      "current": 0.7120743034055728
+    },
+    {
+      "id": "eval-fever/bm25-only/ndcg",
+      "context": "eval-fever/bm25-only",
+      "key": "ndcg",
+      "variant": "bm25-only",
+      "verdict": "no-prior",
+      "reason": "nDCG@10: no prior recorded",
+      "prior": null,
+      "current": 0.9435278650592086
+    },
+    {
+      "id": "eval-fever/bm25-only/rr",
+      "context": "eval-fever/bm25-only",
+      "key": "rr",
+      "variant": "bm25-only",
+      "verdict": "no-prior",
+      "reason": "MRR@10: no prior recorded",
+      "prior": null,
+      "current": 0.9507565449643487
+    },
+    {
+      "id": "eval-fever/bm25-only/hit",
+      "context": "eval-fever/bm25-only",
+      "key": "hit",
+      "variant": "bm25-only",
+      "verdict": "no-prior",
+      "reason": "hit@10: no prior recorded",
+      "prior": null,
+      "current": 0.9969007483558848
+    },
+    {
+      "id": "eval-fever/fused/ndcg",
+      "context": "eval-fever/fused",
+      "key": "ndcg",
+      "variant": "fused",
+      "verdict": "no-prior",
+      "reason": "nDCG@10: no prior recorded",
+      "prior": null,
+      "current": 0.936062899468175
+    },
+    {
+      "id": "eval-fever/fused/rr",
+      "context": "eval-fever/fused",
+      "key": "rr",
+      "variant": "fused",
+      "verdict": "no-prior",
+      "reason": "MRR@10: no prior recorded",
+      "prior": null,
+      "current": 0.9381366934356592
+    },
+    {
+      "id": "eval-fever/fused/hit",
+      "context": "eval-fever/fused",
+      "key": "hit",
+      "variant": "fused",
+      "verdict": "no-prior",
+      "reason": "hit@10: no prior recorded",
+      "prior": null,
+      "current": 0.9971275228664298
+    },
+    {
+      "id": "eval-fever/semantic/ndcg",
+      "context": "eval-fever/semantic",
+      "key": "ndcg",
+      "variant": "semantic",
+      "verdict": "no-prior",
+      "reason": "nDCG@10: no prior recorded",
+      "prior": null,
+      "current": 0.9336523047847716
+    },
+    {
+      "id": "eval-fever/semantic/rr",
+      "context": "eval-fever/semantic",
+      "key": "rr",
+      "variant": "semantic",
+      "verdict": "no-prior",
+      "reason": "MRR@10: no prior recorded",
+      "prior": null,
+      "current": 0.9343124532802529
+    },
+    {
+      "id": "eval-fever/semantic/hit",
+      "context": "eval-fever/semantic",
+      "key": "hit",
+      "variant": "semantic",
+      "verdict": "no-prior",
+      "reason": "hit@10: no prior recorded",
+      "prior": null,
+      "current": 0.9965227908383097
+    }
+  ],
+  "accepted": {},
+  "record": {
+    "hub_cold_crawl_ms": 2000,
+    "hub_version_canary_ms": 27,
+    "hub_warm_query_ms": 121,
+    "hub_find_ms": 168,
+    "hub_find_row_tokens": 71,
+    "hub_semantic_find_ms": 284,
+    "hub_map_ms": 157,
+    "hub_map_tokens": 548,
+    "hub_peek_ms": 129,
+    "hub_peek_tokens": 581,
+    "hub_inproc_cold_build_ms": 1811,
+    "hub_inproc_open_nochange_ms": 34.6,
+    "scale_13k_cold_crawl_ms": 3641,
+    "scale_13k_version_canary_ms": 25,
+    "scale_13k_warm_query_ms": 193,
+    "scale_13k_find_ms": 280,
+    "scale_13k_find_row_tokens": 71,
+    "scale_13k_semantic_find_ms": 481,
+    "scale_13k_map_ms": 268,
+    "scale_13k_map_tokens": 555,
+    "scale_13k_peek_ms": 204,
+    "scale_13k_peek_tokens": 692,
+    "scale_13k_inproc_cold_build_ms": 3011,
+    "scale_13k_inproc_open_nochange_ms": 70.8,
+    "scale_26k_cold_crawl_ms": 7228,
+    "scale_26k_version_canary_ms": 26,
+    "scale_26k_warm_query_ms": 327,
+    "scale_26k_find_ms": 476,
+    "scale_26k_find_row_tokens": 70,
+    "scale_26k_semantic_find_ms": 858,
+    "scale_26k_map_ms": 480,
+    "scale_26k_map_tokens": 555,
+    "scale_26k_peek_ms": 351,
+    "scale_26k_peek_tokens": 843,
+    "scale_26k_inproc_cold_build_ms": 6848,
+    "scale_26k_inproc_open_nochange_ms": 146.5,
+    "stress_cold_crawl_ms": 5989,
+    "stress_version_canary_ms": 26,
+    "stress_warm_query_ms": 72,
+    "stress_find_ms": 317,
+    "stress_find_row_tokens": 59,
+    "stress_semantic_find_ms": 922,
+    "stress_map_ms": 105,
+    "stress_map_tokens": 411,
+    "stress_peek_ms": 91,
+    "stress_peek_tokens": 476,
+    "stress_inproc_cold_build_ms": 4991,
+    "stress_inproc_open_nochange_ms": 11.2,
+    "battery_duckdb_hub_cold_crawl_ms": 5339,
+    "battery_duckdb_hub_version_canary_ms": 26,
+    "battery_duckdb_hub_warm_query_ms": 153,
+    "battery_duckdb_hub_find_ms": 549,
+    "battery_duckdb_hub_find_row_tokens": 100,
+    "battery_duckdb_hub_semantic_find_ms": 645,
+    "battery_duckdb_hub_map_ms": 211,
+    "battery_duckdb_hub_map_tokens": 580,
+    "battery_duckdb_hub_peek_ms": 174,
+    "battery_duckdb_hub_peek_tokens": 581,
+    "battery_duckdb_hub_inproc_cold_build_ms": 3703,
+    "battery_duckdb_hub_inproc_open_nochange_ms": 42.1,
+    "battery_duckdb_13k_cold_crawl_ms": 10845,
+    "battery_duckdb_13k_version_canary_ms": 25,
+    "battery_duckdb_13k_warm_query_ms": 227,
+    "battery_duckdb_13k_find_ms": 964,
+    "battery_duckdb_13k_find_row_tokens": 101,
+    "battery_duckdb_13k_semantic_find_ms": 1174,
+    "battery_duckdb_13k_map_ms": 406,
+    "battery_duckdb_13k_map_tokens": 587,
+    "battery_duckdb_13k_peek_ms": 257,
+    "battery_duckdb_13k_peek_tokens": 692,
+    "battery_duckdb_13k_inproc_cold_build_ms": 7163,
+    "battery_duckdb_13k_inproc_open_nochange_ms": 78.1,
+    "battery_duckdb_26k_cold_crawl_ms": 22359,
+    "battery_duckdb_26k_version_canary_ms": 26,
+    "battery_duckdb_26k_warm_query_ms": 364,
+    "battery_duckdb_26k_find_ms": 1781,
+    "battery_duckdb_26k_find_row_tokens": 100,
+    "battery_duckdb_26k_semantic_find_ms": 2041,
+    "battery_duckdb_26k_map_ms": 620,
+    "battery_duckdb_26k_map_tokens": 587,
+    "battery_duckdb_26k_peek_ms": 420,
+    "battery_duckdb_26k_peek_tokens": 843,
+    "battery_duckdb_26k_inproc_cold_build_ms": 14472,
+    "battery_duckdb_26k_inproc_open_nochange_ms": 149.8,
+    "battery_duckdb_stress_cold_crawl_ms": 40016,
+    "battery_duckdb_stress_version_canary_ms": 26,
+    "battery_duckdb_stress_warm_query_ms": 107,
+    "battery_duckdb_stress_find_ms": 1857,
+    "battery_duckdb_stress_find_row_tokens": 89,
+    "battery_duckdb_stress_semantic_find_ms": 1964,
+    "battery_duckdb_stress_map_ms": 318,
+    "battery_duckdb_stress_map_tokens": 449,
+    "battery_duckdb_stress_peek_ms": 162,
+    "battery_duckdb_stress_peek_tokens": 476,
+    "battery_duckdb_stress_inproc_cold_build_ms": 29787,
+    "battery_duckdb_stress_inproc_open_nochange_ms": 18.2,
+    "battery_turso_hub_cold_crawl_ms": 4436,
+    "battery_turso_hub_version_canary_ms": 26,
+    "battery_turso_hub_warm_query_ms": 129,
+    "battery_turso_hub_find_ms": 208,
+    "battery_turso_hub_find_row_tokens": 100,
+    "battery_turso_hub_semantic_find_ms": 493,
+    "battery_turso_hub_map_ms": 306,
+    "battery_turso_hub_map_tokens": 548,
+    "battery_turso_hub_peek_ms": 149,
+    "battery_turso_hub_peek_tokens": 581,
+    "battery_turso_hub_inproc_cold_build_ms": 3186,
+    "battery_turso_hub_inproc_open_nochange_ms": 41.8,
+    "battery_turso_13k_cold_crawl_ms": 8604,
+    "battery_turso_13k_version_canary_ms": 26,
+    "battery_turso_13k_warm_query_ms": 205,
+    "battery_turso_13k_find_ms": 358,
+    "battery_turso_13k_find_row_tokens": 99,
+    "battery_turso_13k_semantic_find_ms": 884,
+    "battery_turso_13k_map_ms": 571,
+    "battery_turso_13k_map_tokens": 555,
+    "battery_turso_13k_peek_ms": 236,
+    "battery_turso_13k_peek_tokens": 692,
+    "battery_turso_13k_inproc_cold_build_ms": 6647,
+    "battery_turso_13k_inproc_open_nochange_ms": 82.3,
+    "battery_turso_26k_cold_crawl_ms": 17110,
+    "battery_turso_26k_version_canary_ms": 26,
+    "battery_turso_26k_warm_query_ms": 351,
+    "battery_turso_26k_find_ms": 632,
+    "battery_turso_26k_find_row_tokens": 100,
+    "battery_turso_26k_semantic_find_ms": 1663,
+    "battery_turso_26k_map_ms": 1095,
+    "battery_turso_26k_map_tokens": 555,
+    "battery_turso_26k_peek_ms": 407,
+    "battery_turso_26k_peek_tokens": 843,
+    "battery_turso_26k_inproc_cold_build_ms": 13432,
+    "battery_turso_26k_inproc_open_nochange_ms": 160,
+    "battery_turso_stress_cold_crawl_ms": 23111,
+    "battery_turso_stress_version_canary_ms": 27,
+    "battery_turso_stress_warm_query_ms": 77,
+    "battery_turso_stress_find_ms": 440,
+    "battery_turso_stress_find_row_tokens": 89,
+    "battery_turso_stress_semantic_find_ms": 2081,
+    "battery_turso_stress_map_ms": 396,
+    "battery_turso_stress_map_tokens": 411,
+    "battery_turso_stress_peek_ms": 96,
+    "battery_turso_stress_peek_tokens": 476,
+    "battery_turso_stress_inproc_cold_build_ms": 18388,
+    "battery_turso_stress_inproc_open_nochange_ms": 13,
+    "eval_nfcorpus_ndcg": 0.3427,
+    "eval_nfcorpus_hit": 0.7121,
+    "eval_fever_ndcg": 0.9337,
+    "eval_fever_hit": 0.9965
+  },
+  "steps": {
+    "compare": {
+      "corpus": "/Users/kevin/Dev/OpenSource/ai/sensemaking/.tmp/cache/obsidian-hub-b11036f9",
+      "store": "sqlite",
+      "versions": [
+        "0.21.1",
+        "local"
+      ],
+      "reversed": false,
+      "results": {
+        "0.21.1": {
+          "measure_version": "m3",
+          "tree": "/Users/kevin/Dev/OpenSource/ai/sensemaking/.tmp/bench-fKjCFb/tree-0.21.1",
+          "work_tree": "/Users/kevin/Dev/OpenSource/ai/sensemaking/.tmp/run-N7aMVv",
+          "copy_ms": 739,
+          "store": "sqlite",
+          "notes": 6566,
+          "cold_crawl_ms": 1967,
+          "cold_crawl_ms_samples": [
+            1967,
+            1902,
+            1999
+          ],
+          "warmed_bytes": 14749122,
+          "version_canary_ms": 27,
+          "warm_query_ms": 128,
+          "setup_ms": 93.6,
+          "find_ms": 177,
+          "words_ms": 141,
+          "find_row_tokens": 71,
+          "embed_supported": true,
+          "cold_embed_ms": 11579,
+          "semantic_find_ms": 291,
+          "map_ms": 163,
+          "map_tokens": 548,
+          "peek_ms": 137,
+          "peek_tokens": 581,
+          "path_ms": 137,
+          "related_ms": 350,
+          "related_tokens": 183,
+          "largest_note_tokens": 77274,
+          "bulk_files": 500,
+          "bulk_change_ms": 542,
+          "bulk_change_ms_samples": [
+            542,
+            524,
+            558
+          ],
+          "bulk_watch_ms": 171,
+          "bulk_watch_ms_samples": [
+            171,
+            172,
+            168
+          ],
+          "inproc": {
+            "cold_build_ms": 1851,
+            "cold_build_ms_samples": [
+              1866,
+              1851,
+              1849
+            ],
+            "stages": null,
+            "unaccounted_ms": null,
+            "open_nochange_ms": 34.4,
+            "update_1_file_ms": 38,
+            "update_1_file_stages": null,
+            "update_10_files_ms": 42,
+            "update_10_files_stages": null
+          },
+          "errors": {}
+        },
+        "local": {
+          "measure_version": "m3",
+          "tree": "/Users/kevin/Dev/OpenSource/ai/sensemaking/.tmp/bench-fKjCFb/tree-local",
+          "work_tree": "/Users/kevin/Dev/OpenSource/ai/sensemaking/.tmp/run-jY6nOb",
+          "copy_ms": 758,
+          "store": "sqlite",
+          "notes": 6566,
+          "cold_crawl_ms": 2000,
+          "cold_crawl_ms_samples": [
+            1913,
+            2000,
+            2003
+          ],
+          "warmed_bytes": 14749122,
+          "version_canary_ms": 27,
+          "warm_query_ms": 121,
+          "setup_ms": 86.4,
+          "find_ms": 168,
+          "words_ms": 135,
+          "find_row_tokens": 71,
+          "embed_supported": true,
+          "cold_embed_ms": 11462,
+          "semantic_find_ms": 284,
+          "map_ms": 157,
+          "map_tokens": 548,
+          "peek_ms": 129,
+          "peek_tokens": 581,
+          "path_ms": 131,
+          "related_ms": 341,
+          "related_tokens": 183,
+          "largest_note_tokens": 77274,
+          "bulk_files": 500,
+          "bulk_change_ms": 545,
+          "bulk_change_ms_samples": [
+            536,
+            545,
+            570
+          ],
+          "bulk_watch_ms": 165,
+          "bulk_watch_ms_samples": [
+            165,
+            164,
+            165
+          ],
+          "inproc": {
+            "cold_build_ms": 1811,
+            "cold_build_ms_samples": [
+              1845,
+              1811,
+              1806
+            ],
+            "stages": {
+              "version": "s1",
+              "totalMs": 1802.2,
+              "txMs": 320,
+              "parseWorkerMs": 10837,
+              "spans": {
+                "list": 30.5,
+                "existing": 0,
+                "parse": 1449.9,
+                "alter": 0.3,
+                "added-recheck": 0.1,
+                "fm-upsert": 7.3,
+                "text-index": 62.2,
+                "presets": 7,
+                "vanished": 0,
+                "meta": 0.1,
+                "feature:links:remove": 0,
+                "feature:links:store": 47.2,
+                "feature:links:after": 106.2,
+                "feature:sections:remove": 0,
+                "feature:sections:store": 18.2,
+                "feature:sections:after": 0,
+                "feature:tags:remove": 0,
+                "feature:tags:store": 4.5,
+                "feature:tags:after": 0,
+                "feature:rank:remove": 0,
+                "feature:rank:store": 0,
+                "feature:rank:after": 35.9
+              }
+            },
+            "unaccounted_ms": 32.8,
+            "open_nochange_ms": 34.6,
+            "update_1_file_ms": 39,
+            "update_1_file_stages": {
+              "version": "s1",
+              "totalMs": 38.1,
+              "txMs": 2,
+              "parseWorkerMs": 0,
+              "spans": {
+                "list": 29.8,
+                "existing": 1.6,
+                "parse": 1.4,
+                "alter": 0,
+                "added-recheck": 0,
+                "fm-upsert": 0,
+                "text-index": 0.1,
+                "presets": 0,
+                "vanished": 0,
+                "meta": 0,
+                "feature:links:remove": 0,
+                "feature:links:store": 0,
+                "feature:links:after": 2.2,
+                "feature:sections:remove": 0,
+                "feature:sections:store": 0,
+                "feature:sections:after": 0,
+                "feature:tags:remove": 0,
+                "feature:tags:store": 0,
+                "feature:tags:after": 0,
+                "feature:rank:remove": 0,
+                "feature:rank:store": 0,
+                "feature:rank:after": 0
+              }
+            },
+            "update_10_files_ms": 42,
+            "update_10_files_stages": {
+              "version": "s1",
+              "totalMs": 41.7,
+              "txMs": 3,
+              "parseWorkerMs": 0,
+              "spans": {
+                "list": 29,
+                "existing": 1.6,
+                "parse": 5.5,
+                "alter": 0,
+                "added-recheck": 0,
+                "fm-upsert": 0.1,
+                "text-index": 0.2,
+                "presets": 0,
+                "vanished": 0,
+                "meta": 0,
+                "feature:links:remove": 0,
+                "feature:links:store": 0.1,
+                "feature:links:after": 2.2,
+                "feature:sections:remove": 0,
+                "feature:sections:store": 0,
+                "feature:sections:after": 0,
+                "feature:tags:remove": 0,
+                "feature:tags:store": 0,
+                "feature:tags:after": 0,
+                "feature:rank:remove": 0,
+                "feature:rank:store": 0,
+                "feature:rank:after": 0
+              }
+            }
+          },
+          "errors": {}
+        }
+      }
+    },
+    "scale-13k": {
+      "measure_version": "m3",
+      "tree": "/Users/kevin/Dev/OpenSource/ai/sensemaking/.tmp/cache/obsidian-hub-x2-x2-hub-1",
+      "work_tree": "/Users/kevin/Dev/OpenSource/ai/sensemaking/.tmp/run-IV3nC9",
+      "copy_ms": 1726,
+      "store": "sqlite",
+      "notes": 13132,
+      "cold_crawl_ms": 3641,
+      "cold_crawl_ms_samples": [
+        3833,
+        3641,
+        3510
+      ],
+      "warmed_bytes": 29498244,
+      "version_canary_ms": 25,
+      "warm_query_ms": 193,
+      "setup_ms": 122.2,
+      "find_ms": 280,
+      "words_ms": 212,
+      "find_row_tokens": 71,
+      "embed_supported": true,
+      "cold_embed_ms": 22657,
+      "semantic_find_ms": 481,
+      "map_ms": 268,
+      "map_tokens": 555,
+      "peek_ms": 204,
+      "peek_tokens": 692,
+      "path_ms": 210,
+      "related_ms": 657,
+      "related_tokens": 164,
+      "largest_note_tokens": 77274,
+      "bulk_files": 500,
+      "bulk_change_ms": 640,
+      "bulk_change_ms_samples": [
+        630,
+        640,
+        640
+      ],
+      "bulk_watch_ms": 237,
+      "bulk_watch_ms_samples": [
+        237,
+        236,
+        239
+      ],
+      "inproc": {
+        "cold_build_ms": 3011,
+        "cold_build_ms_samples": [
+          3011,
+          2976,
+          3074
+        ],
+        "stages": {
+          "version": "s1",
+          "totalMs": 3001.8,
+          "txMs": 650,
+          "parseWorkerMs": 17094.1,
+          "spans": {
+            "list": 60.3,
+            "existing": 0,
+            "parse": 2288,
+            "alter": 0.3,
+            "added-recheck": 0.2,
+            "fm-upsert": 17.3,
+            "text-index": 130.3,
+            "presets": 13.9,
+            "vanished": 0,
+            "meta": 0.1,
+            "feature:links:remove": 0,
+            "feature:links:store": 94.1,
+            "feature:links:after": 233.5,
+            "feature:sections:remove": 0,
+            "feature:sections:store": 36.7,
+            "feature:sections:after": 0,
+            "feature:tags:remove": 0,
+            "feature:tags:store": 9.2,
+            "feature:tags:after": 0,
+            "feature:rank:remove": 0,
+            "feature:rank:store": 0,
+            "feature:rank:after": 56.4
+          }
+        },
+        "unaccounted_ms": 61.5,
+        "open_nochange_ms": 70.8,
+        "update_1_file_ms": 76,
+        "update_1_file_stages": {
+          "version": "s1",
+          "totalMs": 75.6,
+          "txMs": 5,
+          "parseWorkerMs": 0,
+          "spans": {
+            "list": 59.9,
+            "existing": 4,
+            "parse": 1.4,
+            "alter": 0,
+            "added-recheck": 0,
+            "fm-upsert": 0,
+            "text-index": 0.1,
+            "presets": 0,
+            "vanished": 0,
+            "meta": 0,
+            "feature:links:remove": 0,
+            "feature:links:store": 0,
+            "feature:links:after": 4.2,
+            "feature:sections:remove": 0,
+            "feature:sections:store": 0,
+            "feature:sections:after": 0,
+            "feature:tags:remove": 0,
+            "feature:tags:store": 0,
+            "feature:tags:after": 0,
+            "feature:rank:remove": 0,
+            "feature:rank:store": 0,
+            "feature:rank:after": 0
+          }
+        },
+        "update_10_files_ms": 81,
+        "update_10_files_stages": {
+          "version": "s1",
+          "totalMs": 80.6,
+          "txMs": 7,
+          "parseWorkerMs": 0,
+          "spans": {
+            "list": 60.9,
+            "existing": 3.2,
+            "parse": 4.4,
+            "alter": 0,
+            "added-recheck": 0,
+            "fm-upsert": 0.1,
+            "text-index": 0.2,
+            "presets": 0,
+            "vanished": 0,
+            "meta": 0,
+            "feature:links:remove": 0,
+            "feature:links:store": 0.1,
+            "feature:links:after": 5.7,
+            "feature:sections:remove": 0,
+            "feature:sections:store": 0,
+            "feature:sections:after": 0,
+            "feature:tags:remove": 0,
+            "feature:tags:store": 0,
+            "feature:tags:after": 0,
+            "feature:rank:remove": 0,
+            "feature:rank:store": 0,
+            "feature:rank:after": 0
+          }
+        }
+      },
+      "errors": {}
+    },
+    "scale-26k": {
+      "measure_version": "m3",
+      "tree": "/Users/kevin/Dev/OpenSource/ai/sensemaking/.tmp/cache/obsidian-hub-x4-x4-hub-1",
+      "work_tree": "/Users/kevin/Dev/OpenSource/ai/sensemaking/.tmp/run-D1Msjw",
+      "copy_ms": 3384,
+      "store": "sqlite",
+      "notes": 26264,
+      "cold_crawl_ms": 7228,
+      "cold_crawl_ms_samples": [
+        7044,
+        7228,
+        7319
+      ],
+      "warmed_bytes": 58996488,
+      "version_canary_ms": 26,
+      "warm_query_ms": 327,
+      "setup_ms": 180.5,
+      "find_ms": 476,
+      "words_ms": 360,
+      "find_row_tokens": 70,
+      "embed_supported": true,
+      "cold_embed_ms": 45457,
+      "semantic_find_ms": 858,
+      "map_ms": 480,
+      "map_tokens": 555,
+      "peek_ms": 351,
+      "peek_tokens": 843,
+      "path_ms": 370,
+      "related_ms": 1248,
+      "related_tokens": 162,
+      "largest_note_tokens": 77274,
+      "bulk_files": 500,
+      "bulk_change_ms": 785,
+      "bulk_change_ms_samples": [
+        785,
+        804,
+        766
+      ],
+      "bulk_watch_ms": 372,
+      "bulk_watch_ms_samples": [
+        368,
+        372,
+        388
+      ],
+      "inproc": {
+        "cold_build_ms": 6848,
+        "cold_build_ms_samples": [
+          6526,
+          6893,
+          6848
+        ],
+        "stages": {
+          "version": "s1",
+          "totalMs": 6837.4,
+          "txMs": 1345,
+          "parseWorkerMs": 40657.3,
+          "spans": {
+            "list": 122,
+            "existing": 0.1,
+            "parse": 5362.5,
+            "alter": 0.3,
+            "added-recheck": 0.3,
+            "fm-upsert": 33.3,
+            "text-index": 270.1,
+            "presets": 28.7,
+            "vanished": 0,
+            "meta": 0.1,
+            "feature:links:remove": 0,
+            "feature:links:store": 195.5,
+            "feature:links:after": 488.5,
+            "feature:sections:remove": 0,
+            "feature:sections:store": 78.2,
+            "feature:sections:after": 0,
+            "feature:tags:remove": 0,
+            "feature:tags:store": 17.8,
+            "feature:tags:after": 0,
+            "feature:rank:remove": 0,
+            "feature:rank:store": 0,
+            "feature:rank:after": 119.5
+          }
+        },
+        "unaccounted_ms": 120.5,
+        "open_nochange_ms": 146.5,
+        "update_1_file_ms": 148,
+        "update_1_file_stages": {
+          "version": "s1",
+          "totalMs": 147.6,
+          "txMs": 10,
+          "parseWorkerMs": 0,
+          "spans": {
+            "list": 119,
+            "existing": 7.2,
+            "parse": 1.4,
+            "alter": 0,
+            "added-recheck": 0,
+            "fm-upsert": 0.1,
+            "text-index": 0.1,
+            "presets": 0,
+            "vanished": 0,
+            "meta": 0,
+            "feature:links:remove": 0,
+            "feature:links:store": 0,
+            "feature:links:after": 8.7,
+            "feature:sections:remove": 0,
+            "feature:sections:store": 0,
+            "feature:sections:after": 0,
+            "feature:tags:remove": 0,
+            "feature:tags:store": 0,
+            "feature:tags:after": 0,
+            "feature:rank:remove": 0,
+            "feature:rank:store": 0,
+            "feature:rank:after": 0
+          }
+        },
+        "update_10_files_ms": 158,
+        "update_10_files_stages": {
+          "version": "s1",
+          "totalMs": 157.5,
+          "txMs": 13,
+          "parseWorkerMs": 0,
+          "spans": {
+            "list": 118.9,
+            "existing": 6.3,
+            "parse": 8.1,
+            "alter": 0,
+            "added-recheck": 0,
+            "fm-upsert": 0.1,
+            "text-index": 2.5,
+            "presets": 0,
+            "vanished": 0,
+            "meta": 0,
+            "feature:links:remove": 0,
+            "feature:links:store": 0.1,
+            "feature:links:after": 8.8,
+            "feature:sections:remove": 0,
+            "feature:sections:store": 0,
+            "feature:sections:after": 0,
+            "feature:tags:remove": 0,
+            "feature:tags:store": 0,
+            "feature:tags:after": 0,
+            "feature:rank:remove": 0,
+            "feature:rank:store": 0,
+            "feature:rank:after": 0
+          }
+        }
+      },
+      "errors": {}
+    },
+    "stress": {
+      "measure_version": "m3",
+      "tree": "/Users/kevin/Dev/OpenSource/ai/sensemaking/.tmp/cache/stress-stress-1",
+      "work_tree": "/Users/kevin/Dev/OpenSource/ai/sensemaking/.tmp/run-XfOOOB",
+      "copy_ms": 514,
+      "store": "sqlite",
+      "notes": 2000,
+      "cold_crawl_ms": 5989,
+      "cold_crawl_ms_samples": [
+        6052,
+        5989,
+        5708
+      ],
+      "warmed_bytes": 17915080,
+      "version_canary_ms": 26,
+      "warm_query_ms": 72,
+      "setup_ms": 60.8,
+      "find_ms": 317,
+      "words_ms": 151,
+      "find_row_tokens": 59,
+      "embed_supported": true,
+      "cold_embed_ms": 28113,
+      "semantic_find_ms": 922,
+      "map_ms": 105,
+      "map_tokens": 411,
+      "peek_ms": 91,
+      "peek_tokens": 476,
+      "path_ms": 116,
+      "related_ms": 1553,
+      "related_tokens": 60,
+      "largest_note_tokens": 254821,
+      "bulk_files": 500,
+      "bulk_change_ms": 1779,
+      "bulk_change_ms_samples": [
+        1810,
+        1779,
+        1772
+      ],
+      "bulk_watch_ms": 116,
+      "bulk_watch_ms_samples": [
+        115,
+        116,
+        116
+      ],
+      "inproc": {
+        "cold_build_ms": 4991,
+        "cold_build_ms_samples": [
+          4991,
+          4977,
+          5114
+        ],
+        "stages": {
+          "version": "s1",
+          "totalMs": 4984.5,
+          "txMs": 1923,
+          "parseWorkerMs": 23562.7,
+          "spans": {
+            "list": 9.1,
+            "existing": 0,
+            "parse": 3050.9,
+            "alter": 16,
+            "added-recheck": 0,
+            "fm-upsert": 53.8,
+            "text-index": 142.6,
+            "presets": 2.1,
+            "vanished": 0,
+            "meta": 0.1,
+            "feature:links:remove": 0,
+            "feature:links:store": 391.7,
+            "feature:links:after": 772.7,
+            "feature:sections:remove": 0,
+            "feature:sections:store": 302.8,
+            "feature:sections:after": 0,
+            "feature:tags:remove": 0,
+            "feature:tags:store": 0.3,
+            "feature:tags:after": 0,
+            "feature:rank:remove": 0,
+            "feature:rank:store": 0,
+            "feature:rank:after": 137.3
+          }
+        },
+        "unaccounted_ms": 105.1,
+        "open_nochange_ms": 11.2,
+        "update_1_file_ms": 25,
+        "update_1_file_stages": {
+          "version": "s1",
+          "totalMs": 24.8,
+          "txMs": 3,
+          "parseWorkerMs": 0,
+          "spans": {
+            "list": 10.7,
+            "existing": 0.6,
+            "parse": 9.1,
+            "alter": 0,
+            "added-recheck": 0,
+            "fm-upsert": 0.3,
+            "text-index": 0.2,
+            "presets": 0,
+            "vanished": 0,
+            "meta": 0,
+            "feature:links:remove": 0,
+            "feature:links:store": 0.5,
+            "feature:links:after": 0.8,
+            "feature:sections:remove": 0.1,
+            "feature:sections:store": 0.2,
+            "feature:sections:after": 0,
+            "feature:tags:remove": 0,
+            "feature:tags:store": 0,
+            "feature:tags:after": 0,
+            "feature:rank:remove": 0,
+            "feature:rank:store": 0,
+            "feature:rank:after": 0
+          }
+        },
+        "update_10_files_ms": 95,
+        "update_10_files_stages": {
+          "version": "s1",
+          "totalMs": 94,
+          "txMs": 16,
+          "parseWorkerMs": 0,
+          "spans": {
+            "list": 8.8,
+            "existing": 0.6,
+            "parse": 67.3,
+            "alter": 0,
+            "added-recheck": 0,
+            "fm-upsert": 0.6,
+            "text-index": 1.3,
+            "presets": 0,
+            "vanished": 0,
+            "meta": 0,
+            "feature:links:remove": 0,
+            "feature:links:store": 6.1,
+            "feature:links:after": 2.3,
+            "feature:sections:remove": 0.4,
+            "feature:sections:store": 2.2,
+            "feature:sections:after": 0,
+            "feature:tags:remove": 0,
+            "feature:tags:store": 0,
+            "feature:tags:after": 0,
+            "feature:rank:remove": 0,
+            "feature:rank:store": 0,
+            "feature:rank:after": 0
+          }
+        }
+      },
+      "errors": {}
+    },
+    "battery-duckdb-hub": {
+      "measure_version": "m3",
+      "tree": "/Users/kevin/Dev/OpenSource/ai/sensemaking/.tmp/cache/obsidian-hub-b11036f9",
+      "work_tree": "/Users/kevin/Dev/OpenSource/ai/sensemaking/.tmp/run-OdImsN",
+      "copy_ms": 736,
+      "store": "duckdb",
+      "notes": 6566,
+      "cold_crawl_ms": 5339,
+      "cold_crawl_ms_samples": [
+        5339,
+        5298,
+        5345
+      ],
+      "warmed_bytes": 14749122,
+      "version_canary_ms": 26,
+      "warm_query_ms": 153,
+      "setup_ms": 110.9,
+      "find_ms": 549,
+      "words_ms": 501,
+      "find_row_tokens": 100,
+      "embed_supported": true,
+      "cold_embed_ms": 30773,
+      "semantic_find_ms": 645,
+      "map_ms": 211,
+      "map_tokens": 580,
+      "peek_ms": 174,
+      "peek_tokens": 581,
+      "path_ms": 194,
+      "related_ms": 477,
+      "related_tokens": 183,
+      "largest_note_tokens": 77274,
+      "bulk_files": 500,
+      "bulk_change_ms": 1169,
+      "bulk_change_ms_samples": [
+        1191,
+        1161,
+        1169
+      ],
+      "bulk_watch_ms": 193,
+      "bulk_watch_ms_samples": [
+        193,
+        193,
+        197
+      ],
+      "inproc": {
+        "cold_build_ms": 3703,
+        "cold_build_ms_samples": [
+          3724,
+          3703,
+          3691
+        ],
+        "stages": {
+          "version": "s1",
+          "totalMs": 3688.3,
+          "txMs": 2202,
+          "parseWorkerMs": 10845.3,
+          "spans": {
+            "list": 30.1,
+            "existing": 1.5,
+            "parse": 1451.9,
+            "alter": 0.4,
+            "added-recheck": 0.3,
+            "fm-upsert": 100.4,
+            "text-index": 52.8,
+            "presets": 58,
+            "vanished": 0,
+            "meta": 0,
+            "feature:links:remove": 0,
+            "feature:links:store": 627.4,
+            "feature:links:after": 575.4,
+            "feature:sections:remove": 0,
+            "feature:sections:store": 592.5,
+            "feature:sections:after": 0,
+            "feature:tags:remove": 0,
+            "feature:tags:store": 50.6,
+            "feature:tags:after": 0,
+            "feature:rank:remove": 0,
+            "feature:rank:store": 0,
+            "feature:rank:after": 90.3
+          }
+        },
+        "unaccounted_ms": 56.7,
+        "open_nochange_ms": 42.1,
+        "update_1_file_ms": 57,
+        "update_1_file_stages": {
+          "version": "s1",
+          "totalMs": 51.2,
+          "txMs": 15,
+          "parseWorkerMs": 0,
+          "spans": {
+            "list": 28.7,
+            "existing": 4.2,
+            "parse": 1.3,
+            "alter": 0,
+            "added-recheck": 0,
+            "fm-upsert": 4.5,
+            "text-index": 0.5,
+            "presets": 1.3,
+            "vanished": 0,
+            "meta": 0,
+            "feature:links:remove": 0,
+            "feature:links:store": 0.4,
+            "feature:links:after": 2.7,
+            "feature:sections:remove": 0.4,
+            "feature:sections:store": 1.2,
+            "feature:sections:after": 0,
+            "feature:tags:remove": 0.3,
+            "feature:tags:store": 0.8,
+            "feature:tags:after": 0,
+            "feature:rank:remove": 0,
+            "feature:rank:store": 0,
+            "feature:rank:after": 0
+          }
+        },
+        "update_10_files_ms": 68,
+        "update_10_files_stages": {
+          "version": "s1",
+          "totalMs": 63,
+          "txMs": 23,
+          "parseWorkerMs": 0,
+          "spans": {
+            "list": 28.9,
+            "existing": 4.7,
+            "parse": 4.6,
+            "alter": 0,
+            "added-recheck": 0,
+            "fm-upsert": 5.9,
+            "text-index": 0.8,
+            "presets": 1.6,
+            "vanished": 0,
+            "meta": 0,
+            "feature:links:remove": 0,
+            "feature:links:store": 3.5,
+            "feature:links:after": 3.5,
+            "feature:sections:remove": 0.7,
+            "feature:sections:store": 1.5,
+            "feature:sections:after": 0,
+            "feature:tags:remove": 0.6,
+            "feature:tags:store": 1.1,
+            "feature:tags:after": 0,
+            "feature:rank:remove": 0,
+            "feature:rank:store": 0,
+            "feature:rank:after": 0
+          }
+        }
+      },
+      "errors": {}
+    },
+    "battery-duckdb-13k": {
+      "measure_version": "m3",
+      "tree": "/Users/kevin/Dev/OpenSource/ai/sensemaking/.tmp/cache/obsidian-hub-x2-x2-hub-1",
+      "work_tree": "/Users/kevin/Dev/OpenSource/ai/sensemaking/.tmp/run-Ma1OVp",
+      "copy_ms": 1487,
+      "store": "duckdb",
+      "notes": 13132,
+      "cold_crawl_ms": 10845,
+      "cold_crawl_ms_samples": [
+        10709,
+        10845,
+        10944
+      ],
+      "warmed_bytes": 29498244,
+      "version_canary_ms": 25,
+      "warm_query_ms": 227,
+      "setup_ms": 148.9,
+      "find_ms": 964,
+      "words_ms": 873,
+      "find_row_tokens": 101,
+      "embed_supported": true,
+      "cold_embed_ms": 54785,
+      "semantic_find_ms": 1174,
+      "map_ms": 406,
+      "map_tokens": 587,
+      "peek_ms": 257,
+      "peek_tokens": 692,
+      "path_ms": 300,
+      "related_ms": 876,
+      "related_tokens": 164,
+      "largest_note_tokens": 77274,
+      "bulk_files": 500,
+      "bulk_change_ms": 1150,
+      "bulk_change_ms_samples": [
+        1475,
+        1129,
+        1150
+      ],
+      "bulk_watch_ms": 271,
+      "bulk_watch_ms_samples": [
+        271,
+        276,
+        271
+      ],
+      "inproc": {
+        "cold_build_ms": 7163,
+        "cold_build_ms_samples": [
+          7126,
+          7205,
+          7163
+        ],
+        "stages": {
+          "version": "s1",
+          "totalMs": 7147.8,
+          "txMs": 4771,
+          "parseWorkerMs": 17282.7,
+          "spans": {
+            "list": 62.6,
+            "existing": 2.8,
+            "parse": 2307.1,
+            "alter": 0.4,
+            "added-recheck": 0.3,
+            "fm-upsert": 207.7,
+            "text-index": 112.2,
+            "presets": 114.4,
+            "vanished": 0,
+            "meta": 0,
+            "feature:links:remove": 0,
+            "feature:links:store": 1318.6,
+            "feature:links:after": 1224.3,
+            "feature:sections:remove": 0,
+            "feature:sections:store": 1314.4,
+            "feature:sections:after": 0,
+            "feature:tags:remove": 0,
+            "feature:tags:store": 145.4,
+            "feature:tags:after": 0,
+            "feature:rank:remove": 0,
+            "feature:rank:store": 0,
+            "feature:rank:after": 185.5
+          }
+        },
+        "unaccounted_ms": 152.1,
+        "open_nochange_ms": 78.1,
+        "update_1_file_ms": 105,
+        "update_1_file_stages": {
+          "version": "s1",
+          "totalMs": 99.9,
+          "txMs": 19,
+          "parseWorkerMs": 0,
+          "spans": {
+            "list": 60.5,
+            "existing": 14.6,
+            "parse": 1.8,
+            "alter": 0,
+            "added-recheck": 0,
+            "fm-upsert": 4.4,
+            "text-index": 0.5,
+            "presets": 1.5,
+            "vanished": 0,
+            "meta": 0,
+            "feature:links:remove": 0,
+            "feature:links:store": 0.8,
+            "feature:links:after": 5.6,
+            "feature:sections:remove": 0.9,
+            "feature:sections:store": 1.7,
+            "feature:sections:after": 0,
+            "feature:tags:remove": 0.4,
+            "feature:tags:store": 0.7,
+            "feature:tags:after": 0,
+            "feature:rank:remove": 0,
+            "feature:rank:store": 0,
+            "feature:rank:after": 0
+          }
+        },
+        "update_10_files_ms": 112,
+        "update_10_files_stages": {
+          "version": "s1",
+          "totalMs": 107.1,
+          "txMs": 30,
+          "parseWorkerMs": 0,
+          "spans": {
+            "list": 59.7,
+            "existing": 8.9,
+            "parse": 5.1,
+            "alter": 0,
+            "added-recheck": 0,
+            "fm-upsert": 5.9,
+            "text-index": 0.8,
+            "presets": 2,
+            "vanished": 0,
+            "meta": 0,
+            "feature:links:remove": 0,
+            "feature:links:store": 4.6,
+            "feature:links:after": 7.2,
+            "feature:sections:remove": 1.4,
+            "feature:sections:store": 2.3,
+            "feature:sections:after": 0,
+            "feature:tags:remove": 0.7,
+            "feature:tags:store": 1.5,
+            "feature:tags:after": 0,
+            "feature:rank:remove": 0,
+            "feature:rank:store": 0,
+            "feature:rank:after": 0
+          }
+        }
+      },
+      "errors": {}
+    },
+    "battery-duckdb-26k": {
+      "measure_version": "m3",
+      "tree": "/Users/kevin/Dev/OpenSource/ai/sensemaking/.tmp/cache/obsidian-hub-x4-x4-hub-1",
+      "work_tree": "/Users/kevin/Dev/OpenSource/ai/sensemaking/.tmp/run-Qt3XTE",
+      "copy_ms": 2992,
+      "store": "duckdb",
+      "notes": 26264,
+      "cold_crawl_ms": 22359,
+      "cold_crawl_ms_samples": [
+        22247,
+        22359,
+        22697
+      ],
+      "warmed_bytes": 58996488,
+      "version_canary_ms": 26,
+      "warm_query_ms": 364,
+      "setup_ms": 214.2,
+      "find_ms": 1781,
+      "words_ms": 1619,
+      "find_row_tokens": 100,
+      "embed_supported": true,
+      "cold_embed_ms": 104079,
+      "semantic_find_ms": 2041,
+      "map_ms": 620,
+      "map_tokens": 587,
+      "peek_ms": 420,
+      "peek_tokens": 843,
+      "path_ms": 504,
+      "related_ms": 1143,
+      "related_tokens": 162,
+      "largest_note_tokens": 77274,
+      "bulk_files": 500,
+      "bulk_change_ms": 1357,
+      "bulk_change_ms_samples": [
+        1645,
+        1357,
+        1351
+      ],
+      "bulk_watch_ms": 397,
+      "bulk_watch_ms_samples": [
+        397,
+        405,
+        393
+      ],
+      "inproc": {
+        "cold_build_ms": 14472,
+        "cold_build_ms_samples": [
+          14472,
+          14443,
+          14588
+        ],
+        "stages": {
+          "version": "s1",
+          "totalMs": 14459.8,
+          "txMs": 10089,
+          "parseWorkerMs": 31670.4,
+          "spans": {
+            "list": 118.6,
+            "existing": 2,
+            "parse": 4243.1,
+            "alter": 0.5,
+            "added-recheck": 0.5,
+            "fm-upsert": 411,
+            "text-index": 246.5,
+            "presets": 242.6,
+            "vanished": 0,
+            "meta": 0,
+            "feature:links:remove": 0,
+            "feature:links:store": 2783,
+            "feature:links:after": 2634.4,
+            "feature:sections:remove": 0,
+            "feature:sections:store": 2897.2,
+            "feature:sections:after": 0,
+            "feature:tags:remove": 0,
+            "feature:tags:store": 203.3,
+            "feature:tags:after": 0,
+            "feature:rank:remove": 0,
+            "feature:rank:store": 0,
+            "feature:rank:after": 370.2
+          }
+        },
+        "unaccounted_ms": 306.9,
+        "open_nochange_ms": 149.8,
+        "update_1_file_ms": 179,
+        "update_1_file_stages": {
+          "version": "s1",
+          "totalMs": 173.3,
+          "txMs": 28,
+          "parseWorkerMs": 0,
+          "spans": {
+            "list": 119.7,
+            "existing": 17.6,
+            "parse": 1.4,
+            "alter": 0,
+            "added-recheck": 0,
+            "fm-upsert": 4.5,
+            "text-index": 0.5,
+            "presets": 2,
+            "vanished": 0,
+            "meta": 0,
+            "feature:links:remove": 0,
+            "feature:links:store": 1.6,
+            "feature:links:after": 10.7,
+            "feature:sections:remove": 1.9,
+            "feature:sections:store": 2.6,
+            "feature:sections:after": 0,
+            "feature:tags:remove": 0.6,
+            "feature:tags:store": 1,
+            "feature:tags:after": 0,
+            "feature:rank:remove": 0,
+            "feature:rank:store": 0,
+            "feature:rank:after": 0
+          }
+        },
+        "update_10_files_ms": 196,
+        "update_10_files_stages": {
+          "version": "s1",
+          "totalMs": 190.7,
+          "txMs": 43,
+          "parseWorkerMs": 0,
+          "spans": {
+            "list": 118.8,
+            "existing": 17.9,
+            "parse": 4.7,
+            "alter": 0,
+            "added-recheck": 0,
+            "fm-upsert": 5.9,
+            "text-index": 0.8,
+            "presets": 2.7,
+            "vanished": 0,
+            "meta": 0,
+            "feature:links:remove": 0,
+            "feature:links:store": 7.3,
+            "feature:links:after": 13.9,
+            "feature:sections:remove": 2.8,
+            "feature:sections:store": 3.3,
+            "feature:sections:after": 0,
+            "feature:tags:remove": 1,
+            "feature:tags:store": 1.6,
+            "feature:tags:after": 0,
+            "feature:rank:remove": 0,
+            "feature:rank:store": 0,
+            "feature:rank:after": 0
+          }
+        }
+      },
+      "errors": {}
+    },
+    "battery-duckdb-stress": {
+      "measure_version": "m3",
+      "tree": "/Users/kevin/Dev/OpenSource/ai/sensemaking/.tmp/cache/stress-stress-1",
+      "work_tree": "/Users/kevin/Dev/OpenSource/ai/sensemaking/.tmp/run-GKRJAu",
+      "copy_ms": 231,
+      "store": "duckdb",
+      "notes": 2000,
+      "cold_crawl_ms": 40016,
+      "cold_crawl_ms_samples": [
+        39793,
+        40016,
+        40383
+      ],
+      "warmed_bytes": 17915080,
+      "version_canary_ms": 26,
+      "warm_query_ms": 107,
+      "setup_ms": 88.8,
+      "find_ms": 1857,
+      "words_ms": 1575,
+      "find_row_tokens": 89,
+      "embed_supported": true,
+      "cold_embed_ms": 125749,
+      "semantic_find_ms": 1964,
+      "map_ms": 318,
+      "map_tokens": 449,
+      "peek_ms": 162,
+      "peek_tokens": 476,
+      "path_ms": 182,
+      "related_ms": 695,
+      "related_tokens": 60,
+      "largest_note_tokens": 254821,
+      "bulk_files": 500,
+      "bulk_change_ms": 11877,
+      "bulk_change_ms_samples": [
+        11877,
+        11892,
+        11423
+      ],
+      "bulk_watch_ms": 148,
+      "bulk_watch_ms_samples": [
+        148,
+        106,
+        150
+      ],
+      "inproc": {
+        "cold_build_ms": 29787,
+        "cold_build_ms_samples": [
+          29804,
+          29703,
+          29787
+        ],
+        "stages": {
+          "version": "s1",
+          "totalMs": 29773,
+          "txMs": 26722,
+          "parseWorkerMs": 23488,
+          "spans": {
+            "list": 9.5,
+            "existing": 1.3,
+            "parse": 3039,
+            "alter": 24.2,
+            "added-recheck": 0.3,
+            "fm-upsert": 204.7,
+            "text-index": 19.1,
+            "presets": 18.5,
+            "vanished": 0,
+            "meta": 0,
+            "feature:links:remove": 0,
+            "feature:links:store": 4705.5,
+            "feature:links:after": 4974.9,
+            "feature:sections:remove": 0,
+            "feature:sections:store": 16090.9,
+            "feature:sections:after": 0,
+            "feature:tags:remove": 0,
+            "feature:tags:store": 0.1,
+            "feature:tags:after": 0,
+            "feature:rank:remove": 0,
+            "feature:rank:store": 0,
+            "feature:rank:after": 272.4
+          }
+        },
+        "unaccounted_ms": 412.6,
+        "open_nochange_ms": 18.2,
+        "update_1_file_ms": 272,
+        "update_1_file_stages": {
+          "version": "s1",
+          "totalMs": 264.4,
+          "txMs": 242,
+          "parseWorkerMs": 0,
+          "spans": {
+            "list": 9.1,
+            "existing": 1.5,
+            "parse": 10.4,
+            "alter": 0,
+            "added-recheck": 0,
+            "fm-upsert": 165.6,
+            "text-index": 0.8,
+            "presets": 1.2,
+            "vanished": 0,
+            "meta": 0,
+            "feature:links:remove": 0,
+            "feature:links:store": 5.1,
+            "feature:links:after": 1.3,
+            "feature:sections:remove": 0.6,
+            "feature:sections:store": 5.4,
+            "feature:sections:after": 0,
+            "feature:tags:remove": 0.2,
+            "feature:tags:store": 0,
+            "feature:tags:after": 0,
+            "feature:rank:remove": 0,
+            "feature:rank:store": 0,
+            "feature:rank:after": 0
+          }
+        },
+        "update_10_files_ms": 433,
+        "update_10_files_stages": {
+          "version": "s1",
+          "totalMs": 426.2,
+          "txMs": 347,
+          "parseWorkerMs": 0,
+          "spans": {
+            "list": 8.7,
+            "existing": 1.7,
+            "parse": 68,
+            "alter": 0,
+            "added-recheck": 0,
+            "fm-upsert": 209.8,
+            "text-index": 1.1,
+            "presets": 1.9,
+            "vanished": 0,
+            "meta": 0,
+            "feature:links:remove": 0,
+            "feature:links:store": 24.9,
+            "feature:links:after": 3.9,
+            "feature:sections:remove": 3.3,
+            "feature:sections:store": 46,
+            "feature:sections:after": 0,
+            "feature:tags:remove": 0.3,
+            "feature:tags:store": 0,
+            "feature:tags:after": 0,
+            "feature:rank:remove": 0,
+            "feature:rank:store": 0,
+            "feature:rank:after": 0
+          }
+        }
+      },
+      "errors": {}
+    },
+    "battery-turso-hub": {
+      "measure_version": "m3",
+      "tree": "/Users/kevin/Dev/OpenSource/ai/sensemaking/.tmp/cache/obsidian-hub-b11036f9",
+      "work_tree": "/Users/kevin/Dev/OpenSource/ai/sensemaking/.tmp/run-trbRvo",
+      "copy_ms": 737,
+      "store": "turso",
+      "notes": 6566,
+      "cold_crawl_ms": 4436,
+      "cold_crawl_ms_samples": [
+        4424,
+        4436,
+        4484
+      ],
+      "warmed_bytes": 14749122,
+      "version_canary_ms": 26,
+      "warm_query_ms": 129,
+      "setup_ms": 87.2,
+      "find_ms": 208,
+      "words_ms": 155,
+      "find_row_tokens": 100,
+      "embed_supported": true,
+      "cold_embed_ms": 16477,
+      "semantic_find_ms": 493,
+      "map_ms": 306,
+      "map_tokens": 548,
+      "peek_ms": 149,
+      "peek_tokens": 581,
+      "path_ms": 198,
+      "related_ms": 619,
+      "related_tokens": 183,
+      "largest_note_tokens": 77274,
+      "bulk_files": 500,
+      "bulk_change_ms": 840,
+      "bulk_change_ms_samples": [
+        840,
+        851,
+        837
+      ],
+      "bulk_watch_ms": 164,
+      "bulk_watch_ms_samples": [
+        164,
+        139,
+        226
+      ],
+      "inproc": {
+        "cold_build_ms": 3186,
+        "cold_build_ms_samples": [
+          3188,
+          3186,
+          3175
+        ],
+        "stages": {
+          "version": "s1",
+          "totalMs": 3158.4,
+          "txMs": 1872,
+          "parseWorkerMs": 9289.9,
+          "spans": {
+            "list": 33.1,
+            "existing": 0.1,
+            "parse": 1250.7,
+            "alter": 0.3,
+            "added-recheck": 0.1,
+            "fm-upsert": 136.6,
+            "text-index": 174.8,
+            "presets": 77.9,
+            "vanished": 0,
+            "meta": 1.1,
+            "feature:links:remove": 0,
+            "feature:links:store": 469.5,
+            "feature:links:after": 566.4,
+            "feature:sections:remove": 0,
+            "feature:sections:store": 245.6,
+            "feature:sections:after": 0,
+            "feature:tags:remove": 0,
+            "feature:tags:store": 38.6,
+            "feature:tags:after": 0,
+            "feature:rank:remove": 0,
+            "feature:rank:store": 0,
+            "feature:rank:after": 135.7
+          }
+        },
+        "unaccounted_ms": 27.9,
+        "open_nochange_ms": 41.8,
+        "update_1_file_ms": 53,
+        "update_1_file_stages": {
+          "version": "s1",
+          "totalMs": 51.9,
+          "txMs": 12,
+          "parseWorkerMs": 0,
+          "spans": {
+            "list": 29.2,
+            "existing": 7.8,
+            "parse": 1.3,
+            "alter": 0,
+            "added-recheck": 0,
+            "fm-upsert": 0.1,
+            "text-index": 7.9,
+            "presets": 0.1,
+            "vanished": 0,
+            "meta": 0,
+            "feature:links:remove": 0,
+            "feature:links:store": 0.6,
+            "feature:links:after": 2.8,
+            "feature:sections:remove": 0,
+            "feature:sections:store": 0.1,
+            "feature:sections:after": 0,
+            "feature:tags:remove": 0,
+            "feature:tags:store": 0,
+            "feature:tags:after": 0,
+            "feature:rank:remove": 0,
+            "feature:rank:store": 0,
+            "feature:rank:after": 0
+          }
+        },
+        "update_10_files_ms": 128,
+        "update_10_files_stages": {
+          "version": "s1",
+          "totalMs": 127.5,
+          "txMs": 78,
+          "parseWorkerMs": 0,
+          "spans": {
+            "list": 29.3,
+            "existing": 7.8,
+            "parse": 10.9,
+            "alter": 0,
+            "added-recheck": 0,
+            "fm-upsert": 0.3,
+            "text-index": 68.6,
+            "presets": 0.3,
+            "vanished": 0,
+            "meta": 0,
+            "feature:links:remove": 0,
+            "feature:links:store": 1.1,
+            "feature:links:after": 3.2,
+            "feature:sections:remove": 0.1,
+            "feature:sections:store": 0.2,
+            "feature:sections:after": 0,
+            "feature:tags:remove": 0.2,
+            "feature:tags:store": 0.3,
+            "feature:tags:after": 0,
+            "feature:rank:remove": 0,
+            "feature:rank:store": 0,
+            "feature:rank:after": 0
+          }
+        }
+      },
+      "errors": {}
+    },
+    "battery-turso-13k": {
+      "measure_version": "m3",
+      "tree": "/Users/kevin/Dev/OpenSource/ai/sensemaking/.tmp/cache/obsidian-hub-x2-x2-hub-1",
+      "work_tree": "/Users/kevin/Dev/OpenSource/ai/sensemaking/.tmp/run-1dlbln",
+      "copy_ms": 1992,
+      "store": "turso",
+      "notes": 13132,
+      "cold_crawl_ms": 8604,
+      "cold_crawl_ms_samples": [
+        8674,
+        8564,
+        8604
+      ],
+      "warmed_bytes": 29498244,
+      "version_canary_ms": 26,
+      "warm_query_ms": 205,
+      "setup_ms": 122.7,
+      "find_ms": 358,
+      "words_ms": 250,
+      "find_row_tokens": 99,
+      "embed_supported": true,
+      "cold_embed_ms": 33257,
+      "semantic_find_ms": 884,
+      "map_ms": 571,
+      "map_tokens": 555,
+      "peek_ms": 236,
+      "peek_tokens": 692,
+      "path_ms": 340,
+      "related_ms": 1238,
+      "related_tokens": 164,
+      "largest_note_tokens": 77274,
+      "bulk_files": 500,
+      "bulk_change_ms": 1005,
+      "bulk_change_ms_samples": [
+        982,
+        1022,
+        1005
+      ],
+      "bulk_watch_ms": 247,
+      "bulk_watch_ms_samples": [
+        249,
+        246,
+        247
+      ],
+      "inproc": {
+        "cold_build_ms": 6647,
+        "cold_build_ms_samples": [
+          6647,
+          6708,
+          6637
+        ],
+        "stages": {
+          "version": "s1",
+          "totalMs": 6598.9,
+          "txMs": 3830,
+          "parseWorkerMs": 20501.9,
+          "spans": {
+            "list": 59.6,
+            "existing": 0.1,
+            "parse": 2704.3,
+            "alter": 0.3,
+            "added-recheck": 0.2,
+            "fm-upsert": 281.2,
+            "text-index": 359.7,
+            "presets": 155.7,
+            "vanished": 0,
+            "meta": 1.7,
+            "feature:links:remove": 0,
+            "feature:links:store": 962.4,
+            "feature:links:after": 1172.9,
+            "feature:sections:remove": 0,
+            "feature:sections:store": 509.8,
+            "feature:sections:after": 0,
+            "feature:tags:remove": 0,
+            "feature:tags:store": 77.4,
+            "feature:tags:after": 0,
+            "feature:rank:remove": 0,
+            "feature:rank:store": 0,
+            "feature:rank:after": 258.7
+          }
+        },
+        "unaccounted_ms": 54.9,
+        "open_nochange_ms": 82.3,
+        "update_1_file_ms": 107,
+        "update_1_file_stages": {
+          "version": "s1",
+          "totalMs": 105.1,
+          "txMs": 24,
+          "parseWorkerMs": 0,
+          "spans": {
+            "list": 60.3,
+            "existing": 16.9,
+            "parse": 1.4,
+            "alter": 0,
+            "added-recheck": 0,
+            "fm-upsert": 0.1,
+            "text-index": 16.1,
+            "presets": 0.1,
+            "vanished": 0,
+            "meta": 0,
+            "feature:links:remove": 0,
+            "feature:links:store": 1.7,
+            "feature:links:after": 4.8,
+            "feature:sections:remove": 0,
+            "feature:sections:store": 0,
+            "feature:sections:after": 0,
+            "feature:tags:remove": 0,
+            "feature:tags:store": 0,
+            "feature:tags:after": 0,
+            "feature:rank:remove": 0,
+            "feature:rank:store": 0,
+            "feature:rank:after": 0
+          }
+        },
+        "update_10_files_ms": 248,
+        "update_10_files_stages": {
+          "version": "s1",
+          "totalMs": 246.9,
+          "txMs": 155,
+          "parseWorkerMs": 0,
+          "spans": {
+            "list": 61.3,
+            "existing": 16,
+            "parse": 11.7,
+            "alter": 0,
+            "added-recheck": 0,
+            "fm-upsert": 0.3,
+            "text-index": 145.1,
+            "presets": 0.4,
+            "vanished": 0,
+            "meta": 0,
+            "feature:links:remove": 0,
+            "feature:links:store": 2,
+            "feature:links:after": 4.8,
+            "feature:sections:remove": 0.1,
+            "feature:sections:store": 0.2,
+            "feature:sections:after": 0,
+            "feature:tags:remove": 0.2,
+            "feature:tags:store": 0.3,
+            "feature:tags:after": 0,
+            "feature:rank:remove": 0,
+            "feature:rank:store": 0,
+            "feature:rank:after": 0
+          }
+        }
+      },
+      "errors": {}
+    },
+    "battery-turso-26k": {
+      "measure_version": "m3",
+      "tree": "/Users/kevin/Dev/OpenSource/ai/sensemaking/.tmp/cache/obsidian-hub-x4-x4-hub-1",
+      "work_tree": "/Users/kevin/Dev/OpenSource/ai/sensemaking/.tmp/run-IzjwDm",
+      "copy_ms": 4221,
+      "store": "turso",
+      "notes": 26264,
+      "cold_crawl_ms": 17110,
+      "cold_crawl_ms_samples": [
+        17110,
+        17113,
+        17100
+      ],
+      "warmed_bytes": 58996488,
+      "version_canary_ms": 26,
+      "warm_query_ms": 351,
+      "setup_ms": 191,
+      "find_ms": 632,
+      "words_ms": 437,
+      "find_row_tokens": 100,
+      "embed_supported": true,
+      "cold_embed_ms": 66210,
+      "semantic_find_ms": 1663,
+      "map_ms": 1095,
+      "map_tokens": 555,
+      "peek_ms": 407,
+      "peek_tokens": 843,
+      "path_ms": 608,
+      "related_ms": 2499,
+      "related_tokens": 162,
+      "largest_note_tokens": 77274,
+      "bulk_files": 500,
+      "bulk_change_ms": 1404,
+      "bulk_change_ms_samples": [
+        1400,
+        1404,
+        1414
+      ],
+      "bulk_watch_ms": 394,
+      "bulk_watch_ms_samples": [
+        401,
+        394,
+        392
+      ],
+      "inproc": {
+        "cold_build_ms": 13432,
+        "cold_build_ms_samples": [
+          13432,
+          13444,
+          13399
+        ],
+        "stages": {
+          "version": "s1",
+          "totalMs": 13313.6,
+          "txMs": 7838,
+          "parseWorkerMs": 40339.9,
+          "spans": {
+            "list": 118.9,
+            "existing": 0.1,
+            "parse": 5322.4,
+            "alter": 0.3,
+            "added-recheck": 0.4,
+            "fm-upsert": 561.2,
+            "text-index": 733.7,
+            "presets": 308.7,
+            "vanished": 0,
+            "meta": 26.9,
+            "feature:links:remove": 0,
+            "feature:links:store": 1958.1,
+            "feature:links:after": 2421.8,
+            "feature:sections:remove": 0,
+            "feature:sections:store": 1033.5,
+            "feature:sections:after": 0,
+            "feature:tags:remove": 0,
+            "feature:tags:store": 167.6,
+            "feature:tags:after": 0,
+            "feature:rank:remove": 0,
+            "feature:rank:store": 0,
+            "feature:rank:after": 520.2
+          }
+        },
+        "unaccounted_ms": 139.8,
+        "open_nochange_ms": 160,
+        "update_1_file_ms": 227,
+        "update_1_file_stages": {
+          "version": "s1",
+          "totalMs": 226.6,
+          "txMs": 68,
+          "parseWorkerMs": 0,
+          "spans": {
+            "list": 119.8,
+            "existing": 31,
+            "parse": 1.4,
+            "alter": 0,
+            "added-recheck": 0,
+            "fm-upsert": 0.1,
+            "text-index": 53.5,
+            "presets": 0.1,
+            "vanished": 0,
+            "meta": 0,
+            "feature:links:remove": 0,
+            "feature:links:store": 2.7,
+            "feature:links:after": 9.9,
+            "feature:sections:remove": 0,
+            "feature:sections:store": 0.1,
+            "feature:sections:after": 0,
+            "feature:tags:remove": 0,
+            "feature:tags:store": 0,
+            "feature:tags:after": 0,
+            "feature:rank:remove": 0,
+            "feature:rank:store": 0,
+            "feature:rank:after": 0
+          }
+        },
+        "update_10_files_ms": 693,
+        "update_10_files_stages": {
+          "version": "s1",
+          "totalMs": 692,
+          "txMs": 522,
+          "parseWorkerMs": 0,
+          "spans": {
+            "list": 120.2,
+            "existing": 30.8,
+            "parse": 12.1,
+            "alter": 0,
+            "added-recheck": 0,
+            "fm-upsert": 0.3,
+            "text-index": 508.3,
+            "presets": 0.4,
+            "vanished": 0,
+            "meta": 0,
+            "feature:links:remove": 0,
+            "feature:links:store": 1.2,
+            "feature:links:after": 9.7,
+            "feature:sections:remove": 0.1,
+            "feature:sections:store": 0.2,
+            "feature:sections:after": 0,
+            "feature:tags:remove": 0.2,
+            "feature:tags:store": 0.3,
+            "feature:tags:after": 0,
+            "feature:rank:remove": 0,
+            "feature:rank:store": 0,
+            "feature:rank:after": 0
+          }
+        }
+      },
+      "errors": {}
+    },
+    "battery-turso-stress": {
+      "measure_version": "m3",
+      "tree": "/Users/kevin/Dev/OpenSource/ai/sensemaking/.tmp/cache/stress-stress-1",
+      "work_tree": "/Users/kevin/Dev/OpenSource/ai/sensemaking/.tmp/run-qpzi2J",
+      "copy_ms": 504,
+      "store": "turso",
+      "notes": 2000,
+      "cold_crawl_ms": 23111,
+      "cold_crawl_ms_samples": [
+        23111,
+        22915,
+        23354
+      ],
+      "warmed_bytes": 17915080,
+      "version_canary_ms": 27,
+      "warm_query_ms": 77,
+      "setup_ms": 64,
+      "find_ms": 440,
+      "words_ms": 104,
+      "find_row_tokens": 89,
+      "embed_supported": true,
+      "cold_embed_ms": 63474,
+      "semantic_find_ms": 2081,
+      "map_ms": 396,
+      "map_tokens": 411,
+      "peek_ms": 96,
+      "peek_tokens": 476,
+      "path_ms": 189,
+      "related_ms": 3533,
+      "related_tokens": 60,
+      "largest_note_tokens": 254821,
+      "bulk_files": 500,
+      "bulk_change_ms": 5479,
+      "bulk_change_ms_samples": [
+        5479,
+        5442,
+        5548
+      ],
+      "bulk_watch_ms": 122,
+      "bulk_watch_ms_samples": [
+        130,
+        119,
+        122
+      ],
+      "inproc": {
+        "cold_build_ms": 18388,
+        "cold_build_ms_samples": [
+          18406,
+          18388,
+          18337
+        ],
+        "stages": {
+          "version": "s1",
+          "totalMs": 18165.5,
+          "txMs": 14556,
+          "parseWorkerMs": 27934.9,
+          "spans": {
+            "list": 8.7,
+            "existing": 0,
+            "parse": 3595.4,
+            "alter": 8.6,
+            "added-recheck": 0.1,
+            "fm-upsert": 984,
+            "text-index": 205.2,
+            "presets": 21.9,
+            "vanished": 0,
+            "meta": 4.2,
+            "feature:links:remove": 0,
+            "feature:links:store": 3763.3,
+            "feature:links:after": 4313.1,
+            "feature:sections:remove": 0,
+            "feature:sections:store": 4723.6,
+            "feature:sections:after": 0,
+            "feature:tags:remove": 0,
+            "feature:tags:store": 0.3,
+            "feature:tags:after": 0,
+            "feature:rank:remove": 0,
+            "feature:rank:store": 0,
+            "feature:rank:after": 448.8
+          }
+        },
+        "unaccounted_ms": 88.3,
+        "open_nochange_ms": 13,
+        "update_1_file_ms": 49,
+        "update_1_file_stages": {
+          "version": "s1",
+          "totalMs": 48,
+          "txMs": 25,
+          "parseWorkerMs": 0,
+          "spans": {
+            "list": 9.7,
+            "existing": 3.6,
+            "parse": 8.7,
+            "alter": 0,
+            "added-recheck": 0,
+            "fm-upsert": 0.7,
+            "text-index": 15.1,
+            "presets": 0.1,
+            "vanished": 0,
+            "meta": 0,
+            "feature:links:remove": 0,
+            "feature:links:store": 2.9,
+            "feature:links:after": 1.5,
+            "feature:sections:remove": 0.3,
+            "feature:sections:store": 2.5,
+            "feature:sections:after": 0,
+            "feature:tags:remove": 0,
+            "feature:tags:store": 0,
+            "feature:tags:after": 0,
+            "feature:rank:remove": 0,
+            "feature:rank:store": 0,
+            "feature:rank:after": 0
+          }
+        },
+        "update_10_files_ms": 281,
+        "update_10_files_stages": {
+          "version": "s1",
+          "totalMs": 278.2,
+          "txMs": 202,
+          "parseWorkerMs": 0,
+          "spans": {
+            "list": 9.1,
+            "existing": 2.7,
+            "parse": 62.1,
+            "alter": 0,
+            "added-recheck": 0,
+            "fm-upsert": 5.7,
+            "text-index": 133.9,
+            "presets": 0.3,
+            "vanished": 0,
+            "meta": 0.2,
+            "feature:links:remove": 0,
+            "feature:links:store": 20.9,
+            "feature:links:after": 4,
+            "feature:sections:remove": 2.6,
+            "feature:sections:store": 23.9,
+            "feature:sections:after": 0,
+            "feature:tags:remove": 0.1,
+            "feature:tags:store": 0,
+            "feature:tags:after": 0,
+            "feature:rank:remove": 0,
+            "feature:rank:store": 0,
+            "feature:rank:after": 0
+          }
+        }
+      },
+      "errors": {}
+    },
+    "eval-nfcorpus": {
+      "corpus": "nfcorpus",
+      "split": "test",
+      "queries": 323,
+      "k": 10,
+      "store": "sqlite",
+      "no_silent_change": true,
+      "variants": {
+        "bm25-only": {
+          "ndcg": 0.32339782487130336,
+          "rr": 0.5183153963339723,
+          "hit": 0.6873065015479877,
+          "ms_per_query": 5.621320795665638,
+          "errors": 0
+        },
+        "fused": {
+          "ndcg": 0.32339782487130336,
+          "rr": 0.5183153963339723,
+          "hit": 0.6873065015479877,
+          "ms_per_query": 5.502986829721364,
+          "errors": 0
+        },
+        "semantic": {
+          "ndcg": 0.3427475423812081,
+          "rr": 0.5555014988451521,
+          "hit": 0.7120743034055728,
+          "ms_per_query": 16.759677492260074,
+          "errors": 0
+        }
+      },
+      "paired": {
+        "fused_vs_bm25": {
+          "ndcg": {
+            "wins": 0,
+            "losses": 0,
+            "z": 0
+          },
+          "hit": {
+            "wins": 0,
+            "losses": 0,
+            "z": 0
+          }
+        },
+        "semantic_vs_fused": {
+          "ndcg": {
+            "wins": 108,
+            "losses": 77,
+            "z": 2.2791653284908038
+          },
+          "hit": {
+            "wins": 16,
+            "losses": 8,
+            "z": 1.6329931618554523
+          }
+        }
+      }
+    },
+    "eval-fever": {
+      "corpus": "fever",
+      "split": "test",
+      "queries": 13229,
+      "k": 10,
+      "store": "sqlite",
+      "no_silent_change": true,
+      "variants": {
+        "bm25-only": {
+          "ndcg": 0.9435278650592086,
+          "rr": 0.9507565449643487,
+          "hit": 0.9969007483558848,
+          "ms_per_query": 9.086672353012348,
+          "errors": 0
+        },
+        "fused": {
+          "ndcg": 0.936062899468175,
+          "rr": 0.9381366934356592,
+          "hit": 0.9971275228664298,
+          "ms_per_query": 17.872320613425124,
+          "errors": 0
+        },
+        "semantic": {
+          "ndcg": 0.9336523047847716,
+          "rr": 0.9343124532802529,
+          "hit": 0.9965227908383097,
+          "ms_per_query": 23.09287764895286,
+          "errors": 0
+        }
+      },
+      "paired": {
+        "fused_vs_bm25": {
+          "ndcg": {
+            "wins": 616,
+            "losses": 680,
+            "z": -1.7777777777777777
+          },
+          "hit": {
+            "wins": 6,
+            "losses": 3,
+            "z": 1
+          }
+        },
+        "semantic_vs_fused": {
+          "ndcg": {
+            "wins": 1039,
+            "losses": 975,
+            "z": 1.4261008570290765
+          },
+          "hit": {
+            "wins": 11,
+            "losses": 19,
+            "z": -1.4605934866804429
+          }
+        }
+      }
+    }
+  },
+  "generated": true
+}

@@ -5,16 +5,17 @@ import { featureSignature, STATE_DIR } from '../config/index.ts';
 import { rekeyChunkText } from '../embed/handoff.ts';
 import { SenseError } from '../errors.ts';
 import { FEATURES } from '../features/index.ts';
-import type { Builder } from './builder.ts';
 import { createBuilder } from './builder.ts';
 import { clearCache } from './cache.ts';
 import type { EmbedChangeKind } from './embed-scope.ts';
 import { classifyEmbedChange } from './embed-scope.ts';
 import type { FeatureToggle } from './feature-scope.ts';
 import { classifyFeatureToggles, isFeatureOnlyChange } from './feature-scope.ts';
+import { lockWaitBudgetMs } from './lock-wait.ts';
 import { forcedPresetPaths, isPresetOnlyChange } from './preset-scope.ts';
 import { getMeta, setMeta } from './shared.ts';
 import { changedSignatureKeys, embedIdentityAdopted, signatureDiff } from './signature.ts';
+import type { Stages } from './stages.ts';
 import type { Connection, OpenDialect, Store } from './types.ts';
 
 // One open algorithm shared by every store, parameterised by a per-engine OpenDialect (types.ts).
@@ -28,6 +29,9 @@ export interface OpenResult {
   dbPath: string;
   parsed: number;
   warnings: string[];
+  // Per-stage wall time for this open's build pass (stages.ts), not for any narrow embed or
+  // feature invalidation that ran beside it -- on a cold build there is none, so it is the whole cost.
+  stages: Stages;
 }
 
 interface ConnectResult<Handle> {
@@ -37,34 +41,30 @@ interface ConnectResult<Handle> {
   dbPath: string;
   parsed: number;
   warnings: string[];
-  // Closed already unless `keepBuilderOpen` was set: a one-shot open reconciles once and is done
-  // with it, a watcher keeps calling build() on the same instance across its whole run.
-  builder: Builder;
+  stages: Stages;
 }
 
-// duckdb and turso hold the cache file for their connection's whole life, not for a transaction,
-// so a second command waits on the first command finishing. Bounded rather than open-ended: this
-// clears a warm query's collision (~100ms) and still fails loudly behind a cold build instead of
-// looking hung.
-const LOCK_RETRY_MS = 5_000;
+// duckdb/turso hold the cache file for their connection's whole life, so a second command waits.
+// Bounded by this tree's recorded reconcile time (lock-wait.ts), not a fixed guess.
 const LOCK_POLL_MS = 50;
 
 async function connectUnlocked<Handle>(dbPath: string, cfg: ResolvedConfig, dialect: OpenDialect<Handle>): Promise<{ handle: Handle; conn: Connection }> {
-  const deadline = Date.now() + LOCK_RETRY_MS;
+  const budgetMs = lockWaitBudgetMs(cfg.baseDir);
+  const deadline = Date.now() + budgetMs;
   for (;;) {
     try {
       return await dialect.connect(dbPath, cfg);
     } catch (err) {
       if (!dialect.isLocked?.(err as Error)) throw err;
       if (Date.now() >= deadline) {
-        throw new SenseError('STORE_BUSY', `another sense process is using this tree's ${cfg.store} cache (${dbPath}) and did not release it within ${LOCK_RETRY_MS / 1000}s; wait for that command to finish, or set "store" to "sqlite" in sense.config.json, which serves concurrent commands`);
+        throw new SenseError('STORE_BUSY', `another sense process is using this tree's ${cfg.store} cache (${dbPath}) and did not release it within ${Math.round(budgetMs / 1000)}s; wait for that command to finish, or set "store" to "sqlite" in sense.config.json, which serves concurrent commands`);
       }
       await new Promise((resolve) => setTimeout(resolve, LOCK_POLL_MS));
     }
   }
 }
 
-async function connectWithDialect<Handle>(cfg: ResolvedConfig, dialect: OpenDialect<Handle>, keepBuilderOpen: boolean): Promise<ConnectResult<Handle>> {
+async function connectWithDialect<Handle>(cfg: ResolvedConfig, dialect: OpenDialect<Handle>): Promise<ConnectResult<Handle>> {
   const stateDir = join(cfg.baseDir, STATE_DIR);
   mkdirSync(stateDir, { recursive: true });
   const dbPath = join(stateDir, dialect.filename);
@@ -73,8 +73,8 @@ async function connectWithDialect<Handle>(cfg: ResolvedConfig, dialect: OpenDial
   // A throw below must release this handle, or the leaked WAL makes the cache file undeletable on
   // Windows. `closed` keeps the catch from double-closing a handle a rebuild branch already closed.
   let closed = false;
-  // Created here, not inside reconcile(): its pool must survive across every build() call this
-  // connection sees (a watcher's repeated ticks), not just the one below.
+  // Created here, not inside reconcile(): invalidate()/invalidateFeatures() below share its pool
+  // with the build() call that follows them.
   const builder = createBuilder(conn, cfg, cfg.baseDir, dialect.reconcileDialect);
   try {
     await conn.exec('CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)');
@@ -100,7 +100,7 @@ async function connectWithDialect<Handle>(cfg: ResolvedConfig, dialect: OpenDial
         closed = true;
         await dialect.close(handle);
         clearCache(cfg);
-        return connectWithDialect(cfg, dialect, keepBuilderOpen);
+        return connectWithDialect(cfg, dialect);
       }
       const changedKeys = changedSignatureKeys(features ?? '', wantFeatures);
       // Null (rather than the empty set) when changedKeys isn't preset-only, or a changed
@@ -149,7 +149,7 @@ async function connectWithDialect<Handle>(cfg: ResolvedConfig, dialect: OpenDial
         closed = true;
         await dialect.close(handle);
         clearCache(cfg);
-        return connectWithDialect(cfg, dialect, keepBuilderOpen);
+        return connectWithDialect(cfg, dialect);
       }
     }
 
@@ -168,11 +168,11 @@ async function connectWithDialect<Handle>(cfg: ResolvedConfig, dialect: OpenDial
     const embedParsed = embedInvalidate ? (await builder.invalidate(embedInvalidate)).parsed : 0;
     const featureParsed = featureToggles ? (await builder.invalidateFeatures(featureToggles)).parsed : 0;
 
-    const { parsed, warnings } = await builder.build(forcedPaths);
-    // A one-shot open is done reconciling for good; a watcher keeps `builder` alive across its run.
-    if (!keepBuilderOpen) await builder.close();
+    const { parsed, warnings, stages } = await builder.build(forcedPaths);
+    // Every open reconciles once and is done with it -- a watcher opens fresh per event instead of holding this connection (src/watch.ts).
+    await builder.close();
 
-    return { handle, conn, cfg, dbPath, parsed: parsed + embedParsed + featureParsed, warnings, builder };
+    return { handle, conn, cfg, dbPath, parsed: parsed + embedParsed + featureParsed, warnings, stages };
   } catch (err) {
     await builder.close();
     if (!closed) await dialect.close(handle);
@@ -183,20 +183,11 @@ async function connectWithDialect<Handle>(cfg: ResolvedConfig, dialect: OpenDial
 // A store's open(): connects (see connectWithDialect above), then wraps the resulting connection
 // in the Store interface. The builder's pool closes right after the initial build.
 export async function openWithDialect<Handle>(cfg: ResolvedConfig, dialect: OpenDialect<Handle>): Promise<OpenResult> {
-  const { handle, conn, cfg: resolvedCfg, dbPath, parsed, warnings } = await connectWithDialect(cfg, dialect, false);
+  const { handle, conn, cfg: resolvedCfg, dbPath, parsed, warnings, stages } = await connectWithDialect(cfg, dialect);
   const store = dialect.createStore(handle, conn, resolvedCfg);
   // reconcile ran before this object existed, so its chunk text is keyed by the connection.
   rekeyChunkText(conn, store);
-  return { store, cfg: resolvedCfg, dbPath, parsed, warnings };
-}
-
-// Same connect+build as openWithDialect, but keeps the builder's pool alive and hands it back
-// alongside the store, for a caller (a watcher) that reconciles repeatedly on this connection.
-export async function openWithBuilder<Handle>(cfg: ResolvedConfig, dialect: OpenDialect<Handle>): Promise<OpenResult & { builder: Builder }> {
-  const { handle, conn, cfg: resolvedCfg, dbPath, parsed, warnings, builder } = await connectWithDialect(cfg, dialect, true);
-  const store = dialect.createStore(handle, conn, resolvedCfg);
-  rekeyChunkText(conn, store);
-  return { store, cfg: resolvedCfg, dbPath, parsed, warnings, builder };
+  return { store, cfg: resolvedCfg, dbPath, parsed, warnings, stages };
 }
 
 export async function docCount(store: Store): Promise<number> {

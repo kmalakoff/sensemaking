@@ -19,7 +19,9 @@ export interface ParseWorkerData {
 // parseFile already returns -- extracted text and per-feature values, never the mdast tree.
 export type ParseTask = FileStat;
 
-export type ParseTaskResult = { ok: true; doc: ParsedDoc; warnings: string[] } | { ok: false; error: WorkerErrorPayload };
+// parseMs is the worker's own hrtime for parseFile, excluding dispatch and the return clone --
+// what separates it from the pool's dispatch-to-drain `parse` stage.
+export type ParseTaskResult = { ok: true; doc: ParsedDoc; warnings: string[]; parseMs: number } | { ok: false; error: WorkerErrorPayload };
 
 // Read once per worker, not per task.
 const { cfg, featureNames } = Tinypool.workerData as ParseWorkerData;
@@ -29,8 +31,10 @@ const selected = FEATURES.filter((feature) => featureNames.includes(feature.name
 
 export default function parseTask(file: ParseTask): ParseTaskResult {
   try {
+    const start = process.hrtime.bigint();
     const { doc, warnings } = parseFile(file, featuresForFile(selected, cfg, file), cfg);
-    return { ok: true, doc, warnings };
+    const parseMs = Number(process.hrtime.bigint() - start) / 1e6;
+    return { ok: true, doc, warnings, parseMs };
   } catch (err) {
     return { ok: false, error: serializeError(err) };
   }

@@ -27,7 +27,7 @@ Subagents dispatched during a release are spawned with `model: sonnet`. Reviews 
    SENSE_TEST_LMSTUDIO_URL=http://localhost:1234/v1   # same three, LM Studio side; _KEY too if it wants one
    ```
 
-2. **Read the verdict.** PASS or BLOCK, with one generated line per reason. Nothing is retyped: the report is rendered from the sitting's own JSON into `benchmark/reports/YYYY-MM-DD-release-gate.{md,json}`, and `npm test` fails if a report and its data disagree.
+2. **Read the verdict.** PASS or BLOCK, with one generated line per reason. Nothing is retyped: the report is rendered from the sitting's own JSON into `.tmp/sittings/<sitting>/release-gate.{md,json}`, beside the data, and `npm test` fails if a record and its data disagree.
 
    **The report cites no commit hash.** One reached by rebase or squash is unreachable afterwards,
    and the claim resting on it becomes uncheckable. The report records what survives instead: the
@@ -39,7 +39,7 @@ Subagents dispatched during a release are spawned with `model: sonnet`. Reviews 
 
    What blocks: a token contract that moved at all, a quality metric that fell, a stress or scale row beyond its band, a store battery that failed, a timing row beyond its band that a reversed-order re-run agreed with. What does not: anything inside its band, and the rows too noisy to gate, which say so.
 
-   On PASS the numbers-of-record table in BENCHMARKING.md moves to this sitting. On BLOCK it is left exactly as it was, so a blocked sitting's numbers never become the official ones. The run says which happened.
+   Releasing a PASS (step 6) moves the numbers-of-record table in BENCHMARKING.md to this sitting. A BLOCK, or a sitting never released, leaves it exactly as it was, so numbers that never shipped never become the official ones.
 
 3. **On BLOCK, fix it or accept it.** Fixing it and running again is the ordinary path. Where the movement is understood and the owner decides to ship anyway, record that decision against the row in the owner's own words and run the gate again:
 
@@ -64,7 +64,7 @@ The mechanical facts are tested in `test/integration/docs.test.ts`; the rest is 
 
 5. Commit steps 1-4, as one commit, or a few when the diff separates naturally (the code change, the benchmark tables). A release is not a trail of incremental work-in-progress commits; if the work accumulated as one, squash before the bump. Messages are short and factual, no Co-Authored-By trailer. Never start a pre-bump subject with the version number: the bump commit is a bare version number, so a subject leading with one reads as the release having already happened. Name the work and carry the version inside it, `Benchmarking for 0.19.2 release: full battery on all three stores`.
 
-6. Maintainer picks the version. Stamp it on the sitting's report first, which re-renders from the same data and measures nothing:
+6. Maintainer picks the version. Name the sitting's report for it first, which copies it to `benchmark/reports/<date>-<version>-release-gate.{md,json}` from the same data and measures nothing:
 
    ```bash
    node benchmark/report.mjs --release <chosen>

@@ -14,6 +14,8 @@ export interface ReparseResult {
   warnings: string[];
   // Frontmatter keys not in `knownColumns`, first-seen order -- the order callers ALTER TABLE ADD COLUMN in.
   newColumns: string[];
+  // Sum of worker-side parseFile time (workers/parse.ts) across files; 0 on the serial path.
+  workerParseMs: number;
 }
 
 export interface ReparseOptions {
@@ -77,8 +79,10 @@ export async function reparseFiles(files: FileStat[], features: Feature[], cfg: 
   const warnings: string[] = [];
   const newColumns: string[] = [];
   const seen = new Set(knownColumns);
-  for (const { doc, warnings: fileWarnings } of results) {
+  let workerParseMs = 0;
+  for (const { doc, warnings: fileWarnings, parseMs } of results) {
     warnings.push(...fileWarnings);
+    workerParseMs += parseMs ?? 0;
     for (const key of Object.keys(doc.data)) {
       if (!seen.has(key)) {
         seen.add(key);
@@ -88,5 +92,5 @@ export async function reparseFiles(files: FileStat[], features: Feature[], cfg: 
     docs.push(doc);
   }
 
-  return { docs, warnings, newColumns };
+  return { docs, warnings, newColumns, workerParseMs };
 }

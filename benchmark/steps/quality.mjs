@@ -20,6 +20,8 @@ const K = Number(flag('k', 10));
 const MAX_QUERIES = Number(flag('queries', Infinity));
 const SPLIT = flag('split', 'test');
 // Retrieval quality is per-store once a store has its own lexical layer: each engine ranks with its own BM25, so scores are comparable only against the same store on the same corpus.
+// sqlite only in practice: the query form is an OR bag (labels.mjs), FTS5 syntax that duckdb and
+// turso refuse outright. Measured 2026-09-04, PLAN.md 3.30.
 // Omitted, this measures the default store, matching every recorded baseline in benchmark/reports.
 const STORE = flag('store', undefined);
 const outArg = flag('out', null);

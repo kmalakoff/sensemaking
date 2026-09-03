@@ -11,7 +11,7 @@ import { materializeScope, narrowByWhere, rawScope, scopeHasEmbeddings } from '.
 import { linksCandidates, vectorsCandidates, wordsCandidates } from './signals.ts';
 
 // snippet() re-tokenizes each candidate doc, superlinearly: ~10s for one 1MB doc
-// (benchmark/reports/2026-08-23-hub-release-battery.md). Past this bound, rows get the JS excerpt.
+// (benchmark/reports/2026-08-23-0.13.2-hub-release-battery.md). Past this bound, rows get the JS excerpt.
 const EXCERPT_WINDOW = 160;
 
 // Bare terms from an FTS5 query string: strips operators/quoting so the oversized-doc excerpt

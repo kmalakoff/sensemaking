@@ -9,7 +9,8 @@ import { ROWS, rowValue, TIMING_KINDS } from './rows.mjs';
 const WALL_INPROC_TOKENS = ROWS.filter((row) => TIMING_KINDS.includes(row.kind));
 const QUALITY_ROWS = ROWS.filter((row) => row.kind === 'quality');
 
-const REPORT_JSON_RE = /^(\d{4}-\d{2}-\d{2})-release-gate\.json$/;
+// A record: <date>-<version>-release-gate.json. An unreleased sitting's report never lives here.
+export const REPORT_JSON_RE = /^(\d{4}-\d{2}-\d{2})-\d+\.\d+\.\d+-release-gate\.json$/;
 
 // Every earlier release-gate JSON, newest first. Plural because the prior resolves per step: one
 // report for the whole run lets a sitting that skipped a step blind the next sitting that runs it.

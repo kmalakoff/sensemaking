@@ -71,11 +71,18 @@ const NEW_DIALECT = /search/.test(HELP);
 // Ad-hoc SQL was `query` until it became `sql`, which took the name back from the search
 // sense of "query". Read off --help so one harness measures every generation.
 const SQL_VERB = /\bsense sql\b/.test(HELP) ? 'sql' : 'query';
-// Two presets over one glob, so both rows measure the same files and differ only in vector
-// participation, with no config edit between them to force a rebuild.
-const TWO_SCOPES = {
+// A preset naming `signals` fails config load on a package older than config v5, which would null
+// every row rather than one. Probed in a child so the harness process is untouched before timing.
+const CONFIG_VERSION = Number(spawnSync(process.execPath, ['-e', `import(${JSON.stringify(pathToFileURL(join(pkgRoot, 'dist', 'esm', 'index.js')).href)}).then((m) => console.log(m.SUPPORTED_CONFIG_VERSION ?? 0), () => console.log(0))`], { encoding: 'utf8' }).stdout);
+// Three presets over one glob, so every search row measures the same files and they differ only in
+// which signals fire, with no config edit between them to force a rebuild.
+const SCOPES = {
   version: 3,
-  presets: { default: { include: ['**/*.md'] }, lexical: { include: ['**/*.md'], semantic: false } },
+  presets: {
+    default: { include: ['**/*.md'] },
+    lexical: { include: ['**/*.md'], semantic: false },
+    ...(CONFIG_VERSION >= 5 ? { words: { include: ['**/*.md'], signals: { words: 1 } } } : {}),
+  },
   queries: {},
 };
 // find_ms: lexical ranked search (BM25 + link fusion, no vectors) -- old dialect is
@@ -84,6 +91,9 @@ const lexicalArgs = (terms, k = '10') => (NEW_DIALECT ? ['search', terms, '--pre
 // semantic_find_ms: vector-participating search -- old dialect opts in with --semantic,
 // new dialect participates by default.
 const vectorArgs = (terms, k = '10') => (NEW_DIALECT ? ['search', terms, '--k', k] : ['find', terms, '--semantic', '--k', k]);
+// words_ms: the same ranked search with links off, so find_ms minus this row is what link
+// expansion costs. Only the preset above can express it, so older packages measure nothing here.
+const wordsArgs = (terms, k = '10') => ['search', terms, '--preset', 'words', '--k', k];
 
 // version_canary_ms: bare Node startup plus argv parsing, no tree work at all -- the number
 // BENCHMARKING.md's Interpreting section calls the canary for "startup got heavier".
@@ -93,10 +103,8 @@ const versionCanary = timed(['--version'], 5);
 const mdFiles = walkMd(tree).map((rel) => ({ rel, size: statSync(join(tree, rel)).size }));
 const largest = mdFiles.reduce((a, b) => (b.size > a.size ? b : a), { rel: null, size: 0 });
 
-const SEARCH = `SELECT f.path, content.title, snippet(content, -1, '«', '»', '…', 10) AS hit FROM frontmatter f JOIN content ON content.path = f.path WHERE content MATCH ? ORDER BY bm25(content, 10.0, 5.0, 1.0) LIMIT 10`;
-
 // --- wall-time (CLI) ---
-if (NEW_DIALECT) writeTreeConfig(tree, TWO_SCOPES, { store });
+if (NEW_DIALECT) writeTreeConfig(tree, SCOPES, { store });
 // Every timed row measures a warm file cache, identically in every sitting. "Cold" means the
 // index is built from nothing, never that the disk is cold, which is not reproducible.
 const warmedBytes = warmFileCache(tree);
@@ -113,8 +121,8 @@ for (let i = 0; i < COLD_REPS; i++) {
 }
 const coldMs = medianOf(coldSamples);
 const warm = fail(timed([SQL_VERB, 'SELECT COUNT(*) AS n FROM frontmatter']), 'warm_query_ms');
-const search = fail(timed([SQL_VERB, SEARCH, 'the']), 'bm25_search_ms');
 const findR = fail(timed(lexicalArgs('the'), 3), 'find_ms');
+const wordsR = CONFIG_VERSION >= 5 ? fail(timed(wordsArgs('the'), 3), 'words_ms') : null;
 // Cold crawl and first embed in one process: the chunk handoff survives only within a single CLI
 // invocation, and the `status` call above already reconciled and exited, discarding it.
 safeRmSync(join(tree, '.sense'), { recursive: true, force: true });
@@ -139,6 +147,10 @@ const peekR = fail(timed(['peek', largest.rel], 3), 'peek_ms');
 // related_ms: the similar-but-unlinked command. Scans every embedding chunk in the tree per call (semantic-search cost class), unlike peek's cheap local queries.
 // Runs after the semantic search above, which has warmed the embeddings this scan reads.
 const relatedR = fail(timed(['related', largest.rel], 3), 'related_ms');
+// path_ms: graph traversal from the first note to the largest, the anchor peek and related use. A
+// pair with no path exhausts the reachable set, which is the traversal cost this row watches either way.
+const pathFrom = mdFiles.find((f) => f.rel !== largest.rel) ?? largest;
+const pathR = fail(timed(['path', pathFrom.rel, largest.rel], 3), 'path_ms');
 
 // --- in-process (library) ---
 let inproc = null;
@@ -155,19 +167,32 @@ try {
     const handle = opened.store ?? opened.db;
     const ms = Number(process.hrtime.bigint() - t) / 1e6;
     await handle.close();
-    return ms;
+    return { ms, stages: opened.stages ?? null };
   };
   const touch = (files) => {
     const future = futureDate();
     for (const f of files) utimesSync(join(tree, f.rel), future, future);
   };
+  // Median of `runs`, keeping the stages of the rep that produced the median (same convention as
+  // the cold build below): the split and the total describe the same run, never an average.
+  const medianWithStages = async (fn, runs) => {
+    const samples = [];
+    const stagesByRun = [];
+    for (let i = 0; i < runs; i++) {
+      const { ms, stages } = await fn();
+      samples.push(Math.round(ms));
+      stagesByRun.push(stages);
+    }
+    const ms = medianOf(samples);
+    return { ms, stages: stagesByRun[samples.indexOf(ms)] ?? null };
+  };
 
-  const noChange = await medianAsync(openClose, 5);
-  const touch1 = await medianAsync(() => {
+  const noChange = await medianAsync(async () => (await openClose()).ms, 5);
+  const touch1 = await medianWithStages(() => {
     touch(mdFiles.slice(0, 1));
     return openClose();
   }, 3);
-  const modify10 = await medianAsync(() => {
+  const modify10 = await medianWithStages(() => {
     for (const f of mdFiles.slice(0, 10)) appendFileSync(join(tree, f.rel), ' benchmark-edit');
     touch(mdFiles.slice(0, 10));
     return openClose();
@@ -175,18 +200,42 @@ try {
   // Median of 3, clearing .sense before each rep (same instrument-spread rationale as cold crawl).
   const COLD_BUILD_REPS = 3;
   const coldBuildSamples = [];
+  const coldBuildStages = [];
   for (let i = 0; i < COLD_BUILD_REPS; i++) {
     safeRmSync(join(tree, '.sense'), { recursive: true, force: true });
     const t = process.hrtime.bigint();
     const opened = await lib.open(cfg);
     coldBuildSamples.push(Math.round(Number(process.hrtime.bigint() - t) / 1e6));
+    // Null on every version published before the stage vocabulary existed, so a reader can tell
+    // "this build reported no stages" from "this stage measured zero". Never defaulted to {}.
+    coldBuildStages.push(opened.stages ?? null);
     await (opened.store ?? opened.db).close();
   }
   const coldBuild = medianOf(coldBuildSamples);
-  inproc = { cold_build_ms: coldBuild, cold_build_ms_samples: coldBuildSamples, open_nochange_ms: noChange, update_1_file_ms: touch1, update_10_files_ms: modify10 };
+  // The stages of the rep that produced the reported median, so the split and the total describe
+  // the same run rather than being averaged across reps that never happened together.
+  const stages = coldBuildStages[coldBuildSamples.indexOf(coldBuild)] ?? null;
+  // Time no stage claims (src/store/stages.ts's unaccountedMs, recomputed here since Stages
+  // carries the raw spans): a residual that grows across releases means the vocabulary stopped covering the build.
+  const unaccountedMs = stages ? Math.round((stages.totalMs - Object.values(stages.spans).reduce((a, b) => a + b, 0)) * 10) / 10 : null;
+  inproc = {
+    cold_build_ms: coldBuild,
+    cold_build_ms_samples: coldBuildSamples,
+    stages,
+    unaccounted_ms: unaccountedMs,
+    open_nochange_ms: noChange,
+    update_1_file_ms: touch1.ms,
+    update_1_file_stages: touch1.stages,
+    update_10_files_ms: modify10.ms,
+    update_10_files_stages: modify10.stages,
+  };
 } catch (err) {
   inproc = { error: String(err.message ?? err).split('\n')[0] };
 }
+
+// setup_ms: the CLI's warm query minus the in-process open of the same work -- what an invocation
+// pays before doing any of it. Computed from the two rows above, never measured.
+const setupMs = warm?.ms != null && typeof inproc?.open_nochange_ms === 'number' ? Math.round((warm.ms - inproc.open_nochange_ms) * 10) / 10 : null;
 
 // --- bulk change (watch's scenario): touch many files, time the first query after ---
 const BULK = Math.min(500, mdFiles.length);
@@ -214,20 +263,27 @@ const bulkColdMs = bulkStatus === 0 ? medianOf(bulkSamples) : null;
 let bulkWatchMs = null;
 const bulkWatchSamples = [];
 try {
-  const watcher = spawn(process.execPath, [cli, 'watch', '--force'], { cwd: tree, stdio: 'ignore' });
+  // An early exit here is a failure, not an unsupported reading: every store can be watched now.
+  let watchErr = '';
+  const watcher = spawn(process.execPath, [cli, 'watch', '--force'], { cwd: tree, stdio: ['ignore', 'ignore', 'pipe'] });
+  watcher.stderr.on('data', (d) => (watchErr += d));
   await new Promise((r) => setTimeout(r, 1500)); // watcher startup + initial reconcile
-  const WATCH_REPS = 3;
-  let watchStatus = 0;
-  for (let i = 0; i < WATCH_REPS; i++) {
-    touchMany(BULK_REPS + i);
-    await new Promise((r) => setTimeout(r, 1500 + 1.5 * (bulkColdMs ?? 4000))); // debounce + background reparse, scaled to the measured reparse cost
-    const r = timed([SQL_VERB, 'SELECT COUNT(*) AS n FROM frontmatter'], 1);
-    bulkWatchSamples.push(r.ms);
-    if (r.status !== 0) watchStatus = r.status;
+  if (watcher.exitCode !== null) {
+    errors.bulk_watch_ms = `exit ${watcher.exitCode}: ${watchErr.split('\n').find(Boolean) ?? 'no stderr'}`;
+  } else {
+    const WATCH_REPS = 3;
+    let watchStatus = 0;
+    for (let i = 0; i < WATCH_REPS; i++) {
+      touchMany(BULK_REPS + i);
+      await new Promise((r) => setTimeout(r, 1500 + 1.5 * (bulkColdMs ?? 4000))); // debounce + background reparse, scaled to the measured reparse cost
+      const r = timed([SQL_VERB, 'SELECT COUNT(*) AS n FROM frontmatter'], 1);
+      bulkWatchSamples.push(r.ms);
+      if (r.status !== 0) watchStatus = r.status;
+    }
+    bulkWatchMs = watchStatus === 0 ? medianOf(bulkWatchSamples) : null;
+    watcher.kill('SIGTERM');
+    await new Promise((r) => setTimeout(r, 300));
   }
-  bulkWatchMs = watchStatus === 0 ? medianOf(bulkWatchSamples) : null;
-  watcher.kill('SIGTERM');
-  await new Promise((r) => setTimeout(r, 300));
 } catch {}
 
 const result = {
@@ -242,8 +298,9 @@ const result = {
   warmed_bytes: warmedBytes,
   version_canary_ms: versionCanary.status === 0 ? versionCanary.ms : null,
   warm_query_ms: warm?.ms ?? null,
-  bm25_search_ms: search?.ms ?? null,
+  setup_ms: setupMs,
   find_ms: findR?.ms ?? null,
+  words_ms: wordsR?.ms ?? null,
   find_row_tokens: findRowTokens,
   embed_supported: NEW_DIALECT,
   cold_embed_ms: coldEmbedAttempt.status === 0 ? coldEmbedAttempt.ms : null,
@@ -253,6 +310,7 @@ const result = {
   map_tokens: mapR ? Math.round(mapR.bytes / 4) : null,
   peek_ms: peekR?.ms ?? null,
   peek_tokens: peekR ? Math.round(peekR.bytes / 4) : null,
+  path_ms: pathR?.ms ?? null,
   related_ms: relatedR?.ms ?? null,
   related_tokens: relatedR ? Math.round(relatedR.bytes / 4) : null,
   largest_note_tokens: Math.round(largest.size / 4),

@@ -9,7 +9,7 @@ import type { ParsedDoc } from '../scan/index.ts';
 // present-but-inert. 'sql-functions': the engine can register has/basename/segment as UDFs at all,
 // which turso's client cannot. The rest are finer FTS5-only behaviors; a missing one fails at open
 // or first use. An array, not a bare union, so a runtime check reads the same list the type does.
-export const CAPABILITY_NAMES = ['phrases', 'snippets', 'watch-concurrency', 'lexical', 'vectors', 'sql-functions'] as const;
+export const CAPABILITY_NAMES = ['phrases', 'snippets', 'lexical', 'vectors', 'sql-functions'] as const;
 export type Capability = (typeof CAPABILITY_NAMES)[number];
 
 export interface RunResult {
