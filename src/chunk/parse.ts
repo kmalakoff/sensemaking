@@ -1,17 +1,11 @@
+import Module from 'node:module';
 import type { RootContent } from 'mdast';
-import { fromMarkdown } from 'mdast-util-from-markdown';
-import { gfmAutolinkLiteralFromMarkdown } from 'mdast-util-gfm-autolink-literal';
-import { gfmFootnoteFromMarkdown } from 'mdast-util-gfm-footnote';
-import { gfmStrikethroughFromMarkdown } from 'mdast-util-gfm-strikethrough';
-import { gfmTableFromMarkdown } from 'mdast-util-gfm-table';
-import { gfmTaskListItemFromMarkdown } from 'mdast-util-gfm-task-list-item';
-import { gfmAutolinkLiteral } from 'micromark-extension-gfm-autolink-literal';
-import { gfmFootnote } from 'micromark-extension-gfm-footnote';
-import { gfmStrikethrough } from 'micromark-extension-gfm-strikethrough';
-import { gfmTable } from 'micromark-extension-gfm-table';
-import { gfmTaskListItem } from 'micromark-extension-gfm-task-list-item';
 import { extractText } from './extract.ts';
 import type { Block, BlockType } from './types.ts';
+
+// Tier-2, as embed/static.ts: the parser's packages cost ~19 ms to load and a warm tree never
+// parses, so every store-opening command paid for them until a file actually changed.
+const _require = typeof require === 'undefined' ? Module.createRequire(import.meta.url) : require;
 
 const BLOCK_TYPES: Partial<Record<RootContent['type'], BlockType>> = {
   heading: 'heading',
@@ -22,15 +16,40 @@ const BLOCK_TYPES: Partial<Record<RootContent['type'], BlockType>> = {
   blockquote: 'blockquote',
 };
 
+type FromMarkdown = typeof import('mdast-util-from-markdown').fromMarkdown;
+type Parser = { fromMarkdown: FromMarkdown; options: NonNullable<Parameters<FromMarkdown>[1]> };
+let cached: Parser | undefined;
+
 // Imported individually, not via micromark-extension-gfm/mdast-util-gfm: those bundles also pull
 // in gfm-tagfilter, an HTML sanitizer this library never uses (no htmlExtensions call anywhere).
-const EXTENSIONS = [gfmAutolinkLiteral(), gfmFootnote(), gfmStrikethrough(), gfmTable(), gfmTaskListItem()];
-const MDAST_EXTENSIONS = [gfmAutolinkLiteralFromMarkdown(), gfmFootnoteFromMarkdown(), gfmStrikethroughFromMarkdown(), gfmTableFromMarkdown(), gfmTaskListItemFromMarkdown()];
+function parser(): Parser {
+  if (cached) return cached;
+  const { fromMarkdown } = _require('mdast-util-from-markdown') as typeof import('mdast-util-from-markdown');
+  const { gfmAutolinkLiteralFromMarkdown } = _require('mdast-util-gfm-autolink-literal') as typeof import('mdast-util-gfm-autolink-literal');
+  const { gfmFootnoteFromMarkdown } = _require('mdast-util-gfm-footnote') as typeof import('mdast-util-gfm-footnote');
+  const { gfmStrikethroughFromMarkdown } = _require('mdast-util-gfm-strikethrough') as typeof import('mdast-util-gfm-strikethrough');
+  const { gfmTableFromMarkdown } = _require('mdast-util-gfm-table') as typeof import('mdast-util-gfm-table');
+  const { gfmTaskListItemFromMarkdown } = _require('mdast-util-gfm-task-list-item') as typeof import('mdast-util-gfm-task-list-item');
+  const { gfmAutolinkLiteral } = _require('micromark-extension-gfm-autolink-literal') as typeof import('micromark-extension-gfm-autolink-literal');
+  const { gfmFootnote } = _require('micromark-extension-gfm-footnote') as typeof import('micromark-extension-gfm-footnote');
+  const { gfmStrikethrough } = _require('micromark-extension-gfm-strikethrough') as typeof import('micromark-extension-gfm-strikethrough');
+  const { gfmTable } = _require('micromark-extension-gfm-table') as typeof import('micromark-extension-gfm-table');
+  const { gfmTaskListItem } = _require('micromark-extension-gfm-task-list-item') as typeof import('micromark-extension-gfm-task-list-item');
+  cached = {
+    fromMarkdown,
+    options: {
+      extensions: [gfmAutolinkLiteral(), gfmFootnote(), gfmStrikethrough(), gfmTable(), gfmTaskListItem()],
+      mdastExtensions: [gfmAutolinkLiteralFromMarkdown(), gfmFootnoteFromMarkdown(), gfmStrikethroughFromMarkdown(), gfmTableFromMarkdown(), gfmTaskListItemFromMarkdown()],
+    },
+  };
+  return cached;
+}
 
 // Top-level blocks of a markdown body, typed and line-extent bounded from mdast's own
 // node.position (never a regex guess). GFM extensions add tables, task lists, footnotes, strikethrough.
 export function parse(body: string): Block[] {
-  const tree = fromMarkdown(body, { extensions: EXTENSIONS, mdastExtensions: MDAST_EXTENSIONS });
+  const { fromMarkdown, options } = parser();
+  const tree = fromMarkdown(body, options);
   return tree.children.map((node) => {
     const position = node.position;
     const block: Block = {

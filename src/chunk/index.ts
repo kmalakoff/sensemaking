@@ -15,7 +15,7 @@ export function chunk(body: string, opts?: ChunkOptions): Chunk[] {
 }
 
 export { extractText, extractTexts } from './extract.ts';
-export { DEFAULT_TARGET_TOKENS, estimateTokens } from './group.ts';
 export { parse } from './parse.ts';
+export { DEFAULT_TARGET_TOKENS, estimateTokens } from './tokens.ts';
 export type { Block, BlockType, Chunk, ChunkOptions } from './types.ts';
 export { CHUNK_VERSION } from './version.ts';

@@ -1,7 +1,7 @@
 import assert from 'node:assert';
-import { estimateTokens } from '../../../src/chunk/group.ts';
 import { chunk, chunkFromBlocks } from '../../../src/chunk/index.ts';
 import { parse } from '../../../src/chunk/parse.ts';
+import { estimateTokens } from '../../../src/chunk/tokens.ts';
 import type { Chunk } from '../../../src/chunk/types.ts';
 
 // chunk(body, opts): W2's public entry. group.ts implements D1 (heading scope), pgc pairing (D3),
