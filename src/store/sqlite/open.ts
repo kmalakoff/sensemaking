@@ -17,7 +17,7 @@ import { createStore } from './store.ts';
 export const DB_FILENAME = 'cache.db';
 // Cache shape version, independent of the config's own `version`. Bumping it rebuilds
 // existing trees on first query.
-export const SCHEMA_VERSION = '19';
+export const SCHEMA_VERSION = '20';
 
 export type { OpenResult };
 

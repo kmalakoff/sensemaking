@@ -44,8 +44,8 @@ describe('sections feature', () => {
     );
   });
 
-  // The outline comes from parse()'s heading blocks, so mdast's CommonMark fences decide it. An
-  // indented fence is where that could diverge: a column-0 hash inside one stays code.
+  // The outline comes from parse()'s heading blocks, so markdown-it's CommonMark fences decide it.
+  // An indented fence is where that could diverge: a column-0 hash inside one stays code.
   it('an indented fence still opens a fence: a column-zero heading inside it is not a section', async () => {
     const baseDir = tmpTree();
     write(baseDir, 'a.md', '# real\n\n   ```\n# inside a 3-space indented fence\n   ```\n\n## after\n');

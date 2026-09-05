@@ -1,67 +1,70 @@
-import Module from 'node:module';
-import type { RootContent } from 'mdast';
+import type { Token } from 'markdown-it';
 import { extractText } from './extract.ts';
+import { parser } from './parser.ts';
 import type { Block, BlockType } from './types.ts';
 
-// Tier-2, as embed/static.ts: the parser's packages cost ~19 ms to load and a warm tree never
-// parses, so every store-opening command paid for them until a file actually changed.
-const _require = typeof require === 'undefined' ? Module.createRequire(import.meta.url) : require;
-
-const BLOCK_TYPES: Partial<Record<RootContent['type'], BlockType>> = {
-  heading: 'heading',
-  paragraph: 'paragraph',
-  code: 'code',
-  table: 'table',
-  list: 'list',
-  blockquote: 'blockquote',
+// Opening token type to Block type. Everything else (rules, raw html, footnote definitions) is
+// 'other', as mdast's BLOCK_TYPES mapped no entry for those nodes.
+const BLOCK_TYPES: Record<string, BlockType> = {
+  heading_open: 'heading',
+  paragraph_open: 'paragraph',
+  fence: 'code',
+  code_block: 'code',
+  table_open: 'table',
+  ordered_list_open: 'list',
+  bullet_list_open: 'list',
+  blockquote_open: 'blockquote',
 };
 
-type FromMarkdown = typeof import('mdast-util-from-markdown').fromMarkdown;
-type Parser = { fromMarkdown: FromMarkdown; options: NonNullable<Parameters<FromMarkdown>[1]> };
-let cached: Parser | undefined;
-
-// Imported individually, not via micromark-extension-gfm/mdast-util-gfm: those bundles also pull
-// in gfm-tagfilter, an HTML sanitizer this library never uses (no htmlExtensions call anywhere).
-function parser(): Parser {
-  if (cached) return cached;
-  const { fromMarkdown } = _require('mdast-util-from-markdown') as typeof import('mdast-util-from-markdown');
-  const { gfmAutolinkLiteralFromMarkdown } = _require('mdast-util-gfm-autolink-literal') as typeof import('mdast-util-gfm-autolink-literal');
-  const { gfmFootnoteFromMarkdown } = _require('mdast-util-gfm-footnote') as typeof import('mdast-util-gfm-footnote');
-  const { gfmStrikethroughFromMarkdown } = _require('mdast-util-gfm-strikethrough') as typeof import('mdast-util-gfm-strikethrough');
-  const { gfmTableFromMarkdown } = _require('mdast-util-gfm-table') as typeof import('mdast-util-gfm-table');
-  const { gfmTaskListItemFromMarkdown } = _require('mdast-util-gfm-task-list-item') as typeof import('mdast-util-gfm-task-list-item');
-  const { gfmAutolinkLiteral } = _require('micromark-extension-gfm-autolink-literal') as typeof import('micromark-extension-gfm-autolink-literal');
-  const { gfmFootnote } = _require('micromark-extension-gfm-footnote') as typeof import('micromark-extension-gfm-footnote');
-  const { gfmStrikethrough } = _require('micromark-extension-gfm-strikethrough') as typeof import('micromark-extension-gfm-strikethrough');
-  const { gfmTable } = _require('micromark-extension-gfm-table') as typeof import('micromark-extension-gfm-table');
-  const { gfmTaskListItem } = _require('micromark-extension-gfm-task-list-item') as typeof import('micromark-extension-gfm-task-list-item');
-  cached = {
-    fromMarkdown,
-    options: {
-      extensions: [gfmAutolinkLiteral(), gfmFootnote(), gfmStrikethrough(), gfmTable(), gfmTaskListItem()],
-      mdastExtensions: [gfmAutolinkLiteralFromMarkdown(), gfmFootnoteFromMarkdown(), gfmStrikethroughFromMarkdown(), gfmTableFromMarkdown(), gfmTaskListItemFromMarkdown()],
-    },
-  };
-  return cached;
+// Top-level blocks of a markdown body, typed and line-extent bounded from markdown-it's own
+// token maps (never a regex guess). html and linkify on, with the footnote and task-list plugins.
+export function parse(body: string): Block[] {
+  const tokens = parser().parse(body, {});
+  const lines = body.split('\n');
+  const blocks: Block[] = [];
+  let i = 0;
+  while (i < tokens.length) {
+    const token = tokens[i];
+    if (token.nesting === 0) {
+      blocks.push(makeBlock(BLOCK_TYPES[token.type] ?? 'other', tokens, i, i + 1, lines));
+      i += 1;
+    } else if (token.nesting === 1) {
+      let depth = 1;
+      let j = i + 1;
+      while (j < tokens.length && depth > 0) {
+        depth += tokens[j].nesting === 1 ? 1 : tokens[j].nesting === -1 ? -1 : 0;
+        j += 1;
+      }
+      blocks.push(makeBlock(BLOCK_TYPES[token.type] ?? 'other', tokens, i, j, lines));
+      i = j;
+    } else {
+      // Defensive: the balanced scan above consumes every close belonging to an open.
+      i += 1;
+    }
+  }
+  return blocks;
 }
 
-// Top-level blocks of a markdown body, typed and line-extent bounded from mdast's own
-// node.position (never a regex guess). GFM extensions add tables, task lists, footnotes, strikethrough.
-export function parse(body: string): Block[] {
-  const { fromMarkdown, options } = parser();
-  const tree = fromMarkdown(body, options);
-  return tree.children.map((node) => {
-    const position = node.position;
-    const block: Block = {
-      type: BLOCK_TYPES[node.type] ?? 'other',
-      startLine: position ? position.start.line : 1,
-      endLine: position ? position.end.line : 1,
-      node,
-    };
-    if (node.type === 'heading') {
-      block.depth = node.depth;
-      block.text = extractText(node);
+// 1-based inclusive extent from the min/max of the tokens' maps (0-based half-open); a block
+// whose tokens carry no map (an empty footnote definition) falls back to line 1. Trailing
+// blank lines trim so a list's endLine lands where mdast's position ended it.
+function makeBlock(type: BlockType, tokens: Token[], i: number, j: number, lines: string[]): Block {
+  let start = Infinity;
+  let end = 0;
+  for (let k = i; k < j; k++) {
+    const map = tokens[k].map;
+    if (map) {
+      start = Math.min(start, map[0]);
+      end = Math.max(end, map[1]);
     }
-    return block;
-  });
+  }
+  const startLine = Number.isFinite(start) ? start + 1 : 1;
+  let endLine = end > start ? end : startLine;
+  while (endLine > startLine && lines[endLine - 1].trim() === '') endLine--;
+  const block: Block = { type, startLine, endLine, node: tokens.slice(i, j) };
+  if (type === 'heading') {
+    block.depth = Number(tokens[i].tag.slice(1));
+    block.text = extractText(block);
+  }
+  return block;
 }

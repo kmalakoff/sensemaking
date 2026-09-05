@@ -122,7 +122,7 @@ function piece(pieceLines: string[], startLine: number, endLine: number, blockTy
     ATOMIC_TYPES.has(blockType) || textMode === 'raw'
       ? pieceLines.join('\n')
       : parse(pieceLines.join('\n'))
-          .map((b) => extractText(b.node))
+          .map((b) => extractText(b))
           .join('\n');
   return { startLine, endLine, text };
 }
@@ -202,7 +202,7 @@ function groupScope(scopeBlocks: Block[], lines: string[], resolved: ResolvedOpt
       continue;
     }
 
-    const extracted = extractText(block.node);
+    const extracted = extractText(block);
     const sizeText = resolved.text === 'raw' ? raw : extracted;
 
     if (block.type === 'heading') {

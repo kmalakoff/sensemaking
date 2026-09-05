@@ -17,7 +17,7 @@ describe('chunk fixtures: signature drift guard', () => {
     for (const name of names) hash.update(readFileSync(join(casesDir, name, 'expected.json')));
     const digest = hash.digest('hex');
     // chunk behavior changed -> regenerate fixtures, update this digest, and bump CHUNK_VERSION in src/chunk/version.ts
-    const EXPECTED_DIGEST = '00caeec332ad366cbfe3a7b385eb6ea9becd70825c7b1d54f17e1f9a33191166';
+    const EXPECTED_DIGEST = '7f1818cafe02162c5c1e77c6531d30763979b5f39c356ecd2169c36a164c1d55';
     assert.strictEqual(digest, EXPECTED_DIGEST, 'expected.json fixtures changed without updating this recorded digest');
   });
 });

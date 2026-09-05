@@ -16,7 +16,7 @@ export interface ParseWorkerData {
 }
 
 // tinypool's task, in and out. The task itself is one FileStat. Result carries only what
-// parseFile already returns -- extracted text and per-feature values, never the mdast tree.
+// parseFile already returns -- extracted text and per-feature values, never the token tree.
 export type ParseTask = FileStat;
 
 // parseMs is the worker's own hrtime for parseFile, excluding dispatch and the return clone --

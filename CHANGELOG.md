@@ -2,6 +2,24 @@
 
 All notable changes to sensemaking are documented here.
 
+## [0.23.0] - 2026-09-05
+
+### Changed
+
+- **Upgrading rebuilds the index.** Cache schema versions bump on all three stores (sqlite 19 to 20,
+  duckdb 3 to 4, turso 4 to 5), so an existing tree re-reads and re-indexes on its first query after
+  the upgrade, and a tree with embeddings re-embeds as it does. Nothing is lost and no configuration
+  changes. On a few thousand notes that is seconds; on a large tree it is one cold build.
+- The markdown parser is now `markdown-it` instead of micromark with mdast, eleven dependencies
+  replaced by three. Parsing the 6,566-note hub corpus falls from 4,147 ms to 811 ms, and parsing is
+  the largest single cost in a cold build.
+- Extracted text is identical on 16,771 of the 16,785 notes across the three benchmark corpora. The
+  14 that differ each hold a link whose label is its own address, such as
+  `[approvaltests.com](https://approvaltests.com)`, and that label now stays in the index instead of
+  being dropped; one of those notes read "in many different languages: . Python" once indexed.
+  Search results shift slightly for the notes whose text was restored. Text extracted from a file
+  with CRLF line endings normalizes them, which no benchmark corpus exercises.
+
 ## [0.22.2] - 2026-09-04
 
 ### Changed

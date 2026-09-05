@@ -70,7 +70,7 @@ describe('stripText', () => {
     assert.ok(text.includes('const apiKey = process.env.KEY;'));
   });
 
-  // A blank line inside %%...%% splits it across mdast blocks. Stripping per block then never saw
+  // A blank line inside %%...%% splits it across blocks. Stripping per block then never saw
   // a closing %%, so the whole comment and both markers were indexed and searchable.
   it('a %%comment%% spanning a blank line is absent, markers included', () => {
     const text = stripText('Visible one.\n\n%%\nhiddenalpha aside\n\nhiddenbeta still inside\n%%\n\nVisible two.');

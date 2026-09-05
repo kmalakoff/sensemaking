@@ -17,7 +17,7 @@ function blockToJson(block) {
   if (block.depth !== undefined) out.depth = block.depth;
   out.endLine = block.endLine;
   out.startLine = block.startLine;
-  out.text = extractText(block.node);
+  out.text = extractText(block);
   out.type = block.type;
   return out;
 }

@@ -170,20 +170,18 @@ Dependencies, all pure JS. No native builds by default.
 | | |
 |---|---|
 | [yaml](https://github.com/eemeli/yaml) | frontmatter |
-| [mdast-util-from-markdown](https://github.com/syntax-tree/mdast-util-from-markdown) | markdown parsing |
+| [markdown-it](https://github.com/markdown-it/markdown-it) | markdown parsing |
 | [@huggingface/tokenizers](https://github.com/huggingface/tokenizers.js) | chunking |
 | [franc-min](https://github.com/wooorm/franc) | language detection |
 | [tinypool](https://github.com/tinylibs/tinypool) | worker pool for parallel parsing on large trees |
 | [install-module-linked](https://github.com/kmalakoff/install-module-linked) | installs the optional `duckdb` and `turso` bindings on first use, instead of shipping them to every install |
 | Node's built-in SQLite | the default store |
 
-Plus the five GFM extensions `mdast-util-from-markdown` needs and their mdast counterparts, not the full gfm/tagfilter bundle:
+Plus two plugins for the GFM constructs the default preset lacks; tables, strikethrough, and
+autolinks are built in:
 
-- [micromark-extension-gfm-autolink-literal](https://github.com/micromark/micromark-extension-gfm-autolink-literal) / [mdast-util-gfm-autolink-literal](https://github.com/syntax-tree/mdast-util-gfm-autolink-literal)
-- [micromark-extension-gfm-footnote](https://github.com/micromark/micromark-extension-gfm-footnote) / [mdast-util-gfm-footnote](https://github.com/syntax-tree/mdast-util-gfm-footnote)
-- [micromark-extension-gfm-strikethrough](https://github.com/micromark/micromark-extension-gfm-strikethrough) / [mdast-util-gfm-strikethrough](https://github.com/syntax-tree/mdast-util-gfm-strikethrough)
-- [micromark-extension-gfm-table](https://github.com/micromark/micromark-extension-gfm-table) / [mdast-util-gfm-table](https://github.com/syntax-tree/mdast-util-gfm-table)
-- [micromark-extension-gfm-task-list-item](https://github.com/micromark/micromark-extension-gfm-task-list-item) / [mdast-util-gfm-task-list-item](https://github.com/syntax-tree/mdast-util-gfm-task-list-item)
+- [markdown-it-footnote](https://github.com/markdown-it/markdown-it-footnote)
+- [markdown-it-task-lists](https://github.com/revin/markdown-it-task-lists)
 
 ## License
 

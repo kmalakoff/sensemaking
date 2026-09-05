@@ -1,16 +1,16 @@
-import type { RootContent } from 'mdast';
+import type { Token } from 'markdown-it';
 
 export type BlockType = 'heading' | 'paragraph' | 'code' | 'table' | 'list' | 'blockquote' | 'other';
 
-// One top-level mdast node plus its 1-indexed source line extent, heading depth/text if any.
-// `node` is the mdast node itself, so extract.ts and group.ts (W2) read the same parse.
+// One top-level markdown-it block plus its 1-indexed source line extent, heading depth/text if any.
+// `node` is the block's token slice, so extract.ts and group.ts (W2) read the same parse.
 export interface Block {
   type: BlockType;
   startLine: number;
   endLine: number;
   depth?: number;
   text?: string;
-  node: RootContent;
+  node: Token[];
 }
 
 export interface ChunkOptions {

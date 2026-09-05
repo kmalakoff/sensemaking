@@ -51,7 +51,7 @@ export class ParsePool {
   }
 
   // Never the tree: a worker task carries one FileStat and returns only what parseFile returns --
-  // extracted text and feature values, never the mdast tree.
+  // extracted text and feature values, never the token tree.
   async run(files: FileStat[], features: Feature[], cfg: Config, onParsed: ((done: number) => void) | undefined, maxWorkers: number): Promise<FileResult[]> {
     // cfg and the feature selection are constant for the dispatch, so they cross once per worker
     // as workerData. Features carry closures and cannot cross at all; only their names do.

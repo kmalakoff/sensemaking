@@ -15,7 +15,7 @@ export interface Section {
   tokens: number;
 }
 
-// Heading blocks parse() already found (mdast/CommonMark fences), offset back onto the raw file;
+// Heading blocks parse() already found (markdown-it/CommonMark fences), offset back onto the raw file;
 // a section runs to just before the next heading, or EOF.
 function sectionsFromBlocks(blocks: Block[], raw: string, body: string): Section[] {
   const rawLines = raw.split('\n');
