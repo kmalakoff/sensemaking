@@ -167,12 +167,31 @@ describe('reconcile (duckdb)', () => {
     assert.deepEqual(coldRow, bindRow);
   });
 
-  // links is the strongest alignment case: `dst` sits between target_base and embed and store()
-  // never writes it, so an appender that ignored physical order would slide `embed` into `dst`.
-  it('a cold build appends links with the unwritten middle column (dst) defaulted, not shifted', async () => {
+  // links is the strongest alignment case: `dst` sits between target_base and embed. An
+  // appender ignoring physical order would slide it into `embed`'s slot instead.
+  it('a cold build appends links with dst resolved in place, not shifted into embed', async () => {
     const baseDir = tmpTree();
     writeNote(baseDir, 'a.md', { body: 'See [[b]] and ![[b]].' });
     writeNote(baseDir, 'b.md', { body: 'target' });
+    const { store } = await duckdbTree(baseDir);
+    const rows = (await (await store.prepare('SELECT src, target, target_base, dst, embed FROM links WHERE src = ? ORDER BY embed')).all('a.md')) as Array<Record<string, unknown>>;
+    assert.deepEqual(rows, [
+      { src: 'a.md', target: 'b', target_base: 'b', dst: 'b.md', embed: 0 },
+      { src: 'a.md', target: 'b', target_base: 'b', dst: 'b.md', embed: 1 },
+    ]);
+    await store.close();
+  });
+
+  // The same alignment risk on the path a cold build no longer takes: an incrementally added
+  // link still appends with dst an unwritten (NULL) column, resolved afterward by afterReconcile.
+  it('an incrementally added link appends with the unwritten middle column (dst) defaulted, not shifted', async () => {
+    const baseDir = tmpTree();
+    writeNote(baseDir, 'seed.md', { body: 'seed' });
+    writeNote(baseDir, 'b.md', { body: 'target' });
+    const first = await duckdbTree(baseDir);
+    await first.store.close();
+
+    writeNote(baseDir, 'a.md', { body: 'See [[b]] and ![[b]].' });
     const { store } = await duckdbTree(baseDir);
     const rows = (await (await store.prepare('SELECT src, target, target_base, dst, embed FROM links WHERE src = ? ORDER BY embed')).all('a.md')) as Array<Record<string, unknown>>;
     assert.deepEqual(rows, [

@@ -4,6 +4,7 @@ import { getColumns } from '../shared.ts';
 import { withTransaction } from '../transaction.ts';
 import type { Capability, Connection, Statement, Store } from '../types.ts';
 import { hasVectorRow, pendingRows } from '../vectors.ts';
+import { checkpointWal } from './connection.ts';
 import { fieldStats } from './fieldStats.ts';
 import { queryLexical } from './lexical.ts';
 import { scanCandidates, scanSimilar, writeVectorBatch } from './vectors.ts';
@@ -68,6 +69,7 @@ export function createStore(db: Database, conn: Connection): Store {
       },
     },
     async close() {
+      await checkpointWal(db);
       await db.close();
     },
   };

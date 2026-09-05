@@ -1,4 +1,5 @@
 import assert from 'node:assert';
+import { statSync } from 'node:fs';
 import { join } from 'node:path';
 import { openConfig, tmpTree, writeNote } from '../../../lib/tree.ts';
 
@@ -111,5 +112,20 @@ describe('derived busy_timeout', () => {
     const timeout = ((await (await store.prepare('PRAGMA busy_timeout')).get()) as { busy_timeout: number }).busy_timeout;
     assert.equal(timeout, 30000);
     await store.close();
+  });
+
+  // The client leaves the WAL for the next opener, so without a checkpoint on close a tree
+  // reconciled repeatedly grows one without bound (PLAN 3.36 I).
+  it('close() checkpoints the WAL away instead of leaving it for the next open', async () => {
+    const baseDir = tmpTree();
+    writeNote(baseDir, 'a.md', { frontmatter: { title: 'A' }, body: 'body' });
+    const wal = join(baseDir, '.sense', 'cache.turso.db-wal');
+
+    for (let i = 0; i < 3; i++) {
+      const { store } = await tursoTree(baseDir);
+      writeNote(baseDir, `n${i}.md`, { frontmatter: { title: `N${i}` }, body: 'body '.repeat(200) });
+      await store.close();
+      assert.equal(statSync(wal, { throwIfNoEntry: false })?.size ?? 0, 0, `WAL left behind after close ${i}`);
+    }
   });
 });

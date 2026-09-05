@@ -123,18 +123,6 @@ async function writeResolved(db: Connection, rows: LinkRow[]): Promise<void> {
   );
 }
 
-// A new or deleted file can change any note's resolution, so re-resolve the whole table.
-// Fallback for cold builds and large deltas -- see afterReconcile's threshold.
-async function resolveAll(db: Connection, files: FileStat[]): Promise<boolean> {
-  const pathSet = new Set(files.map((f) => f.relPath));
-  const byBase = buildByBase(files);
-  const stmt = await db.prepare('SELECT src, target, dst, embed FROM links');
-  const rows = (await stmt.all()) as unknown as LinkRow[];
-  const changed = resolveRows(rows, pathSet, byBase);
-  await writeResolved(db, changed);
-  return changed.length > 0;
-}
-
 // Chunked so a large-but-under-threshold delta never exceeds SQLite's bound-variable limit
 // (SQLITE_MAX_VARIABLE_NUMBER, 32766); harmless headroom on DuckDB, which has no such cap.
 async function selectIn(db: Connection, column: string, keys: string[]): Promise<LinkRow[]> {
@@ -192,10 +180,16 @@ export async function linkEdges(db: Connection): Promise<[string, string][]> {
 // and dstChanged alone misses the reparsed-to-zero-links case. Keyed on delta so state dies with it.
 const removedWithLinks = new WeakMap<ReconcileDelta, boolean>();
 
-// dst is written by resolution, not by store(), so it is absent from the column list and takes the
-// table's default on the append path.
+// Cold build only: whether store() resolved at least one row to a non-null dst, so afterReconcile
+// can report linksChanged without re-reading the table it just wrote.
+const coldResolved = new WeakMap<ReconcileDelta, boolean>();
+
+// dst stays NULL here on an incremental store (resolution runs afterward); a cold build resolves
+// it inline in store() instead, through the *_RESOLVED column list and SQL below.
 const LINK_COLUMNS = ['src', 'target', 'target_base', 'embed'];
 const UPSERT_LINK_SQL = 'INSERT INTO links (src, target, target_base, dst, embed) VALUES (?, ?, ?, NULL, ?) ON CONFLICT(src, target, embed) DO UPDATE SET target_base = excluded.target_base';
+const LINK_COLUMNS_RESOLVED = ['src', 'target', 'target_base', 'dst', 'embed'];
+const UPSERT_LINK_SQL_RESOLVED = 'INSERT INTO links (src, target, target_base, dst, embed) VALUES (?, ?, ?, ?, ?) ON CONFLICT(src, target, embed) DO UPDATE SET target_base = excluded.target_base';
 
 export const links: Feature = {
   name: 'links',
@@ -238,8 +232,19 @@ export const links: Feature = {
       removedWithLinks.set(delta, true);
     }
 
-    // Upsert preserves dst on surviving rows; only new rows start at NULL. A same-note anchor
-    // gets no target_base, so SQL's `IN` excludes it from resolveIncremental's lookup.
+    // Cold build: every path is in `added`, so pathSet/byBase cover the same complete tree
+    // afterReconcile's large branch would otherwise re-derive; resolve dst here instead.
+    const cold = delta.files.length === 0 || delta.added.length === delta.files.length;
+    let resolveNew: ((src: string, target: string) => string | null) | undefined;
+    if (cold) {
+      const pathSet = new Set(delta.files.map((f) => f.relPath));
+      const byBase = buildByBase(delta.files);
+      resolveNew = (src, target) => resolveTarget(src, target, pathSet, byBase);
+    }
+    let resolvedLink = false;
+
+    // Upsert preserves dst on surviving rows; a cold build resolves new rows, else they start NULL.
+    // A same-note anchor gets no target_base, so SQL's `IN` excludes it from resolveIncremental's lookup.
     // Split, unlike the other features: this hook has no remove() pass behind it (see above), so
     // only a path in `added` is guaranteed to have no row yet. The rest genuinely conflict and the
     // upsert is what preserves their `dst`.
@@ -247,13 +252,23 @@ export const links: Feature = {
     const upsertRows: unknown[][] = [];
     for (const [path, targets] of byPath) {
       for (const { target, embed } of targets) {
-        const row = [path, target, target.startsWith('#') ? null : baseKey(cleanTarget(target)), embed ? 1 : 0];
-        if (addedSet.has(path)) appendable.push(row);
-        else upsertRows.push(row);
+        const targetBase = target.startsWith('#') ? null : baseKey(cleanTarget(target));
+        if (!addedSet.has(path)) {
+          upsertRows.push([path, target, targetBase, embed ? 1 : 0]);
+          continue;
+        }
+        if (!resolveNew) {
+          appendable.push([path, target, targetBase, embed ? 1 : 0]);
+          continue;
+        }
+        const dst = resolveNew(path, target);
+        if (dst !== null) resolvedLink = true;
+        appendable.push([path, target, targetBase, dst, embed ? 1 : 0]);
       }
     }
-    await appendRows(db, 'links', LINK_COLUMNS, UPSERT_LINK_SQL, appendable);
+    await appendRows(db, 'links', resolveNew ? LINK_COLUMNS_RESOLVED : LINK_COLUMNS, resolveNew ? UPSERT_LINK_SQL_RESOLVED : UPSERT_LINK_SQL, appendable);
     if (upsertRows.length > 0) await db.runBatch(UPSERT_LINK_SQL, upsertRows);
+    if (cold) coldResolved.set(delta, resolvedLink);
   },
   async afterReconcile(db, delta) {
     // Any deleted rows mean the edge set shrank -- whether the file vanished or was reparsed
@@ -263,8 +278,13 @@ export const links: Feature = {
     // A cold build is the only case a full pass wins. Measured 2026-09-01 on 6,566 notes, resolve
     // time alone: full is flat near 90ms at any churn, incremental 7ms at 10 files and 30ms at 2,000.
     const large = delta.files.length === 0 || delta.added.length === delta.files.length;
+    // store() already resolved dst inline on this cold build (same test), so nothing is left to update.
+    if (large) {
+      delta.linksChanged = (coldResolved.get(delta) ?? false) || removeHadLinks;
+      return;
+    }
 
-    const dstChanged = large ? await resolveAll(db, delta.files) : await resolveIncremental(db, delta);
+    const dstChanged = await resolveIncremental(db, delta);
     delta.linksChanged = dstChanged || removeHadLinks;
   },
 };

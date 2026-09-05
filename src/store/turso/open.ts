@@ -8,7 +8,7 @@ import type { OpenResult } from '../open.ts';
 import { openWithDialect } from '../open.ts';
 import { getMeta, setMeta } from '../shared.ts';
 import type { Connection, OpenDialect } from '../types.ts';
-import { createConnection } from './connection.ts';
+import { checkpointWal, createConnection } from './connection.ts';
 import { TURSO_PACKAGE, tursoApi } from './native.ts';
 import { CONTENT_FTS_DDL, tursoDialect } from './reconcile.ts';
 import { createStore } from './store.ts';
@@ -42,6 +42,7 @@ async function ensureSchema(_handle: Database, conn: Connection, cfg: Config): P
 }
 
 async function close(handle: Database): Promise<void> {
+  await checkpointWal(handle);
   await handle.close();
 }
 

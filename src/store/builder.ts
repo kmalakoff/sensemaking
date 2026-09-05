@@ -87,9 +87,8 @@ async function invalidateFeatureTable(conn: Connection, cfg: Config, baseDir: st
   const { docs } = await reparseFiles(files, [feature], cfg, new Set(), undefined, { pool });
   const docsForFeature = docs.map((d) => ({ path: d.relPath, extracted: d.extracted[feature.name] }));
   const paths = docs.map((d) => d.relPath);
-  // Every path counts as added, not just touched: the table was just dropped, so there is nothing
-  // stale to diff against, and links' own afterReconcile takes its cold-build (resolveAll) path
-  // only when added.length equals files.length.
+  // Every path counts as added, not just touched: nothing stale to diff against. Links resolves
+  // dst inside store() itself when added.length equals files.length (a cold build).
   const delta: ReconcileDelta = { files, reparsed: paths, added: paths, vanished: [] };
   await withTransaction(
     conn,

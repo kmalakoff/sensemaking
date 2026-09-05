@@ -2,6 +2,31 @@
 
 All notable changes to sensemaking are documented here.
 
+## [0.22.2] - 2026-09-04
+
+### Changed
+
+- turso cold builds are faster. Bulk writes now reuse one prepared statement per batch instead of
+  `db.batch()`, which re-prepared and finalized every statement it was given. On the 6,566-note hub
+  corpus turso's bulk-write total fell from 1,666 ms to 783 ms and a cold build from 3,485 ms to
+  2,682 ms. sqlite and duckdb are unchanged.
+- Cold builds resolve link destinations while storing them, instead of writing every row with a
+  NULL `dst` and updating the whole table afterward. On the 6,566-note hub corpus this removes the
+  `feature:links:after` stage almost entirely on all three stores.
+- The store comparison in the README and the setup skill now says which engine indexes fastest:
+  sqlite builds a cold index fastest and turso slowest, and turso's advantages (concurrent writers,
+  non-blocking I/O, encryption) are ones a one-shot command does not use.
+
+### Fixed
+
+- turso leaked a prepared statement per bulk write. `db.batch()` finalized the statements it made,
+  the code that replaced it did not, and a connection held open across many writes grew by about
+  6 KB each. A `sense watch` session was never exposed, since it closes its store every cycle.
+- turso left its write-ahead log behind on close, so a tree reconciled over and over grew one
+  without bound: 20 rebuild cycles over the 6,566-note hub corpus grew the cache directory from
+  27 MB to 36 MB, almost all of it WAL, where sqlite's grew by 1.7 MB and left none. Closing now
+  checkpoints it away, which costs 0.1 ms after a cold build and 1.3 ms after five reparse cycles.
+
 ## [0.22.1] - 2026-09-04
 
 ### Changed
