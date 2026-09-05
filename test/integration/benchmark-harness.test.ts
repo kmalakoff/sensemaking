@@ -449,4 +449,39 @@ describe('priorStepLookup: measure_version, the absent-stamp trap and a real mis
     );
     assert.deepEqual((report.prior_harness_mismatch as Record<string, unknown>).stress, { prior: 'm1', current: MEASURE_VERSION });
   });
+
+  it('an artifact with no measure_version stamp is a prior mismatch at the current version (PLAN.md 3.42: the m2->m3 bump made this the permanent case for an unstamped step)', () => {
+    const priorReports = [{ name: 'old.json', report: { steps: { compare: metricRow(100) } } }];
+    const hit = priorStepLookup(priorReports, MEASURE_VERSION)('compare');
+    assert.deepEqual(hit, { step: null, from: 'old.json', mismatch: { prior: 'm2', current: MEASURE_VERSION } });
+  });
+
+  it('an artifact stamped with the current measure_version is not a mismatch', () => {
+    const priorReports = [{ name: 'old.json', report: { steps: { compare: { ...metricRow(100), measure_version: MEASURE_VERSION } } } }];
+    const hit = priorStepLookup(priorReports, MEASURE_VERSION)('compare');
+    assert.deepEqual(hit, { step: { ...metricRow(100), measure_version: MEASURE_VERSION }, from: 'old.json' });
+  });
+});
+
+describe('every step compared against a prior sitting stamps measure_version (PLAN.md 3.42)', () => {
+  // Source check, not a run: actually executing every out:true step (13k/26k/stress trees, both
+  // eval corpora, every store battery) takes hours. This reads each step's own script instead.
+  it('every out:true step in the baseline/scale/quality stages has measure_version in its runner script', async () => {
+    const { buildStages } = await import('../../benchmark/lib/stages.mjs');
+    // report.mjs's classifySitting only ever calls priorStep() for steps in these three stages
+    // (compare/battery-*-hub, scale-13k/26k/stress/battery-*-*, eval-nfcorpus/eval-fever) -- see
+    // benchmark/report.mjs. static/functional's out:true steps (store-dump, oracle) are same-sitting
+    // pass/fail checks with no prior-comparison concept, so measure_version doesn't apply to them.
+    const comparedStageIds = new Set(['baseline', 'scale', 'quality']);
+    const steps = buildStages()
+      .filter((stage: { id: string }) => comparedStageIds.has(stage.id))
+      .flatMap((stage: { steps: Array<{ id: string; argv: string[]; out?: boolean }> }) => stage.steps)
+      .filter((step: { out?: boolean }) => step.out);
+    assert.ok(steps.length > 0, 'sanity: the compared stages still declare out:true steps');
+    for (const step of steps) {
+      const script = step.argv[1]; // argv[0] is 'node'
+      const src = readFileSync(join(packageRoot, script), 'utf8');
+      assert.ok(src.includes('measure_version'), `${step.id} (${script}) writes an artifact a prior sitting is compared against but never stamps measure_version`);
+    }
+  });
 });

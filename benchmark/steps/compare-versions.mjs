@@ -8,6 +8,7 @@ import { parseArgs } from 'node:util';
 import { safeRmSync } from 'fs-remove-compat';
 import { cached } from '../lib/cache.mjs';
 import { corpusPath, writeTreeConfig } from '../lib/corpus.mjs';
+import { MEASURE_VERSION } from '../lib/measure.mjs';
 import { writeOut } from '../lib/out.mjs';
 import { renderRowsTable } from '../lib/render.mjs';
 import { ROWS, TIMING_KINDS } from '../lib/rows.mjs';
@@ -72,7 +73,7 @@ for (const version of versions) {
   process.stderr.write(`benchmarking ${version}...\n`);
   const out = spawnSync(process.execPath, [join(benchDir, 'measure-tree.mjs'), rootFor(version), treeCopyFor(version), ...(store ? ['--store', store] : [])], { encoding: 'utf8', maxBuffer: 16e6 });
   if (out.status !== 0) {
-    writeOut(outArg, { corpus: treeDir, store: store ?? 'sqlite', versions, reversed: reverse, error: `run.mjs failed for ${version}: ${out.stderr}` });
+    writeOut(outArg, { corpus: treeDir, store: store ?? 'sqlite', versions, reversed: reverse, measure_version: MEASURE_VERSION, error: `run.mjs failed for ${version}: ${out.stderr}` });
     console.error(`run.mjs failed for ${version}:\n${out.stderr}`);
     process.exit(1);
   }
@@ -85,7 +86,7 @@ for (const version of versions) {
 const embedCapable = versions.filter((v) => results.get(v).embed_supported);
 const embedBroken = embedCapable.filter((v) => results.get(v).cold_embed_ms === null);
 if (embedBroken.length > 0) {
-  writeOut(outArg, { corpus: treeDir, store: store ?? 'sqlite', versions, reversed: reverse, error: `embed column broken for ${embedBroken.join(', ')}`, results: Object.fromEntries(results) });
+  writeOut(outArg, { corpus: treeDir, store: store ?? 'sqlite', versions, reversed: reverse, measure_version: MEASURE_VERSION, error: `embed column broken for ${embedBroken.join(', ')}`, results: Object.fromEntries(results) });
   console.error(`embed column broken for ${embedBroken.join(', ')}: ${embedBroken.map((v) => `${v}: ${results.get(v).cold_embed_error ?? 'no error captured'}`).join('; ')}`);
   process.exit(1);
 }
@@ -101,6 +102,6 @@ const printable = ROWS.filter((row) => TIMING_KINDS.includes(row.kind));
 const resultsByColumn = Object.fromEntries(versions.map((v) => [v, results.get(v)]));
 console.log(renderRowsTable(printable, versions, resultsByColumn));
 
-writeOut(outArg, { corpus: treeDir, store: store ?? 'sqlite', versions, reversed: reverse, results: Object.fromEntries(results) });
+writeOut(outArg, { corpus: treeDir, store: store ?? 'sqlite', versions, reversed: reverse, measure_version: MEASURE_VERSION, results: Object.fromEntries(results) });
 
 safeRmSync(work, { recursive: true, force: true });

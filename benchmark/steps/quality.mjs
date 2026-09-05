@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { corpusLabels, corpusPath } from '../lib/corpus.mjs';
 import { orBag, readLabels } from '../lib/labels.mjs';
+import { MEASURE_VERSION } from '../lib/measure.mjs';
 import { metrics } from '../lib/metrics.mjs';
 import { writeOut } from '../lib/out.mjs';
 import { mdTable } from '../lib/render.mjs';
@@ -94,7 +95,7 @@ const fused = results.find((r) => r.name === 'fused');
 const fusedEmbedConfigured = results.find((r) => r.name === 'fused-embed-configured');
 const divergent = qids.filter((qid) => fused.perQuery.get(qid)?.rows !== fusedEmbedConfigured.perQuery.get(qid)?.rows);
 if (divergent.length > 0) {
-  writeOut(outArg, { corpus, split: SPLIT, queries: qids.length, k: K, store: STORE ?? 'sqlite', error: `NO-SILENT-CHANGE VIOLATION: ${divergent.length}/${qids.length} queries diverged from fused (first: ${divergent[0]})` });
+  writeOut(outArg, { corpus, split: SPLIT, queries: qids.length, k: K, store: STORE ?? 'sqlite', measure_version: MEASURE_VERSION, error: `NO-SILENT-CHANGE VIOLATION: ${divergent.length}/${qids.length} queries diverged from fused (first: ${divergent[0]})` });
   console.error(`NO-SILENT-CHANGE VIOLATION: semantic:false didn't fully disable vectors on the embed-configured corpus -- ${divergent.length}/${qids.length} queries diverged from fused (first: ${divergent[0]})`);
   process.exit(1);
 }
@@ -141,6 +142,7 @@ writeOut(outArg, {
   queries: qids.length,
   k: K,
   store: STORE ?? 'sqlite',
+  measure_version: MEASURE_VERSION,
   no_silent_change: true,
   variants: Object.fromEntries(shown.map((r) => [r.name, { ndcg: mean(r, 'ndcg'), rr: mean(r, 'rr'), hit: mean(r, 'hit'), ms_per_query: r.ms, errors: r.errors }])),
   paired: pairedOut,
