@@ -112,11 +112,5 @@
   },
   "engines": {
     "node": ">=22.20"
-  },
-  "allowScripts": {
-    "node-semvers": true,
-    "node-filename-to-dist-paths": true,
-    "node-version-use": true,
-    "thread-sleep-compat": true
   }
 }

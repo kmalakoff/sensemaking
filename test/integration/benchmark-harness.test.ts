@@ -26,14 +26,29 @@ describe('classify: band edges', () => {
     assert.equal(classify(WALL_ROW, 100, 80).verdict, 'flat');
   });
 
-  it('one unit beyond the band, either sign, is moved with no reversed run', () => {
+  it('one unit beyond the band with no reversed run: moved slower, faster faster', () => {
     assert.equal(classify(WALL_ROW, 100, 120.01).verdict, 'moved');
-    assert.equal(classify(WALL_ROW, 100, 79.99).verdict, 'moved');
+    assert.equal(classify(WALL_ROW, 100, 79.99).verdict, 'faster');
   });
 
   it('no prior recorded is no-prior, not a block', () => {
     const c = classify(WALL_ROW, null, 100);
     assert.equal(c.verdict, 'no-prior');
+  });
+});
+
+describe('classify: faster verdict', () => {
+  it('beyond band, faster, is its own verdict and never blocks', () => {
+    const c = classify(WALL_ROW, 1000, 600);
+    assert.equal(c.verdict, 'faster');
+    const { verdict, reasons } = aggregateVerdict([{ id: 'row', context: 'compare', ...c }], []);
+    assert.equal(verdict, 'PASS');
+    assert.deepEqual(reasons, []);
+  });
+
+  it('beyond band, slower, stays moved', () => {
+    const c = classify(WALL_ROW, 1000, 1400);
+    assert.equal(c.verdict, 'moved');
   });
 });
 
@@ -331,6 +346,24 @@ describe('prior resolution: per step, never per report', () => {
       'every stress row must find its prior in the older report, across the docs-only sitting between'
     );
     assert.equal((report.prior_from as Record<string, string>).stress, '2099-01-01-9.9.8-release-gate.json');
+  });
+
+  it('two releases on one day: the prior is the newest release at or below the baseline, never a later one', async () => {
+    const reportsDir = scratchDir('prior-same-day-reports');
+    const sitting = scratchDir('prior-same-day-sitting');
+    const stamp = (steps: Record<string, unknown>) => Object.fromEntries(Object.entries(steps).map(([k, v]) => [k, { ...(v as object), measure_version: MEASURE_VERSION }]));
+    const record = (version: string, value: number) => writeFileSync(join(reportsDir, `2099-01-01-${version}-release-gate.json`), JSON.stringify({ date: '2099-01-01', verdict: 'PASS', generated: true, classifications: [], accepted: {}, steps: stamp({ stress: metricRow(value) }) }));
+    record('9.9.7', 90);
+    record('9.9.8', 100);
+    record('9.9.10', 200); // a later release than the baseline: a re-render after this sitting's own release must not read it
+    writeFileSync(join(sitting, 'stress.json'), JSON.stringify(metricRow(101)));
+    writeFileSync(join(sitting, 'sitting.json'), JSON.stringify({ date: '2099-01-01', baseline_version: '9.9.8', last_tag: 'v9.9.8', machine: { cpu_model: 'Fixture' }, node: 'v99', changed_paths: ['src/x.ts'], owed: { baseline: ['src/x.ts'] }, steps: {}, failed_stage_reasons: [] }));
+
+    const { buildReport } = await import('../../benchmark/report.mjs');
+    const report = buildReport(sitting, { reportsDir });
+    assert.equal((report.prior_from as Record<string, string>).stress, '2099-01-01-9.9.8-release-gate.json', 'same-day priors resolve by version, and 9.9.10 is not a prior of a 9.9.8 baseline');
+    const stress = report.classifications.filter((c: { context: string }) => c.context === 'stress');
+    assert.equal(stress.filter((c: { verdict: string }) => c.verdict === 'no-prior').length, 0, 'every stress row found its prior on the same day');
   });
 
   it('a step no earlier report ever ran is a real no-prior', async () => {

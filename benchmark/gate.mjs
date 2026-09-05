@@ -354,7 +354,8 @@ if (reportJson.verdict === 'BLOCK') for (const reason of reportJson.verdict_reas
 if (unmetSteps.length > 0) console.log(`owed and unmet (not a block): ${unmetSteps.map((s) => s.id).join(', ')}`);
 console.log(reportJson.verdict === 'PASS' ? 'numbers of record: repointed once report.mjs --release names this sitting' : 'numbers of record: left as they were (BLOCK)');
 const noPrior = reportJson.classifications.filter((c) => c.verdict === 'no-prior').length;
-console.log(`compared: ${reportJson.classifications.length - noPrior} row(s) against a prior, ${noPrior} with no prior (an uncompared row is not a pass)`);
+const faster = reportJson.classifications.filter((c) => c.verdict === 'faster').length;
+console.log(`compared: ${reportJson.classifications.length - noPrior} row(s) against a prior, ${noPrior} with no prior (an uncompared row is not a pass), ${faster} faster than band (read the stage split before believing a gain)`);
 console.log(`sitting: ${sittingDir}`);
 console.log(`report: ${join(sittingDir, `${SITTING_REPORT}.md`)}`);
 console.log(`default store for this pipeline: ${DEFAULT_STORE}; offered: ${OFFERED.join(', ')}`);

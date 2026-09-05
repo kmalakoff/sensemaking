@@ -10,16 +10,25 @@ const WALL_INPROC_TOKENS = ROWS.filter((row) => TIMING_KINDS.includes(row.kind))
 const QUALITY_ROWS = ROWS.filter((row) => row.kind === 'quality');
 
 // A record: <date>-<version>-release-gate.json. An unreleased sitting's report never lives here.
-export const REPORT_JSON_RE = /^(\d{4}-\d{2}-\d{2})-\d+\.\d+\.\d+-release-gate\.json$/;
+export const REPORT_JSON_RE = /^(\d{4}-\d{2}-\d{2})-(\d+\.\d+\.\d+)-release-gate\.json$/;
 
-// Every earlier release-gate JSON, newest first. Plural because the prior resolves per step: one
-// report for the whole run lets a sitting that skipped a step blind the next sitting that runs it.
-export function findPriorReports(reportsDir, excludeDate) {
-  if (!existsSync(reportsDir)) return [];
+const compareVersions = (a, b) => {
+  const x = a.split('.').map(Number);
+  const y = b.split('.').map(Number);
+  return x[0] - y[0] || x[1] - y[1] || x[2] - y[2];
+};
+
+// Every record for a release at or before the baseline this sitting measured against, newest
+// release first. Ordered by version, not date, so several releases on one day still find each other.
+export function findPriorReports(reportsDir, baselineVersion) {
+  if (!existsSync(reportsDir) || !baselineVersion) return [];
   return readdirSync(reportsDir)
-    .map((name) => ({ name, date: REPORT_JSON_RE.exec(name)?.[1] }))
-    .filter((c) => c.date && c.date < excludeDate)
-    .sort((a, b) => (a.date < b.date ? 1 : -1))
+    .map((name) => {
+      const m = REPORT_JSON_RE.exec(name);
+      return m ? { name, date: m[1], version: m[2] } : null;
+    })
+    .filter((c) => c && compareVersions(c.version, baselineVersion) <= 0)
+    .sort((a, b) => compareVersions(b.version, a.version) || (a.date < b.date ? 1 : -1))
     .map((c) => ({ ...c, report: JSON.parse(readFileSync(join(reportsDir, c.name), 'utf8')) }));
 }
 
@@ -39,9 +48,9 @@ export function priorStepLookup(priorReports, currentVersion) {
   };
 }
 
-// Newest earlier report, for the fields that are genuinely per-report rather than per-step.
-export function findPriorReport(reportsDir, excludeDate) {
-  return findPriorReports(reportsDir, excludeDate)[0]?.report ?? null;
+// Newest prior record, for the fields that are genuinely per-report rather than per-step.
+export function findPriorReport(reportsDir, baselineVersion) {
+  return findPriorReports(reportsDir, baselineVersion)[0]?.report ?? null;
 }
 
 // compare.mjs's JSON: baseline is prior, local is current, gated on row.band; reversedJson confirms

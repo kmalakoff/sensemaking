@@ -198,6 +198,13 @@ export function renderMarkdown(report) {
     for (const c of noise.filter((c) => c.verdict === 'noise')) lines.push(`- ${c.reason}`);
     lines.push('');
   }
+  const faster = report.classifications.filter((c) => c.verdict === 'faster');
+  if (faster.length > 0) {
+    lines.push('#### Faster than band, never blocking');
+    lines.push('');
+    for (const c of faster) lines.push(`- ${c.reason}`);
+    lines.push('');
+  }
   if (Object.keys(report.accepted).length > 0) {
     lines.push('#### Owner decisions');
     lines.push('');
@@ -275,7 +282,7 @@ export function buildReport(sittingDir, { reportsDir = REPORTS_DIR, releaseVersi
   const existing = existingSittingReport(sittingDir);
   const accepted = existing?.accepted ?? {};
 
-  const priorReports = findPriorReports(reportsDir, sitting.date);
+  const priorReports = findPriorReports(reportsDir, sitting.baseline_version);
   const { classifications, steps, priorFrom, priorHarnessMismatch } = classifySitting(sittingDir, sitting, priorStepLookup(priorReports, MEASURE_VERSION));
   const { verdict, reasons } = aggregateVerdict(classifications, [...(sitting.failed_stage_reasons ?? []), ...interruptedSteps(sittingDir, sitting)], accepted);
 
