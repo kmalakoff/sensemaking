@@ -9,9 +9,7 @@ export function mdTable(headers, rows) {
 }
 
 // A wall/inproc/total cell: a number in ms, a bold FAILED string, or an em dash for a
-// version/store with no command for this row. Every catalog row of these kinds is measured in
-// ms (bulk_change_ms and bulk_watch_ms included, despite 'total' also describing a
-// possible future battery-elapsed-seconds row); pass unit explicitly for anything else.
+// version/store with no command for this row; pass unit explicitly for anything else.
 export function msCell(value, unit = 'ms') {
   if (value === null || value === undefined) return '—';
   if (typeof value === 'string') return `**${value}**`;

@@ -4,7 +4,7 @@
 // so re-running this against the same sitting is idempotent, byte for byte. Never re-measures.
 //
 // usage: node benchmark/report.mjs [--sitting <dir>] [--release <version>]
-//        node benchmark/report.mjs --accept <row id> --reason "<owner's words>"
+//        node benchmark/report.mjs --accept <row id | stage reason> --reason "<owner's words>"
 //
 // Releasing a PASS (or a BLOCK whose every blocking row carries an accepted override) repoints
 // BENCHMARKING.md's numbers-of-record table at the record; a BLOCK, or an unreleased sitting,
@@ -21,7 +21,7 @@ import { MEASURE_VERSION } from './lib/measure.mjs';
 import { mdTable } from './lib/render.mjs';
 import { ROWS } from './lib/rows.mjs';
 import { DEFAULT_STORE, OFFERED, ROOT } from './lib/stages.mjs';
-import { aggregateVerdict, classifyCompare, classifyCrossGroup, classifyEval, findPriorReports, priorStepLookup } from './lib/verdict.mjs';
+import { aggregateVerdict, classifyCompare, classifyCrossGroup, classifyEval, compareVersions, findPriorReports, priorStepLookup } from './lib/verdict.mjs';
 
 export const REPORTS_DIR = join(ROOT, 'benchmark', 'reports');
 export const SITTINGS_DIR = join(ROOT, '.tmp', 'sittings');
@@ -37,6 +37,42 @@ export function reportBase(date, version) {
 }
 
 const readJson = (p) => (existsSync(p) ? JSON.parse(readFileSync(p, 'utf8')) : null);
+
+// The stage-failure contract, shared with gate.mjs: a stage failure is named `<step id>: <status>`
+// wherever it appears, in sitting.failed_stage_reasons, in the report's stage_reasons, and as the
+// argument --accept takes.
+const stageReason = (stepId, status) => `${stepId}: ${status}`;
+
+// blocked is the quiet-machine wait giving up before the stage ever ran.
+const FAILED_STATUSES = new Set(['failed', 'timeout', 'blocked']);
+
+// Recomputed from the recorded steps after every run, so a resume that fixes a failure drops its
+// reason and a resume that does not keeps it. A failure never leaves the report by being skipped.
+export function failedStageReasons(steps) {
+  return Object.values(steps)
+    .filter((s) => FAILED_STATUSES.has(s.status))
+    .map((s) => stageReason(s.id, s.status));
+}
+
+// What the owner has accepted on this sitting's own report, row ids and stage reasons together.
+// Acceptance belongs to the sitting, so a changed tree, which is a new sitting, starts with none.
+export function acceptedIds(sittingDir) {
+  return new Set(Object.keys(readJson(join(sittingDir, `${SITTING_REPORT}.json`))?.accepted ?? {}));
+}
+
+// Whether a step an earlier run recorded is done for this resume. Done is the recorded status,
+// never the existence of the step's out JSON: a failed step writes one too, and reading that as
+// done drops the failure from the report. A failure stays failed and is re-run unless the owner
+// has accepted its reason, which is the decision to keep it.
+export function doneOnResume(stepId, recorded, accepted = new Set()) {
+  if (!recorded?.status) return false;
+  if (recorded.status === 'ok') return true;
+  return accepted.has(stageReason(stepId, recorded.status));
+}
+
+// The stage failures still blocking: an accepted one leaves the verdict the way an accepted row
+// does, and stays in the report beside the owner's words.
+const blockingStageReasons = (stageReasons, accepted) => stageReasons.filter((r) => !accepted[r]?.reason);
 
 function newestSittingDir(sittingsDir = SITTINGS_DIR) {
   const dirs = existsSync(sittingsDir)
@@ -208,7 +244,8 @@ export function renderMarkdown(report) {
   if (Object.keys(report.accepted).length > 0) {
     lines.push('#### Owner decisions');
     lines.push('');
-    for (const [id, { reason, date }] of Object.entries(report.accepted)) lines.push(`- ${id}: owner decision, ${date}: ${reason}`);
+    const stageReasons = new Set(report.stage_reasons ?? []);
+    for (const [id, { reason, date }] of Object.entries(report.accepted)) lines.push(`- ${stageReasons.has(id) ? 'stage ' : ''}${id}: owner decision, ${date}: ${reason}`);
     lines.push('');
   }
   if (report.changelog_entry) {
@@ -276,6 +313,14 @@ export function interruptedSteps(sittingDir, sitting) {
     .map((id) => `${id}: started, never finished (sitting interrupted); run the gate again to resume it`);
 }
 
+// A step an earlier stage failure left unreached (gate.mjs's not-run marker): unmeasured, the
+// same kind of reason as interruptedSteps, never something a resume can silently pass.
+export function unmeasuredSteps(sitting) {
+  return Object.values(sitting.steps ?? {})
+    .filter((s) => s.status === 'not-run')
+    .map((s) => `${s.id}: not run (the gate stopped at an earlier failure); run the gate again to resume it`);
+}
+
 /** @param {string} sittingDir @param {{ reportsDir?: string, releaseVersionOverride?: string }} [opts] */
 export function buildReport(sittingDir, { reportsDir = REPORTS_DIR, releaseVersionOverride } = {}) {
   const sitting = JSON.parse(readFileSync(join(sittingDir, 'sitting.json'), 'utf8'));
@@ -284,7 +329,13 @@ export function buildReport(sittingDir, { reportsDir = REPORTS_DIR, releaseVersi
 
   const priorReports = findPriorReports(reportsDir, sitting.baseline_version);
   const { classifications, steps, priorFrom, priorHarnessMismatch } = classifySitting(sittingDir, sitting, priorStepLookup(priorReports, MEASURE_VERSION));
-  const { verdict, reasons } = aggregateVerdict(classifications, [...(sitting.failed_stage_reasons ?? []), ...interruptedSteps(sittingDir, sitting)], accepted);
+  // stageReasons is the only thing --accept may ever name (a stage failure the owner can judge
+  // and choose to ship past). unmeasured is a different kind of reason -- work the gate never
+  // reached at all -- and blocks unconditionally: it is never in stage_reasons, so acceptRow can
+  // never find it as an id, and no override can turn "this was not measured" into a pass.
+  const stageReasons = sitting.failed_stage_reasons ?? [];
+  const unmeasured = [...interruptedSteps(sittingDir, sitting), ...unmeasuredSteps(sitting)];
+  const { verdict, reasons } = aggregateVerdict(classifications, [...blockingStageReasons(stageReasons, accepted), ...unmeasured], accepted);
 
   const record = recordFields(classifications);
 
@@ -309,6 +360,14 @@ export function buildReport(sittingDir, { reportsDir = REPORTS_DIR, releaseVersi
     embed_model: Object.values(steps).some((s) => s?.variants?.semantic) ? 'minishlab/potion-retrieval-32M' : null,
     verdict,
     verdict_reasons: reasons,
+    // Every stage failure this sitting recorded, accepted or not, so a failure stays in the record
+    // across a resume and --accept has something to name.
+    stage_reasons: stageReasons,
+    // Work the gate never reached at all (interrupted or left not-run by an earlier failure).
+    // Persisted separately from stage_reasons, never merged into it: acceptRow re-reads this
+    // report rather than recomputing from the sitting, so without its own field these reasons
+    // would vanish from the verdict the moment any row or stage got accepted.
+    unmeasured_reasons: unmeasured,
     // Provenance is the last tag plus the paths the gate read, never a commit hash: a rebase or
     // squash orphans a hash, and it orphaned the one the 0.20.0 report cited.
     last_tag: sitting.last_tag ?? null,
@@ -381,8 +440,15 @@ export function parseNumbersTable(md, start, end) {
   return rows;
 }
 
+// The release version a numbers-of-record row's link names, so a historic rerun (--release
+// <old version>) can tell whether it is older than the row it would overwrite.
+const REPORT_LINK_VERSION_RE = /(\d+\.\d+\.\d+)-release-gate\.md\)/;
+const versionOfRow = (row) => REPORT_LINK_VERSION_RE.exec(row?.[1] ?? '')?.[1] ?? null;
+
 // Regenerates the numbers-of-record table: a measured metric is added or repointed, an unmeasured
 // one keeps its row, nothing is deleted. Never called for a BLOCK, whose numbers are not official.
+// A row already pointing at a newer release than this report's is left alone, per row (rows
+// already point at different reports), so a historic rerun never moves the numbers backwards.
 export function updateNumbersOfRecord(report, benchmarkingMdPath = BENCHMARKING_MD) {
   if (!existsSync(benchmarkingMdPath)) return;
   const md = readFileSync(benchmarkingMdPath, 'utf8');
@@ -393,6 +459,8 @@ export function updateNumbersOfRecord(report, benchmarkingMdPath = BENCHMARKING_
   const link = `[${report.date} release gate](benchmark/reports/${reportBase(report.date, report.release_version)}.md)`;
   for (const [key, value] of Object.entries(report.record)) {
     if (value === null || value === undefined) continue;
+    const existingVersion = versionOfRow(rows.get(key));
+    if (existingVersion && compareVersions(report.release_version, existingVersion) < 0) continue;
     rows.set(key, [String(value), link]);
   }
   const table = mdTable(
@@ -402,24 +470,26 @@ export function updateNumbersOfRecord(report, benchmarkingMdPath = BENCHMARKING_
   writeFileSync(benchmarkingMdPath, `${md.slice(0, start)}${NUMBERS_START}\n\n${table}\n\n${md.slice(end)}`);
 }
 
-export function acceptRow(rowId, reason, { sittingDir = newestSittingDir(), reportsDir = REPORTS_DIR, benchmarkingMdPath = BENCHMARKING_MD } = {}) {
+// id is a classification row id, or a stage reason exactly as the report's stage_reasons carries
+// it (`<step id>: <status>`). Both record the same way, so the published record shows the decision.
+export function acceptRow(id, reason, { sittingDir = newestSittingDir(), reportsDir = REPORTS_DIR, benchmarkingMdPath = BENCHMARKING_MD } = {}) {
   // This is the only path that turns a BLOCK into a PASS, so a blank reason is refused here
   // rather than only at the CLI: an override with nothing written in it records no decision.
   if (typeof reason !== 'string' || reason.trim() === '') {
-    throw new Error(`accepting "${rowId}" needs a reason in the owner's own words; an override with no reason records no decision`);
+    throw new Error(`accepting "${id}" needs a reason in the owner's own words; an override with no reason records no decision`);
   }
   const jsonPath = join(sittingDir, `${SITTING_REPORT}.json`);
-  if (!existsSync(jsonPath)) throw new Error(`no report under ${sittingDir} to accept a row against; run node benchmark/gate.mjs first`);
+  if (!existsSync(jsonPath)) throw new Error(`no report under ${sittingDir} to accept against; run node benchmark/gate.mjs first`);
   const report = JSON.parse(readFileSync(jsonPath, 'utf8'));
-  const match = report.classifications.find((c) => c.id === rowId);
-  if (!match) {
-    throw new Error(`"${rowId}" is not a row in ${jsonPath}. Known row ids:\n${report.classifications.map((c) => `  ${c.id}`).join('\n')}`);
+  const stageReasons = report.stage_reasons ?? [];
+  const unmeasured = report.unmeasured_reasons ?? [];
+  if (!report.classifications.some((c) => c.id === id) && !stageReasons.includes(id)) {
+    throw new Error(`"${id}" is neither a row nor a stage reason in ${jsonPath}. Known stage reasons:\n${stageReasons.map((r) => `  ${r}`).join('\n') || '  (none)'}\nKnown row ids:\n${report.classifications.map((c) => `  ${c.id}`).join('\n')}`);
   }
-  report.accepted[rowId] = { reason, date: new Date().toISOString().slice(0, 10) };
-  // A stage failure never has a row id and so can never be overridden by --accept; carry the
-  // original report's own stage-only reasons forward (its non-row reasons).
-  const stageReasons = report.verdict_reasons.filter((r) => !report.classifications.some((c) => c.reason === r));
-  const { verdict, reasons } = aggregateVerdict(report.classifications, stageReasons, report.accepted);
+  report.accepted[id] = { reason, date: new Date().toISOString().slice(0, 10) };
+  // unmeasured never runs through blockingStageReasons: it is not filtered by accepted, and id
+  // can never equal one of its entries (the check above already refused any id not in stageReasons).
+  const { verdict, reasons } = aggregateVerdict(report.classifications, [...blockingStageReasons(stageReasons, report.accepted), ...unmeasured], report.accepted);
   report.verdict = verdict;
   report.verdict_reasons = reasons;
   persist(report, { sittingDir, reportsDir, benchmarkingMdPath });
@@ -428,17 +498,17 @@ export function acceptRow(rowId, reason, { sittingDir = newestSittingDir(), repo
 
 async function main() {
   const {
-    values: { accept: rowId, reason, sitting: sittingArg, release: releaseVersionOverride },
+    values: { accept: acceptId, reason, sitting: sittingArg, release: releaseVersionOverride },
   } = parseArgs({
     options: { accept: { type: 'string' }, reason: { type: 'string' }, sitting: { type: 'string' }, release: { type: 'string' } },
   });
-  if (rowId !== undefined) {
-    if (!rowId || !reason) {
-      console.error('usage: node benchmark/report.mjs --accept <row id> --reason "<owner words>"');
+  if (acceptId !== undefined) {
+    if (!acceptId || !reason) {
+      console.error('usage: node benchmark/report.mjs --accept <row id | stage reason> --reason "<owner words>"');
       process.exit(2);
     }
-    const report = acceptRow(rowId, reason);
-    console.log(`accepted ${rowId}: ${reason}`);
+    const report = acceptRow(acceptId, reason);
+    console.log(`accepted ${acceptId}: ${reason}`);
     console.log(`verdict now: ${report.verdict}`);
     return;
   }

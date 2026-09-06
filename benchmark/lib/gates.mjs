@@ -42,7 +42,15 @@ function pathOwesRow(path, prefixes) {
 
 // gate name -> the changed paths that triggered it, for --dry-run's explanation. A gate absent
 // from the diff owes nothing and is not a key.
-export function owedReasons(paths) {
+//
+// A checked-out tag has no diff (`git diff --name-only <tag>` at that tag is empty), so an empty
+// paths list means this tree is the release itself, not that nothing changed: every gate is owed,
+// including test-engines, live-suite, oracle and store-dump, which the diff map never names on
+// their own. oracle already reports owed-unmet without Obsidian; a live-suite or test-engines
+// failure on a machine lacking the prerequisite is an ordinary stage failure the owner accepts
+// with --accept (3.47) and resumes past -- that is the mechanism, no special case here.
+export function owedReasons(paths, lastTag) {
+  if (paths.length === 0) return new Map(GATE_NAMES.map((gate) => [gate, [`no diff since ${lastTag}: this tree is the release`]]));
   const reasons = new Map();
   for (const { gate, when } of DIFF_MAP) {
     const matched = paths.filter((p) => pathOwesRow(p, when));
@@ -51,6 +59,6 @@ export function owedReasons(paths) {
   return reasons;
 }
 
-export function owedGates(paths) {
-  return new Set(owedReasons(paths).keys());
+export function owedGates(paths, lastTag) {
+  return new Set(owedReasons(paths, lastTag).keys());
 }

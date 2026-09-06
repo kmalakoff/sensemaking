@@ -11,6 +11,17 @@ import { join } from 'node:path';
 //       row per note and `map` prints one more line: every token row shifts against an m2 prior
 export const MEASURE_VERSION = 'm3';
 
+// Every verb `sense --help` advertises, read off its own output rather than hard-coded, so a
+// verb the CLI under test genuinely lacks reads as unmeasured rather than as a command that
+// broke. `sense <name>` (the saved-query placeholder) and `sense --list`/`--version` are not verbs.
+export function verbsFrom(helpText) {
+  const verbs = new Set();
+  for (const m of helpText.matchAll(/^\s*(?:usage:\s*)?\S+\s+(\S+)/gm)) {
+    if (/^[a-z][\w-]*$/i.test(m[1])) verbs.add(m[1]);
+  }
+  return verbs;
+}
+
 // Sorted relPaths of the .md files a crawl would see (dotfiles and node_modules skipped).
 export function walkMd(tree) {
   const out = [];

@@ -12,7 +12,7 @@ const QUALITY_ROWS = ROWS.filter((row) => row.kind === 'quality');
 // A record: <date>-<version>-release-gate.json. An unreleased sitting's report never lives here.
 export const REPORT_JSON_RE = /^(\d{4}-\d{2}-\d{2})-(\d+\.\d+\.\d+)-release-gate\.json$/;
 
-const compareVersions = (a, b) => {
+export const compareVersions = (a, b) => {
   const x = a.split('.').map(Number);
   const y = b.split('.').map(Number);
   return x[0] - y[0] || x[1] - y[1] || x[2] - y[2];

@@ -2,7 +2,9 @@
 // Runs the staged pipeline benchmark/lib/stages.mjs defines, gated by what
 // benchmark/lib/gates.mjs says the diff since the last tag owes. A stage that fails stops the
 // run. --dry-run prints what the diff owes and exits without measuring. A run resumes by default:
-// the sitting is keyed on the tree it measures, so delete that directory for a clean run.
+// the sitting is keyed on the tree it measures, so delete that directory for a clean run. A resume
+// skips a step recorded ok, and re-runs a failed one unless the owner accepted its reason
+// (report.mjs --accept), so a stage failure never leaves the report by being resumed past.
 //
 // One store alone, or one tree, is `node benchmark/steps/measure-tree.mjs . <corpus> --store <name>`:
 // the steps run standalone, so the gate needs no flag for it.
@@ -21,12 +23,13 @@ import { owedReasons } from './lib/gates.mjs';
 import { describeLoad, topProcesses } from './lib/quiet-machine.mjs';
 import { assertBuilt } from './lib/require-build.mjs';
 import { treeFingerprint } from './lib/tree-fingerprint.mjs';
-import { SITTING_REPORT } from './report.mjs';
 
-// Dynamic, and after the check: stages.mjs reaches the built package, and a static import here
-// would fail at resolution before any guard could run.
+// Dynamic, and after the check: stages.mjs reaches the built package directly, and report.mjs
+// reaches it through stages.mjs, so a static import of either here would fail at resolution
+// before any guard could run.
 assertBuilt();
 const { buildStages, DEFAULT_STORE, MINUTES, OFFERED, ROOT } = await import('./lib/stages.mjs');
+const { acceptedIds, doneOnResume, failedStageReasons, SITTING_REPORT } = await import('./report.mjs');
 
 import { classifyCompare } from './lib/verdict.mjs';
 
@@ -53,7 +56,7 @@ const owedFor = (step, owed) => step.owedBy === 'always' || owed.has(step.owedBy
 
 if (dryRun) {
   const { lastTag, paths } = changedPaths();
-  const reasons = owedReasons(paths);
+  const reasons = owedReasons(paths, lastTag);
   const owed = new Set(reasons.keys());
   console.log(`diff since ${lastTag}: ${paths.length} path(s) changed`);
   for (const [gate, matched] of reasons) console.log(`  owes ${gate}: ${matched.slice(0, 3).join(', ')}${matched.length > 3 ? `, +${matched.length - 3} more` : ''}`);
@@ -107,6 +110,9 @@ const baselineVersion = packageVersion();
 const sittingDir = join(ROOT, '.tmp', 'sittings', `${today}-${baselineVersion}-${currentTreeFingerprint()}`);
 const resuming = existsSync(join(sittingDir, 'sitting.json'));
 mkdirSync(sittingDir, { recursive: true });
+// Read before anything is rewritten: the owner's accepted stage reasons decide which recorded
+// failures this resume keeps rather than re-runs.
+const accepted = acceptedIds(sittingDir);
 
 // A step killed by its timeout cannot clean up after itself, and each abandoned copy is hundreds
 // of MB. Anything left here at the start of a run is from an earlier one.
@@ -114,12 +120,12 @@ for (const name of readdirSync(join(ROOT, '.tmp')).filter((n) => n.startsWith('r
   safeRmSync(join(ROOT, '.tmp', name), { recursive: true, force: true });
   console.log(`swept abandoned work tree .tmp/${name}`);
 }
-if (resuming) console.log(`resuming ${sittingDir}; steps already finished are skipped. Delete that directory for a clean run.`);
+if (resuming) console.log(`resuming ${sittingDir}; steps recorded ok, and failures the owner accepted, are skipped. Delete that directory for a clean run.`);
 
 const priorSitting = existsSync(join(sittingDir, 'sitting.json')) ? JSON.parse(readFileSync(join(sittingDir, 'sitting.json'), 'utf8')) : null;
 
 const { lastTag, paths } = changedPaths();
-const reasons = owedReasons(paths);
+const reasons = owedReasons(paths, lastTag);
 const owed = new Set(reasons.keys());
 
 const sitting = {
@@ -141,13 +147,9 @@ function writeSitting() {
 }
 writeSitting();
 
-// A step's own output JSON (written via --out) is the resume signal for a measured step; a
-// functional step with no --out (npm test, the live suite) resumes off its own last recorded status.
-function alreadyDone(step) {
-  if (!resuming) return false;
-  if (step.out) return existsSync(join(sittingDir, `${step.id}.json`));
-  return sitting.steps[step.id]?.status === 'ok';
-}
+// The recorded status is the resume signal, never the step's own output JSON: a failed step writes
+// one too, so reading that as done dropped the failure from the report and from the verdict.
+const alreadyDone = (step) => resuming && doneOnResume(step.id, sitting.steps[step.id], accepted);
 
 // Whichever column is measured first reads high on cache-sensitive rows, so sitting.json records
 // the order compare.mjs actually spawned.
@@ -279,8 +281,11 @@ for (const stage of STAGES) {
       continue;
     }
     if (alreadyDone(step)) {
-      console.log(`${step.id}: already done, resuming past it`);
-      sitting.steps[step.id] = { ...sitting.steps[step.id], id: step.id, owed: true, status: 'ok', resumed: true };
+      // The recorded status is carried through untouched: an accepted failure stays failed, so
+      // its reason is still in the report the owner accepted it against.
+      const recorded = sitting.steps[step.id];
+      console.log(recorded.status === 'ok' ? `${step.id}: already done, resuming past it` : `${step.id}: ${recorded.status}, accepted by the owner, resuming past it`);
+      sitting.steps[step.id] = { ...recorded, id: step.id, owed: true, resumed: true };
       continue;
     }
     const loadEntry = loadavg()[0];
@@ -333,9 +338,18 @@ for (const stage of STAGES) {
   writeSitting();
 }
 
-const failedSteps = Object.values(sitting.steps).filter((s) => s.status === 'failed' || s.status === 'timeout' || s.status === 'blocked');
+// Everything a break left unmeasured: the loop already writes a status for every step it
+// reaches, so only a step an earlier stage's failure skipped is missing one.
+for (const stage of STAGES) {
+  for (const step of stage.steps) {
+    if (owedFor(step, owed) && !sitting.steps[step.id]?.status) {
+      sitting.steps[step.id] = { id: step.id, argv: step.argv, owed: true, status: 'not-run' };
+    }
+  }
+}
+
 const unmetSteps = Object.values(sitting.steps).filter((s) => s.status === 'owed-unmet');
-sitting.failed_stage_reasons = failedSteps.map((s) => `${s.id}: ${s.status}`);
+sitting.failed_stage_reasons = failedStageReasons(sitting.steps);
 writeSitting();
 
 // Always written, a blocked sitting included: a report records what happened. report.mjs decides

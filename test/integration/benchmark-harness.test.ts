@@ -3,8 +3,8 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { classify } from '../../benchmark/lib/classify.mjs';
-import { DIFF_MAP_PATHS } from '../../benchmark/lib/gates.mjs';
-import { MEASURE_VERSION, warmFileCache } from '../../benchmark/lib/measure.mjs';
+import { DIFF_MAP_PATHS, GATE_NAMES, owedReasons } from '../../benchmark/lib/gates.mjs';
+import { MEASURE_VERSION, verbsFrom, warmFileCache } from '../../benchmark/lib/measure.mjs';
 import { describeLoad, parseTopProcesses, quietMachineCheck } from '../../benchmark/lib/quiet-machine.mjs';
 import { INPROC_META_KEYS, ROW_BY_KEY, RUN_META_KEYS, RUN_METRIC_KEYS, rowValue } from '../../benchmark/lib/rows.mjs';
 import { treeFingerprint } from '../../benchmark/lib/tree-fingerprint.mjs';
@@ -208,6 +208,28 @@ describe('classify: tokens', () => {
   });
 });
 
+describe('classify: bulk_change_ms and bulk_watch_ms gate on their own band (PLAN.md 3.51)', () => {
+  const bulkChange = ROW_BY_KEY.get('bulk_change_ms');
+  const bulkWatch = ROW_BY_KEY.get('bulk_watch_ms');
+  const unaccounted = ROW_BY_KEY.get('inproc.unaccounted_ms');
+
+  it('bulk_change_ms doubled exceeds the measured band and BLOCKs', () => {
+    assert.equal(classify(bulkChange, 500, 1000).verdict, 'moved');
+  });
+
+  it('bulk_watch_ms doubled exceeds the measured band and BLOCKs', () => {
+    assert.equal(classify(bulkWatch, 500, 1000).verdict, 'moved');
+  });
+
+  it('bulk_change_ms within its measured band PASSes', () => {
+    assert.equal(classify(bulkChange, 500, 800).verdict, 'flat');
+  });
+
+  it('inproc.unaccounted_ms doubled still PASSes: a derived residual, never gates', () => {
+    assert.equal(classify(unaccounted, 500, 1000).verdict, 'flat');
+  });
+});
+
 describe('classifyCompare: same-sitting compare.mjs JSON', () => {
   it('a forced token mismatch between baseline and local produces a contract classification', () => {
     const compareJson = {
@@ -271,6 +293,44 @@ describe('classifyCompare / classifyCrossGroup: a failed command blocks instead 
       out.find((c) => c.key === 'map_ms'),
       undefined
     );
+  });
+});
+
+describe('owedReasons: a tree with no diff since its tag owes everything', () => {
+  it('an empty diff owes every gate, explained by the tag it is at', () => {
+    const reasons = owedReasons([], 'v9.9.8');
+    assert.deepEqual([...reasons.keys()].sort(), [...GATE_NAMES].sort());
+    for (const matched of reasons.values()) assert.deepEqual(matched, ['no diff since v9.9.8: this tree is the release']);
+  });
+
+  it('a real diff is unchanged: only the gates it matches are owed', () => {
+    assert.deepEqual([...owedReasons(['README.md'], 'v9.9.8').keys()], []);
+    const srcOnly = owedReasons(['src/store/sqlite/connection.ts'], 'v9.9.8');
+    assert.ok(srcOnly.has('test-engines'));
+    assert.ok(!srcOnly.has('fever'));
+  });
+});
+
+describe('verbsFrom: a verb the CLI lacks reads as unmeasured, not a failure', () => {
+  const HELP = execFileSync(process.execPath, [join(packageRoot, 'bin', 'cli.js'), '--help'], { encoding: 'utf8' });
+
+  it('the current --help text carries every verb measure-tree.mjs routes through it', () => {
+    const verbs = verbsFrom(HELP);
+    for (const v of ['map', 'peek', 'related', 'path', 'watch', 'sql', 'search']) assert.ok(verbs.has(v), `--help must list ${v}`);
+  });
+
+  it('a text with no "sense map" line does not carry map', () => {
+    const withoutMap = HELP.split('\n')
+      .filter((line) => !/\bmap\b/.test(line))
+      .join('\n');
+    assert.ok(!verbsFrom(withoutMap).has('map'));
+  });
+
+  it('"sense <name>" and "sense --list"/"--version" are not verbs', () => {
+    const verbs = verbsFrom(HELP);
+    assert.ok(!verbs.has('<name>'));
+    assert.ok(!verbs.has('--list'));
+    assert.ok(!verbs.has('--version'));
   });
 });
 
@@ -460,6 +520,45 @@ describe('priorStepLookup: measure_version, the absent-stamp trap and a real mis
     const priorReports = [{ name: 'old.json', report: { steps: { compare: { ...metricRow(100), measure_version: MEASURE_VERSION } } } }];
     const hit = priorStepLookup(priorReports, MEASURE_VERSION)('compare');
     assert.deepEqual(hit, { step: { ...metricRow(100), measure_version: MEASURE_VERSION }, from: 'old.json' });
+  });
+});
+
+describe('gate resume: a stage failure never disappears from the report', () => {
+  // The defect this guards: a step read as done on resume when its out JSON existed, and a failed
+  // step writes one too, so the 0.23.0 store-dump failure resumed as `ok` and left the report.
+  const failed = { id: 'store-dump', status: 'failed' };
+
+  it("a failed step's out file does not read as done on resume", async () => {
+    const { doneOnResume, failedStageReasons } = await import('../../benchmark/report.mjs');
+    const sitting = scratchDir('resume-failed-out');
+    writeFileSync(join(sitting, 'store-dump.json'), JSON.stringify({ baseline: '9.9.8', ok: false, output: '' })); // a failed step's own out file
+    assert.ok(existsSync(join(sitting, 'store-dump.json')), 'sanity: the failed step wrote an out file');
+    assert.equal(doneOnResume('store-dump', failed), false, 'the recorded status decides, not the out file');
+    assert.deepEqual(failedStageReasons({ 'store-dump': failed }), ['store-dump: failed']);
+  });
+
+  it('a step recorded ok is done; an accepted failure stays failed rather than re-running', async () => {
+    const { doneOnResume } = await import('../../benchmark/report.mjs');
+    assert.equal(doneOnResume('store-dump', { id: 'store-dump', status: 'ok' }), true);
+    assert.equal(doneOnResume('store-dump', failed, new Set(['store-dump: failed'])), true, "an accepted failure is the owner's decision to keep it");
+    assert.equal(doneOnResume('store-dump', failed, new Set(['store-dump: timeout'])), false, 'accepting one failure does not accept a different one');
+    assert.equal(doneOnResume('store-dump', undefined), false, 'a step no earlier run recorded is never done');
+    assert.equal(doneOnResume('compare', { status: 'not-run' }), false, 'a step an earlier failure left unreached is never done');
+  });
+
+  it("a failed stage's reason survives a resume into the report", async () => {
+    const { buildReport, failedStageReasons } = await import('../../benchmark/report.mjs');
+    const reportsDir = scratchDir('resume-failed-reports');
+    const sitting = scratchDir('resume-failed-sitting');
+    // What gate.mjs carries across a resume: the recorded status untouched, the reasons recomputed.
+    const steps = { 'store-dump': { ...failed, owed: true, resumed: true } };
+    writeFileSync(join(sitting, 'store-dump.json'), JSON.stringify({ baseline: '9.9.8', ok: false, output: '' }));
+    writeFileSync(join(sitting, 'sitting.json'), JSON.stringify({ date: '2099-01-03', baseline_version: '9.9.9', last_tag: 'v9.9.8', machine: { cpu_model: 'Fixture' }, node: 'v99', changed_paths: [], owed: {}, steps, failed_stage_reasons: failedStageReasons(steps) }));
+
+    const report = buildReport(sitting, { reportsDir });
+    assert.equal(report.verdict, 'BLOCK', 'a failure the owner has not accepted still blocks after a resume');
+    assert.deepEqual(report.verdict_reasons, ['store-dump: failed']);
+    assert.deepEqual(report.stage_reasons, ['store-dump: failed']);
   });
 });
 

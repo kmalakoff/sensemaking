@@ -46,7 +46,7 @@ Subagents dispatched during a release are spawned with `model: sonnet`. Reviews 
 3. **On BLOCK, fix it or accept it.** Fixing it and running again is the ordinary path. Where the movement is understood and the owner decides to ship anyway, record that decision against the row in the owner's own words and run the gate again:
 
    ```bash
-   node benchmark/report.mjs --accept <row id> --reason "<why this ships>"
+   node benchmark/report.mjs --accept <row id | stage reason> --reason "<why this ships>"
    ```
 
    The reason is required and cannot be blank: an override with nothing written in it records no decision. It appears in the report beside the row, and `npm test` fails on a report carrying an accepted row without one. An agent never runs this. The version is the maintainer's call and so is this.

@@ -7,7 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { safeRmSync } from 'fs-remove-compat';
 import { CORPUS_NAMES, corpusPath, writeTreeConfig } from '../lib/corpus.mjs';
-import { futureDate, MEASURE_VERSION, medianAsync, medianOf, timedCli, walkMd, warmFileCache } from '../lib/measure.mjs';
+import { futureDate, MEASURE_VERSION, medianAsync, medianOf, timedCli, verbsFrom, walkMd, warmFileCache } from '../lib/measure.mjs';
 import { writeOut } from '../lib/out.mjs';
 import { copyTree, ephemeralWorkTree } from '../lib/work-tree.mjs';
 
@@ -68,6 +68,11 @@ const fail = (r, row) => {
 // Every row-mapping choice below reads off this one flag, so old and new packages land in the same JSON shape for compare.mjs.
 const HELP = spawnSync(process.execPath, [cli, '--help'], { encoding: 'utf8' }).stdout ?? '';
 const NEW_DIALECT = /search/.test(HELP);
+// Every verb this package's CLI advertises. A verb this build lacks reads as an empty row, not a
+// failure: map/peek/related/path route through verbRow below; sql/query and find/search keep
+// their own dialect selection since NEW_DIALECT already tells them apart.
+const VERBS = verbsFrom(HELP);
+const verbRow = (verb, args, row, runs) => (VERBS.has(verb) ? fail(timed(args, runs), row) : null);
 // Ad-hoc SQL was `query` until it became `sql`, which took the name back from the search
 // sense of "query". Read off --help so one harness measures every generation.
 const SQL_VERB = /\bsense sql\b/.test(HELP) ? 'sql' : 'query';
@@ -130,7 +135,7 @@ const coldEmbedAttempt = timed(vectorArgs('the'), 1);
 // Non-null only on embed-enabled trees (vectors pre-built by the run above). The delta
 // vs find_ms is what vector participation pays per invocation: model load + query embed + scan.
 const semanticR = fail(timed(vectorArgs('the'), 3), 'semantic_find_ms');
-const mapR = fail(timed(['map'], 3), 'map_ms');
+const mapR = verbRow('map', ['map'], 'map_ms', 3);
 // A `find` row is an output contract like the map/peek token counts: a row is a reference, and its cost must not grow with the tree.
 // Measured in json (the shape an agent parses), per row actually returned.
 const findRowTokens = (() => {
@@ -143,14 +148,14 @@ const findRowTokens = (() => {
     return null;
   }
 })();
-const peekR = fail(timed(['peek', largest.rel], 3), 'peek_ms');
+const peekR = verbRow('peek', ['peek', largest.rel], 'peek_ms', 3);
 // related_ms: the similar-but-unlinked command. Scans every embedding chunk in the tree per call (semantic-search cost class), unlike peek's cheap local queries.
 // Runs after the semantic search above, which has warmed the embeddings this scan reads.
-const relatedR = fail(timed(['related', largest.rel], 3), 'related_ms');
+const relatedR = verbRow('related', ['related', largest.rel], 'related_ms', 3);
 // path_ms: graph traversal from the first note to the largest, the anchor peek and related use. A
 // pair with no path exhausts the reachable set, which is the traversal cost this row watches either way.
 const pathFrom = mdFiles.find((f) => f.rel !== largest.rel) ?? largest;
-const pathR = fail(timed(['path', pathFrom.rel, largest.rel], 3), 'path_ms');
+const pathR = verbRow('path', ['path', pathFrom.rel, largest.rel], 'path_ms', 3);
 
 // --- in-process (library) ---
 let inproc = null;
@@ -262,29 +267,33 @@ const bulkColdMs = bulkStatus === 0 ? medianOf(bulkSamples) : null;
 // the freshness check. One watcher for all 3 reps: startup is not what this row measures.
 let bulkWatchMs = null;
 const bulkWatchSamples = [];
-try {
-  // An early exit here is a failure, not an unsupported reading: every store can be watched now.
-  let watchErr = '';
-  const watcher = spawn(process.execPath, [cli, 'watch', '--force'], { cwd: tree, stdio: ['ignore', 'ignore', 'pipe'] });
-  watcher.stderr.on('data', (d) => (watchErr += d));
-  await new Promise((r) => setTimeout(r, 1500)); // watcher startup + initial reconcile
-  if (watcher.exitCode !== null) {
-    errors.bulk_watch_ms = `exit ${watcher.exitCode}: ${watchErr.split('\n').find(Boolean) ?? 'no stderr'}`;
-  } else {
-    const WATCH_REPS = 3;
-    let watchStatus = 0;
-    for (let i = 0; i < WATCH_REPS; i++) {
-      touchMany(BULK_REPS + i);
-      await new Promise((r) => setTimeout(r, 1500 + 1.5 * (bulkColdMs ?? 4000))); // debounce + background reparse, scaled to the measured reparse cost
-      const r = timed([SQL_VERB, 'SELECT COUNT(*) AS n FROM frontmatter'], 1);
-      bulkWatchSamples.push(r.ms);
-      if (r.status !== 0) watchStatus = r.status;
+// A package with no watch verb measures nothing here, not a failure: verbRow's rule applies to
+// this whole block the same way it applies to a single command.
+if (VERBS.has('watch')) {
+  try {
+    // An early exit here is a failure, not an unsupported reading: every store can be watched now.
+    let watchErr = '';
+    const watcher = spawn(process.execPath, [cli, 'watch', '--force'], { cwd: tree, stdio: ['ignore', 'ignore', 'pipe'] });
+    watcher.stderr.on('data', (d) => (watchErr += d));
+    await new Promise((r) => setTimeout(r, 1500)); // watcher startup + initial reconcile
+    if (watcher.exitCode !== null) {
+      errors.bulk_watch_ms = `exit ${watcher.exitCode}: ${watchErr.split('\n').find(Boolean) ?? 'no stderr'}`;
+    } else {
+      const WATCH_REPS = 3;
+      let watchStatus = 0;
+      for (let i = 0; i < WATCH_REPS; i++) {
+        touchMany(BULK_REPS + i);
+        await new Promise((r) => setTimeout(r, 1500 + 1.5 * (bulkColdMs ?? 4000))); // debounce + background reparse, scaled to the measured reparse cost
+        const r = timed([SQL_VERB, 'SELECT COUNT(*) AS n FROM frontmatter'], 1);
+        bulkWatchSamples.push(r.ms);
+        if (r.status !== 0) watchStatus = r.status;
+      }
+      bulkWatchMs = watchStatus === 0 ? medianOf(bulkWatchSamples) : null;
+      watcher.kill('SIGTERM');
+      await new Promise((r) => setTimeout(r, 300));
     }
-    bulkWatchMs = watchStatus === 0 ? medianOf(bulkWatchSamples) : null;
-    watcher.kill('SIGTERM');
-    await new Promise((r) => setTimeout(r, 300));
-  }
-} catch {}
+  } catch {}
+}
 
 const result = {
   measure_version: MEASURE_VERSION,

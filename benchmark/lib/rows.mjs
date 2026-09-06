@@ -54,11 +54,10 @@ export const ROWS = [
   { key: 'path_ms', label: '`path` (graph traversal)', kind: 'wall', band: PROXY, cross: PROXY_CROSS, record: false, source: 'no dedicated spread measurement yet; proxied off the cold-row starting band pending a real sitting' },
   { key: 'related_ms', label: '`related` (similar-but-unlinked)', kind: 'wall', band: PROXY, cross: PROXY_CROSS, record: false, source: 'no dedicated spread measurement yet; proxied off the cold-row starting band pending a real sitting' },
   { key: 'related_tokens', label: '`related` token count', kind: 'tokens', record: false },
-  // kind 'total': informational, never gates (see classify.mjs). A row that varies 73% on
-  // identical code cannot detect anything smaller than 73%; as a gate it would only produce
-  // false positives. Do not promote this back to 'wall' without a fresh spread measurement.
-  { key: 'bulk_change_ms', label: 'bulk change: first query', kind: 'total', band: MEASURED_BULK, cross: MEASURED_BULK, record: false, source: 'PLAN.md 3.10 and a 2026-09-01/02 cross-sitting A/B: +73% on an identical artifact across sittings' },
-  { key: 'bulk_watch_ms', label: 'bulk change: with warm watcher', kind: 'total', band: MEASURED_BULK, cross: MEASURED_BULK, record: false, source: 'PLAN.md 3.10: proxied off bulk_change_ms, the sibling scenario measured there' },
+  // Deliberately non-gating here until 2026-09-05, on the theory that a 73%-noise row could
+  // only false-block; reversed that day, see PLAN.md 3.51 Root cause 1 for why that held nothing.
+  { key: 'bulk_change_ms', label: 'bulk change: first query', kind: 'wall', band: MEASURED_BULK, cross: MEASURED_BULK, record: false, source: 'PLAN.md 3.10 and a 2026-09-01/02 cross-sitting A/B: +73% on an identical artifact across sittings' },
+  { key: 'bulk_watch_ms', label: 'bulk change: with warm watcher', kind: 'wall', band: MEASURED_BULK, cross: MEASURED_BULK, record: false, source: 'PLAN.md 3.10: proxied off bulk_change_ms, the sibling scenario measured there' },
   { key: 'inproc.cold_build_ms', label: 'in-process: cold index build', kind: 'inproc', band: MEASURED_COLD_BAND, cross: MEASURED_COLD_CROSS, record: true, source: COLD_SOURCE },
   // Time no stage claims (src/store/stages.ts): informational, never gates. A residual that
   // grows across releases signals the stage vocabulary stopped covering the build.
@@ -81,8 +80,7 @@ export function rowValue(record, key) {
 }
 
 // Every kind a run.mjs row carries a real measured value for: wall/inproc/tokens gate on their
-// band, 'total' (bulk_change_ms, bulk_watch_ms, inproc.unaccounted_ms) is reported but never
-// gates. One constant so compare.mjs, verdict.mjs and the harness test filter run.mjs's own fields the same way.
+// band, 'total' (setup_ms, inproc.unaccounted_ms) is derived and reports but never gates.
 export const TIMING_KINDS = ['wall', 'inproc', 'tokens', 'total'];
 
 // The metric keys a run.mjs row is expected to carry, flattened the same way rowValue() reads

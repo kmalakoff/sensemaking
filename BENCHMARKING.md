@@ -254,7 +254,7 @@ history; each entry names the commit that introduced the change.
   measuring it. `benchmark/report.mjs` renders a sitting's `release-gate.{json,md}` beside its data,
   and `--release <version>` copies it to `benchmark/reports/<date>-<version>-release-gate.{json,md}`.
   It is the only writer of the numbers-of-record table below: releasing a `PASS` sitting
-  repoints it, a `BLOCK` or an unreleased sitting leaves it untouched, and `report.mjs --accept <row id> --reason
+  repoints it, a `BLOCK` or an unreleased sitting leaves it untouched, and `report.mjs --accept <row id | stage reason> --reason
   "<words>"` is the sole owner override.
 
 - **2026-09-02 (staged gate renamed, priors resolved per step).** The harness directory is renamed
