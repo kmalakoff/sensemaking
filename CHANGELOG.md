@@ -2,6 +2,27 @@
 
 All notable changes to sensemaking are documented here.
 
+## [0.23.1] - 2026-09-06
+
+### Fixed
+
+- **The turso cache no longer grows without bound.** Every rewritten note left space behind in the
+  full-text index that nothing reclaimed, so a tree reconciled over and over kept growing: twelve
+  passes over 260 notes took a cache from 27 MB to 77 MB, and a long `sense watch` on an actively
+  edited tree had no ceiling at all. The cache now compacts itself once it passes 1.5x its compact
+  size, so it stays bounded. A cold build never pays for it, and the compaction happens as the store
+  closes, not while a command is waiting. sqlite and duckdb were never affected.
+
+### Changed
+
+- **turso indexes and updates faster.** Inserts are now written as one statement per batch instead
+  of one per row. On a 6,566-note tree a cold index build falls from 1,412 ms to 1,141 ms, and
+  re-indexing after ten edited files from 123 ms to 76 ms; on 26,264 notes, 5,017 ms to 4,254 ms and
+  652 ms to 443 ms. sqlite and duckdb are unchanged.
+- The store comparison in the README and the `sense-setup` skill no longer says turso's concurrent
+  access is something no command uses. turso is still the slowest of the three at building an index,
+  which is the part of that guidance that matters when picking a store.
+
 ## [0.23.0] - 2026-09-05
 
 ### Changed

@@ -1,7 +1,10 @@
+import { stat } from 'node:fs/promises';
 import type { Database } from '@tursodatabase/database';
 import { rewriteInsert } from '../batch.ts';
+import { setMeta } from '../shared.ts';
 import { BEGIN_WRITE, withTransaction } from '../transaction.ts';
 import type { Connection, RunResult, Statement } from '../types.ts';
+import { CONNECT_OPTS, tursoApi } from './native.ts';
 
 // The client's own Statement class isn't re-exported by name from '@tursodatabase/database',
 // so its type is derived structurally from Database.prepare()'s return type instead.
@@ -48,6 +51,41 @@ export async function checkpointWal(db: Database): Promise<void> {
     await db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
   } catch (err) {
     console.error(`sense: turso WAL checkpoint failed, the -wal file will keep growing until one succeeds: ${(err as Error).message}`);
+  }
+}
+
+// The main cache file's path, or null when unresolvable. The store holds a Database and
+// Connection, not a path (PLAN 3.52), so the path is read from the database itself.
+export async function cacheFilePath(conn: Connection): Promise<string | null> {
+  const rows = (await (await conn.prepare('PRAGMA database_list')).all()) as Array<{ name: string; file: string }>;
+  return rows.find((r) => r.name === 'main')?.file || null;
+}
+
+export async function fileSize(path: string): Promise<number | null> {
+  try {
+    return (await stat(path)).size;
+  } catch {
+    return null;
+  }
+}
+
+// Reclaims turso#8170's FTS space amplification (PLAN 3.41), on a throwaway connection after the
+// store's own has closed: `vacuum` doubles incremental reconcile cost merely by being enabled (3.54).
+export async function reclaimSpace(path: string): Promise<void> {
+  try {
+    const turso = await tursoApi();
+    const db = await turso.connect(path, { ...CONNECT_OPTS, experimental: [...CONNECT_OPTS.experimental, 'vacuum'] });
+    try {
+      await db.exec('VACUUM');
+      const size = await fileSize(path);
+      // Recorded here, not by the caller: this connection is the only one still open on the file.
+      if (size !== null) await setMeta(createConnection(db), 'compact_size', String(size));
+      await checkpointWal(db);
+    } finally {
+      await db.close();
+    }
+  } catch (err) {
+    console.error(`sense: turso VACUUM failed, the cache will keep the space until one succeeds: ${(err as Error).message}`);
   }
 }
 

@@ -4,6 +4,10 @@ export const TURSO_PACKAGE = '@tursodatabase/database';
 
 const TURSO: NativeDescriptor = { store: 'turso', pkg: TURSO_PACKAGE, sizeHint: '~16MB' };
 
+// Every connect() in this store goes through these: the same 30s floor sqlite opens with, and the
+// FTS index method ensureSchema() needs. reclaimSpace adds 'vacuum'; nothing else may (PLAN 3.54).
+export const CONNECT_OPTS = { timeout: 30_000, experimental: ['index_method'] } as const;
+
 let tursoApiPromise: Promise<typeof import('@tursodatabase/database')> | undefined;
 
 // One accessor every consumer must go through, not each its own bare-specifier import: Node

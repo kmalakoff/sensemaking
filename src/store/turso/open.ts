@@ -9,7 +9,7 @@ import { openWithDialect } from '../open.ts';
 import { getMeta, setMeta } from '../shared.ts';
 import type { Connection, OpenDialect } from '../types.ts';
 import { checkpointWal, createConnection } from './connection.ts';
-import { TURSO_PACKAGE, tursoApi } from './native.ts';
+import { CONNECT_OPTS, TURSO_PACKAGE, tursoApi } from './native.ts';
 import { CONTENT_FTS_DDL, tursoDialect } from './reconcile.ts';
 import { createStore } from './store.ts';
 
@@ -63,9 +63,9 @@ async function connect(dbPath: string, _cfg: ResolvedConfig): Promise<{ handle: 
 
   let db: Database;
   try {
-    // Floored at the same 30s sqlite opens with. `timeout` is connect-time only in this client;
-    // the derived value is set via runtime PRAGMA below. `index_method` is required for ensureSchema()'s FTS indexes (T1).
-    db = await turso.connect(dbPath, { timeout: 30_000, experimental: ['index_method'] });
+    // `timeout` is connect-time only in this client; the derived value is set via runtime PRAGMA
+    // below. Options in native.ts, shared with reclaimSpace's own connection.
+    db = await turso.connect(dbPath, { ...CONNECT_OPTS, experimental: [...CONNECT_OPTS.experimental] });
   } catch (err) {
     throw new SenseError('STORE_DEPENDENCY_MISSING', `store "turso" failed to open ${dbPath}: ${(err as Error).message}`);
   }

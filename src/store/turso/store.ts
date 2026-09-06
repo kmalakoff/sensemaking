@@ -1,10 +1,10 @@
 import type { Database } from '@tursodatabase/database';
 import { STORE_DIMS } from '../../embed/types.ts';
-import { getColumns } from '../shared.ts';
+import { getColumns, getMeta, setMeta } from '../shared.ts';
 import { withTransaction } from '../transaction.ts';
 import type { Capability, Connection, Statement, Store } from '../types.ts';
 import { hasVectorRow, pendingRows } from '../vectors.ts';
-import { checkpointWal } from './connection.ts';
+import { cacheFilePath, checkpointWal, fileSize, reclaimSpace } from './connection.ts';
 import { fieldStats } from './fieldStats.ts';
 import { queryLexical } from './lexical.ts';
 import { scanCandidates, scanSimilar, writeVectorBatch } from './vectors.ts';
@@ -12,6 +12,10 @@ import { scanCandidates, scanSimilar, writeVectorBatch } from './vectors.ts';
 // No 'snippets': fts_highlight returns the whole column, not a bounded window, so hits use
 // the caller's JS excerpt.
 export const CAPABILITIES: ReadonlySet<Capability> = new Set(['lexical', 'phrases', 'vectors']);
+
+// close() reclaims once the cache file outgrows its compact size by this factor: the disk
+// overhead a user should accept (PLAN 3.52), in postgres autovacuum scale-factor shape.
+const BLOAT_FACTOR = 1.5;
 
 // Shares one Connection instance (conn) with the builder's own reconcile call so transaction depth
 // (see transaction.ts) is tracked against the same object everywhere.
@@ -69,8 +73,31 @@ export function createStore(db: Database, conn: Connection): Store {
       },
     },
     async close() {
+      // Checkpoint before measuring: the last reconcile's pages sit in the WAL, not the file yet.
       await checkpointWal(db);
+      let reclaimPath: string | null = null;
+      try {
+        const path = await cacheFilePath(conn);
+        const base = Number((await getMeta(conn, 'compact_size')) ?? '0');
+        const size = path === null ? null : await fileSize(path);
+        if (size !== null) {
+          // No baseline yet (cold build or an upgraded cache): record it, never reclaim here, so a
+          // cold build pays no VACUUM (PLAN 3.49 Track A) and an upgraded cache heals on a crossing.
+          if (base === 0) {
+            await setMeta(conn, 'compact_size', String(size));
+            // The meta write landed past the checkpoint; leave no WAL for the next opener.
+            await checkpointWal(db);
+          } else if (size > BLOAT_FACTOR * base) {
+            reclaimPath = path;
+          }
+        }
+      } catch (err) {
+        console.error(`sense: turso cache bloat check failed, the cache will keep its space until one succeeds: ${(err as Error).message}`);
+      }
       await db.close();
+      // After this store's connection is closed, never before: turso hands the file to one
+      // connection at a time, and reclaimSpace opens its own to carry the `vacuum` flag (PLAN 3.54).
+      if (reclaimPath !== null) await reclaimSpace(reclaimPath);
     },
   };
 }

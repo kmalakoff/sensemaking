@@ -129,3 +129,79 @@ describe('derived busy_timeout', () => {
     }
   });
 });
+
+// store.ts's close() reclaims turso#8170's FTS space amplification (PLAN 3.41) once the cache
+// file outgrows its recorded compact size by the bloat factor, re-recording the size (PLAN 3.52).
+describe('cache bloat reclaim', () => {
+  const dbSize = (baseDir: string) => statSync(join(baseDir, '.sense', 'cache.turso.db')).size;
+
+  // A quiet open/close that only reads meta: at rest the file is within the guarantee, so the
+  // probe reclaims nothing and perturbs nothing.
+  async function compactSize(baseDir: string): Promise<number> {
+    const probe = await tursoTree(baseDir);
+    const row = (await (await probe.store.prepare(`SELECT value FROM meta WHERE key = 'compact_size'`)).get()) as { value: string } | undefined;
+    await probe.store.close();
+    return Number(row?.value ?? '0');
+  }
+
+  function seed(baseDir: string, tag: string, count: number, repeats: number) {
+    for (let i = 0; i < count; i++) writeNote(baseDir, `n${String(i).padStart(3, '0')}.md`, { frontmatter: { title: `N${i}` }, body: `${tag} body `.repeat(repeats) });
+  }
+
+  it('bloat under the factor accumulates without reclaiming', async () => {
+    const baseDir = tmpTree();
+    seed(baseDir, 'seed', 200, 25);
+    const first = await tursoTree(baseDir);
+    await first.store.close();
+    const baseline = dbSize(baseDir);
+    const base = await compactSize(baseDir);
+    assert.ok(base > 0, 'the cold close must have recorded the compact baseline');
+
+    seed(baseDir, 'c1', 50, 20); // 50 rewrites: FTS garbage, far under the factor
+    const { store } = await tursoTree(baseDir);
+    await store.close();
+    const after = dbSize(baseDir);
+    assert.ok(after > baseline, 'the rewrites must leave FTS garbage behind');
+    assert.ok(after <= 1.5 * base, 'no reclaim below the factor');
+    assert.equal(await compactSize(baseDir), base, 'the baseline is untouched under the factor');
+  });
+
+  it('crossing the factor reclaims once, re-records the size, and rests within the guarantee', async () => {
+    const baseDir = tmpTree();
+    seed(baseDir, 'seed', 200, 25);
+    const first = await tursoTree(baseDir);
+    await first.store.close();
+
+    let prev = dbSize(baseDir);
+    let peak = prev;
+    let crossed = false;
+    for (let k = 1; k <= 20 && !crossed; k++) {
+      seed(baseDir, `c${k}`, 50, 20 + k); // body length grows with k, so every rewrite reparses
+      const { store } = await tursoTree(baseDir);
+      await store.close();
+      const now = dbSize(baseDir);
+      if (now > peak) peak = now;
+      if (now < prev) crossed = true; // a shrink is only VACUUM: reparsing never shrinks the file
+      prev = now;
+    }
+    assert.ok(crossed, 'bloat must cross the factor within 20 cycles');
+    const newBase = await compactSize(baseDir);
+    assert.ok(newBase < peak, 'the baseline is re-recorded at the post-VACUUM size, not the bloated peak');
+    assert.ok(dbSize(baseDir) <= 1.5 * newBase, 'the file rests within the guarantee of its re-recorded baseline');
+  });
+
+  it('a cold build never reclaims and records the built size as its baseline', async () => {
+    const baseDir = tmpTree();
+    seed(baseDir, 'seed', 200, 25);
+    const { store } = await tursoTree(baseDir);
+    // A cold-build VACUUM is size-invisible (a fresh file has no garbage), so no-reclaim is
+    // structural: only close() may write the baseline the reclaim branch requires.
+    const early = (await (await store.prepare(`SELECT value FROM meta WHERE key = 'compact_size'`)).get()) as { value: string } | undefined;
+    assert.equal(early, undefined, 'nothing may record the baseline during the cold reconcile');
+    await store.close();
+    const base = await compactSize(baseDir);
+    assert.ok(base > 0, 'the cold close must have recorded a baseline');
+    const built = dbSize(baseDir);
+    assert.ok(built >= base && built - base <= 16384, 'only the baseline row itself may follow the recorded size');
+  });
+});
