@@ -1,13 +1,11 @@
 // Rewrites the store's single-row parameterized INSERT/UPDATE/DELETE into one multi-row statement --
 // DuckDB's columnar engine pays for row-at-a-time writes, not just the round trip (PRINCIPLES: documented-means-tested).
+// rewriteInsert itself lives in the shared ../batch.ts: turso folds INSERTs the same way (3.36 B).
 
-const INSERT_RE = /^(INSERT\s+(?:OR\s+\w+\s+)?INTO\s+\S+\s*\([^)]*\)\s*VALUES\s*)\(([^()]*)\)(.*)$/is;
+import { rewriteInsert } from '../batch.ts';
+
 const UPDATE_RE = /^UPDATE\s+(\S+)\s+SET\s+(.+?)\s+WHERE\s+(.+)$/is;
 const DELETE_RE = /^DELETE\s+FROM\s+(\S+)\s+WHERE\s+(.+)$/is;
-
-function placeholderCount(tuple: string): number {
-  return (tuple.match(/\?/g) ?? []).length;
-}
 
 // "a = ?, b = ?" or "a = ? AND b = ?" -> ["a", "b"]. A clause that doesn't fit yields a shorter
 // list, which rewriteUpdate/rewriteDelete reject as a width mismatch.
@@ -25,16 +23,6 @@ function equalityColumns(clause: string, sep: RegExp): string[] | null {
 function tuples(rowCount: number, width: number): string {
   const row = `(${Array.from({ length: width }, () => '?').join(', ')})`;
   return Array.from({ length: rowCount }, () => row).join(', ');
-}
-
-export function rewriteInsert(sql: string, rowCount: number): { sql: string; width: number } | null {
-  const m = INSERT_RE.exec(sql.trim());
-  if (!m) return null;
-  const [, head, tuple, tail] = m;
-  const width = placeholderCount(tuple);
-  if (width === 0) return null;
-  const rows = Array.from({ length: rowCount }, () => `(${tuple})`).join(', ');
-  return { sql: `${head}${rows}${tail}`, width };
 }
 
 export function rewriteUpdate(sql: string, rowCount: number): { sql: string; width: number } | null {

@@ -1,4 +1,5 @@
 import type { Database } from '@tursodatabase/database';
+import { rewriteInsert } from '../batch.ts';
 import { BEGIN_WRITE, withTransaction } from '../transaction.ts';
 import type { Connection, RunResult, Statement } from '../types.ts';
 
@@ -58,16 +59,28 @@ export function createConnection(db: Database): Connection {
     async prepare(sql: string): Promise<Statement> {
       return new TursoStatementWrapper(await db.prepare(sql));
     },
-    // Prepares once and awaits run() per row: db.batch() re-prepares each statement, which cost as
-    // much as preparing per row. A literal nested BEGIN hard-errors, so withTransaction's join-not-savepoint helper makes this safe inside reconcile's own transaction too.
+    // Folds a plain INSERT into one multi-row VALUES statement (shared rewriteInsert, ../batch.ts):
+    // no bind-variable ceiling to chunk against, measured empirically. UPDATE/DELETE keep the per-row loop.
     async runBatch(sql: string, paramRows: unknown[][]): Promise<void> {
       if (paramRows.length === 0) return;
       await withTransaction(
         conn,
         async () => {
-          const stmt = await db.prepare(sql);
+          const rewritten = rewriteInsert(sql, paramRows.length);
+          if (rewritten) {
+            const stmt = await db.prepare(rewritten.sql);
+            try {
+              // One flat array, not spread: spreading tens of thousands of args hits a JS call-stack
+              // limit well before turso enforces any variable-count ceiling (measured; see PLAN.md).
+              await stmt.run(paramRows.flat());
+            } finally {
+              await stmt.close();
+            }
+            return;
+          }
           // Finalized here because nothing else will: open() hands back a connection the caller
           // can hold across many batches, and the db.batch() this replaced finalized its own.
+          const stmt = await db.prepare(sql);
           try {
             for (const row of paramRows) await stmt.run(...row);
           } finally {
