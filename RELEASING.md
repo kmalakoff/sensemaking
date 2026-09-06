@@ -1,6 +1,8 @@
 # Releasing
 
-Everything that can block a release runs **before** the version bump, and publishing is the last step of all. A regression or a stale doc found after `npm publish` is already shipped: consumers install it, and the only remedy is another release.
+Everything that can block a release runs **before** the version bump, and publishing is the last step of all. A regression or a stale doc found after the publish is already shipped: consumers install it, and the only remedy is another release.
+
+House-wide release rules live in the `releasing-standards` skill: what an agent never runs, how history is collapsed and agreed, the changelog, and the handoff that ends an agent's part. This file is sense's own gate, which is the part no other package here has.
 
 Subagents dispatched during a release are spawned with `model: sonnet`. Reviews at high or max effort go through the `coding-standards` skill, which keeps the built-in review's fork and its workers on Sonnet whatever the session model. When the session model is costlier than Sonnet, the multi-step items below (the benchmark write-up, the docs reconcile) are dispatched to subagents rather than run inline; the session keeps the one-command gates and the reading of results.
 
@@ -60,31 +62,23 @@ Subagents dispatched during a release are spawned with `model: sonnet`. Reviews 
    | `skills/sense-setup` | making or restructuring one | agents |
    | `schema.json` | every config key | editors |
 
-The mechanical facts are tested in `test/integration/docs.test.ts`; the rest is a read. For `keywords`: write down the search terms a person looking for this release's new capability would type (a release that added semantic search added `semantic-search`), check each is present, and drop keywords for things sense no longer emphasizes. Keywords are how npm search finds the package, and they only change when capabilities do, so this review belongs to the release that changes them. Form: npm's indexer tokenizes hyphens as word separators (verified empirically 2026-08-15 against the registry search API), so `knowledge-base` matches both "knowledge-base" and "knowledge base" queries, while a closed compound (`knowledgebase`) matches only itself. Always prefer the hyphenated form for multi-word keywords. Re-check every measured claim in the docs against the run from step 2; a number that no longer holds is worse than no number, because the next reader trusts it. Prefer linking BENCHMARKING.md over copying figures that drift.
+The mechanical facts are tested in `test/integration/docs.test.ts`; the rest is a read. The keyword review and the npm indexer's hyphen tokenization are in `releasing-standards`. Re-check every measured claim in the docs against the run from step 2, and prefer linking BENCHMARKING.md over copying figures that drift: a number that no longer holds is worse than no number, because the next reader trusts it.
 
-5. Commit steps 1-4, as one commit, or a few when the diff separates naturally (the code change, the benchmark tables). A release is not a trail of incremental work-in-progress commits; if the work accumulated as one, squash before the bump. Messages are short and factual, no Co-Authored-By trailer. Never start a pre-bump subject with the version number: the bump commit is a bare version number, so a subject leading with one reads as the release having already happened. Name the work and carry the version inside it, `Benchmarking for 0.19.2 release: full battery on all three stores`.
+5. Ask the maintainer which version this is going out as, write the CHANGELOG entry under that heading, and commit steps 1-4 per `releasing-standards`. A sitting usually separates into the code change and the benchmark tables; the grouping is proposed and agreed before anything is rewritten, and it is collapsed before the bump.
 
-6. Maintainer picks the version. Name the sitting's report for it first, which copies it to `benchmark/reports/<date>-<version>-release-gate.{md,json}` from the same data and measures nothing:
+6. With the version named, name the sitting's report for it, which copies it to `benchmark/reports/<date>-<version>-release-gate.{md,json}` from the same data and measures nothing:
 
    ```bash
    node benchmark/report.mjs --release <chosen>
    ```
 
-   Then: `npm version <chosen>` → `npm publish` → `git push --follow-tags`. Confirm the tag reached the remote (`git ls-remote --tags origin`): a skipped push leaves a version on npm with no commit or tag behind it, and nothing downstream notices.
+   Then the maintainer's own step, and an agent's part has ended before it: `tsds publish <chosen>`, which reinstalls from the lockfile, runs the tests, bumps the version and publishes in one command. Then `git push --follow-tags`, and confirm the tag reached the remote (`git ls-remote --tags origin`): a skipped push leaves a version on npm with no commit or tag behind it, and nothing downstream notices.
 
-Run the three as separate commands, never chained with `&&`: a chain publishes with no point to stop and read what is about to ship.
+7. Tell consumers what changed: dependent trees get their note, and the git tag's release notes carry the same consumer-visible list as the CHANGELOG entry, which is what the maintainer picked the version from.
 
-`npm version` owns the version commit. Never hand-write one, and never fold the bump into the work commit: the bump is subject-only (the bare version number) and touches `package.json` and `package-lock.json` and nothing else, which is what every release in `git log` looks like. Squashing the work into minimal commits happens in step 7, before the bump, because the message is cheap to fix then and expensive after: rewriting anything below a published tag means deleting and recreating that tag.
-
-`npm version` leaves HEAD on the release commit, which reads like any other commit in `git log`. Never `--amend` from there, and check `git log -1` before amending at all: rewriting it diverges from the tag and from what npm already shipped. A follow-up fix is a new commit, and the next `npm version` carries it.
-
-7. Tell consumers what changed: dependent trees get their note, and the git tag's release notes carry the consumer-visible changes (new config keys, changed output shapes, bug fixes), the same list the maintainer used to pick the version. Commit messages and release notes are short and factual, and never carry a Co-Authored-By trailer. Consumers are on the previous version until they upgrade, so guidance written for unreleased behaviour is guidance that fails.
-
-**Docs-only patches take the short path**, and the gate takes it for you: a diff touching nothing but published prose owes the static checks and `npm test`, nothing more, because text cannot move a number. What remains: `npm test` (the docs tests guard the mechanical facts), the step-5 read of the surfaces the diff touched, then version → publish → push with the tag check. Anything that touches src/, benchmark logic, or dependencies is not a docs-only patch, whatever the diff size.
+**Docs-only patches take the short path**, and the gate takes it for you: a diff touching nothing but published prose owes the static checks and `npm test`, nothing more, because text cannot move a number. What remains: `npm test` (the docs tests guard the mechanical facts), the step-4 read of the surfaces the diff touched, then `tsds publish` and the push with the tag check. Anything that touches src/, benchmark logic, or dependencies is not a docs-only patch, whatever the diff size.
 
 Reports in `benchmark/reports/` are generated from the sitting's own JSON, never written by hand, and `npm test` fails if a report and its data disagree. The markdown of a past report is never edited either: a dated report records what was true that day.
-
-**The version is the maintainer's call.** An agent preparing a release states what changed and what a consumer would notice (new config keys, changed output shapes, changed storage classes, bug fixes only) and suggests a bump if asked. It does not choose one, and does not encode a bump policy here.
 
 Two storage formats version themselves, and neither is a judgement call:
 
