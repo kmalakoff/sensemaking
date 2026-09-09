@@ -87,5 +87,9 @@ export function featureSignature(cfg: Config, features: Feature[]): string {
       return `preset:${name}:${include}:${exclude}:${presetHasSignal(cfg, name, 'vectors') ? 'on' : 'off'}`;
     })
     .join('|');
-  return [...togglesPart, ...featureParts, presetsPart].join('|');
+  // A configured root changes every filesystem input while retaining the cache under the
+  // config directory. Its own segment therefore forces the safe full-rebuild path. Omission
+  // intentionally preserves the pre-root signature and cache behavior.
+  const rootPart = cfg.root === undefined ? [] : [`root:${cfg.root}`];
+  return [...togglesPart, ...featureParts, ...rootPart, presetsPart].join('|');
 }

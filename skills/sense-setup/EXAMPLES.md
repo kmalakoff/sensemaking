@@ -106,3 +106,24 @@ sense peek "Plugins/dataview.md"                # outline + links before reading
 ```
 
 Presets earn their place only when a tree has parts deserving different treatment; a tree that is one kind of thing needs none of the vocabulary above. On a big vault, raise `default`'s `k` and read `lines` ranges instead of whole files, or start from the starter's `large` preset.
+
+## E. One vault, separate consumers
+
+Keep each consumer's configuration and cache under its own configuration directory while indexing one shared vault. `root` is relative to this config file, so saved SQL continues to use stable vault-relative paths.
+
+`~/.config/obsidian/tasks/sense.config.json`:
+
+```json
+{
+  "version": 5,
+  "root": "../../../.obsidian",
+  "presets": {
+    "default": { "include": ["vault/tasks/**/*.md"], "k": 20 }
+  },
+  "queries": {
+    "active": { "sql": "SELECT path, title FROM frontmatter WHERE path LIKE 'vault/tasks/%' AND status = 'active' ORDER BY path" }
+  }
+}
+```
+
+The database is `~/.config/obsidian/tasks/.sense/cache.db`; the indexed row remains `vault/tasks/...`, never a path back out through the configuration directory. A `general/` sibling can point at the same root with different presets and a separate `.sense/` cache.

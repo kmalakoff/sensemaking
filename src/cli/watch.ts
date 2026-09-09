@@ -10,7 +10,7 @@ const watch: Command = async (ctx) => {
     force: values.force as boolean,
     onEvent: (event: WatchEvent) => {
       if (event.type === 'started') {
-        console.log(`${ctx.name} watch: watching ${event.baseDir}`);
+        console.log(`${ctx.name} watch: watching ${event.rootDir}`);
         console.log(`${ctx.name} watch: db ${event.dbPath}`);
       } else if (event.type === 'reconciled') {
         printWarnings(event.warnings);

@@ -10,7 +10,7 @@ const DEBOUNCE_MS = 200;
 const HEARTBEAT_INTERVAL_MS = 5000;
 const STALE_HEARTBEAT_MS = 15000;
 
-export type WatchEvent = { type: 'started'; baseDir: string; dbPath: string } | { type: 'reconciled'; parsed: number; total: number; warnings: string[] } | { type: 'reconcile-error'; message: string };
+export type WatchEvent = { type: 'started'; rootDir: string; dbPath: string } | { type: 'reconciled'; parsed: number; total: number; warnings: string[] } | { type: 'reconcile-error'; message: string };
 
 export interface WatchOptions {
   force?: boolean;
@@ -27,9 +27,9 @@ export async function runWatch(cfg: ResolvedConfig, opts: WatchOptions = {}): Pr
   const onEvent = opts.onEvent ?? (() => {});
   const debounceMs = opts.debounceMs ?? DEBOUNCE_MS;
   const heartbeatIntervalMs = opts.heartbeatIntervalMs ?? HEARTBEAT_INTERVAL_MS;
-  const baseDir = cfg.baseDir;
-
   const { store: initialStore, dbPath, warnings: initialWarnings, parsed: initialParsed } = await openStore(cfg);
+  // openStore normalizes the legacy direct-API baseDir before a watcher touches the filesystem.
+  const rootDir = cfg.rootDir ?? cfg.baseDir;
   const existingHeartbeat = await getMeta(initialStore, 'watch_heartbeat');
   if (existingHeartbeat && !opts.force) {
     const age = Date.now() - Date.parse(existingHeartbeat);
@@ -45,7 +45,7 @@ export async function runWatch(cfg: ResolvedConfig, opts: WatchOptions = {}): Pr
   await setMeta(initialStore, 'watch_pid', String(process.pid));
   await initialStore.close();
 
-  onEvent({ type: 'started', baseDir, dbPath });
+  onEvent({ type: 'started', rootDir, dbPath });
   if (initialWarnings.length > 0 || initialParsed > 0) {
     onEvent({ type: 'reconciled', parsed: initialParsed, total: initialTotal, warnings: initialWarnings });
   }
@@ -104,7 +104,7 @@ export async function runWatch(cfg: ResolvedConfig, opts: WatchOptions = {}): Pr
 
   // Ignore our own state dir, or the heartbeat write would retrigger itself forever. An event with
   // an unresolvable filename (null, which fs.watch delivers under load) reconciles: parsing nothing costs less than missing a real edit.
-  const watcher = fsWatch(baseDir, { recursive: true }, (_event, filename) => {
+  const watcher = fsWatch(rootDir, { recursive: true }, (_event, filename) => {
     if (typeof filename === 'string' && filename.startsWith(STATE_DIR)) return;
     scheduleReconcile();
   });

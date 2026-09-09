@@ -236,5 +236,7 @@ export function loadConfig(explicitPath?: string): ResolvedConfig {
   }
 
   const unknownKeys = unknownConfigKeys(cfg as unknown as Record<string, unknown>);
-  return { ...cfg, baseDir: dirname(configPath), configPath, migratedFrom, unknownKeys: unknownKeys.length > 0 ? unknownKeys : undefined };
+  const configDir = dirname(configPath);
+  const rootDir = resolve(configDir, cfg.root ?? '.');
+  return { ...cfg, configDir, rootDir, baseDir: rootDir, configPath, migratedFrom, unknownKeys: unknownKeys.length > 0 ? unknownKeys : undefined };
 }

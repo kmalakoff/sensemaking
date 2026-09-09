@@ -60,6 +60,9 @@ export interface Config {
   // Editor-only pointer to schema.json; never read by sense.
   $schema?: string;
   version?: number;
+  // Markdown tree to index. Relative paths resolve from the configuration file's directory;
+  // omitted keeps the historic colocated-config behavior.
+  root?: string;
   // File selection, index-time, and per-preset search defaults. A file is indexed iff any
   // preset's include/exclude covers it (union). `default` is used when a command names no preset.
   presets: Record<string, Preset>;
@@ -75,6 +78,11 @@ export interface Config {
 }
 
 export interface ResolvedConfig extends Config {
+  // Configuration and state ownership are deliberately separate from the indexed tree.
+  configDir?: string;
+  rootDir?: string;
+  // Compatibility for callers that construct a ResolvedConfig for `open()` directly. New code
+  // uses rootDir/configDir; openStore normalizes this alias to both when necessary.
   baseDir: string;
   configPath: string | null;
   // Keys the file declares that this build does not read; cli reports them.

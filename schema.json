@@ -15,6 +15,11 @@
       "enum": [1, 2, 3, 4, 5],
       "description": "Config format version. Older versions are auto-migrated (and the file rewritten) on load; a version newer than this sense build supports makes it exit with an error rather than misinterpret the file. Omit to default to 1."
     },
+    "root": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Optional markdown tree root. Relative paths resolve against the directory containing sense.config.json; omitted means that directory, preserving colocated-config behavior. Preset globs and stored paths are relative to this root, while .sense state remains beside the config."
+    },
     "presets": {
       "type": "object",
       "description": "File selection, index-time, and named search defaults. A preset is self-contained: no inheritance between presets, and no ordering -- presets may overlap freely (they are views, not partitions), and a preset whose globs match nothing is valid. A file is indexed iff any preset's include/exclude covers it (union across presets); `default` is used when a command names no preset, and must be declared. A file is embedded when the top-level `embed` block names a model and some covering preset's `signals` include `vectors`. `sense init` generates `default` plus one `large` example.",
@@ -28,7 +33,7 @@
             "type": "array",
             "items": { "type": "string" },
             "minItems": 1,
-            "description": "Glob patterns (globby syntax), resolved relative to this config file's own directory -- never the invocation cwd. Required for every preset, including `default`."
+            "description": "Glob patterns (globby syntax), resolved relative to the configured root (or the config file's directory when root is omitted) -- never the invocation cwd. Required for every preset, including `default`."
           },
           "exclude": {
             "type": "array",

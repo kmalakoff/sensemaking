@@ -294,7 +294,7 @@ export async function hydrateSearchRows(store: Store, cfg: ResolvedConfig, rows:
     if (!matchedPaths.has(row.path as string)) continue;
     let text: string;
     try {
-      text = readFileSync(join(cfg.baseDir, row.path as string), 'utf8');
+      text = readFileSync(join(cfg.rootDir ?? cfg.baseDir, row.path as string), 'utf8');
     } catch {
       continue; // vanished since the match; leave snippets/lines empty rather than throw
     }

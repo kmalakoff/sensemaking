@@ -94,9 +94,9 @@ export async function embedPending(store: Store, cfg: Config, baseDir: string): 
 // Best chunk per file by cosine, its line range riding along; FTS5 operators are stripped as
 // lexical syntax. Similarity comes back because the fused score cannot express match quality.
 export async function semanticCandidates(store: Store, cfg: Config, terms: string, fetch: number, allowed?: Set<string>): Promise<VectorCandidate[]> {
-  const baseDir = (cfg as Partial<ResolvedConfig>).baseDir;
-  if (!baseDir) throw new SenseError('EMBED_MODEL', 'semantic expansion needs a config with baseDir (use loadConfig/open)');
-  await embedPending(store, cfg, baseDir);
+  const rootDir = (cfg as Partial<ResolvedConfig>).rootDir ?? (cfg as Partial<ResolvedConfig>).baseDir;
+  if (!rootDir) throw new SenseError('EMBED_MODEL', 'semantic expansion needs a resolved config (use loadConfig/open)');
+  await embedPending(store, cfg, rootDir);
 
   const provider = await getProvider(cfg);
   const storeDims = Math.min(STORE_DIMS, provider.dims);

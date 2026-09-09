@@ -94,7 +94,9 @@ const status: Command = async (ctx) => {
     configVersion: SUPPORTED_CONFIG_VERSION,
     migratedFrom: cfg.migratedFrom ?? null,
     unknownConfigKeys: cfg.unknownKeys ?? null,
-    tree: cfg.baseDir,
+    tree: cfg.rootDir ?? cfg.baseDir,
+    treeRoot: cfg.rootDir ?? cfg.baseDir,
+    configDir: cfg.configDir ?? cfg.baseDir,
     cache: dirname(dbPath),
     db: dbPath,
     cacheSchema,
@@ -117,7 +119,8 @@ const status: Command = async (ctx) => {
     console.log(`config:   ${result.config} (v${SUPPORTED_CONFIG_VERSION}${migrated})`);
     // A load-time stderr warning has scrolled away by the time anyone looks here.
     if (cfg.unknownKeys) console.log(`          unknown keys, ignored: ${cfg.unknownKeys.join(', ')}`);
-    console.log(`tree:     ${result.tree}`);
+    console.log(`tree root: ${result.treeRoot}`);
+    console.log(`configDir: ${result.configDir}`);
     console.log(`cache:    ${result.cache} (schema ${result.cacheSchema}; delete this directory to reset)`);
     console.log(`docs:     ${result.docs}${result.unparseableFrontmatter > 0 ? `  (${result.unparseableFrontmatter} with unparseable frontmatter: WHERE _parse_error IS NOT NULL)` : ''}`);
     console.log('');

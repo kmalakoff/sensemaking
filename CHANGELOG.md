@@ -2,6 +2,15 @@
 
 All notable changes to sensemaking are documented here.
 
+## [0.24.1] - 2026-09-09
+
+### Added
+
+- **Configurations can live outside the indexed Markdown tree.** Set top-level `root` to the
+  tree path (relative to `sense.config.json` or absolute). Globs, stored paths, search hydration,
+  and `sense watch` use that root, while `.sense` cache state remains beside the configuration.
+  This lets separate consumers keep independent presets, saved queries, and caches for one vault.
+
 ## [0.24.0] - 2026-09-06
 
 ### Added

@@ -37,7 +37,7 @@ export async function relatedNotes(store: Store, cfg: ResolvedConfig, pathArg: s
   const allowed = await scopedPaths(store, cfg, overrides);
   // Top up pending rows before the seed check, or a fresh index reports every note as
   // having no indexed text until some search has run.
-  await embedPending(store, cfg, cfg.baseDir);
+  await embedPending(store, cfg, cfg.rootDir ?? cfg.baseDir);
   if (!(await hasEmbedding(store, path))) {
     throw new SenseError('NOTE_NOT_EMBEDDED', `${path} has no indexed text to compare -- a note that is frontmatter only, or empty, has nothing to rank by meaning`);
   }

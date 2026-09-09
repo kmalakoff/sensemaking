@@ -4,7 +4,7 @@ import { type Config, STORE_NAMES, type StoreName } from './types.ts';
 
 // Shape check for hand-edited files, so a typo names itself instead of surfacing as a
 // TypeError. Unknown top-level keys warn (forward compat); unknown keys inside a block error.
-const KNOWN_KEYS = new Set(['$schema', 'version', 'presets', 'features', 'embed', 'store', 'queries']);
+const KNOWN_KEYS = new Set(['$schema', 'version', 'root', 'presets', 'features', 'embed', 'store', 'queries']);
 const KNOWN_PRESET_KEYS = new Set(['include', 'exclude', 'k', 'signals', 'where']);
 const KNOWN_FEATURE_KEYS = new Set(['links', 'sections', 'tags', 'rank']);
 // The one source of truth for what the embed block accepts. schema.json carries an editor-facing
@@ -205,6 +205,10 @@ export function validateConfig(parsed: unknown, configPath: string): Config {
     throw new SenseError('CONFIG_INVALID', `${configPath}: config must be a JSON object`);
   }
   const cfg = parsed as Record<string, unknown>;
+
+  if (cfg.root !== undefined && (typeof cfg.root !== 'string' || cfg.root.length === 0)) {
+    throw new SenseError('CONFIG_INVALID', `${configPath}: root must be a non-empty path string`);
+  }
 
   // `checks` is rejected by name, not warned: silence would hide that assertions are gone.
   if (cfg.checks !== undefined) {

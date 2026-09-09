@@ -51,7 +51,7 @@ const LOCK_POLL_MS = 50;
 const lockWait = channel('sensemaking.store.lock-wait');
 
 async function connectUnlocked<Handle>(dbPath: string, cfg: ResolvedConfig, dialect: OpenDialect<Handle>): Promise<{ handle: Handle; conn: Connection }> {
-  const budgetMs = lockWaitBudgetMs(cfg.baseDir);
+  const budgetMs = lockWaitBudgetMs(cfg.configDir ?? cfg.baseDir);
   const deadline = Date.now() + budgetMs;
   for (;;) {
     try {
@@ -69,7 +69,7 @@ async function connectUnlocked<Handle>(dbPath: string, cfg: ResolvedConfig, dial
 }
 
 async function connectWithDialect<Handle>(cfg: ResolvedConfig, dialect: OpenDialect<Handle>): Promise<ConnectResult<Handle>> {
-  const stateDir = join(cfg.baseDir, STATE_DIR);
+  const stateDir = join(cfg.configDir ?? cfg.baseDir, STATE_DIR);
   mkdirSync(stateDir, { recursive: true });
   const dbPath = join(stateDir, dialect.filename);
 
@@ -79,7 +79,7 @@ async function connectWithDialect<Handle>(cfg: ResolvedConfig, dialect: OpenDial
   let closed = false;
   // Created here, not inside reconcile(): invalidate()/invalidateFeatures() below share its pool
   // with the build() call that follows them.
-  const builder = createBuilder(conn, cfg, cfg.baseDir, dialect.reconcileDialect);
+  const builder = createBuilder(conn, cfg, cfg.rootDir ?? cfg.baseDir, dialect.reconcileDialect);
   try {
     await conn.exec('CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)');
 
@@ -110,7 +110,7 @@ async function connectWithDialect<Handle>(cfg: ResolvedConfig, dialect: OpenDial
       // Null (rather than the empty set) when changedKeys isn't preset-only, or a changed
       // preset's stored segment can't be parsed back into old include/exclude/vectors -- either
       // way the branch below is skipped and the full rebuild stays the fallback.
-      const presetForced = isPresetOnlyChange(changedKeys) ? forcedPresetPaths(cfg, cfg.baseDir, features ?? '', changedKeys) : null;
+      const presetForced = isPresetOnlyChange(changedKeys) ? forcedPresetPaths(cfg, cfg.rootDir ?? cfg.baseDir, features ?? '', changedKeys) : null;
       // Null unless exactly one segment changed and it decomposes into a recognised embed-only
       // case (embed-scope.ts): anything else, including embed toggled on/off, stays null.
       const embedKind = changedKeys.size === 1 && changedKeys.has('embed') ? classifyEmbedChange(features ?? '', wantFeatures) : null;
@@ -187,6 +187,13 @@ async function connectWithDialect<Handle>(cfg: ResolvedConfig, dialect: OpenDial
 // A store's open(): connects (see connectWithDialect above), then wraps the resulting connection
 // in the Store interface. The builder's pool closes right after the initial build.
 export async function openWithDialect<Handle>(cfg: ResolvedConfig, dialect: OpenDialect<Handle>): Promise<OpenResult> {
+  // `baseDir` was the original public open() input. Keep direct API callers working while
+  // making the two ownership paths explicit for every internal operation.
+  if (!cfg.rootDir) {
+    if (!cfg.baseDir) throw new SenseError('CONFIG_INVALID', 'open requires rootDir (or legacy baseDir)');
+    cfg.rootDir = cfg.baseDir;
+  }
+  if (!cfg.configDir) cfg.configDir = cfg.rootDir;
   const { handle, conn, cfg: resolvedCfg, dbPath, parsed, warnings, stages } = await connectWithDialect(cfg, dialect);
   const store = dialect.createStore(handle, conn, resolvedCfg);
   // reconcile ran before this object existed, so its chunk text is keyed by the connection.
