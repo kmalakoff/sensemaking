@@ -1,7 +1,7 @@
 import { search } from '../commands/search.ts';
 import { printRows } from '../output/output.ts';
 import { USAGE } from './index.ts';
-import { CONFIG, FORMAT, parse, parseK, rowFormatOf, SEARCH_FLAGS, scopeOf, withDb } from './shared.ts';
+import { CONFIG, FORMAT, parse, parseK, parseSnippetCharLimit, parseSnippetCountLimit, rowFormatOf, SEARCH_FLAGS, scopeOf, withDb } from './shared.ts';
 import type { Command } from './types.ts';
 
 const searchCmd: Command = async (ctx) => {
@@ -10,7 +10,9 @@ const searchCmd: Command = async (ctx) => {
   const [terms] = positionals;
   if (!terms) ctx.usageError(usage);
   const k = parseK(values.k as string | undefined, ctx.usageError);
+  const snippetCharLimit = parseSnippetCharLimit(values['snippet-char-limit'] as string | undefined, ctx.usageError);
+  const snippetCountLimit = parseSnippetCountLimit(values['snippet-count-limit'] as string | undefined, ctx.usageError);
   const format = rowFormatOf(values);
-  await withDb(ctx, values.config as string | undefined, async (store, cfg) => printRows(await search(store, cfg, terms, { k, ...scopeOf(values) }), format));
+  await withDb(ctx, values.config as string | undefined, async (store, cfg) => printRows(await search(store, cfg, terms, { k, snippetCharLimit, snippetCountLimit, ...scopeOf(values) }), format));
 };
 export default searchCmd;

@@ -9,8 +9,22 @@ import { asCosine, hasVectorRow, pendingRows, sampleEvenly, TARGET_CHUNK_CAP } f
 // the lightest concrete one available (no optional native dependency), used only as a portable Connection, not to exercise sqlite-specific behavior.
 function makeDb(): { db: DatabaseSync; conn: Connection } {
   const db = new DatabaseSync(':memory:');
-  db.exec(`CREATE TABLE embeddings ("path" TEXT, chunk INTEGER, start_line INTEGER, end_line INTEGER, scale REAL, vector BLOB, PRIMARY KEY ("path", chunk))`);
-  return { db, conn: createConnection(db) };
+  try {
+    db.exec(`CREATE TABLE embeddings ("path" TEXT, chunk INTEGER, start_line INTEGER, end_line INTEGER, scale REAL, vector BLOB, PRIMARY KEY ("path", chunk))`);
+    return { db, conn: createConnection(db) };
+  } catch (err) {
+    db.close();
+    throw err;
+  }
+}
+
+async function withDb<T>(fn: (db: DatabaseSync, conn: Connection) => Promise<T>): Promise<T> {
+  const { db, conn } = makeDb();
+  try {
+    return await fn(db, conn);
+  } finally {
+    db.close();
+  }
 }
 
 function insertPending(db: DatabaseSync, path: string, chunk: number, start = 1, end = 1): void {
@@ -23,31 +37,33 @@ function int8(values: number[]): Buffer {
 
 describe('pendingRows', () => {
   it('returns only rows whose vector is NULL, ordered by path then chunk', async () => {
-    const { db, conn } = makeDb();
-    insertPending(db, 'b.md', 1);
-    insertPending(db, 'a.md', 0);
-    insertPending(db, 'a.md', 1);
-    await writeVectorBatch(conn, [{ path: 'a.md', chunk: 0, scale: 1, vector: int8([1]) }]);
+    await withDb(async (db, conn) => {
+      insertPending(db, 'b.md', 1);
+      insertPending(db, 'a.md', 0);
+      insertPending(db, 'a.md', 1);
+      await writeVectorBatch(conn, [{ path: 'a.md', chunk: 0, scale: 1, vector: int8([1]) }]);
 
-    assert.deepEqual(await pendingRows(conn), [
-      { path: 'a.md', chunk: 1 },
-      { path: 'b.md', chunk: 1 },
-    ]);
+      assert.deepEqual(await pendingRows(conn), [
+        { path: 'a.md', chunk: 1 },
+        { path: 'b.md', chunk: 1 },
+      ]);
+    });
   });
 });
 
 describe('hasVectorRow', () => {
   it('distinguishes no rows, rows still pending, and at least one embedded chunk', async () => {
-    const { db, conn } = makeDb();
-    assert.equal(await hasVectorRow(conn, 'missing.md'), false);
+    await withDb(async (db, conn) => {
+      assert.equal(await hasVectorRow(conn, 'missing.md'), false);
 
-    insertPending(db, 'pending.md', 0);
-    assert.equal(await hasVectorRow(conn, 'pending.md'), false);
+      insertPending(db, 'pending.md', 0);
+      assert.equal(await hasVectorRow(conn, 'pending.md'), false);
 
-    insertPending(db, 'partial.md', 0);
-    insertPending(db, 'partial.md', 1);
-    await writeVectorBatch(conn, [{ path: 'partial.md', chunk: 1, scale: 1, vector: int8([1]) }]);
-    assert.equal(await hasVectorRow(conn, 'partial.md'), true);
+      insertPending(db, 'partial.md', 0);
+      insertPending(db, 'partial.md', 1);
+      await writeVectorBatch(conn, [{ path: 'partial.md', chunk: 1, scale: 1, vector: int8([1]) }]);
+      assert.equal(await hasVectorRow(conn, 'partial.md'), true);
+    });
   });
 });
 

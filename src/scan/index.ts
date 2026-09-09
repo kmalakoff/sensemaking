@@ -29,6 +29,7 @@ export interface ParsedDoc {
 }
 
 export function parseFile(file: FileStat, extractors: Feature[] = [], cfg?: Config): { doc: ParsedDoc; warnings: string[] } {
+  // Preserve the authored bytes: feature extractors and section offsets use the raw document.
   const raw = readFileSync(file.absPath, 'utf8');
   const warnings: string[] = [];
 

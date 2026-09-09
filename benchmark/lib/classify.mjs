@@ -12,7 +12,8 @@
 //   fell      a quality-kind row that got worse.
 //   failed    the measuring command exited nonzero on the working tree; carries the stderr line.
 //   no-prior  nothing to compare against; never blocks.
-// moved, contract, fell and failed are BLOCK reasons; flat, noise, faster and no-prior never block.
+// This module records observations only. verdict.mjs applies release severity from validity and
+// explicit requirements, so a historical movement is not a release block by itself.
 export const BLOCK_VERDICTS = new Set(['moved', 'contract', 'fell', 'failed']);
 
 const pct = (delta) => `${(delta * 100).toFixed(1)}%`;

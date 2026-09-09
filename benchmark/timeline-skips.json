@@ -1,0 +1,11 @@
+{
+  "note": "Version-store pairs tools/timeline.mjs never measures. Added by hand after reading a kill log; the tool never writes this file. Delete an entry to measure the pair again, or pass --retry-killed for one sitting.",
+  "skips": [
+    {
+      "version": "0.19.0",
+      "store": "turso",
+      "why": "quadratic cold build (fixed in 0.19.1), 2h+ per run, not worth the machine time",
+      "killed": ["2026-09-02 x3 at 20 min", "2026-09-06 at 120 min"]
+    }
+  ]
+}

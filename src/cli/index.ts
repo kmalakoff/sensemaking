@@ -8,7 +8,7 @@ export const USAGE = {
   status: 'status [--format table|json] [--config path]',
   download: 'download [--config path]',
   sql: 'sql "<statement>" [params...] [--preset name] [--format table|json|csv] [--config path]',
-  search: 'search "<terms>" [--preset name] [--include glob ...] [--exclude glob ...] [--no-exclude] [--where "<sql>"] [--k n] [--format table|json|csv] [--config path]',
+  search: 'search "<terms>" [--preset name] [--include glob ...] [--exclude glob ...] [--no-exclude] [--where "<sql>"] [--k n] [--snippet-char-limit n] [--snippet-count-limit n] [--format table|json|csv] [--config path]',
   map: 'map [--format table|json] [--config path]',
   peek: 'peek <path> [--preset name] [--include glob ...] [--exclude glob ...] [--no-exclude] [--where "<sql>"] [--format table|json] [--config path]',
   path: 'path <a> <b> [--preset name] [--include glob ...] [--exclude glob ...] [--no-exclude] [--where "<sql>"] [--max-depth n] [--format table|json] [--config path]',

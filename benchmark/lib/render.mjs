@@ -35,7 +35,7 @@ export function cellFor(row, value) {
 // Renders one row per catalog entry across N result objects, keyed by column label
 // (compare.mjs's per-version columns, report.mjs's prior/current pair).
 export function renderRowsTable(catalogRows, columns, resultsByColumn) {
-  const headers = ['metric', ...columns];
-  const rows = catalogRows.map((row) => [row.label, ...columns.map((c) => cellFor(row, rowValue(resultsByColumn[c], row.key)))]);
+  const headers = ['metric', 'comparison class', ...columns];
+  const rows = catalogRows.map((row) => [row.label, row.comparison_class ?? 'unrecorded', ...columns.map((c) => cellFor(row, rowValue(resultsByColumn[c], row.key)))]);
   return mdTable(headers, rows);
 }

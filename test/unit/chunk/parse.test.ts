@@ -157,9 +157,8 @@ describe('parse: parity classes from the 3.38 spike', () => {
   });
 });
 
-// Where a linkify span and the old GFM autolink-literal machine disagree, the extracted text
-// still lands where the old pipeline's did. Every expectation was pinned against the old
-// mdast pipeline (pool-spike dist) before the swap.
+// Where a linkify span and GFM's autolink-literal rules disagree on a boundary, these
+// expectations pin one resolution so a parser change cannot silently redraw it.
 describe('parse + extract: autolink boundary parity with the old pipeline', () => {
   it('a bracketed <https> leaf autolink is dropped whole, brackets included', () => {
     assert.equal(extractText(parse('See <https://a.b/c> here.')[0]), 'See  here.');

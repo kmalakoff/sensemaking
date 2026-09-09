@@ -2,7 +2,7 @@ import assert from 'node:assert';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { segmentField, segmentMatch } from '../../../src/text/segment.ts';
+import { searchTokens, segmentField, segmentMatch } from '../../../src/text/segment.ts';
 import { runCli as spawnCli } from '../../lib/cli.ts';
 import { scratchDir } from '../../lib/scratch.ts';
 
@@ -58,6 +58,17 @@ describe('segmentMatch', () => {
       assert.equal(segmentMatch(input), want);
     });
   }
+});
+
+describe('searchTokens', () => {
+  it('rejects an orphan combining mark while retaining NFD marks after a base', () => {
+    assert.deepEqual(searchTokens('\u0301'), []);
+    const tokens = searchTokens('re\u0301sume');
+    assert.deepEqual(
+      tokens.map((token) => token.text),
+      ['re\u0301sume']
+    );
+  });
 });
 
 describe('segmentMatch: unqualified rewrites are valid, composable FTS5 syntax', () => {

@@ -1,16 +1,49 @@
 import assert from 'node:assert';
+import { join } from 'node:path';
 import { DuckDBInstance } from '@duckdb/node-api';
 import type { SenseError } from '../../../../src/errors.ts';
 import { createConnection } from '../../../../src/store/duckdb/connection.ts';
-import { createLexicalIndex } from '../../../../src/store/duckdb/lexical.ts';
+import { createLexicalIndex, markContentStale } from '../../../../src/store/duckdb/lexical.ts';
+import { getMeta } from '../../../../src/store/shared.ts';
 import type { Connection } from '../../../../src/store/types.ts';
+import { tmpTree } from '../../../lib/tree.ts';
 
 async function makeConn(): Promise<Connection> {
   const instance = await DuckDBInstance.create(':memory:');
   const duckdb = await instance.connect();
   const conn = createConnection(duckdb);
   await conn.exec(`CREATE TABLE content ("path" TEXT PRIMARY KEY, title TEXT, summary TEXT, text TEXT)`);
+  await conn.exec('CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)');
   return conn;
+}
+
+// File-backed (not :memory:), so a second connection can reopen the same on-disk state after the
+// first closes -- what a fresh CLI process actually does, per PLAN 3.60.
+async function openFileConn(dbPath: string): Promise<{ conn: Connection; close: () => void }> {
+  const instance = await DuckDBInstance.create(dbPath);
+  const duckdb = await instance.connect();
+  const conn = createConnection(duckdb);
+  await conn.exec(`CREATE TABLE IF NOT EXISTS content ("path" TEXT PRIMARY KEY, title TEXT, summary TEXT, text TEXT)`);
+  await conn.exec('CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)');
+  return {
+    conn,
+    close: () => {
+      duckdb.disconnectSync();
+      instance.closeSync();
+    },
+  };
+}
+
+// Spies on the real exec() to count PRAGMA create_fts_index calls -- a discrete fact, not a
+// timing measurement, so it proves a rebuild did or didn't run rather than merely how long it took.
+function countFtsRebuilds(conn: Connection): () => number {
+  const real = conn.exec.bind(conn);
+  let count = 0;
+  conn.exec = async (sql: string) => {
+    if (sql.includes('create_fts_index')) count++;
+    return real(sql);
+  };
+  return () => count;
 }
 
 async function insertDoc(conn: Connection, path: string, title: string, summary: string, text: string): Promise<void> {
@@ -31,7 +64,7 @@ describe('queryLexical (duckdb)', () => {
       hits.map((h) => h.path),
       ['a.md']
     );
-    assert.equal(hits[0].hit, null, 'no snippet() equivalent -- hit is always null');
+    assert.deepEqual(Object.keys(hits[0]), ['path'], 'a lexical hit is a match and nothing else; snippets are cut above the store');
   });
 
   it('a title hit outranks a body-only hit (field weighting)', async () => {
@@ -70,16 +103,36 @@ describe('queryLexical (duckdb)', () => {
     );
   });
 
-  it('a quoted punctuated term matches as an exact substring, unsplit by punctuation', async () => {
+  it('verifies a large authored field in one bounded post-filter pass', async () => {
+    const conn = await makeConn();
+    const large = `${'padding '.repeat(120_000)}needle target`;
+    await insertDoc(conn, 'large.md', '', '', large);
+    const { query } = createLexicalIndex(conn);
+    const hits = await query('"needle target"', { ...BASE, limit: 1 });
+    assert.deepEqual(
+      hits.map((hit) => hit.path),
+      ['large.md']
+    );
+  });
+
+  it('a quoted punctuated phrase matches adjacent words across punctuation', async () => {
     const conn = await makeConn();
     await insertDoc(conn, 'hit.md', '', '', 'a customer-facing dashboard');
-    await insertDoc(conn, 'miss.md', '', '', 'a customer facing away from the dashboard');
+    await insertDoc(conn, 'spaced.md', '', '', 'a customer facing away from the dashboard');
     const { query } = createLexicalIndex(conn);
-    const hits = await query('"customer-facing"', { ...BASE, limit: 10 });
+    const hits = await query('"Customer-Facing"', { ...BASE, limit: 10 });
     assert.deepEqual(
       hits.map((h) => h.path),
-      ['hit.md']
+      ['hit.md', 'spaced.md']
     );
+  });
+
+  it('a quoted punctuation-only phrase is empty, even when mixed with a word', async () => {
+    const conn = await makeConn();
+    await insertDoc(conn, 'hit.md', '', '', 'apple dashboard');
+    const { query } = createLexicalIndex(conn);
+    assert.deepEqual(await query('"!!!"', { ...BASE, limit: 10 }), []);
+    assert.deepEqual(await query('apple "!!!"', { ...BASE, limit: 10 }), []);
   });
 
   it('an unspaced-script (CJK) run is found via contains(), unquoted', async () => {
@@ -118,7 +171,7 @@ describe('queryLexical (duckdb)', () => {
       []
     );
     await insertDoc(conn, 'b.md', 'second', '', 'second body');
-    markStale();
+    await markStale();
     assert.deepEqual(
       (await query('second', { ...BASE, limit: 10 })).map((h) => h.path),
       ['b.md']
@@ -182,5 +235,51 @@ describe('queryLexical (duckdb): rejected FTS5 operators', () => {
       hits.map((h) => h.path),
       ['a.md']
     );
+  });
+});
+
+// PLAN 3.60: a fresh connection must trust meta.fts_stale over assuming stale, or every CLI
+// invocation pays a full rebuild regardless of whether content changed since the last one.
+describe('queryLexical (duckdb): fts staleness persists across connections (PLAN 3.60)', () => {
+  it('a second connection over an unchanged cache does not rebuild', async () => {
+    const dbPath = join(tmpTree(), 'cache.duckdb');
+    const first = await openFileConn(dbPath);
+    await insertDoc(first.conn, 'a.md', 'first', '', 'first body');
+    await createLexicalIndex(first.conn).query('first', { ...BASE, limit: 10 });
+    assert.equal(await getMeta(first.conn, 'fts_stale'), '0');
+    first.close();
+
+    const second = await openFileConn(dbPath);
+    assert.equal(await getMeta(second.conn, 'fts_stale'), '0', "the clear must have persisted to disk, not just this connection's memory");
+    const rebuilds = countFtsRebuilds(second.conn);
+    const hits = await createLexicalIndex(second.conn).query('first', { ...BASE, limit: 10 });
+    assert.deepEqual(
+      hits.map((h) => h.path),
+      ['a.md']
+    );
+    assert.equal(rebuilds(), 0, 'unchanged content must not pay another create_fts_index rebuild');
+    second.close();
+  });
+
+  it('content changed between connections does rebuild', async () => {
+    const dbPath = join(tmpTree(), 'cache.duckdb');
+    const first = await openFileConn(dbPath);
+    await insertDoc(first.conn, 'a.md', 'first', '', 'first body');
+    await createLexicalIndex(first.conn).query('first', { ...BASE, limit: 10 });
+    first.close();
+
+    const second = await openFileConn(dbPath);
+    await insertDoc(second.conn, 'b.md', 'second', '', 'second body');
+    // Mirrors what reconcileContent (reconcile.ts) does inside its own transaction when content changes.
+    await markContentStale(second.conn);
+    const rebuilds = countFtsRebuilds(second.conn);
+    const hits = await createLexicalIndex(second.conn).query('second', { ...BASE, limit: 10 });
+    assert.deepEqual(
+      hits.map((h) => h.path),
+      ['b.md']
+    );
+    assert.equal(rebuilds(), 1, 'changed content must rebuild exactly once');
+    assert.equal(await getMeta(second.conn, 'fts_stale'), '0');
+    second.close();
   });
 });

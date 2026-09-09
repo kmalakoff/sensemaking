@@ -4,8 +4,8 @@ import { tursoOpenDialect } from '../../../src/store/turso/open.ts';
 
 // isLocked decides whether connectUnlocked retries or gives up, and each engine words the refusal
 // differently per platform. The Windows phrasings are absent from every posix run, so a matcher
-// narrowed to posix passes locally and fails only on Windows CI, which is how it happened
-// (run 33635519373). These are the verbatim messages from that run.
+// narrowed to posix passes locally and fails only on Windows CI. These are each engine's verbatim
+// messages, not paraphrased.
 const LOCKED = {
   duckdb: [
     ['posix', 'IO Error: Could not set lock on file "/tmp/t/.sense/cache.duckdb": Conflicting lock is held in /usr/bin/node (PID 4242)'],

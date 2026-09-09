@@ -9,8 +9,10 @@
 // A published version's numbers never change, so a result already on disk is never re-measured.
 // Delete a file to re-measure it; delete the directory to start over.
 //
+// timeline-skips.json lists pairs never worth measuring. It is written by hand, never by this tool.
+//
 // usage: node benchmark/tools/timeline.mjs [--corpus <name>] [--repeats 3] [--out <dir>]
-//                                          [--timeout <ms>] [--no-timeouts] [--dry-run]
+//                                          [--timeout <ms>] [--no-timeouts] [--retry-killed] [--dry-run]
 import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { cpus, loadavg } from 'node:os';
@@ -21,7 +23,7 @@ import { quietMachineCheck } from '../lib/quiet-machine.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const {
-  values: { corpus, repeats: repeatsArg, out: outArg, timeout: timeoutArg, 'dry-run': dryRun, 'no-timeouts': noTimeouts },
+  values: { corpus, repeats: repeatsArg, out: outArg, timeout: timeoutArg, 'dry-run': dryRun, 'no-timeouts': noTimeouts, 'retry-killed': retryKilled },
 } = parseArgs({
   options: {
     corpus: { type: 'string', default: 'obsidian-hub' },
@@ -30,6 +32,7 @@ const {
     timeout: { type: 'string' },
     'dry-run': { type: 'boolean', default: false },
     'no-timeouts': { type: 'boolean', default: false },
+    'retry-killed': { type: 'boolean', default: false },
   },
 });
 const repeats = Number(repeatsArg);
@@ -39,7 +42,7 @@ const outDir = outArg ?? join(ROOT, '.tmp', 'timeline', corpus);
 // An early version can be orders of magnitude slower than a current one, which is the finding
 // rather than a fault, so the budget is the caller's to set. --no-timeouts lets a slow version
 // take as long as it takes.
-const timeout = noTimeouts ? undefined : Number(timeoutArg ?? 2 * 60 * 60_000);
+const timeout = noTimeouts ? undefined : Number(timeoutArg ?? 30 * 60_000);
 
 // Work that would contend with a measurement. A sitting taken alongside any of these is not one
 // sitting, and the numbers cannot be compared with the rest of the series.
@@ -78,6 +81,7 @@ function reapStragglers() {
   return reaped;
 }
 
+const SKIPS_FILE = join(ROOT, 'benchmark', 'timeline-skips.json');
 const cacheDir = join(ROOT, '.tmp', 'cache');
 const pkgRoot = (v) => join(cacheDir, `sensemaking-${v}`, 'node_modules', 'sensemaking');
 
@@ -113,11 +117,42 @@ const wanted = [];
 for (let repeat = 1; repeat <= repeats; repeat++) for (const pair of matrix) wanted.push({ ...pair, repeat });
 const todo = wanted.filter(({ version, store, repeat }) => !existsSync(join(outDir, `${version}-${store}-${repeat}.json`)));
 
+// A pair killed at the budget is killed again on every repeat, so the kill logs on disk drop the
+// rest of that pair's repeats and a stopped sitting resumes knowing it. A plain exit is retried.
+function killedPairs() {
+  const pairs = new Set();
+  if (!existsSync(outDir)) return pairs;
+  for (const f of readdirSync(outDir)) {
+    const m = /^(.+)-([^-]+)-(\d+)\.log$/.exec(f);
+    if (!m || !/killed at the \d+ min budget/.test(readFileSync(join(outDir, f), 'utf8'))) continue;
+    pairs.add(`${m[1]}-${m[2]}`);
+  }
+  return pairs;
+}
+
+// Pairs the owner has ruled out. A malformed file throws rather than silently measuring everything.
+function listedSkips() {
+  if (!existsSync(SKIPS_FILE)) return new Map();
+  const { skips } = JSON.parse(readFileSync(SKIPS_FILE, 'utf8'));
+  return new Map(skips.map((s) => [`${s.version}-${s.store}`, `listed in benchmark/timeline-skips.json, ${s.why}`]));
+}
+
+const listed = listedSkips();
+const skipReasons = retryKilled ? new Map() : new Map(listed);
+if (!retryKilled) for (const pair of killedPairs()) if (!skipReasons.has(pair)) skipReasons.set(pair, 'an earlier attempt was killed at the budget');
+
+const skipped = [];
+const runnable = [];
+const skipLine = ({ version, store, repeat }) => `skipping ${version}/${store} #${repeat}: ${skipReasons.get(`${version}-${store}`)}`;
+for (const run of todo) (skipReasons.has(`${run.version}-${run.store}`) ? skipped : runnable).push(run);
+
 console.log(`corpus ${corpus}, ${populated.length} versions installed, ${repeats} repeats`);
 console.log(`results: ${outDir}`);
 if (hollow.length) console.log(`not installed, so not measured: ${hollow.join(', ')}`);
-console.log(`${wanted.length} runs in the matrix, ${wanted.length - todo.length} already on disk, ${todo.length} to run`);
+console.log(`${wanted.length} runs in the matrix, ${wanted.length - todo.length} already on disk, ${runnable.length} to run`);
 console.log(`timeout: ${timeout === undefined ? 'none' : `${Math.round(timeout / 60000)} min`}`);
+for (const run of skipped) console.log(skipLine(run));
+if (skipped.length) console.log(`${skipped.length} run(s) skipped; --retry-killed measures them anyway`);
 for (const v of populated) console.log(`  ${v}: ${storesOf(v).join(', ')}`);
 if (dryRun) process.exit(0);
 
@@ -142,7 +177,12 @@ const contended = [];
 let done = 0;
 let failed = 0;
 
-for (const { version, store, repeat } of todo) {
+for (const { version, store, repeat } of runnable) {
+  if (skipReasons.has(`${version}-${store}`)) {
+    skipped.push({ version, store, repeat });
+    console.log(skipLine({ version, store, repeat }));
+    continue;
+  }
   const out = join(outDir, `${version}-${store}-${repeat}.json`);
   const at = Date.now();
   const r = spawnSync(process.execPath, [join(ROOT, 'benchmark', 'steps', 'measure-tree.mjs'), pkgRoot(version), corpus, '--store', store, '--out', out], { cwd: ROOT, encoding: 'utf8', timeout, killSignal: 'SIGKILL' });
@@ -156,12 +196,19 @@ for (const { version, store, repeat } of todo) {
     console.log(`${version}/${store} #${repeat}: ok in ${mins}m`);
   } else {
     failed++;
-    const why = r.signal === 'SIGKILL' ? `killed at the ${Math.round((timeout ?? 0) / 60000)} min budget` : `exit ${r.status}`;
+    const wasKilled = r.signal === 'SIGKILL';
+    const why = wasKilled ? `killed at the ${Math.round((timeout ?? 0) / 60000)} min budget` : `exit ${r.status}`;
+    if (wasKilled) skipReasons.set(`${version}-${store}`, 'an earlier attempt was killed at the budget');
     writeFileSync(join(outDir, `${version}-${store}-${repeat}.log`), `${new Date(at).toISOString()}\n${why} after ${mins}m\n${r.stderr ?? ''}`);
     console.error(`${version}/${store} #${repeat}: FAILED, ${why} after ${mins}m`);
     reapStragglers();
   }
 }
 
-writeFileSync(join(outDir, '_sitting.json'), JSON.stringify({ corpus, repeats, timeout_ms: timeout ?? null, started, finished: new Date().toISOString(), cores: cpus().length, load_start: loadStart, load_end: loadavg()[0], matrix: matrix.length, ran: todo.length, done, failed, hollow, contended }, null, 2));
+writeFileSync(join(outDir, '_sitting.json'), JSON.stringify({ corpus, repeats, timeout_ms: timeout ?? null, started, finished: new Date().toISOString(), cores: cpus().length, load_start: loadStart, load_end: loadavg()[0], matrix: matrix.length, ran: done + failed, done, failed, hollow, skipped, contended }, null, 2));
 console.log(`\n${done} ok, ${failed} failed. ${join(outDir, '_sitting.json')}`);
+for (const pair of skipReasons.keys()) {
+  if (listed.has(pair)) continue;
+  const [version, store] = [pair.slice(0, pair.lastIndexOf('-')), pair.slice(pair.lastIndexOf('-') + 1)];
+  console.log(`${version}/${store} was killed at the budget; add it to benchmark/timeline-skips.json to stop measuring it`);
+}

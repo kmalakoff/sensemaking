@@ -24,11 +24,12 @@ function makeTree(): string {
 describe('search', () => {
   it('BM25 matches carry via=match with a snippet', async () => {
     const { store: db, cfg } = await openTree(makeTree());
-    const rows = (await search(db, cfg, 'price')) as Array<{ path: string; via: string; hit: string }>;
+    const rows = (await search(db, cfg, 'price')) as Array<{ path: string; via: string; snippets: string[] }>;
     const floor = rows.find((r) => r.path === 'floor.md');
     assert.ok(floor, `expected floor.md in results: ${JSON.stringify(rows.map((r) => r.path))}`);
     assert.ok(floor.via.includes('match'));
-    assert.ok(/«pric/i.test(floor.hit), `no highlighted match in: ${floor.hit}`);
+    assert.equal(floor.snippets.length, 1);
+    assert.ok(/«pric/i.test(floor.snippets[0]), `no highlighted match in: ${floor.snippets[0]}`);
   });
 
   it('link expansion surfaces a connected note that never contains the terms, via=link', async () => {
@@ -531,14 +532,16 @@ describe('search error coverage beyond ad-hoc search', () => {
 });
 
 describe('search on oversized docs', () => {
-  it('overlapping terms never duplicate document text in the excerpt', async () => {
+  it('overlapping terms never duplicate document text in the snippet', async () => {
     const baseDir = tmpTree();
     const filler = 'lorem ipsum dolor sit amet consectetur adipiscing elit '.repeat(2000);
     write(baseDir, 'big.md', `${filler}\n\nwe test tests here and testing continues\n\n${filler}`, { title: 'Big' });
     const { store: db, cfg } = await openTree(baseDir);
     // "test" occurs inside "tests"/"testing": overlapping spans must be absorbed, not re-emitted.
     const rows = await search(db, cfg, 'test OR tests', { k: 5 });
-    const hit = rows.find((r) => r.path === 'big.md')?.hit as string;
+    const big = rows.find((r) => r.path === 'big.md');
+    assert.ok(big, `expected big.md in results: ${JSON.stringify(rows.map((r) => r.path))}`);
+    const hit = (big.snippets as string[])[0];
     assert.ok(hit.includes('«test»'), hit);
     assert.ok(!/»«/.test(hit), `adjacent re-emitted spans in: ${hit}`);
     assert.ok(hit.includes('«tests»'), `longest span should win the tie: ${hit}`);
@@ -558,31 +561,31 @@ describe('search on oversized docs', () => {
     return baseDir;
   }
 
-  it('computes a JS excerpt with the term highlighted and a section-backed lines range', async () => {
+  it('computes a JS snippet with the term highlighted and a section-backed lines range', async () => {
     const { store: db, cfg } = await openTree(bigTree());
-    const rows = (await search(db, cfg, 'zzxyzzy')) as Array<{ path: string; hit: string | null; lines: string | null }>;
+    const rows = (await search(db, cfg, 'zzxyzzy')) as Array<{ path: string; snippets: string[]; lines: string | null }>;
     const big = rows.find((r) => r.path === 'big.md');
     assert.ok(big, `expected big.md in results: ${JSON.stringify(rows.map((r) => r.path))}`);
-    assert.ok(big.hit !== null, 'expected a JS-computed excerpt, not null');
-    assert.ok(big.hit.includes('«zzxyzzy»'), `expected the marker highlighted: ${big.hit}`);
+    assert.equal(big.snippets.length, 1, 'expected a JS-computed snippet');
+    assert.ok(big.snippets[0].includes('«zzxyzzy»'), `expected the marker highlighted: ${big.snippets[0]}`);
     assert.match(big.lines as string, /^L\d+-\d+$/, `expected a section-backed lines range: ${big.lines}`);
   });
 
-  it('a via=link row pulled in from the oversized doc still has a null hit', async () => {
+  it('a via=link row pulled in from the oversized doc still has an empty snippets array', async () => {
     const { store: db, cfg } = await openTree(bigTree());
-    const rows = (await search(db, cfg, 'zzxyzzy')) as Array<{ path: string; via: string; hit: string | null }>;
+    const rows = (await search(db, cfg, 'zzxyzzy')) as Array<{ path: string; via: string; snippets: string[] }>;
     const other = rows.find((r) => r.path === 'other.md');
     assert.ok(other, `expected other.md via link: ${JSON.stringify(rows.map((r) => r.path))}`);
     assert.equal(other.via, 'link');
-    assert.equal(other.hit, null);
+    assert.deepEqual(other.snippets, []);
   });
 
   it('a small note in the same tree still gets an ordinary FTS5 snippet', async () => {
     const { store: db, cfg } = await openTree(bigTree());
-    const rows = (await search(db, cfg, 'unrelated')) as Array<{ path: string; hit: string | null }>;
+    const rows = (await search(db, cfg, 'unrelated')) as Array<{ path: string; snippets: string[] }>;
     const other = rows.find((r) => r.path === 'other.md');
     assert.ok(other, `expected other.md matched directly: ${JSON.stringify(rows.map((r) => r.path))}`);
-    assert.ok(other.hit?.includes('«unrelated»'), `expected an ordinary snippet: ${other.hit}`);
+    assert.ok(other.snippets[0]?.includes('«unrelated»'), `expected an ordinary snippet: ${other.snippets[0]}`);
   });
 
   it('completes well under a second, not the multi-second snippet() cliff', async () => {
@@ -591,6 +594,132 @@ describe('search on oversized docs', () => {
     await search(db, cfg, 'zzxyzzy');
     const elapsed = Date.now() - start;
     assert.ok(elapsed < 2000, `search took ${elapsed}ms`);
+  });
+});
+
+describe('search snippets: char limit, count limit, word edges', () => {
+  it('a snippet never exceeds the char limit, markers and ellipses included, and its edges land on word boundaries', async () => {
+    const baseDir = tmpTree();
+    const body = 'The quick brown fox jumps over the lazy dog while researchers observe quietly nearby in the misty morning air.';
+    write(baseDir, 'a.md', body, { title: 'A' });
+    const { store: db, cfg } = await openTree(baseDir);
+    const charLimit = 20;
+    const rows = (await search(db, cfg, 'jumps', { snippetCharLimit: charLimit })) as Array<{ path: string; snippets: string[] }>;
+    const row = rows.find((r) => r.path === 'a.md');
+    assert.ok(row, `expected a.md to match: ${JSON.stringify(rows.map((r) => r.path))}`);
+    const snippet = row.snippets[0];
+    // The rendered string is what a caller budgets for and what costs context, so the limit
+    // bounds it directly -- guillemets and ellipses count, not just the underlying document text.
+    assert.ok(snippet.length <= charLimit, `rendered snippet exceeded --snippet-char-limit ${charLimit} (${snippet.length} chars): ${JSON.stringify(snippet)}`);
+    const stripped = snippet.replace(/[«»]/g, '').replace(/^…/, '').replace(/…$/, '');
+    const firstWord = stripped.match(/^[A-Za-z]+/)?.[0];
+    const lastWord = stripped.match(/[A-Za-z]+$/)?.[0];
+    if (firstWord) {
+      const idx = body.indexOf(firstWord);
+      assert.ok(idx === 0 || !/[A-Za-z]/.test(body[idx - 1]), `snippet starts mid-word: ${JSON.stringify(snippet)}`);
+    }
+    if (lastWord) {
+      const idx = body.lastIndexOf(lastWord);
+      const after = idx + lastWord.length;
+      assert.ok(after >= body.length || !/[A-Za-z]/.test(body[after]), `snippet ends mid-word: ${JSON.stringify(snippet)}`);
+    }
+    await db.close();
+  });
+
+  it('a dense-match note (every word marked) still renders within the limit, at several limits', async () => {
+    const baseDir = tmpTree();
+    const body = Array(20).fill('the').join(' ');
+    write(baseDir, 'a.md', body, { title: 'Dense' });
+    const { store: db, cfg } = await openTree(baseDir);
+    for (const charLimit of [30, 80, 120]) {
+      const rows = (await search(db, cfg, 'the', { snippetCharLimit: charLimit })) as Array<{ path: string; snippets: string[] }>;
+      const row = rows.find((r) => r.path === 'a.md');
+      assert.ok(row, `expected a.md to match at limit ${charLimit}: ${JSON.stringify(rows.map((r) => r.path))}`);
+      const snippet = row.snippets[0];
+      assert.ok(snippet.length <= charLimit, `limit ${charLimit}: rendered length ${snippet.length} exceeded it: ${JSON.stringify(snippet)}`);
+      assert.ok(snippet.includes('«the»'), `limit ${charLimit}: expected at least one marked word: ${JSON.stringify(snippet)}`);
+    }
+    await db.close();
+  });
+
+  it('a count of 2 returns two non-overlapping snippets in document order', async () => {
+    const baseDir = tmpTree();
+    const filler = 'lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor incididunt ut labore '.repeat(3);
+    const body = `first passage mentions gazelle herds at dawn near the river. ${filler} second passage mentions gazelle migration patterns across the plains at dusk.`;
+    write(baseDir, 'a.md', body, { title: 'A' });
+    const { store: db, cfg } = await openTree(baseDir);
+    const rows = (await search(db, cfg, 'gazelle', { snippetCountLimit: 2 })) as Array<{ path: string; snippets: string[] }>;
+    const row = rows.find((r) => r.path === 'a.md');
+    assert.ok(row, `expected a.md to match: ${JSON.stringify(rows.map((r) => r.path))}`);
+    assert.equal(row.snippets.length, 2, `expected two snippets: ${JSON.stringify(row.snippets)}`);
+    assert.ok(body.indexOf('herds') < body.indexOf('migration'), 'fixture invariant: herds precedes migration');
+    assert.ok(row.snippets[0].includes('herds'), `expected the earlier passage first: ${JSON.stringify(row.snippets)}`);
+    assert.ok(row.snippets[1].includes('migration'), `expected the later passage second: ${JSON.stringify(row.snippets)}`);
+    await db.close();
+  });
+
+  it('the default snippet count (1) matches an explicit count of 1, byte for byte', async () => {
+    const baseDir = tmpTree();
+    const filler = 'lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor incididunt ut labore '.repeat(3);
+    const body = `first passage mentions gazelle herds at dawn near the river. ${filler} second passage mentions gazelle migration patterns across the plains at dusk.`;
+    write(baseDir, 'a.md', body, { title: 'A' });
+    const { store: db, cfg } = await openTree(baseDir);
+    const defaultRows = (await search(db, cfg, 'gazelle')) as Array<{ path: string; snippets: string[] }>;
+    const explicitRows = (await search(db, cfg, 'gazelle', { snippetCountLimit: 1 })) as Array<{ path: string; snippets: string[] }>;
+    const a = defaultRows.find((r) => r.path === 'a.md');
+    const b = explicitRows.find((r) => r.path === 'a.md');
+    assert.ok(a && b, 'expected a.md in both result sets');
+    assert.equal(a?.snippets.length, 1);
+    assert.deepEqual(a?.snippets, b?.snippets);
+    await db.close();
+  });
+});
+
+describe('search snippets: rendering across formats', () => {
+  function twoSnippetTree(): string {
+    const baseDir = tmpTree();
+    writeFileSync(join(baseDir, 'sense.config.json'), JSON.stringify({ version: 4, presets: { default: { include: ['*.md'] } }, queries: {} }));
+    const filler = 'lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor incididunt ut labore '.repeat(3);
+    writeNote(baseDir, 'a.md', { body: `first passage mentions gazelle herds at dawn near the river. ${filler} second passage mentions gazelle migration patterns across the plains at dusk.` });
+    return baseDir;
+  }
+
+  it('json renders a two-snippet row as an array', () => {
+    const dir = twoSnippetTree();
+    const result = runCli(['search', 'gazelle', '--snippet-count-limit', '2', '--format', 'json'], { cwd: dir });
+    assert.equal(result.status, 0, result.stderr);
+    const rows = JSON.parse(result.stdout) as Row[];
+    const row = rows.find((r) => r.path === 'a.md');
+    assert.ok(row, `expected a.md: ${result.stdout}`);
+    assert.equal((row.snippets as string[]).length, 2);
+  });
+
+  it('csv renders a two-snippet row joined with a newline inside a quoted field', () => {
+    const dir = twoSnippetTree();
+    const result = runCli(['search', 'gazelle', '--snippet-count-limit', '2', '--format', 'csv'], { cwd: dir });
+    assert.equal(result.status, 0, result.stderr);
+    const header = result.stdout.split('\n')[0].split(',');
+    assert.ok(header.includes('snippets'), `expected a snippets column: ${header}`);
+    assert.match(result.stdout, /"[^"]*\n[^"]*"/, `expected an embedded newline inside a quoted field: ${result.stdout}`);
+  });
+
+  it('table renders a two-snippet row as two physical lines', () => {
+    const dir = twoSnippetTree();
+    const result = runCli(['search', 'gazelle', '--snippet-count-limit', '2'], { cwd: dir });
+    assert.equal(result.status, 0, result.stderr);
+    const lines = result.stdout.trimEnd().split('\n');
+    assert.equal(lines.length, 4, `expected header, separator, and two physical body lines: ${JSON.stringify(lines)}`);
+    assert.ok(lines[2].startsWith('a.md'), `expected the row's first line to carry the path: ${JSON.stringify(lines)}`);
+    assert.ok(!lines[3].startsWith('a.md') && lines[3].trim().length > 0, `expected a non-empty, blank-padded continuation line: ${JSON.stringify(lines)}`);
+  });
+
+  it('a single-line row (the default snippet count) is unchanged in table output', () => {
+    const dir = twoSnippetTree();
+    const result = runCli(['search', 'gazelle'], { cwd: dir });
+    assert.equal(result.status, 0, result.stderr);
+    const lines = result.stdout.trimEnd().split('\n');
+    assert.equal(lines.length, 3, `expected header, separator, and exactly one body line: ${JSON.stringify(lines)}`);
+    assert.ok(lines[2].startsWith('a.md'));
   });
 });
 

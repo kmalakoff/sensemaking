@@ -54,12 +54,13 @@ function installOnce(specifier: string, nodeModulesPath: string): Promise<void> 
 }
 
 // Node caches a bare specifier's resolution, including a "not found" miss, for the process
-// lifetime; importing the entry by an absolute file: URL instead of the bare name sidesteps that.
-function resolveEntryUrl(importName: string, nodeModulesPath: string): string {
+// lifetime; use the installed entry directly, as a URL for ESM and a path for CJS.
+function resolveEntrySpecifier(importName: string, nodeModulesPath: string): string {
   const pkgDir = join(nodeModulesPath, ...importName.split('/'));
   const pkg = JSON.parse(readFileSync(join(pkgDir, 'package.json'), 'utf8')) as { main?: string; exports?: string };
   const entry = typeof pkg.exports === 'string' ? pkg.exports : (pkg.main ?? 'index.js');
-  return pathToFileURL(join(pkgDir, entry)).href;
+  const entryPath = join(pkgDir, entry);
+  return typeof require === 'undefined' ? pathToFileURL(entryPath).href : entryPath;
 }
 
 // Import-then-install-then-retry, over an injectable importName so the failure path can be
@@ -78,7 +79,7 @@ export async function loadOrInstall<T>(descriptor: NativeDescriptor, nodeModules
       );
     }
     try {
-      return (await import(resolveEntryUrl(importName, nodeModulesPath))) as T;
+      return (await import(resolveEntrySpecifier(importName, nodeModulesPath))) as T;
     } catch (loadErr) {
       throw new SenseError(
         'STORE_DEPENDENCY_MISSING',

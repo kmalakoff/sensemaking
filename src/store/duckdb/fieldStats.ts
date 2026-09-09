@@ -10,13 +10,10 @@ function classifyVariantType(name: string, field: string): 'integer' | 'real' | 
   throw new Error(`duckdb: variant_typeof() returned unrecognized type "${name}" for column "${field}"`);
 }
 
-// duckdb degrades superlinearly in the number of string_agg(DISTINCT variant_typeof()) aggregates in
-// one projection: 301 columns cost 1148ms in one query against 10ms for COUNT alone over the same
-// columns, so it is the aggregate count, not the width. Measured chunk sizes at 301 columns:
-// 10 -> 71ms, 16 -> 81ms, 25 -> 88ms, 40 -> 110ms, 64 -> 158ms, flat between 10 and 25. Chunking
-// also wins on an ordinary tree (31 columns: 17ms in one query, 11ms chunked), so there is no
-// small-tree cost to trade against. sqlite and turso need none of this: GROUP_CONCAT over 300
-// columns runs in 7ms.
+// duckdb degrades superlinearly in the number of string_agg(DISTINCT variant_typeof()) aggregates
+// per projection, not the column width (301 columns: 1148ms unchunked vs 88ms at chunk size 25);
+// 16 sits inside the measured flat 10-25 range. sqlite/turso need none of this: GROUP_CONCAT over
+// 300 columns runs in 7ms.
 const AGGREGATES_PER_QUERY = 16;
 
 // COUNT + string_agg(DISTINCT variant_typeof()) per column keeps this O(columns), not O(rows x columns).

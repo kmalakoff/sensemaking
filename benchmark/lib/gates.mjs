@@ -19,6 +19,8 @@
 // stage-level "owed when" columns for stage 2 (compare + hub battery) and stage 4's nfcorpus leg,
 // which are broader than any single diff-map row. They live here anyway because release.mjs needs
 // one function answering "what does this diff owe", not two.
+import { shouldRunReversedCompare } from './verdict.mjs';
+
 const DIFF_MAP = [
   { gate: 'test-engines', when: ['src/store/sqlite/', 'src/watch.ts', 'src/scan/', 'src/workers/', 'package.json'] },
   { gate: 'live-suite', when: ['src/embed/'] },
@@ -61,4 +63,15 @@ export function owedReasons(paths, lastTag) {
 
 export function owedGates(paths, lastTag) {
   return new Set(owedReasons(paths, lastTag).keys());
+}
+
+export function stepStatus(step, result) {
+  return step.unavailableExit !== undefined && result.code === step.unavailableExit ? 'owed-unmet' : result.status;
+}
+
+export function reversedCompareAction(compareJson, recorded, { resuming = false, accepted = new Set() } = {}) {
+  if (!shouldRunReversedCompare(compareJson)) return 'not-needed';
+  const done = resuming && (recorded?.status === 'ok' || accepted.has(`compare-reversed: ${recorded?.status}`));
+  if (!done) return 'run';
+  return recorded.status === 'ok' ? 'done' : 'accepted';
 }

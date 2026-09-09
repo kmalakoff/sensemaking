@@ -5,6 +5,7 @@ import { hasUnspacedRun } from '../../text/segment.ts';
 import { quoteIdent, recordReconcileDuration } from '../shared.ts';
 import { BEGIN_WRITE } from '../transaction.ts';
 import type { Connection, ReconcileDialect } from '../types.ts';
+import { stemFolded } from './lexical-text.ts';
 
 // This store's dialect (types.ts's ReconcileDialect) for the shared orchestration in
 // store/reconcile.ts. content is a plain table with "_ngram" sidecars for lexical.ts.
@@ -14,7 +15,7 @@ import type { Connection, ReconcileDialect } from '../types.ts';
 // The two FTS indexes, named here (not open.ts) because reconcile drops and rebuilds them around
 // a bulk load: Tantivy maintains them per inserted row, which is quadratic in what is already indexed.
 export const CONTENT_FTS_DDL = [
-  `CREATE INDEX IF NOT EXISTS content_fts ON content USING fts (title, summary, text) WITH (weights = 'title=10.0,summary=5.0,text=1.0')`,
+  `CREATE INDEX IF NOT EXISTS content_fts ON content USING fts (title_stem, summary_stem, text_stem) WITH (weights = 'title_stem=10.0,summary_stem=5.0,text_stem=1.0')`,
   `CREATE INDEX IF NOT EXISTS content_fts_ngram ON content USING fts (title_ngram, summary_ngram, text_ngram) WITH (tokenizer='ngram', weights='title_ngram=10.0,summary_ngram=5.0,text_ngram=1.0')`,
 ] as const;
 export const CONTENT_FTS_NAMES = ['content_fts', 'content_fts_ngram'] as const;
@@ -34,11 +35,11 @@ const MAX_FRONTMATTER_COLUMNS = 2000;
 export const FTS_REBUILD_THRESHOLD = 250;
 
 // No rowid coupling (unlike sqlite's FTS5 content): `path` is content's own primary key.
-const INSERT_CONTENT_SQL = `INSERT INTO content ("path", title, summary, text, title_ngram, summary_ngram, text_ngram) VALUES (?, ?, ?, ?, ?, ?, ?)`;
+const INSERT_CONTENT_SQL = `INSERT INTO content ("path", title, summary, text, title_stem, summary_stem, text_stem, title_ngram, summary_ngram, text_ngram) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 
 function contentRow(doc: ParsedDoc): unknown[] {
   const { title, summary, text } = doc.search;
-  return [doc.relPath, title, summary, text, ngramSidecar(title), ngramSidecar(summary), ngramSidecar(text)];
+  return [doc.relPath, title, summary, text, stemFolded(title), stemFolded(summary), stemFolded(text), ngramSidecar(title), ngramSidecar(summary), ngramSidecar(text)];
 }
 
 async function reconcileContent(conn: Connection, touched: string[], docs: ParsedDoc[], delta: ReconcileDelta): Promise<void> {

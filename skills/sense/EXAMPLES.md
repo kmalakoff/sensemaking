@@ -11,9 +11,9 @@ sense search "pricing OR billing OR invoicing" --k 10 --format json
 ```json
 [
   { "path": "notes/pricing-model.md", "title": "Pricing model",
-    "summary": "Tiered per-seat pricing; floor and discount rules", "hit": "«Pricing» floor for annual…", "via": "match+link", "score": 0.0333, "lines": null },
+    "summary": "Tiered per-seat pricing; floor and discount rules", "snippets": ["«Pricing» floor for annual…"], "via": "match+link", "score": 0.0333, "lines": null },
   { "path": "notes/renewal-playbook.md", "title": "Renewal playbook",
-    "summary": "Renewal sequence and owners", "hit": "…«billing» contact confirms the PO…", "via": "match", "score": 0.0313, "lines": "L81-140" }
+    "summary": "Renewal sequence and owners", "snippets": ["…«billing» contact confirms the PO…"], "via": "match", "score": 0.0313, "lines": "L81-140" }
 ]
 ```
 
@@ -79,7 +79,7 @@ sense search "children dying from poor nutrition" --k 3 --format json
 ```json
 [
   { "path": "notes/malnutrition-outcomes.md", "title": "Malnutrition outcomes",
-    "summary": "Stunting and mortality by region", "hit": null, "via": "vector", "score": 0.0167, "similarity": 0.61, "lines": "L14-52" }
+    "summary": "Stunting and mortality by region", "snippets": [], "via": "vector", "score": 0.0167, "similarity": 0.61, "lines": "L14-52" }
 ]
 ```
 

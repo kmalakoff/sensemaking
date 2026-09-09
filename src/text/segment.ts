@@ -1,3 +1,5 @@
+import { stemmer } from 'stemmer';
+
 // Word boundaries FTS5's tokenizers cannot find on their own. Contract: seg(query) must appear in
 // seg(document) for any substring query; word mode is context-dependent and breaks that, so grapheme mode (UAX #29) is used.
 
@@ -13,6 +15,62 @@ const HAS_RUN = new RegExp(`[${UNSPACED_SCRIPTS}]`, 'u');
 // sidecar population and query split turns on.
 export function hasUnspacedRun(text: string): boolean {
   return HAS_RUN.test(text);
+}
+
+export interface SearchToken {
+  text: string;
+  start: number;
+  end: number;
+  unspaced: boolean;
+}
+
+// Search tokens share the native separator contract: letters, marks, and numbers form tokens;
+// underscore, apostrophe, and hyphen separate them. Unspaced-script runs stay whole so callers
+// can apply substring semantics, while adjacent Latin text still gets its own token.
+export function searchTokens(text: string): SearchToken[] {
+  const tokens: SearchToken[] = [];
+  for (const match of text.matchAll(/[\p{L}\p{N}][\p{L}\p{M}\p{N}]*/gu)) {
+    const start = match.index;
+    const end = start + match[0].length;
+    let cursor = start;
+    for (const run of text.slice(start, end).matchAll(RUN)) {
+      const runStart = start + run.index;
+      if (runStart > cursor) tokens.push({ text: text.slice(cursor, runStart), start: cursor, end: runStart, unspaced: false });
+      const runEnd = runStart + run[0].length;
+      tokens.push({ text: run[0], start: runStart, end: runEnd, unspaced: true });
+      cursor = runEnd;
+    }
+    if (cursor < end) tokens.push({ text: text.slice(cursor, end), start: cursor, end, unspaced: false });
+  }
+  return tokens;
+}
+
+// Phrase membership is checked after native ranking. A CJK token matches inside one authored
+// run; Latin tokens compare folded Porter stems. Each call scans one field once per candidate.
+export function matchesSearchPhrase(text: string, phrase: SearchToken[]): boolean {
+  const haystack = searchTokens(text);
+  if (phrase.length === 0 || haystack.length < phrase.length) return false;
+  for (let start = 0; start <= haystack.length - phrase.length; start++) {
+    let matches = true;
+    for (let i = 0; i < phrase.length; i++) {
+      const query = phrase[i];
+      const authored = haystack[start + i];
+      if (query.unspaced) {
+        if (!authored.unspaced || !authored.text.includes(query.text)) matches = false;
+      } else if (authored.unspaced || stemmer(foldForSearch(authored.text)) !== stemmer(foldForSearch(query.text))) {
+        matches = false;
+      }
+      if (!matches) break;
+    }
+    if (matches) return true;
+  }
+  return false;
+}
+
+// Character spans of unspaced-script runs in text, the same boundary the index segments on --
+// the snippet marker uses this to keep substring semantics inside a run and word/stem matching outside it.
+export function unspacedRuns(text: string): Array<{ start: number; end: number }> {
+  return Array.from(text.matchAll(RUN), (m) => ({ start: m.index, end: m.index + m[0].length }));
 }
 // Grapheme clusters, ECMA-402/UAX #29: base char plus its marks, ZWJ sequences, Hangul jamo.
 // Built on first use and kept: construction is 6.6 ms, and a tree with no unspaced-script run
@@ -95,4 +153,10 @@ export function segmentMatch(terms: string): string {
     }
   }
   return out;
+}
+
+// FTS tokenizers compare letters without combining marks. Keep the authored string for output and
+// offsets, but use this key when JS needs to compare a matched word to its source segment.
+export function foldForSearch(text: string): string {
+  return text.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
 }

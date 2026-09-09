@@ -1,9 +1,11 @@
 import assert from 'node:assert';
+import { writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import type { Config } from 'sensemaking';
 import { SenseError } from '../../../src/errors.ts';
 import { FEATURES } from '../../../src/features/index.ts';
 import type { Feature } from '../../../src/features/types.ts';
-import { listFiles } from '../../../src/scan/index.ts';
+import { listFiles, parseFile } from '../../../src/scan/index.ts';
 import { reparseFiles } from '../../../src/scan/reparse.ts';
 import { reviveError, serializeError } from '../../../src/scan/worker-error.ts';
 import { tmpTree, writeNote } from '../../lib/tree.ts';
@@ -16,6 +18,17 @@ function noopFeature(name: Feature['name'], overrides: Partial<Feature> = {}): F
 }
 
 describe('reparseFiles', () => {
+  it('passes authored bytes to feature extractors while search normalization stays derived', () => {
+    const baseDir = tmpTree();
+    const authored = '---\ntitle: Cafe\u0301\n---\n\nBody cafe\u0301\n';
+    writeFileSync(join(baseDir, 'a.md'), authored);
+    const file = listFiles(cfg, baseDir)[0];
+    const feature = noopFeature('links', { extract: (raw) => raw });
+    const { doc } = parseFile(file, [feature], cfg);
+    assert.equal(doc.extracted.links, authored);
+    assert.equal(doc.size, Buffer.byteLength(authored));
+  });
+
   it('collects new frontmatter columns in first-seen order across files, skipping already-known ones', async () => {
     const baseDir = tmpTree();
     writeNote(baseDir, 'a.md', { frontmatter: { zeta: 1, alpha: 2 } });

@@ -1,8 +1,24 @@
 import { SenseError } from '../errors.ts';
+import { hasUnspacedRun } from '../text/segment.ts';
 
 // FTS5 reads punctuation as syntax, so `end-to-end` parses as a filter on column `to` and
 // errors `no such column: to` -- true about the parse, misleading about the input.
-const FTS5_PUNCTUATION = /[^\p{L}\p{N}_\s]/u;
+const FTS5_PUNCTUATION = /[^\p{L}\p{M}\p{N}_\s]/u;
+
+// SQLite treats punctuation in an unquoted spaced-script token as MATCH syntax. Validate that
+// boundary before dispatch so DuckDB and Tantivy do not silently interpret the same input as text.
+export function bareTermSyntaxError(terms: string): Error | null {
+  const outsideQuotes = terms.replace(/"[^"]*"/g, ' ');
+  const suspects = (outsideQuotes.match(/\S+/g) ?? []).filter((token) => {
+    if (!FTS5_PUNCTUATION.test(token) || hasUnspacedRun(token)) return false;
+    if (/^[\p{L}_]\w*\s*:/u.test(token)) return false;
+    if (/^[\p{L}\p{N}_]+\*(?:\s|$)/u.test(token)) return false;
+    if (/^(?:AND|OR|NOT)$/u.test(token)) return false;
+    return true;
+  });
+  if (suspects.length === 0) return null;
+  return new SenseError('SEARCH_SYNTAX', `the punctuation in ${suspects.map((term) => `\`${term}\``).join(', ')} is FTS5 syntax, not literal text; search for it literally by double-quoting: '"${suspects[0]}"'. Searchable columns are title, summary, text.`);
+}
 
 export function searchError(err: Error, terms: string, scope?: string): Error {
   const message = err.message;

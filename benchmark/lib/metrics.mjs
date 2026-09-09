@@ -26,11 +26,45 @@ export function rrf(rrfK, ...lists) {
 // Per-query metrics averaged over a run.
 export function mean(rows) {
   const n = rows.length;
-  return rows.reduce((acc, m) => ({ ndcg: acc.ndcg + m.ndcg / n, rr: acc.rr + m.rr / n, hit: acc.hit + m.hit / n }), { ndcg: 0, rr: 0, hit: 0 });
+  const totals = rows.reduce((acc, m) => ({ ndcg: acc.ndcg + m.ndcg, rr: acc.rr + m.rr, hit: acc.hit + m.hit }), { ndcg: 0, rr: 0, hit: 0 });
+  return { ndcg: totals.ndcg / n, rr: totals.rr / n, hit: totals.hit / n };
+}
+
+const QUALITY_RANGES = { ndcg: [0, 1], rr: [0, 1], hit: [0, 1] };
+
+// Persisted quality rows are bounded probabilities/scores. Keep this validator shared with the
+// report classifier so malformed current and prior artifacts cannot enter a comparison.
+export function metricRangeError(key, value) {
+  const range = QUALITY_RANGES[key];
+  if (!range) return null;
+  if (typeof value !== 'number' || !Number.isFinite(value)) return `${key} must be a finite number`;
+  if (value < range[0] || value > range[1]) return `${key} must be between ${range[0]} and ${range[1]}`;
+  return null;
+}
+
+export function rankingInputError(ranked, rels, K) {
+  if (!Array.isArray(ranked)) return 'ranked results must be an array';
+  if (!Number.isSafeInteger(K) || K < 1) return 'cutoff K must be a positive integer';
+  if (!(rels instanceof Map)) return 'qrels must be a Map';
+  const seen = new Set();
+  for (let i = 0; i < ranked.length; i++) {
+    const id = ranked[i];
+    if (typeof id !== 'string' || id.trim().length === 0) return `ranked result ${i} has an empty or non-string id`;
+    if (seen.has(id)) return `ranked results contain duplicate id "${id}"`;
+    seen.add(id);
+  }
+  for (const [id, grade] of rels) {
+    if (typeof id !== 'string' || id.trim().length === 0) return 'qrels contain an empty or non-string document id';
+    if (typeof grade !== 'number' || !Number.isFinite(grade) || grade < 0) return `qrel "${id}" has a malformed grade`;
+    if (!Number.isFinite(2 ** grade)) return `qrel "${id}" grade produces a non-finite gain`;
+  }
+  return null;
 }
 
 // Ranking metrics: one ranked id list vs graded qrels, cutoff K.
 export function metrics(ranked, rels, K) {
+  const error = rankingInputError(ranked, rels, K);
+  if (error) throw new Error(error);
   let dcg = 0;
   let firstRel = 0;
   ranked.slice(0, K).forEach((doc, i) => {
@@ -47,5 +81,10 @@ export function metrics(ranked, rels, K) {
     .forEach((rel, i) => {
       idcg += (2 ** rel - 1) / Math.log2(i + 2);
     });
-  return { ndcg: idcg > 0 ? dcg / idcg : 0, rr: firstRel > 0 ? 1 / firstRel : 0, hit: firstRel > 0 ? 1 : 0 };
+  const result = { ndcg: idcg > 0 ? dcg / idcg : 0, rr: firstRel > 0 ? 1 / firstRel : 0, hit: firstRel > 0 ? 1 : 0 };
+  for (const [key, value] of Object.entries(result)) {
+    const rangeError = metricRangeError(key, value);
+    if (rangeError) throw new Error(rangeError);
+  }
+  return result;
 }

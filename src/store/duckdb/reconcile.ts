@@ -33,8 +33,8 @@ async function reconcileContent(conn: Connection, touched: string[], docs: Parse
   // connection, so no second writer can have landed one of these rows: nothing can conflict.
   await appendRows(conn, 'content', CONTENT_COLUMNS, INSERT_CONTENT_SQL, docs.map(contentRow));
   // content changed: the fts index is rebuilt lazily, on the next lexical query that needs it,
-  // not here (lexical.ts's FtsIndexState).
-  markContentStale(conn);
+  // not here. Awaited so the persisted mark (lexical.ts) commits with this same transaction.
+  await markContentStale(conn);
 }
 
 // DuckDB rejects more than one ALTER command per statement ("Parser Error: Only one ALTER

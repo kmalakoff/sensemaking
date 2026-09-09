@@ -1,5 +1,5 @@
-// The ordered release-gate pipeline: five stages, each a list of steps. A stage that fails stops
-// the run; nothing in a later stage is measured. Adding a check is one entry here (plus a catalog
+// The ordered release-gate pipeline: five stages, each a list of steps. Independent failures are
+// collected; gate-dependencies.mjs identifies work requiring successful prerequisites. A check is one entry here (plus a catalog
 // row once benchmark/lib/rows.mjs exists) -- this is the one obvious place a new check goes.
 //
 // A step is { id, argv, timeout, quiet, owedBy, out?, env? }.
@@ -83,12 +83,22 @@ export function buildStages() {
     {
       id: 'baseline',
       label: '2 baseline',
-      steps: [{ id: 'compare', argv: ['node', 'benchmark/steps/compare-versions.mjs'], timeout: 30 * MINUTES, quiet: true, owedBy: 'baseline', out: true }, ...OTHER_STORES.map((name) => storeHubStep(name))],
+      steps: [
+        { id: 'shared-snippet', argv: ['node', 'benchmark/tools/shared-snippet.mjs'], timeout: 5 * MINUTES, quiet: true, owedBy: 'baseline', out: true },
+        ...OFFERED.map((name) => ({ id: `native-hydration-${name}`, argv: ['node', 'benchmark/tools/native-hydration.mjs', '--store', name], timeout: 5 * MINUTES, quiet: true, owedBy: 'baseline', out: true })),
+        { id: 'native-hydration-comparison', argv: ['node', 'benchmark/tools/native-hydration-compare.mjs'], timeout: 5 * MINUTES, quiet: false, owedBy: 'baseline', out: true },
+        // Missing or malformed evidence blocks, so collect it before the expensive timing it
+        // protects. The overlap values themselves remain descriptive and never gate a row.
+        { id: 'result-sets-hub', argv: ['node', 'benchmark/tools/result-sets.mjs', CORPORA.hub], timeout: 15 * MINUTES, quiet: false, owedBy: 'baseline', out: true },
+        { id: 'compare', argv: ['node', 'benchmark/steps/compare-versions.mjs'], timeout: 30 * MINUTES, quiet: true, owedBy: 'baseline', out: true },
+        ...OTHER_STORES.map((name) => storeHubStep(name)),
+      ],
     },
     {
       id: 'scale',
       label: '3 scale',
       steps: [
+        { id: 'result-sets-stress', argv: ['node', 'benchmark/tools/result-sets.mjs', CORPORA.stress], timeout: 15 * MINUTES, quiet: false, owedBy: 'scale', out: true },
         { id: 'scale-13k', argv: run('.', CORPORA.x2), timeout: 30 * MINUTES, quiet: true, owedBy: 'scale', out: true },
         { id: 'scale-26k', argv: run('.', CORPORA.x4), timeout: 45 * MINUTES, quiet: true, owedBy: 'scale', out: true },
         { id: 'stress', argv: run('.', CORPORA.stress), timeout: 30 * MINUTES, quiet: true, owedBy: 'scale', out: true },
@@ -102,9 +112,21 @@ export function buildStages() {
         // nDCG/MRR/hit@10 on a fixed corpus and model: load changes wall time, not the digits, so
         // this stage runs on any machine.
         { id: 'eval-nfcorpus', argv: ['node', 'benchmark/steps/quality.mjs', 'nfcorpus'], timeout: 20 * MINUTES, quiet: false, owedBy: 'quality-baseline', out: true },
+        // The historical SQLite OR-bag rows above retain their old same-store series. These
+        // portable rows use one query form and qrels on every offered store; the comparator below
+        // validates that identity before any relevance result is classified.
+        ...portableQualitySteps('nfcorpus', 'quality-baseline'),
         { id: 'eval-fever', argv: ['node', 'benchmark/steps/quality.mjs', 'fever'], timeout: 45 * MINUTES, quiet: false, owedBy: 'fever', out: true },
+        ...portableQualitySteps('fever', 'fever'),
       ],
     },
+  ];
+}
+
+function portableQualitySteps(corpus, owedBy) {
+  return [
+    ...OFFERED.map((store) => ({ id: `portable-eval-${corpus}-${store}`, argv: ['node', 'benchmark/steps/quality.mjs', corpus, '--store', store, '--query-form', 'bare-and'], timeout: corpus === 'fever' ? 45 * MINUTES : 20 * MINUTES, quiet: false, owedBy, out: true })),
+    { id: `portable-eval-${corpus}-comparison`, argv: ['node', 'benchmark/tools/portable-quality-compare.mjs'], timeout: 5 * MINUTES, quiet: false, owedBy, out: true },
   ];
 }
 

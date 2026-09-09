@@ -1,7 +1,7 @@
 // Release benchmark gate: node benchmark/gate.mjs [--dry-run]
 // Runs the staged pipeline benchmark/lib/stages.mjs defines, gated by what
-// benchmark/lib/gates.mjs says the diff since the last tag owes. A stage that fails stops the
-// run. --dry-run prints what the diff owes and exits without measuring. A run resumes by default:
+// benchmark/lib/gates.mjs says the diff since the last tag owes. Independent failures accumulate;
+// failed prerequisites skip dependent work. --dry-run prints what is owed. A run resumes by default:
 // the sitting is keyed on the tree it measures, so delete that directory for a clean run. A resume
 // skips a step recorded ok, and re-runs a failed one unless the owner accepted its reason
 // (report.mjs --accept), so a stage failure never leaves the report by being resumed past.
@@ -13,13 +13,13 @@
 // (report.mjs), including for a blocked sitting: a report is a record of what happened. The
 // verdict decides whether BENCHMARKING.md's numbers of record move, not a flag or a human call.
 import { spawn, spawnSync } from 'node:child_process';
-import { createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { createWriteStream, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { arch, cpus, loadavg } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
-import { safeRmSync } from 'fs-remove-compat';
-import { owedReasons } from './lib/gates.mjs';
+import { runStageSteps, stepOutputEvidence } from './lib/gate-runner.mjs';
+import { owedReasons, reversedCompareAction, stepStatus } from './lib/gates.mjs';
 import { describeLoad, topProcesses } from './lib/quiet-machine.mjs';
 import { assertBuilt } from './lib/require-build.mjs';
 import { treeFingerprint } from './lib/tree-fingerprint.mjs';
@@ -29,9 +29,8 @@ import { treeFingerprint } from './lib/tree-fingerprint.mjs';
 // before any guard could run.
 assertBuilt();
 const { buildStages, DEFAULT_STORE, MINUTES, OFFERED, ROOT } = await import('./lib/stages.mjs');
-const { acceptedIds, doneOnResume, failedStageReasons, SITTING_REPORT } = await import('./report.mjs');
-
-import { classifyCompare } from './lib/verdict.mjs';
+const { acceptedIds, comparisonCounts, doneOnResume, failedStageReasons, SITTING_REPORT } = await import('./report.mjs');
+const { missingPrerequisites } = await import('./lib/gate-dependencies.mjs');
 
 const {
   values: { 'dry-run': dryRun },
@@ -114,12 +113,6 @@ mkdirSync(sittingDir, { recursive: true });
 // failures this resume keeps rather than re-runs.
 const accepted = acceptedIds(sittingDir);
 
-// A step killed by its timeout cannot clean up after itself, and each abandoned copy is hundreds
-// of MB. Anything left here at the start of a run is from an earlier one.
-for (const name of readdirSync(join(ROOT, '.tmp')).filter((n) => n.startsWith('run-'))) {
-  safeRmSync(join(ROOT, '.tmp', name), { recursive: true, force: true });
-  console.log(`swept abandoned work tree .tmp/${name}`);
-}
 if (resuming) console.log(`resuming ${sittingDir}; steps recorded ok, and failures the owner accepted, are skipped. Delete that directory for a clean run.`);
 
 const priorSitting = existsSync(join(sittingDir, 'sitting.json')) ? JSON.parse(readFileSync(join(sittingDir, 'sitting.json'), 'utf8')) : null;
@@ -153,11 +146,12 @@ const alreadyDone = (step) => resuming && doneOnResume(step.id, sitting.steps[st
 
 // Whichever column is measured first reads high on cache-sensitive rows, so sitting.json records
 // the order compare.mjs actually spawned.
-function recordColumnOrder(stepId) {
-  const outPath = join(sittingDir, `${stepId}.json`);
-  if (!existsSync(outPath)) return;
-  const out = JSON.parse(readFileSync(outPath, 'utf8'));
-  if (Array.isArray(out.versions)) sitting.steps[stepId] = { ...sitting.steps[stepId], column_order: out.versions };
+function recordColumnOrder(step) {
+  if (!step.out) return;
+  const evidence = stepOutputEvidence(join(sittingDir, `${step.id}.json`));
+  const recorded = sitting.steps[step.id];
+  sitting.steps[step.id] = { ...recorded, ...evidence, status: recorded.status === 'ok' ? (evidence.status ?? 'ok') : recorded.status };
+  if (evidence.detail) console.error(evidence.detail);
 }
 
 // The running step, so an interrupt takes its group down with the gate. Each step is its own
@@ -255,75 +249,85 @@ async function waitForQuiet(label) {
   }
 }
 
-const blockedStages = [];
 for (const stage of STAGES) {
-  if (blockedStages.length > 0) break;
   console.log(`\n===== ${stage.label} =====`);
 
-  const owedSteps = stage.steps.filter((step) => owedFor(step, owed) && !alreadyDone(step));
+  const owedSteps = stage.steps.filter((step) => owedFor(step, owed) && !alreadyDone(step) && missingPrerequisites(step.id, STAGES, sitting, accepted).length === 0);
   const needsQuiet = owedSteps.some((step) => step.quiet);
+  let quietBlocked = false;
   if (needsQuiet) {
     const load1 = await waitForQuiet(stage.label);
     if (load1 !== null) {
       console.error(`BLOCKED entering ${stage.label} after waiting ${QUIET_WAIT_MS / 60_000} minutes for the machine to settle`);
-      for (const step of owedSteps) sitting.steps[step.id] = { id: step.id, argv: step.argv, owed: true, status: 'blocked', timeout: step.timeout, load_entry: load1 };
-      blockedStages.push(stage.id);
-      writeSitting();
-      break;
+      quietBlocked = true;
     }
   }
 
-  let stageFailed = false;
-  for (const step of stage.steps) {
-    const isOwed = owedFor(step, owed);
-    if (!isOwed) {
+  await runStageSteps(stage.steps, {
+    collectIndependent: true,
+    isOwed: (step) => owedFor(step, owed),
+    resume: (step) => (alreadyDone(step) ? sitting.steps[step.id] : null),
+    blockedBy: (step) => [...missingPrerequisites(step.id, STAGES, sitting, accepted), ...(quietBlocked && step.quiet ? ['quiet-machine'] : [])],
+    recordBlocked: (step, prerequisites) => {
+      sitting.steps[step.id] = { id: step.id, argv: step.argv, owed: true, status: prerequisites.includes('quiet-machine') ? 'blocked' : 'not-run', blocked_by: prerequisites };
+      console.error(`${step.id}: not run; unmet prerequisites: ${prerequisites.join(', ')}`);
+      writeSitting();
+    },
+    run: async (step) => {
+      console.log(`\n----- ${step.id} -----`);
+      const loadEntry = loadavg()[0];
+      return { ...(await runStep(step)), loadEntry };
+    },
+    recordNotOwed: (step) => {
       sitting.steps[step.id] = { id: step.id, argv: step.argv, owed: false, status: 'not-owed' };
-      continue;
-    }
-    if (alreadyDone(step)) {
-      // The recorded status is carried through untouched: an accepted failure stays failed, so
-      // its reason is still in the report the owner accepted it against.
-      const recorded = sitting.steps[step.id];
+    },
+    recordResume: (step, recorded) => {
       console.log(recorded.status === 'ok' ? `${step.id}: already done, resuming past it` : `${step.id}: ${recorded.status}, accepted by the owner, resuming past it`);
       sitting.steps[step.id] = { ...recorded, id: step.id, owed: true, resumed: true };
-      continue;
-    }
-    const loadEntry = loadavg()[0];
-    console.log(`\n----- ${step.id} -----`);
-    const result = await runStep(step);
-    const loadExit = loadavg()[0];
-    sitting.steps[step.id] = { id: step.id, argv: step.argv, owed: true, timeout: step.timeout, started: new Date(Date.now() - result.elapsedMs).toISOString(), elapsed_ms: result.elapsedMs, status: result.status, load_entry: loadEntry, load_exit: loadExit };
-    recordColumnOrder(step.id);
-    writeSitting();
-    if (result.code === step.unavailableExit) {
-      console.log(`${step.id}: owed, unmet (its prerequisite is not on this machine)`);
-      sitting.steps[step.id] = { ...sitting.steps[step.id], status: 'owed-unmet' };
+    },
+    recordResult: (step, result) => {
+      sitting.steps[step.id] = { id: step.id, argv: step.argv, owed: true, timeout: step.timeout, started: new Date(Date.now() - result.elapsedMs).toISOString(), elapsed_ms: result.elapsedMs, status: stepStatus(step, result), detail: result.detail, load_entry: result.loadEntry, load_exit: loadavg()[0] };
+      recordColumnOrder(step);
+      const status = sitting.steps[step.id].status;
       writeSitting();
-    } else if (result.status !== 'ok') {
-      console.error(`${step.id}: ${result.status} after ${(result.elapsedMs / 1000).toFixed(1)}s`);
-      stageFailed = true;
-      break;
-    } else {
-      console.log(`${step.id}: ok in ${(result.elapsedMs / 1000).toFixed(1)}s`);
-    }
-  }
-  if (stageFailed) blockedStages.push(stage.id);
+      if (status === 'owed-unmet') console.log(`${step.id}: owed, unmet (its prerequisite is not on this machine)`);
+      else if (status !== 'ok') console.error(`${step.id}: ${status} after ${(result.elapsedMs / 1000).toFixed(1)}s`);
+      else console.log(`${step.id}: ok in ${(result.elapsedMs / 1000).toFixed(1)}s`);
+      return status;
+    },
+  });
 
   // A row beyond band is re-run with the column order swapped, keeping both readings. This
   // classify pass is only a "is anything beyond band" probe; report.mjs does the real one.
-  if (stage.id === 'baseline' && !stageFailed) {
+  if (stage.id === 'baseline' && sitting.steps.compare?.status === 'ok') {
     const compareJsonPath = join(sittingDir, 'compare.json');
-    const reversedJsonPath = join(sittingDir, 'compare-reversed.json');
-    if (existsSync(compareJsonPath) && !existsSync(reversedJsonPath)) {
+    const reversedStep = { id: 'compare-reversed', argv: ['node', 'benchmark/steps/compare-versions.mjs', '--reverse'], timeout: 30 * MINUTES, out: true };
+    if (existsSync(compareJsonPath)) {
       const compareJson = JSON.parse(readFileSync(compareJsonPath, 'utf8'));
-      const beyondBand = classifyCompare(compareJson, null).some((c) => c.verdict === 'moved');
-      if (beyondBand) {
+      const reversedRecorded = sitting.steps['compare-reversed'];
+      const reversedAction = reversedCompareAction(compareJson, reversedRecorded, { resuming, accepted });
+      if (reversedAction === 'run') {
         console.log('\na timing row moved beyond band on compare; running the reversed re-run (compare.mjs --reverse) to confirm...');
-        const loadEntry = loadavg()[0];
-        const result = await runStep({ id: 'compare-reversed', argv: ['node', 'benchmark/steps/compare-versions.mjs', '--reverse'], timeout: 30 * MINUTES, out: true });
-        const loadExit = loadavg()[0];
-        sitting.steps['compare-reversed'] = { id: 'compare-reversed', argv: ['node', 'benchmark/steps/compare-versions.mjs', '--reverse'], owed: true, elapsed_ms: result.elapsedMs, status: result.status, load_entry: loadEntry, load_exit: loadExit };
-        recordColumnOrder('compare-reversed');
+        await runStageSteps([reversedStep], {
+          isOwed: () => true,
+          resume: () => null,
+          run: async (step) => {
+            const loadEntry = loadavg()[0];
+            return { ...(await runStep(step)), loadEntry };
+          },
+          recordNotOwed: () => {},
+          recordResume: () => {},
+          recordResult: (step, result) => {
+            sitting.steps[step.id] = { id: step.id, argv: step.argv, owed: true, elapsed_ms: result.elapsedMs, status: result.status, load_entry: result.loadEntry, load_exit: loadavg()[0] };
+            recordColumnOrder(step);
+            writeSitting();
+            if (result.status !== 'ok') console.error(`${step.id}: ${result.status} after ${(result.elapsedMs / 1000).toFixed(1)}s`);
+            return sitting.steps[step.id].status;
+          },
+        });
+      } else if (reversedAction === 'accepted') {
+        console.log(`compare-reversed: ${reversedRecorded.status}, accepted by the owner, resuming past it`);
+        sitting.steps['compare-reversed'] = { ...reversedRecorded, resumed: true };
         writeSitting();
       }
     }
@@ -338,8 +342,7 @@ for (const stage of STAGES) {
   writeSitting();
 }
 
-// Everything a break left unmeasured: the loop already writes a status for every step it
-// reaches, so only a step an earlier stage's failure skipped is missing one.
+// Defensive coverage: no owed step may disappear from the final report.
 for (const stage of STAGES) {
   for (const step of stage.steps) {
     if (owedFor(step, owed) && !sitting.steps[step.id]?.status) {
@@ -367,9 +370,9 @@ console.log(`\n${reportJson.verdict}`);
 if (reportJson.verdict === 'BLOCK') for (const reason of reportJson.verdict_reasons) console.error(`  ${reason}`);
 if (unmetSteps.length > 0) console.log(`owed and unmet (not a block): ${unmetSteps.map((s) => s.id).join(', ')}`);
 console.log(reportJson.verdict === 'PASS' ? 'numbers of record: repointed once report.mjs --release names this sitting' : 'numbers of record: left as they were (BLOCK)');
-const noPrior = reportJson.classifications.filter((c) => c.verdict === 'no-prior').length;
+const counts = comparisonCounts(reportJson.classifications);
 const faster = reportJson.classifications.filter((c) => c.verdict === 'faster').length;
-console.log(`compared: ${reportJson.classifications.length - noPrior} row(s) against a prior, ${noPrior} with no prior (an uncompared row is not a pass), ${faster} faster than band (read the stage split before believing a gain)`);
+console.log(`comparisons: ${counts.valid} valid numeric, ${counts.invalid} invalid, ${counts.notCompared} not compared; ${faster} faster than band (read the stage split before believing a gain)`);
 console.log(`sitting: ${sittingDir}`);
 console.log(`report: ${join(sittingDir, `${SITTING_REPORT}.md`)}`);
 console.log(`default store for this pipeline: ${DEFAULT_STORE}; offered: ${OFFERED.join(', ')}`);

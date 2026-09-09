@@ -13,7 +13,7 @@ Subagents dispatched during a release are spawned with `model: sonnet`. Reviews 
    npm run benchmark -- --dry-run # what it would run, without measuring
    ```
 
-   Stages run in order and a failing one stops the run: static checks, then the functional suites, then the hub baseline, then scale and stress, then retrieval quality. A broken build is never benchmarked, and a basic regression is not paid for at 26k. Run it on a machine that is otherwise idle: it refuses to start a timing stage when the one-minute load is above half the core count, and there is no override. Stop whatever else is running and run the gate again; the sitting resumes where it stopped, so a refusal costs nothing.
+   Stages run in order: static checks, functional suites, hub baseline, scale and stress, then retrieval quality. Independent benchmark and evidence failures accumulate so the final report lists them together. Failed build/test prerequisites prevent dependent work unless their identified failure has an existing owner acceptance. Failed artifact producers prevent their dependent comparators, even when that producer failure was accepted. Store-dump differences and other independent evidence failures remain BLOCK reasons but do not stop unrelated collection. Skipped steps name their unmet prerequisites. Run on an otherwise idle machine: timing refuses excessive load and has no override. A rerun on unchanged code reuses successful work and retries failed or incomplete steps; a changed measured tree requires new evidence. No failure disappears merely because later steps ran.
 
    **The diff picks the gates, not the person running it.** `benchmark/lib/gates.mjs` maps changed paths to the gates they owe: a change under `src/embed/` owes the live endpoint suite and the fever eval, a change under `src/chunk/` owes the Obsidian parity gate, a docs-only change owes the tests and nothing else. A gate the map owes cannot be skipped by a flag. This exists because the fever eval was skipped by every sitting from 0.6.0 until something forced it.
 
@@ -39,11 +39,11 @@ Subagents dispatched during a release are spawned with `model: sonnet`. Reviews 
 
    A reason states what was measured, never a cause: the row, both values, the band it exceeded, and whether a reversed-order re-run agreed. A wall-clock delta says where a cost is, not what it is. Two attributions made from one on this repo in a single day were both wrong, so settle a cause by removing the mechanism and re-measuring, or by timing it directly, before writing it anywhere.
 
-   What blocks: a token contract that moved at all, a quality metric that fell, a stress or scale row beyond its band, a store battery that failed, a timing row beyond its band that a reversed-order re-run agreed with. What does not: anything inside its band, and the rows too noisy to gate, which say so.
+   What blocks: failed required behavior, invalid required evidence, missing required coverage, an explicit caller bound or quality floor, an approved performance guard, or an unexplained public semantic change. Historical timing, quality, and output observations are WARN findings, including movements beyond a legacy band. A changed workload or missing prior is INFO and starts a new series. The report keeps valid numeric comparisons, invalid readings, and not-compared rows separate.
 
    Releasing a PASS (step 6) moves the numbers-of-record table in BENCHMARKING.md to this sitting. A BLOCK, or a sitting never released, leaves it exactly as it was, so numbers that never shipped never become the official ones.
 
-3. **On BLOCK, fix it or accept it.** Fixing it and running again is the ordinary path. Where the movement is understood and the owner decides to ship anyway, record that decision against the row in the owner's own words and run the gate again:
+3. **On BLOCK, fix it or accept it.** Fixing it and running again is the ordinary path. An owner may record a decision against an eligible blocking finding in the owner's own words. This never makes invalid evidence comparable or turns missing required coverage into a pass:
 
    ```bash
    node benchmark/report.mjs --accept <row id | stage reason> --reason "<why this ships>"
@@ -78,7 +78,7 @@ The mechanical facts are tested in `test/integration/docs.test.ts`; the rest is 
 
 **Docs-only patches take the short path**, and the gate takes it for you: a diff touching nothing but published prose owes the static checks and `npm test`, nothing more, because text cannot move a number. What remains: `npm test` (the docs tests guard the mechanical facts), the step-4 read of the surfaces the diff touched, then `tsds publish` and the push with the tag check. Anything that touches src/, benchmark logic, or dependencies is not a docs-only patch, whatever the diff size.
 
-Reports in `benchmark/reports/` are generated from the sitting's own JSON, never written by hand, and `npm test` fails if a report and its data disagree. The markdown of a past report is never edited either: a dated report records what was true that day.
+Reports in `benchmark/reports/` are generated from the sitting's own JSON, never written by hand, and `npm test` fails if a report and its data disagree. A release JSON is a compact export: it retains the identities and readings needed for later compatible comparisons, while raw evidence stays in its named sitting and is listed by canonical hash and byte count. It cannot revalidate omitted raw evidence. The markdown of a past report is never edited either: a dated report records what was true that day.
 
 Two storage formats version themselves, and neither is a judgement call:
 

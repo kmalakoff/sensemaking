@@ -1,12 +1,12 @@
 import { search } from '../commands/search.ts';
 import { printRows } from '../output/output.ts';
-import { CONFIG, FORMAT, parse, parseK, rowFormatOf, runSql, SEARCH_FLAGS, withDb } from './shared.ts';
+import { CONFIG, FORMAT, parse, parseK, parseSnippetCharLimit, parseSnippetCountLimit, rowFormatOf, runSql, SEARCH_FLAGS, withDb } from './shared.ts';
 import type { Ctx } from './types.ts';
 
 // Fallback when the first positional is not a command: a saved query, { sql } or { search }.
 // SEARCH_FLAGS override a saved search's fields the same way they override a preset's.
 export default async function named(ctx: Ctx, queryName: string): Promise<void> {
-  const usage = `usage: ${ctx.name} ${queryName} [params...] [--format table|json|csv] [--config path] [--where "<sql>"] [--k n] [--preset name] [--include glob ...] [--exclude glob ...] [--no-exclude]`;
+  const usage = `usage: ${ctx.name} ${queryName} [params...] [--format table|json|csv] [--config path] [--where "<sql>"] [--k n] [--snippet-char-limit n] [--snippet-count-limit n] [--preset name] [--include glob ...] [--exclude glob ...] [--no-exclude]`;
   const { values, positionals: params } = parse(ctx.argv, usage, { ...SEARCH_FLAGS, ...FORMAT, ...CONFIG });
   const format = rowFormatOf(values);
   const configPath = values.config as string | undefined;
@@ -31,10 +31,12 @@ export default async function named(ctx: Ctx, queryName: string): Promise<void> 
     ctx.usageError(`"${queryName}" is a saved search and takes no positional parameters; edit its "search" in sense.config.json, or use "${ctx.name} search" directly`);
   }
   const k = parseK(values.k as string | undefined, ctx.usageError) ?? entry.k;
+  const snippetCharLimit = parseSnippetCharLimit(values['snippet-char-limit'] as string | undefined, ctx.usageError);
+  const snippetCountLimit = parseSnippetCountLimit(values['snippet-count-limit'] as string | undefined, ctx.usageError);
   const where = (values.where as string | undefined) ?? entry.where;
   const preset = (values.preset as string | undefined) ?? entry.preset;
   const include = (values.include as string[] | undefined) ?? entry.include;
   const exclude = (values.exclude as string[] | undefined) ?? entry.exclude;
   const noExclude = values['no-exclude'] === true;
-  await withDb(ctx, configPath, async (store, resolvedCfg) => printRows(await search(store, resolvedCfg, entry.search, { k, where, preset, include, exclude, noExclude }), format));
+  await withDb(ctx, configPath, async (store, resolvedCfg) => printRows(await search(store, resolvedCfg, entry.search, { k, snippetCharLimit, snippetCountLimit, where, preset, include, exclude, noExclude }), format));
 }

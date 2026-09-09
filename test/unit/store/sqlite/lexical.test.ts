@@ -42,26 +42,7 @@ describe('queryLexical', () => {
       hits.map((h) => h.path),
       ['title-hit.md', 'body-hit.md']
     );
-  });
-
-  it('includes an excerpt for a doc under the snippet bound, and NULL past it', async () => {
-    const { db, conn } = makeDb();
-    insertDoc(db, 'short.md', 'short', '', 'needle in a short haystack');
-    // SNIPPET_BOUND is 16384 chars; well past it so `hit` must be NULL rather than attempt
-    // the superlinear snippet() call.
-    const long = `${'padding '.repeat(3000)} needle`;
-    insertDoc(db, 'long.md', 'long', '', long);
-
-    const hits = await queryLexical(conn, 'needle', { ...BASE, limit: 10 });
-    const shortHit = hits.find((h) => h.path === 'short.md');
-    const longHit = hits.find((h) => h.path === 'long.md');
-
-    assert.ok(shortHit);
-    assert.notEqual(shortHit?.hit, null);
-    assert.match(shortHit?.hit as string, /needle/);
-
-    assert.ok(longHit);
-    assert.equal(longHit?.hit, null, 'a doc whose text exceeds SNIPPET_BOUND should get a NULL hit');
+    assert.deepEqual(Object.keys(hits[0]), ['path'], 'a lexical hit is a match and nothing else; snippets are cut above the store');
   });
 
   it('narrows results by the caller-built scope condition', async () => {

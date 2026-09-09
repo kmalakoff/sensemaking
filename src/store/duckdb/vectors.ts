@@ -62,25 +62,32 @@ export async function writeVectorBatch(duckdb: DuckDBConnection, conn: Connectio
   });
 }
 
-// Best chunk per file by cosine, its line range riding along, entirely in SQL: arg_max picks the winning chunk's line range from the same row max(score) came from, per path.
+// Best chunk per file by cosine, with the earliest chunk winning exact score ties.
 // An empty `allowed` set matches sqlite's scan (every row filtered out) without touching the table.
 export async function scanCandidates(duckdb: DuckDBConnection, qv: Float32Array, dims: number, fetch: number, allowed?: Set<string>): Promise<VectorCandidate[]> {
   if (allowed && allowed.size === 0) return [];
   const { arrayValue, ARRAY, DOUBLE } = await duckdbApi();
   const allowedList = allowed ? [...allowed] : [];
-  const sql = `SELECT "path", arg_max(start_line, score) AS start_line, arg_max(end_line, score) AS end_line, max(score) AS score
+  const query = padded(qv, dims);
+  const queryNorm = Math.sqrt(query.reduce((sum, value) => sum + value * value, 0));
+  const score = queryNorm === 0 ? '0.0' : 'CASE WHEN array_inner_product(vector, vector) = 0 THEN 0.0 ELSE array_cosine_similarity(vector, ?) END';
+  const sql = `SELECT "path", start_line, end_line, score
     FROM (
-      SELECT "path", start_line, end_line, array_cosine_similarity(vector, ?) AS score
-      FROM embeddings
-      WHERE vector IS NOT NULL ${allowed ? `AND ${inClause('"path"', allowedList.length)}` : ''}
-    ) sub
-    GROUP BY "path"
-    ORDER BY score DESC
+      SELECT "path", start_line, end_line, score,
+        row_number() OVER (PARTITION BY "path" ORDER BY score DESC, chunk ASC) AS selected
+      FROM (
+        SELECT "path", chunk, start_line, end_line, ${score} AS score
+        FROM embeddings
+        WHERE vector IS NOT NULL ${allowed ? `AND ${inClause('"path"', allowedList.length)}` : ''}
+      ) sub
+    ) ranked
+    WHERE selected = 1
+    ORDER BY score DESC, "path" ASC
     LIMIT ?`;
   const stmt = await duckdb.prepare(sql);
   try {
-    const values: DuckDBValue[] = [arrayValue(padded(qv, dims)), ...allowedList, fetch];
-    const types: DuckDBType[] = [ARRAY(DOUBLE, dims), ...allowedList.map(() => untyped), untyped];
+    const values: DuckDBValue[] = [...(queryNorm === 0 ? [] : [arrayValue(query)]), ...allowedList, fetch];
+    const types: DuckDBType[] = [...(queryNorm === 0 ? [] : [ARRAY(DOUBLE, dims)]), ...allowedList.map(() => untyped), untyped];
     stmt.bind(values, types);
     const reader = await stmt.runAndReadAll();
     const rows = reader.getRowObjectsJS() as Array<{ path: string; start_line: number; end_line: number; score: number }>;
@@ -102,14 +109,16 @@ export async function scanSimilar(duckdb: DuckDBConnection, conn: Connection, di
   const { arrayValue, ARRAY, DOUBLE } = await duckdbApi();
   const excludeList = [...opts.exclude];
   const allowedList = opts.allowed ? [...opts.allowed] : [];
-  const sql = `WITH targets(tv) AS (VALUES ${targets.map(() => '(?)').join(', ')})
-    SELECT e."path" AS path, max(array_cosine_similarity(e.vector, t.tv)) AS score
+  const sql = `WITH targets(tv) AS (VALUES ${targets.map(() => '(?)').join(', ')}), grouped AS (
+    SELECT e."path" AS path, max(CASE WHEN array_inner_product(e.vector, e.vector) = 0 OR array_inner_product(t.tv, t.tv) = 0 THEN 0.0 ELSE array_cosine_similarity(e.vector, t.tv) END) AS score
     FROM embeddings e, targets t
     WHERE e.vector IS NOT NULL AND e."path" != ?
       ${excludeList.length > 0 ? `AND NOT ${inClause('e."path"', excludeList.length)}` : ''}
       ${opts.allowed ? `AND ${inClause('e."path"', allowedList.length)}` : ''}
     GROUP BY e."path"
-    ORDER BY score DESC
+  )
+    SELECT path, score FROM grouped
+    ORDER BY score DESC, path ASC
     LIMIT ?`;
   const stmt = await duckdb.prepare(sql);
   try {

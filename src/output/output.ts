@@ -17,8 +17,10 @@ function cell(value: unknown): string {
 
 // RFC 4180, deliberately not cell(): csv is the redirect-to-file format, so it keeps every
 // character, newlines included; what it cannot carry (NULL vs empty, types) is what json is for.
+// An array (e.g. snippets) joins with the one delimiter our content provably cannot contain,
+// inside the quoted field newlines already trigger (DESIGN.md "Rendering a list of snippets").
 function csvField(value: unknown): string {
-  const text = value === null || value === undefined ? '' : String(value);
+  const text = value === null || value === undefined ? '' : Array.isArray(value) ? value.join('\n') : String(value);
   return /["\r\n,]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
 
@@ -135,13 +137,22 @@ function fitWidths(widths: number[], limit: number): number[] {
   }
 }
 
+// An array cell (snippets) becomes one physical line per element; every other value stays the
+// single line cell() already produced. No cell in any other command holds one today, so a row
+// with no array-valued cell yields exactly one physical line, unchanged from before this existed.
+function cellLines(value: unknown): string[] {
+  if (Array.isArray(value)) return value.length === 0 ? [''] : value.map((v) => cell(v));
+  return [cell(value)];
+}
+
 function renderRows(rows: Row[], format: Format, width = process.stdout.columns): string {
   if (format === 'json') return stringifyJson(rows, 2);
   if (rows.length === 0) return '(0 rows)';
 
   const columns = Object.keys(rows[0]);
-  const cells = rows.map((row) => columns.map((col) => cell(row[col])));
-  const natural = columns.map((col, i) => Math.max(col.length, ...cells.map((row) => row[i].length)));
+  const linesByCell = rows.map((row) => columns.map((col) => cellLines(row[col])));
+  const heights = linesByCell.map((cellsInRow) => Math.max(1, ...cellsInRow.map((lines) => lines.length)));
+  const natural = columns.map((col, i) => Math.max(col.length, ...linesByCell.flatMap((cellsInRow) => cellsInRow[i]).map((line) => line.length)));
   const widths = width && width > MIN_COLUMN ? fitWidths(natural, width) : natural;
 
   const clip = (value: string, w: number) => (value.length <= w ? value.padEnd(w) : `${value.slice(0, w - 1)}${TRUNCATED}`);
@@ -151,7 +162,14 @@ function renderRows(rows: Row[], format: Format, width = process.stdout.columns)
       .join('  ')
       .trimEnd();
 
-  return [formatRow(columns), widths.map((w) => '-'.repeat(w)).join('  '), ...cells.map(formatRow)].join('\n');
+  // A row becomes as many physical lines as its tallest cell; other columns blank-pad on
+  // continuation lines (DESIGN.md "Rendering a list of snippets").
+  const body: string[] = [];
+  for (let r = 0; r < rows.length; r++) {
+    for (let li = 0; li < heights[r]; li++) body.push(formatRow(columns.map((_, c) => linesByCell[r][c][li] ?? '')));
+  }
+
+  return [formatRow(columns), widths.map((w) => '-'.repeat(w)).join('  '), ...body].join('\n');
 }
 
 // Text renderers for the top-level commands; cli.ts prints what these return.

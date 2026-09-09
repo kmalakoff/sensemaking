@@ -1,11 +1,11 @@
-import assert from 'node:assert';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import assert from 'assert';
+import { COMMANDS } from '../../../dist/esm/cli/index.js';
 import { featureSignature, SUPPORTED_CONFIG_VERSION } from '../../../src/config/index.ts';
 import { FEATURES } from '../../../src/features/index.ts';
 import { runCli } from '../../lib/cli.ts';
-import { packageRoot, scratchDir } from '../../lib/scratch.ts';
+import { scratchDir } from '../../lib/scratch.ts';
 
 function runWith(config: string, args: string[] = ['--list']) {
   const dir = scratchDir('validate');
@@ -219,10 +219,9 @@ describe('config validation', () => {
     assert.match(badInclude.stderr, /queries\.q\.include must be a non-empty array/);
   });
 
-  it('--help lists every command in the registry', async () => {
+  it('--help lists every command in the registry', () => {
     // Every command in the registry, including `check` (which answers "is my config broken"),
     // must appear in --help so it stays discoverable from the CLI itself.
-    const { COMMANDS } = (await import(pathToFileURL(join(packageRoot, 'dist', 'esm', 'cli', 'index.js')).href)) as { COMMANDS: Record<string, unknown> };
     const help = runCli(['--help']).stdout + runCli([]).stderr;
     for (const name of Object.keys(COMMANDS)) {
       assert.ok(new RegExp(`\\b${name}\\b`).test(help), `${name} is a command but is missing from --help`);

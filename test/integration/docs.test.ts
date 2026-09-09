@@ -1,14 +1,17 @@
-import assert from 'node:assert';
-import { execFileSync } from 'node:child_process';
-import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import assert from 'assert';
 import cr from 'cr';
 import { STORE_NAMES, SUPPORTED_CONFIG_VERSION } from 'sensemaking';
 import { parse } from 'yaml';
 import { MEASURE_VERSION } from '../../benchmark/lib/measure.mjs';
+import { RUN_METRIC_KEYS } from '../../benchmark/lib/rows.mjs';
+import { captureIdentity, compareCaptureDirectories } from '../../benchmark/lib/store-dump-evidence.mjs';
 import { REPORT_JSON_RE } from '../../benchmark/lib/verdict.mjs';
+import { identityHash } from '../../benchmark/lib/workload-identity.mjs';
 import { failedStageReasons } from '../../benchmark/report.mjs';
+import { COMMANDS } from '../../dist/esm/cli/index.js';
 import { KNOWN_EMBED_KEYS } from '../../src/config/index.ts';
 import { packageRoot, scratchDir } from '../lib/scratch.ts';
 
@@ -22,8 +25,7 @@ const read = (...parts: string[]) => cr(readFileSync(join(...parts), 'utf8'));
 const readme = () => read(packageRoot, 'README.md');
 
 describe('published docs', () => {
-  it('README lists every command in the registry', async () => {
-    const { COMMANDS } = (await import(pathToFileURL(join(packageRoot, 'dist', 'esm', 'cli', 'index.js')).href)) as { COMMANDS: Record<string, unknown> };
+  it('README lists every command in the registry', () => {
     const text = readme();
     for (const name of Object.keys(COMMANDS)) {
       assert.ok(new RegExp(`\`${name}[\\s"<\`]`).test(text), `${name} is a command but the README never shows it`);
@@ -85,6 +87,15 @@ describe('schema.json matches the code that decides what is valid', () => {
 // steps is what an earlier run recorded, carried across a resume untouched; its reasons come from
 // the harness's own function, so the fixture cannot drift from the key format gate.mjs writes.
 function fixtureSitting(dir: string, date: string, findRowTokens: [number, number], steps: Record<string, { id: string; status: string }> = {}): void {
+  const owed = steps['store-dump'] ? { 'store-dump': ['fixture'] } : {};
+  const recordedSteps = {
+    validate: { id: 'validate', status: 'ok' },
+    'npm-test': { id: 'npm-test', status: 'ok' },
+    'test-engines': { id: 'test-engines', status: 'not-owed' },
+    'live-suite': { id: 'live-suite', status: 'not-owed' },
+    compare: { id: 'compare', status: 'ok' },
+    ...steps,
+  };
   writeFileSync(
     join(dir, 'sitting.json'),
     JSON.stringify({
@@ -96,31 +107,41 @@ function fixtureSitting(dir: string, date: string, findRowTokens: [number, numbe
       chunk_version: 'chunk:v99',
       schema_version: { sqlite: '99', duckdb: '9', turso: '9' },
       changed_paths: ['src/chunk/index.ts'],
-      owed: { baseline: ['src/chunk/index.ts'] },
+      owed,
       continue: false,
-      steps,
-      failed_stage_reasons: failedStageReasons(steps),
+      steps: recordedSteps,
+      failed_stage_reasons: failedStageReasons(recordedSteps),
     })
   );
-  const row = (tokens: number) => ({
-    cold_crawl_ms: 100,
-    version_canary_ms: 20,
-    warm_query_ms: 50,
-    find_ms: 60,
-    find_row_tokens: tokens,
-    cold_embed_ms: 200,
-    semantic_find_ms: 90,
-    map_ms: 40,
-    map_tokens: 496,
-    peek_ms: 35,
-    peek_tokens: 581,
-    related_ms: 80,
-    related_tokens: 60,
-    largest_note_tokens: 77274,
-    bulk_change_ms: 600,
-    bulk_watch_ms: 150,
-    inproc: { cold_build_ms: 2100, open_nochange_ms: 35, update_1_file_ms: 38, update_10_files_ms: 44 },
-  });
+  const row = (tokens: number) => {
+    const workloadRows = Object.fromEntries(
+      RUN_METRIC_KEYS.map((key) => {
+        const inputs = { fixture: 'docs-release-comparison', row: key };
+        return [key, { inputs, fingerprint: identityHash(inputs) }];
+      })
+    );
+    return {
+      cold_crawl_ms: 100,
+      version_canary_ms: 20,
+      warm_query_ms: 50,
+      find_ms: 60,
+      find_row_tokens: tokens,
+      cold_embed_ms: 200,
+      semantic_find_ms: 90,
+      map_ms: 40,
+      map_tokens: 496,
+      peek_ms: 35,
+      peek_tokens: 581,
+      related_ms: 80,
+      related_tokens: 60,
+      largest_note_tokens: 77274,
+      bulk_change_ms: 600,
+      bulk_watch_ms: 150,
+      inproc: { cold_build_ms: 2100, open_nochange_ms: 35, update_1_file_ms: 38, update_10_files_ms: 44 },
+      measure_version: MEASURE_VERSION,
+      workload_identity: { logical_inputs: { rows: workloadRows } },
+    };
+  };
   writeFileSync(
     join(dir, 'compare.json'),
     JSON.stringify({
@@ -128,9 +149,39 @@ function fixtureSitting(dir: string, date: string, findRowTokens: [number, numbe
       store: 'sqlite',
       versions: ['9.9.8', 'local'],
       reversed: false,
+      measure_version: MEASURE_VERSION,
       results: { '9.9.8': row(findRowTokens[0]), local: row(findRowTokens[1]) },
     })
   );
+  if (steps['store-dump']) {
+    mkdirSync(join(dir, 'store-dump-captures', 'before'), { recursive: true });
+    mkdirSync(join(dir, 'store-dump-captures', 'after'), { recursive: true });
+    for (const store of ['sqlite', 'duckdb', 'turso']) {
+      mkdirSync(join(dir, 'store-dump-captures', 'before', store), { recursive: true });
+      mkdirSync(join(dir, 'store-dump-captures', 'after', store), { recursive: true });
+      writeFileSync(join(dir, 'store-dump-captures', 'before', store, 'tables.txt'), '== content (1 rows) ==\n{"path":"fixture.md"}\n');
+      writeFileSync(join(dir, 'store-dump-captures', 'after', store, 'tables.txt'), '== content (1 rows) ==\n{"path":"fixture-changed.md"}\n');
+      writeFileSync(join(dir, 'store-dump-captures', 'before', store, 'ranking.txt'), '== "fixture" (1 rows) ==\n{"path":"fixture.md"}\n');
+      writeFileSync(join(dir, 'store-dump-captures', 'after', store, 'ranking.txt'), '== "fixture" (1 rows) ==\n{"path":"fixture.md"}\n');
+    }
+    writeFileSync(
+      join(dir, 'store-dump.json'),
+      JSON.stringify({
+        baseline: '9.9.9',
+        ok: compareCaptureDirectories(join(dir, 'store-dump-captures', 'before'), join(dir, 'store-dump-captures', 'after')).ok,
+        captures: { before: 'store-dump-captures/before', after: 'store-dump-captures/after' },
+        capture_identity: { before: captureIdentity(join(dir, 'store-dump-captures', 'before')), after: captureIdentity(join(dir, 'store-dump-captures', 'after')) },
+        stores: compareCaptureDirectories(join(dir, 'store-dump-captures', 'before'), join(dir, 'store-dump-captures', 'after')).stores,
+        diff: compareCaptureDirectories(join(dir, 'store-dump-captures', 'before'), join(dir, 'store-dump-captures', 'after')).diff,
+      })
+    );
+  }
+}
+
+function fixtureDir(name: string): string {
+  const dir = scratchDir(name);
+  fixtureSitting(dir, '2099-06-10', [71, 90]);
+  return dir;
 }
 
 describe('benchmark release-gate: numbers of record', () => {
@@ -199,32 +250,31 @@ describe('benchmark release-gate: owner override needs a reason', () => {
   it('acceptRow refuses a blank reason, whatever calls it', async () => {
     const { acceptRow, buildReport, persist } = await import('../../benchmark/report.mjs');
     const sitting = scratchDir('accept-blank-sitting');
-    fixtureSitting(sitting, '2099-06-03', [71, 90]); // token contract -> forced BLOCK
+    fixtureSitting(sitting, '2099-06-03', [71, 90]); // output observation -> WARN
     const reportsDir = scratchDir('accept-blank-reports');
     const mdPath = join(scratchDir('accept-blank-md'), 'BENCHMARKING.md');
     writeFileSync(mdPath, `# Benchmarks\n\n${'<!-- numbers -->'}\n\n<!-- /numbers -->\n`);
     persist(buildReport(sitting, { reportsDir }), { sittingDir: sitting, reportsDir, benchmarkingMdPath: mdPath });
 
-    // The CLI already refuses a missing --reason. These reach acceptRow anyway, which is the only
-    // path that can turn a BLOCK into a PASS.
+    // The CLI already refuses a missing --reason. These reach acceptRow directly.
     for (const blank of ['', '   ', '\n']) {
       assert.throws(() => acceptRow('compare/find_row_tokens', blank, { sittingDir: sitting, reportsDir, benchmarkingMdPath: mdPath }), /needs a reason/, `a reason of ${JSON.stringify(blank)} must be refused`);
     }
     const { SITTING_REPORT } = await import('../../benchmark/report.mjs');
     const stillBlocked = JSON.parse(readFileSync(join(sitting, `${SITTING_REPORT}.json`), 'utf8')) as { verdict: string; accepted: Record<string, unknown> };
-    assert.equal(stillBlocked.verdict, 'BLOCK', 'a refused override must leave the verdict alone');
+    assert.equal(stillBlocked.verdict, 'PASS', 'a refused override must leave the verdict alone');
     assert.deepEqual(stillBlocked.accepted, {}, 'a refused override must record nothing');
   });
 
   it('fixture: report.mjs --accept refuses a missing reason at the CLI, and a recorded override always carries one', async () => {
     const { acceptRow, buildReport, persist } = await import('../../benchmark/report.mjs');
     const sitting = scratchDir('accept-fixture-sitting');
-    fixtureSitting(sitting, '2099-06-02', [71, 90]); // token contract -> forced BLOCK
+    fixtureSitting(sitting, '2099-06-02', [71, 90]); // output observation -> WARN
     const reportsDir = scratchDir('accept-fixture-reports');
     const mdPath = join(scratchDir('accept-fixture-md'), 'BENCHMARKING.md');
     writeFileSync(mdPath, `# Benchmarks\n\n${'<!-- numbers -->'}\n\n<!-- /numbers -->\n`);
     const report = buildReport(sitting, { reportsDir });
-    assert.equal(report.verdict, 'BLOCK');
+    assert.equal(report.verdict, 'PASS');
     persist(report, { sittingDir: sitting, reportsDir, benchmarkingMdPath: mdPath });
     const accepted = acceptRow('compare/find_row_tokens', 'fixture: exercising the override', { sittingDir: sitting, reportsDir, benchmarkingMdPath: mdPath });
     assert.equal(accepted.verdict, 'PASS');
@@ -232,6 +282,101 @@ describe('benchmark release-gate: owner override needs a reason', () => {
     // Every accepted entry the module ever writes carries a non-empty reason: acceptRow has no
     // path that stores one without it (the CLI itself refuses before calling acceptRow).
     for (const entry of Object.values(accepted.accepted) as Array<{ reason: string }>) assert.ok(entry.reason.length > 0);
+  });
+
+  it('does not carry an acceptance onto changed workload evidence', async () => {
+    const { acceptRow, buildReport, persist } = await import('../../benchmark/report.mjs');
+    const sitting = scratchDir('accept-workload-sitting');
+    const reportsDir = scratchDir('accept-workload-reports');
+    const mdPath = join(scratchDir('accept-workload-md'), 'BENCHMARKING.md');
+    writeFileSync(mdPath, `# Benchmarks\n\n${'<!-- numbers -->'}\n\n<!-- /numbers -->\n`);
+    fixtureSitting(sitting, '2099-06-06', [71, 90]);
+    persist(buildReport(sitting, { reportsDir }), { sittingDir: sitting, reportsDir, benchmarkingMdPath: mdPath });
+    const accepted = acceptRow('compare/find_row_tokens', 'fixture decision for one exact workload', { sittingDir: sitting, reportsDir, benchmarkingMdPath: mdPath });
+    assert.equal(accepted.verdict, 'PASS');
+
+    const path = join(sitting, 'compare.json');
+    const compare = JSON.parse(readFileSync(path, 'utf8')) as { versions: string[]; results: Record<string, { workload_identity: { logical_inputs: { rows: Record<string, { inputs: unknown; fingerprint: string }> } } }> };
+    const local = compare.results[compare.versions[1]];
+    const inputs = { fixture: 'changed-release-comparison', row: 'find_row_tokens' };
+    local.workload_identity.logical_inputs.rows.find_row_tokens = { inputs, fingerprint: identityHash(inputs) };
+    writeFileSync(path, JSON.stringify(compare));
+
+    const changed = buildReport(sitting, { reportsDir });
+    assert.equal(changed.verdict, 'PASS', 'no compatible prior is explicitly uncompared and nonblocking');
+    assert.equal(changed.accepted['compare/find_row_tokens'], undefined);
+    assert.equal(changed.stale_acceptances['compare/find_row_tokens'].reason, 'fixture decision for one exact workload');
+    const changedTokens = changed.classifications.find((row) => row.id === 'compare/find_row_tokens');
+    assert.ok(changedTokens);
+    assert.equal(changedTokens.verdict, 'no-compatible-prior');
+  });
+
+  it('does not carry a compare acceptance onto changed reversed evidence', async () => {
+    const { acceptRow, buildReport, persist } = await import('../../benchmark/report.mjs');
+    const sitting = scratchDir('accept-reversed-sitting');
+    const reportsDir = scratchDir('accept-reversed-reports');
+    const mdPath = join(scratchDir('accept-reversed-md'), 'BENCHMARKING.md');
+    writeFileSync(mdPath, `# Benchmarks\n\n${'<!-- numbers -->'}\n\n<!-- /numbers -->\n`);
+    fixtureSitting(sitting, '2099-06-07', [71, 71]);
+    const comparePath = join(sitting, 'compare.json');
+    const compare = JSON.parse(readFileSync(comparePath, 'utf8')) as { versions: string[]; results: Record<string, Record<string, unknown>> };
+    compare.results.local.map_ms = 100;
+    writeFileSync(comparePath, JSON.stringify(compare));
+    writeFileSync(join(sitting, 'compare-reversed.json'), JSON.stringify({ ...compare, reversed: true }));
+    const sittingState = JSON.parse(readFileSync(join(sitting, 'sitting.json'), 'utf8')) as { steps: Record<string, unknown> };
+    sittingState.steps['compare-reversed'] = { id: 'compare-reversed', status: 'ok' };
+    writeFileSync(join(sitting, 'sitting.json'), JSON.stringify(sittingState));
+    persist(buildReport(sitting, { reportsDir }), { sittingDir: sitting, reportsDir, benchmarkingMdPath: mdPath });
+    const accepted = acceptRow('compare/map_ms', 'fixture decision for one exact reversed workload', { sittingDir: sitting, reportsDir, benchmarkingMdPath: mdPath });
+    assert.equal(accepted.verdict, 'PASS');
+
+    const reversedPath = join(sitting, 'compare-reversed.json');
+    const reversed = JSON.parse(readFileSync(reversedPath, 'utf8')) as { results: Record<string, Record<string, unknown>> };
+    reversed.results.local.map_ms = 200;
+    writeFileSync(reversedPath, JSON.stringify(reversed));
+    const changed = buildReport(sitting, { reportsDir });
+    assert.equal(changed.accepted['compare/map_ms'], undefined);
+    assert.equal(changed.stale_acceptances['compare/map_ms'].reason, 'fixture decision for one exact reversed workload');
+  });
+
+  it('the real --sitting option directs acceptance to that sitting', async () => {
+    const { buildReport, persist } = await import('../../benchmark/report.mjs');
+    const first = fixtureDir('cli-target-first');
+    const second = fixtureDir('cli-target-second');
+    for (const sitting of [first, second]) {
+      const reportsDir = scratchDir(`cli-target-reports-${sitting.slice(-5)}`);
+      persist(buildReport(sitting, { reportsDir }), { sittingDir: sitting, reportsDir });
+    }
+    execFileSync(process.execPath, ['benchmark/report.mjs', '--accept', 'compare/find_row_tokens', '--reason', 'explicit sitting target', '--sitting', first], { cwd: packageRoot, encoding: 'utf8' });
+    const firstReport = JSON.parse(readFileSync(join(first, 'release-gate.json'), 'utf8')) as { accepted: Record<string, { reason: string }> };
+    const secondReport = JSON.parse(readFileSync(join(second, 'release-gate.json'), 'utf8')) as { accepted: Record<string, unknown> };
+    assert.equal(firstReport.accepted['compare/find_row_tokens'].reason, 'explicit sitting target');
+    assert.equal(secondReport.accepted['compare/find_row_tokens'], undefined, 'the lexicographically later sitting must not receive the decision');
+  });
+
+  it('a malformed store-dump artifact remains a non-waivable BLOCK', async () => {
+    const { buildReport, failedStageReasons } = await import('../../benchmark/report.mjs');
+    const sitting = fixtureDir('cli-malformed-store-dump');
+    const sittingJson = JSON.parse(readFileSync(join(sitting, 'sitting.json'), 'utf8')) as { owed: Record<string, string[]>; steps: Record<string, { id: string; status: string }>; failed_stage_reasons?: unknown };
+    sittingJson.owed = { 'store-dump': ['fixture'] };
+    sittingJson.steps['store-dump'] = { id: 'store-dump', status: 'ok' };
+    sittingJson.failed_stage_reasons = failedStageReasons(sittingJson.steps);
+    writeFileSync(join(sitting, 'sitting.json'), JSON.stringify(sittingJson));
+    writeFileSync(join(sitting, 'store-dump.json'), '{ malformed');
+    const report = buildReport(sitting, { reportsDir: scratchDir('cli-malformed-store-dump-reports') });
+    assert.equal(report.verdict, 'BLOCK');
+    assert.ok(report.verdict_reasons.some((reason: string) => reason.includes('store-dump: current artifact JSON is malformed')));
+  });
+
+  it('missing owed step records produce named coverage BLOCK reasons', async () => {
+    const { buildReport } = await import('../../benchmark/report.mjs');
+    const sitting = fixtureDir('cli-missing-coverage');
+    const sittingJson = JSON.parse(readFileSync(join(sitting, 'sitting.json'), 'utf8')) as { owed: Record<string, string[]> };
+    sittingJson.owed = { baseline: ['fixture'] };
+    writeFileSync(join(sitting, 'sitting.json'), JSON.stringify(sittingJson));
+    const report = buildReport(sitting, { reportsDir: scratchDir('cli-missing-coverage-reports') });
+    assert.equal(report.verdict, 'BLOCK');
+    assert.ok(report.verdict_reasons.some((reason: string) => reason === 'coverage: owed step "compare" is recorded not-owed' || reason.includes('coverage: owed step')));
   });
 
   it('every release-gate JSON currently in the tree has a non-empty reason on every accepted row', () => {
@@ -283,7 +428,7 @@ describe('benchmark release-gate: a stage failure has an owner path', () => {
   const words = 'the A/B diff is the parser change the changelog names';
 
   it("fixture: accepting a stage reason with the owner's words clears the block and renders in the json and the md", async () => {
-    const { acceptRow, buildReport, persist, SITTING_REPORT } = await import('../../benchmark/report.mjs');
+    const { acceptRow, acceptedIds, buildReport, persist, SITTING_REPORT } = await import('../../benchmark/report.mjs');
     const sitting = scratchDir('accept-stage-sitting');
     fixtureSitting(sitting, '2099-06-04', [71, 71], failedStoreDump); // every row flat: the stage failure is the only block
     const reportsDir = scratchDir('accept-stage-reports');
@@ -301,6 +446,7 @@ describe('benchmark release-gate: a stage failure has an owner path', () => {
     assert.match(accepted.accepted['store-dump: failed'].date, /^\d{4}-\d{2}-\d{2}$/);
     assert.deepEqual(accepted.stage_reasons, ['store-dump: failed'], 'the stage stays in the report, accepted rather than gone');
     assert.match(readFileSync(join(sitting, `${SITTING_REPORT}.md`), 'utf8'), new RegExp(`- stage store-dump: failed: owner decision, \\d{4}-\\d{2}-\\d{2}: ${words}`));
+    assert.match(readFileSync(join(sitting, `${SITTING_REPORT}.md`), 'utf8'), /#### Store-dump evidence/);
 
     // The --release copy carries the decision, so the published record shows it.
     const record = JSON.parse(readFileSync(join(reportsDir, '2099-06-04-9.9.10-release-gate.json'), 'utf8')) as { accepted: Record<string, { reason: string }> };
@@ -311,6 +457,21 @@ describe('benchmark release-gate: a stage failure has an owner path', () => {
     const regenerated = buildReport(sitting, { reportsDir, releaseVersionOverride: '9.9.10' });
     assert.equal(regenerated.verdict, 'PASS');
     assert.equal(regenerated.accepted['store-dump: failed'].reason, words);
+
+    const resumedSitting = JSON.parse(readFileSync(join(sitting, 'sitting.json'), 'utf8')) as { steps: Record<string, Record<string, unknown>> };
+    resumedSitting.steps['store-dump'] = { ...resumedSitting.steps['store-dump'], resumed: true };
+    writeFileSync(join(sitting, 'sitting.json'), JSON.stringify(resumedSitting));
+    const resumed = buildReport(sitting, { reportsDir, releaseVersionOverride: '9.9.10' });
+    assert.equal(resumed.verdict, 'PASS', 'resume bookkeeping must not invalidate an unchanged accepted failure');
+    assert.equal(resumed.accepted['store-dump: failed'].reason, words);
+
+    writeFileSync(join(sitting, 'store-dump-captures', 'before', 'sqlite.txt'), 'changed row with the same summary\n');
+    const changedCapture = buildReport(sitting, { reportsDir, releaseVersionOverride: '9.9.10' });
+    assert.equal(changedCapture.accepted['store-dump: failed'], undefined, 'a changed retained capture must invalidate the owner decision');
+    assert.equal(changedCapture.stale_acceptances['store-dump: failed'].reason, words);
+
+    writeFileSync(join(sitting, 'store-dump.json'), JSON.stringify({ replacement: true }));
+    assert.equal(acceptedIds(sitting).has('store-dump: failed'), false, 'changed stage evidence must not suppress its rerun');
   });
 
   it('acceptRow refuses a blank reason on a stage reason, and refuses a name that is neither a row nor a stage', async () => {
@@ -334,13 +495,10 @@ describe('benchmark release-gate: a stage failure has an owner path', () => {
 });
 
 describe('benchmark release-gate: unmeasured work (an earlier failure, or an interruption) can never be accepted', () => {
-  // The defect this guards: unmeasuredSteps()/interruptedSteps() went into the same stageReasons
-  // array report.stage_reasons publishes, which is exactly what acceptRow validates --accept
-  // against, so the real not-run/interrupted strings were themselves acceptable ids and --accept
-  // could turn "this was never measured" into PASS. Both reasons must block unconditionally and
-  // never appear in stage_reasons, so acceptRow refuses them as an unknown id, the same refusal it
-  // gives any string that names nothing. Every reason asserted below is read off the real
-  // exported functions, never hand-typed, so a wording change cannot make this pass by drift.
+  // unmeasuredSteps()/interruptedSteps() must never land in stage_reasons: acceptRow treats every
+  // string there as a valid --accept id, so anything in that array is overridable into a PASS.
+  // Every reason asserted below is read off the real exported functions, never hand-typed, so a
+  // wording change cannot make this pass by drift.
   it('a sitting owing three gates with store-dump failed and compare not-run blocks on both; accepting the failure leaves the not-run reason; the real not-run reason is refused by acceptRow', async () => {
     const { acceptRow, buildReport, failedStageReasons, persist, unmeasuredSteps } = await import('../../benchmark/report.mjs');
     const sitting = scratchDir('unmeasured-after-failure-sitting');
@@ -366,13 +524,14 @@ describe('benchmark release-gate: unmeasured work (an earlier failure, or an int
 
     const report = buildReport(sitting, { reportsDir });
     assert.equal(report.verdict, 'BLOCK');
-    assert.deepEqual([...report.verdict_reasons].sort(), [notRunReason, 'store-dump: failed'].sort());
+    assert.ok(report.verdict_reasons.includes(notRunReason));
+    assert.ok(report.verdict_reasons.some((reason: string) => reason.startsWith('coverage:')));
     assert.deepEqual(report.stage_reasons, ['store-dump: failed'], 'the not-run reason is never in stage_reasons, so acceptRow can never find it as an id');
     persist(report, { sittingDir: sitting, reportsDir, benchmarkingMdPath: mdPath });
 
     const afterAccept = acceptRow('store-dump: failed', 'the diff is the parser change the changelog names', { sittingDir: sitting, reportsDir, benchmarkingMdPath: mdPath });
     assert.equal(afterAccept.verdict, 'BLOCK', 'the unmeasured step still blocks once the stage failure is accepted');
-    assert.deepEqual(afterAccept.verdict_reasons, [notRunReason]);
+    assert.ok(afterAccept.verdict_reasons.includes(notRunReason));
 
     assert.throws(() => acceptRow(notRunReason, 'trying anyway', { sittingDir: sitting, reportsDir, benchmarkingMdPath: mdPath }), /neither a row nor a stage reason/, 'the real not-run string, not a truncation, must still be refused');
   });
@@ -380,7 +539,7 @@ describe('benchmark release-gate: unmeasured work (an earlier failure, or an int
   it('a real interrupted-step reason is refused by acceptRow the same way, and never appears in stage_reasons', async () => {
     const { acceptRow, buildReport, interruptedSteps, persist } = await import('../../benchmark/report.mjs');
     const sitting = scratchDir('interrupted-not-acceptable-sitting');
-    const sittingJson = { date: '2099-06-09', baseline_version: '9.9.9', last_tag: 'v9.9.8', machine: { cpu_model: 'Fixture' }, node: 'v99', changed_paths: [], owed: {}, steps: {}, failed_stage_reasons: [] };
+    const sittingJson = { date: '2099-06-09', baseline_version: '9.9.9', last_tag: 'v9.9.8', machine: { cpu_model: 'Fixture' }, node: 'v99', changed_paths: [], owed: {}, steps: { validate: { id: 'validate', status: 'ok' }, 'npm-test': { id: 'npm-test', status: 'ok' } }, failed_stage_reasons: [] };
     writeFileSync(join(sitting, 'battery-turso-hub.log'), 'partial output, then the kill\n'); // the log exists, the status never got written
     writeFileSync(join(sitting, 'sitting.json'), JSON.stringify(sittingJson));
     const reportsDir = scratchDir('interrupted-not-acceptable-reports');
@@ -400,7 +559,76 @@ describe('benchmark release-gate: unmeasured work (an earlier failure, or an int
   });
 });
 
+describe('benchmark store-dump: retained captures and structured differences', () => {
+  it('writes capture hashes and path/schema/score/snippet identities for changed output', () => {
+    const root = scratchDir('store-dump-structured');
+    const before = join(root, 'before');
+    const after = join(root, 'after');
+    const output = join(root, 'store-dump.json');
+    for (const side of [before, after]) mkdirSync(join(side, 'sqlite'), { recursive: true });
+    writeFileSync(join(before, 'sqlite', 'tables.txt'), '== content (1 rows) ==\n{"path":"a.md","score":1,"snippets":["old"]}\n');
+    writeFileSync(join(after, 'sqlite', 'tables.txt'), '== content (2 rows) ==\n{"path":"a.md","score":2,"snippets":["new"]}\n{"path":"b.md","score":1,"snippets":["added"]}\n');
+    writeFileSync(join(before, 'sqlite', 'ranking.txt'), '== "q" (1 rows) ==\n{"path":"a.md","score":1}\n');
+    writeFileSync(join(after, 'sqlite', 'ranking.txt'), '== "q" (1 rows) ==\n{"path":"a.md","score":2}\n');
+    const run = spawnSync(process.execPath, ['benchmark/steps/store-dump.mjs', 'compare', before, after, '--out', output], { cwd: packageRoot, encoding: 'utf8' });
+    assert.equal(run.status, 1, 'changed captures must fail the byte-parity comparator');
+    const artifact = JSON.parse(readFileSync(output, 'utf8')) as { capture_identity: { before: { sha256: string }; after: { sha256: string } }; diff: { changed_files: unknown[]; categories: Record<string, unknown[]> }; captures: { before: string; after: string } };
+    assert.notEqual(artifact.capture_identity.before.sha256, artifact.capture_identity.after.sha256);
+    assert.ok(artifact.diff.changed_files.length > 0);
+    assert.ok(artifact.diff.categories.membership.length > 0);
+    assert.ok(artifact.diff.categories.score.length > 0);
+    assert.ok(artifact.diff.categories.snippet.length > 0);
+    assert.equal(artifact.captures.before, 'before');
+    assert.equal(artifact.captures.after, 'after');
+  });
+});
+
 describe('benchmark release-gate: generated report re-render is idempotent', () => {
+  it('fixture: a tracked record is compact, keeps identities, and renders from saved JSON', async () => {
+    const { buildReport, compactReleaseRecord, persist, renderMarkdown } = await import('../../benchmark/report.mjs');
+    const { classifyCrossGroup, classifyEval, priorStepLookup } = await import('../../benchmark/lib/verdict.mjs');
+    const sitting = scratchDir('compact-record-fixture-sitting');
+    fixtureSitting(sitting, '2099-06-02', [71, 71], { 'store-dump': { id: 'store-dump', status: 'ok' } });
+    const reportsDir = scratchDir('compact-record-fixture-reports');
+    const mdPath = join(scratchDir('compact-record-fixture-md'), 'BENCHMARKING.md');
+    writeFileSync(mdPath, `# Benchmarks\n\n${'<!-- numbers -->'}\n\n<!-- /numbers -->\n`);
+    const report = buildReport(sitting, { reportsDir, releaseVersionOverride: '9.9.10' });
+    const compact = compactReleaseRecord(report);
+    const row = compact.steps.compare.results.local.workload_identity.logical_inputs.rows.find_ms;
+    assert.equal(row.fingerprint, identityHash(row.inputs));
+    assert.equal(compact.steps['store-dump'].stores, undefined);
+    assert.match(compact.steps['store-dump'].omitted_evidence.retention, /cannot revalidate/);
+    const { jsonPath, mdPath: savedMdPath } = persist(report, { sittingDir: sitting, reportsDir, benchmarkingMdPath: mdPath });
+    const saved = JSON.parse(readFileSync(jsonPath, 'utf8'));
+    assert.deepEqual(saved, compact);
+    assert.deepEqual(compactReleaseRecord(saved), saved, 'a saved compact record remains stable');
+    assert.ok(readFileSync(savedMdPath, 'utf8').endsWith(renderMarkdown(saved)));
+    assert.ok(JSON.parse(readFileSync(join(sitting, 'release-gate.json'), 'utf8')).steps['store-dump'].stores);
+
+    const inputs = { requested: { model: { reuse_eligible: true } }, fixture: 'compact-eval' };
+    const evalStep = {
+      measure_version: MEASURE_VERSION,
+      errors: 0,
+      variants: { semantic: { ndcg: 0.5, rr: 0.5, hit: 0.5, errors: 0, workload_identity: { inputs, fingerprint: identityHash(inputs) }, per_query: [{ qid: 'q1' }] } },
+      query_evidence: [{ qid: 'q1' }],
+      qrels: { q1: { d1: 1 } },
+    };
+    const scaleRun = compact.steps.compare.results.local;
+    const fullPrior = { measure_version: MEASURE_VERSION, steps: { eval: evalStep, scale: scaleRun } };
+    const compactPrior = compactReleaseRecord({ ...report, steps: fullPrior.steps });
+    assert.equal(compactPrior.steps.eval.query_evidence, undefined);
+    assert.equal(compactPrior.steps.eval.variants.semantic.per_query, undefined);
+    const fullLookup = priorStepLookup([{ name: 'full.json', report: fullPrior }], MEASURE_VERSION);
+    const compactLookup = priorStepLookup([{ name: 'compact.json', report: compactPrior }], MEASURE_VERSION);
+    const fullEval = fullLookup('eval');
+    const compactEval = compactLookup('eval');
+    const fullScale = fullLookup('scale');
+    const compactScale = compactLookup('scale');
+    assert.ok(fullEval && compactEval && fullScale && compactScale);
+    assert.deepEqual(classifyEval('eval', evalStep, fullEval.step, false, { requireIdentity: true }), classifyEval('eval', evalStep, compactEval.step, false, { requireIdentity: true }));
+    assert.deepEqual(classifyCrossGroup({ scale: scaleRun }, { scale: fullScale.step }, { requireIdentity: true }), classifyCrossGroup({ scale: scaleRun }, { scale: compactScale.step }, { requireIdentity: true }));
+  });
+
   it('fixture: buildReport + persist is byte-identical to a second run against the same sitting', async () => {
     const { buildReport, persist } = await import('../../benchmark/report.mjs');
     const sitting = scratchDir('idempotent-fixture-sitting');

@@ -3,12 +3,11 @@ import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import assert from 'assert';
 import { packageRoot } from '../lib/scratch.ts';
-import { hasCapability } from '../lib/stores.ts';
 import { tmpTree, writeNote } from '../lib/tree.ts';
 
 // duckdb and turso hold the cache file for their connection's whole life, so two commands on one
-// tree collide at open() rather than at a transaction. Measured before the retry landed: 1 of 3
-// succeeded, warm as well as cold, and every failure returned inside 200 ms.
+// tree collide at open() rather than at a transaction; every failure returns inside 200 ms, which
+// is what makes retrying the open cheap enough to do unconditionally.
 
 // Spawned from the package root with --config, never cwd=scratch: Windows will not delete a live
 // process's cwd (same reason as shutdown.test.ts).
@@ -38,8 +37,7 @@ describe('concurrent commands on one tree', () => {
   // is shared: a warm tree has nothing left to reparse, so two commands never reach a write
   // transaction together, and its own concurrency defect is cold-only (below).
   for (const store of ['duckdb', 'turso'] as const) {
-    it(`${store}: ${PARALLEL} simultaneous searches on a warm tree all succeed`, async function () {
-      if (!hasCapability(store, 'lexical')) this.skip();
+    it(`${store}: ${PARALLEL} simultaneous searches on a warm tree all succeed`, async () => {
       const baseDir = tree(store);
       await search(baseDir);
 
@@ -68,8 +66,7 @@ describe('concurrent commands on one tree', () => {
   // in full; the second, still trusting its stale "added" classification, then reruns bare
   // INSERTs against rows the first already created -- a primary-key race, not a lock, so a retry
   // would only mask it. 200 files: small counts don't reliably overlap the two reconciles.
-  it('sqlite: 3 simultaneous searches on a cold tree all succeed', async function () {
-    if (!hasCapability('sqlite', 'lexical')) this.skip();
+  it('sqlite: 3 simultaneous searches on a cold tree all succeed', async () => {
     const baseDir = tree('sqlite', 200);
 
     const results = await Promise.all(Array.from({ length: PARALLEL }, () => search(baseDir)));

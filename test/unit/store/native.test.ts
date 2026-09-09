@@ -1,11 +1,11 @@
-import assert from 'node:assert';
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { chmodSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
+import assert from 'assert';
 import { SenseError } from '../../../src/errors.ts';
 import { loadOrInstall, type NativeDescriptor } from '../../../src/store/native.ts';
-import { scratchDir } from '../../lib/scratch.ts';
+import { packageRoot, scratchDir } from '../../lib/scratch.ts';
 
 const DESCRIPTOR: NativeDescriptor = { store: 'test-store', pkg: 'test-store-native-pkg', sizeHint: '~1MB' };
 
@@ -73,5 +73,33 @@ describe('loadOrInstall', () => {
     assert.equal(typeof mod.default, 'function');
     assert.equal(mod.default(4), true);
     assert.equal(mod.default(-1), false);
+  });
+
+  it('loads the installed package through both built module formats with the import namespace shape', () => {
+    const script = `
+      import { createRequire } from 'node:module';
+      import { pathToFileURL } from 'node:url';
+      const mode = process.argv[1];
+      const nodeModulesPath = process.argv[2];
+      const builtPath = process.argv[3];
+      const native = mode === 'esm'
+        ? await import(pathToFileURL(builtPath).href)
+        : createRequire(import.meta.url)(builtPath);
+      const loaded = await native.loadOrInstall(
+        { store: 'built-' + mode, pkg: 'built-native-pkg', sizeHint: 'tiny' },
+        nodeModulesPath,
+        'is-natural-number'
+      );
+      const check = loaded.default;
+      console.log(JSON.stringify({ defaultType: typeof check, positive: check(4), negative: check(-1) }));
+    `;
+
+    for (const mode of ['esm', 'cjs'] as const) {
+      const nodeModulesPath = scratchDir(`native-built-${mode}`);
+      const builtPath = join(packageRoot, 'dist', mode, 'store', 'native.js');
+      const result = spawnSync(process.execPath, ['--input-type=module', '-e', script, mode, nodeModulesPath, builtPath], { encoding: 'utf8' });
+      assert.equal(result.status, 0, result.stderr);
+      assert.deepEqual(JSON.parse(result.stdout.trim()), { defaultType: 'function', positive: true, negative: false });
+    }
   });
 });

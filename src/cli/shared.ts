@@ -25,7 +25,7 @@ export const SCOPE: ParseArgsOptionsConfig = {
   // own side of the preset, so neither can drop an exclusion the preset declares.
   'no-exclude': { type: 'boolean', default: false },
 };
-export const SEARCH_FLAGS: ParseArgsOptionsConfig = { ...SCOPE, k: { type: 'string' } };
+export const SEARCH_FLAGS: ParseArgsOptionsConfig = { ...SCOPE, k: { type: 'string' }, 'snippet-char-limit': { type: 'string' }, 'snippet-count-limit': { type: 'string' } };
 
 type Values = Record<string, string | boolean | string[] | undefined>;
 
@@ -89,6 +89,21 @@ export function parseK(k: string | undefined, usageError: (message: string) => n
   if (k === undefined) return undefined;
   const parsed = Number(k);
   if (!Number.isInteger(parsed) || parsed <= 0) usageError(`--k expects a positive integer, got "${k}"`);
+  return parsed;
+}
+
+// Same positive-integer rule as --k, beside it since both flags come from SEARCH_FLAGS.
+export function parseSnippetCharLimit(value: string | undefined, usageError: (message: string) => never): number | undefined {
+  if (value === undefined) return undefined;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) usageError(`--snippet-char-limit expects a positive integer, got "${value}"`);
+  return parsed;
+}
+
+export function parseSnippetCountLimit(value: string | undefined, usageError: (message: string) => never): number | undefined {
+  if (value === undefined) return undefined;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) usageError(`--snippet-count-limit expects a positive integer, got "${value}"`);
   return parsed;
 }
 

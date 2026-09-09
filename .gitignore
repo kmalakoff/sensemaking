@@ -14,3 +14,5 @@ plans/
 
 # secrets for live provider tests
 .env.test
+.agents/
+.archive/

@@ -2,6 +2,71 @@
 
 All notable changes to sensemaking are documented here.
 
+## [0.24.0] - 2026-09-06
+
+### Added
+
+- **`has()` and `basename()` now work on `turso`.** Both are rewritten into portable SQL rather than
+  registered as engine functions, so a saved query or a `sense sql` call using them runs on all three
+  stores. `segment()` still cannot run on `turso` and now fails with a named error telling you to
+  rephrase or switch store, instead of whatever the engine happened to say.
+
+### Fixed
+
+- Search spends less time generating snippets for long notes containing many words unrelated to
+  the query. Returned passages, line ranges and caller budgets are unchanged.
+- **Search results no longer mark fragments inside other words, on any store.** A search for `the`
+  marked the `the` inside `them`, `they` and `there`, and those false matches also pulled the shown
+  passage to the wrong part of the note. Marking now follows whole words, still matching stemmed
+  forms so `running` marks `runs`, and still matching substrings in scripts written without word
+  spaces, where that is the documented behaviour.
+- **Lexical matching is equivalent across stores for accents, stemming and phrases.** Search folds
+  accents and matches common English inflections consistently on `sqlite`, `duckdb` and `turso`.
+  Quoted phrases treat punctuation and whitespace as separators, so `customer-facing` and
+  `customer facing` have the same semantics.
+
+- **Optional native stores load from both module systems.** DuckDB and Turso can be opened from
+  both ESM and CommonJS builds without a module-resolution failure.
+
+- **Search on a `duckdb` tree no longer rebuilds the whole index on every command.** The
+  index was rebuilt from scratch on each invocation whether or not anything had changed, because the
+  "is it stale" answer lived in memory and every command is a fresh process. It now persists with the
+  cache. On a 6,566-note tree `sense search` falls from about 620 ms to 275 ms and `sense words` from
+  543 ms to 214 ms; the gap grows with tree size. Existing caches rebuild once on their first search
+  after upgrading, then stop.
+
+### Changed
+
+- **`CAPABILITY_NAMES`/`Capability` narrows to `['vectors', 'segment']`.** `'phrases'`, `'lexical'`
+  and `'snippets'` are gone: all three stores declared `'phrases'` and `'lexical'`, so neither ever
+  gated anything, and the FTS5-syntax divergence they gestured at is already enforced with a named
+  error at the query site. `'snippets'` described an sqlite-only output difference nothing branched
+  on. `'sql-functions'` is renamed to `'segment'`: `has()`/`basename()` now resolve on every store
+  (turso via SQL rewrite), so the only remaining difference is `segment()`, which turso still cannot
+  run. A consumer calling `store.capabilities.has('phrases' | 'lexical' | 'snippets')` must delete
+  the call; one calling it with `'sql-functions'` must switch to `'segment'`.
+- **The `hit` field on a search row is now `snippets`, and it is always a list.** It was one string
+  or null; it is now a list of passages, `[]` when a row matched by link or meaning rather than by
+  words. The field is a snippet, a short passage cut around your query, and the old name did not say
+  so. A consumer reading `row.hit` reads `row.snippets` and takes the first entry.
+- **Two flags bound what a search row costs you.** `--snippet-char-limit` caps each passage at 80
+  characters by default, counted on what is actually returned including the `«»` marks.
+  `--snippet-count-limit` asks for more than one passage per note, defaulting to 1, so a note that
+  mentions your term in three places can show all three. Both work on `search` and on saved
+  searches. Passages are cut at word boundaries in every language, including those written without
+  word spaces.
+- **Every store returns the same passages for the same lexical match.** `sqlite` used SQLite's own
+  snippet function below 16 KB and the shared one above it; all three now share one implementation,
+  so the text you see no longer depends on which store the tree uses.
+- **Semantic scores are true cosine similarities.** Zero vectors score `0`; public scores are
+  rounded to three decimals for display, while ranking uses the unrounded cosine and exact ties use
+  bytewise path order. When chunks tie within a note, the earliest chunk wins.
+- **`map` ties are deterministic.** Equal hub ranks and equal recent modification times now break
+  by path, so repeated runs return a stable order.
+- **Turso caches rebuild once after the lexical schema change.** The Turso cache schema advances
+  from version 5 to 8 to store derived search fields. Existing caches re-index on first use after
+  upgrading; source notes are unchanged.
+
 ## [0.23.1] - 2026-09-06
 
 ### Fixed

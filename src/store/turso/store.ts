@@ -7,11 +7,11 @@ import { hasVectorRow, pendingRows } from '../vectors.ts';
 import { cacheFilePath, checkpointWal, fileSize, reclaimSpace } from './connection.ts';
 import { fieldStats } from './fieldStats.ts';
 import { queryLexical } from './lexical.ts';
+import { rewriteFunctions } from './sql-functions.ts';
 import { scanCandidates, scanSimilar, writeVectorBatch } from './vectors.ts';
 
-// No 'snippets': fts_highlight returns the whole column, not a bounded window, so hits use
-// the caller's JS excerpt.
-export const CAPABILITIES: ReadonlySet<Capability> = new Set(['lexical', 'phrases', 'vectors']);
+// No 'segment': has()/basename() resolve via SQL rewrite below (sql-functions.ts), but segment() has no SQL form and the client cannot register it as a UDF.
+export const CAPABILITIES: ReadonlySet<Capability> = new Set(['vectors']);
 
 // close() reclaims once the cache file outgrows its compact size by this factor: the disk
 // overhead a user should accept (PLAN 3.52), in postgres autovacuum scale-factor shape.
@@ -61,7 +61,7 @@ export function createStore(db: Database, conn: Connection): Store {
     },
     raw: {
       async prepare(sql: string) {
-        const stmt = await db.prepare(sql);
+        const stmt = await db.prepare(rewriteFunctions(sql));
         stmt.safeIntegers(true); // int64 past 2^53 arrives as BigInt instead of losing precision
         return {
           columns: () => stmt.columns(),

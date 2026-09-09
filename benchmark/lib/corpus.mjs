@@ -4,6 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { cached } from './cache.mjs';
+import { canonicalJson } from './canonical-json.mjs';
 
 // mulberry32: tiny deterministic PRNG so a spec reproduces byte-identical trees across runs/machines.
 function mulberry32(seed) {
@@ -140,24 +141,11 @@ const SYNTHETIC_DEFAULTS = {
   presets: null, // presets dimension: [{name, dir, semantic}] -> write a v3 presets config instead, one folder per preset
 };
 
-// Recursive key sort, so nested spec objects keep a stable hash; a top-level replacer would
-// strip every key of a nested object instead.
-function stableStringify(v) {
-  if (Array.isArray(v)) return `[${v.map(stableStringify).join(',')}]`;
-  if (v && typeof v === 'object') {
-    return `{${Object.keys(v)
-      .sort()
-      .map((k) => `${JSON.stringify(k)}:${stableStringify(v[k])}`)
-      .join(',')}}`;
-  }
-  return JSON.stringify(v);
-}
-
 // Cache key from the param values, not the catalog name (synthetic corpora are requested by
 // spec object, see syntheticPath). Hash covers every field; the prefix keeps .tmp/cache/ readable.
-function specKey(spec) {
+export function syntheticSpecKey(spec) {
   const full = { ...SYNTHETIC_DEFAULTS, ...spec };
-  const json = stableStringify(full);
+  const json = canonicalJson(full);
   let hash = 2166136261;
   for (let i = 0; i < json.length; i++) {
     hash ^= json.charCodeAt(i);
@@ -457,7 +445,7 @@ BUILDERS.synthetic = (spec, dest) => {
 // Synthetic tree for a param spec (not a catalog name) -- lets sweep.mjs request corpora
 // that the CORPORA table never lists, cached the same way as everything else.
 export function syntheticPath(spec) {
-  return cached(specKey(spec), (staging) => BUILDERS.synthetic(spec, staging));
+  return cached(syntheticSpecKey(spec), (staging) => BUILDERS.synthetic(spec, staging));
 }
 
 function entryDir(name) {

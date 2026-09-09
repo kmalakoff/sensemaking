@@ -1,5 +1,5 @@
 import type { Connection, VectorCandidate, VectorSimilar, VectorWriteRow } from '../types.ts';
-import { asCosine, sampleEvenly } from '../vectors.ts';
+import { asCosine, compareVectorScores, sampleEvenly } from '../vectors.ts';
 
 // Native F32_BLOB(dims) columns, dims fixed at DDL time (open.ts, STORE_DIMS). Both scans
 // score in JS: a per-row vector_distance_cos measured 3.5-8x slower on this row engine.
@@ -57,20 +57,23 @@ export async function writeVectorBatch(conn: Connection, dims: number, rows: Vec
 // is right but the bare start_line/end_line come from an arbitrary row in the group.
 export async function scanCandidates(conn: Connection, qv: Float32Array, dims: number, fetch: number, allowed?: Set<string>): Promise<VectorCandidate[]> {
   const q = padded(qv, dims);
-  const stmt = await conn.prepare('SELECT "path", start_line, end_line, vector FROM embeddings WHERE vector IS NOT NULL');
-  const rows = (await stmt.all()) as Array<{ path: string; start_line: number; end_line: number; vector: Buffer }>;
+  const stmt = await conn.prepare('SELECT "path", chunk, start_line, end_line, vector FROM embeddings WHERE vector IS NOT NULL ORDER BY "path", chunk');
+  const rows = (await stmt.all()) as Array<{ path: string; chunk: number; start_line: number; end_line: number; vector: Buffer }>;
 
-  const best = new Map<string, { score: number; lines: string }>();
+  const best = new Map<string, { score: number; chunk: number; lines: string }>();
   for (const row of rows) {
     if (allowed && !allowed.has(row.path)) continue;
     const score = cosineSimilarity(q, decode(row.vector, dims));
     const existing = best.get(row.path);
-    if (!existing || score > existing.score) best.set(row.path, { score, lines: `L${row.start_line}-${row.end_line}` });
+    if (!existing || score > existing.score || (score === existing.score && row.chunk < existing.chunk)) {
+      best.set(row.path, { score, chunk: row.chunk, lines: `L${row.start_line}-${row.end_line}` });
+    }
   }
   return [...best.entries()]
-    .sort((a, b) => b[1].score - a[1].score)
+    .map(([path, value]) => ({ path, ...value }))
+    .sort(compareVectorScores)
     .slice(0, fetch)
-    .map(([path, b]) => ({ path, lines: b.lines, similarity: asCosine(b.score) }));
+    .map(({ path, lines, score }) => ({ path, lines, similarity: asCosine(score) }));
 }
 
 // Max cosine over (target chunk, other chunk) pairs. The SQL cross-join duckdb uses measured
@@ -96,7 +99,8 @@ export async function scanSimilar(conn: Connection, dims: number, path: string, 
   }
 
   return [...best.entries()]
-    .sort((a, b) => b[1] - a[1])
+    .map(([p, score]) => ({ path: p, score }))
+    .sort(compareVectorScores)
     .slice(0, opts.k)
-    .map(([p, score]) => ({ path: p, similarity: asCosine(score) }));
+    .map(({ path: p, score }) => ({ path: p, similarity: asCosine(score) }));
 }

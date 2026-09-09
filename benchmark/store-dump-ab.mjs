@@ -5,7 +5,7 @@
 // usage: node benchmark/store-dump-ab.mjs [--out <file>]
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { safeRmSync } from 'fs-remove-compat';
@@ -30,7 +30,7 @@ const installed = cached(`sensemaking-${version}`, (staging) => {
 const oldPkg = join(installed, 'node_modules', 'sensemaking');
 if (!existsSync(join(oldPkg, 'dist', 'esm', 'index.js'))) throw new Error(`${oldPkg} carries no built dist to capture`);
 
-const work = join(ROOT, '.tmp', 'store-dump-ab');
+const work = outArg ? join(dirname(resolve(outArg)), 'store-dump-captures') : join(ROOT, '.tmp', 'store-dump-ab');
 safeRmSync(work, { recursive: true, force: true });
 mkdirSync(work, { recursive: true });
 
@@ -45,8 +45,12 @@ console.log(`store-dump A/B: ${version} (installed from npm) against the working
 const before = capture('before', ['--pkg-root', oldPkg]);
 const after = capture('after', []);
 
-const cmp = spawnSync(process.execPath, [join(ROOT, 'benchmark', 'steps', 'store-dump.mjs'), 'compare', before, after], { cwd: ROOT, encoding: 'utf8' });
+const cmp = spawnSync(process.execPath, [join(ROOT, 'benchmark', 'steps', 'store-dump.mjs'), 'compare', before, after, ...(outArg ? ['--out', outArg] : [])], { cwd: ROOT, encoding: 'utf8' });
 process.stdout.write(cmp.stdout ?? '');
 process.stderr.write(cmp.stderr ?? '');
-if (outArg) writeOut(outArg, { baseline: version, ok: cmp.status === 0, output: cmp.stdout ?? '' });
+if (outArg && existsSync(outArg)) {
+  const artifact = JSON.parse(readFileSync(outArg, 'utf8'));
+  artifact.baseline = version;
+  writeOut(outArg, artifact);
+}
 process.exit(cmp.status ?? 1);

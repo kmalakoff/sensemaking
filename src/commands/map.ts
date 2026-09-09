@@ -51,9 +51,11 @@ export async function mapTree(store: Store, cfg: ResolvedConfig, overrides: Sear
     allFields.sort((a, b) => b.coverage - a.coverage);
     const fields = allFields.slice(0, 20) as unknown as Row[];
 
-    const hubs = featureEnabled(cfg, 'rank') ? ((await (await store.prepare(`SELECT f."path" AS path, round(f."_rank" * 100, 2) AS rank, content.title FROM frontmatter f JOIN content ON content.path = f."path" WHERE f."_rank" IS NOT NULL ${scopeAnd} ORDER BY f."_rank" DESC LIMIT 8`)).all()) as Row[]) : [];
+    const hubs = featureEnabled(cfg, 'rank')
+      ? ((await (await store.prepare(`SELECT f."path" AS path, round(f."_rank" * 100, 2) AS rank, content.title FROM frontmatter f JOIN content ON content.path = f."path" WHERE f."_rank" IS NOT NULL ${scopeAnd} ORDER BY f."_rank" DESC, f."path" ASC LIMIT 8`)).all()) as Row[])
+      : [];
 
-    const recent = ((await (await store.prepare(`SELECT "path", "_mtime" AS mtime FROM frontmatter ${scopeWhere} ORDER BY "_mtime" DESC LIMIT 5`)).all()) as Array<{ path: string; mtime: number }>).map((r) => ({ path: r.path, modified: utcSecond(r.mtime) }));
+    const recent = ((await (await store.prepare(`SELECT "path", "_mtime" AS mtime FROM frontmatter ${scopeWhere} ORDER BY "_mtime" DESC, "path" ASC LIMIT 5`)).all()) as Array<{ path: string; mtime: number }>).map((r) => ({ path: r.path, modified: utcSecond(r.mtime) }));
 
     // A fresh clone/copy stamps files with checkout time, not edit history; second granularity
     // matches the `recent` table above and is coarse enough to catch that without an exact-ms match.

@@ -1,3 +1,4 @@
+import { channel } from 'node:diagnostics_channel';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ResolvedConfig } from '../config/index.ts';
@@ -47,6 +48,7 @@ interface ConnectResult<Handle> {
 // duckdb/turso hold the cache file for their connection's whole life, so a second command waits.
 // Bounded by this tree's recorded reconcile time (lock-wait.ts), not a fixed guess.
 const LOCK_POLL_MS = 50;
+const lockWait = channel('sensemaking.store.lock-wait');
 
 async function connectUnlocked<Handle>(dbPath: string, cfg: ResolvedConfig, dialect: OpenDialect<Handle>): Promise<{ handle: Handle; conn: Connection }> {
   const budgetMs = lockWaitBudgetMs(cfg.baseDir);
@@ -56,6 +58,8 @@ async function connectUnlocked<Handle>(dbPath: string, cfg: ResolvedConfig, dial
       return await dialect.connect(dbPath, cfg);
     } catch (err) {
       if (!dialect.isLocked?.(err as Error)) throw err;
+      // Observe a real rejected native connection, never merely the start of an async open.
+      if (lockWait.hasSubscribers) lockWait.publish({ store: cfg.store, dbPath });
       if (Date.now() >= deadline) {
         throw new SenseError('STORE_BUSY', `another sense process is using this tree's ${cfg.store} cache (${dbPath}) and did not release it within ${Math.round(budgetMs / 1000)}s; wait for that command to finish, or set "store" to "sqlite" in sense.config.json, which serves concurrent commands`);
       }

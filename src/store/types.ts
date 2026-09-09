@@ -5,11 +5,12 @@ import type { Config, ResolvedConfig, StoreName } from '../config/index.ts';
 import type { ReconcileDelta } from '../features/types.ts';
 import type { ParsedDoc } from '../scan/index.ts';
 
-// 'lexical'/'vectors': the store's LexicalIndex/VectorStore is functionally implemented, not
-// present-but-inert. 'sql-functions': the engine can register has/basename/segment as UDFs at all,
-// which turso's client cannot. The rest are finer FTS5-only behaviors; a missing one fails at open
-// or first use. An array, not a bare union, so a runtime check reads the same list the type does.
-export const CAPABILITY_NAMES = ['phrases', 'snippets', 'lexical', 'vectors', 'sql-functions'] as const;
+// 'vectors': the store's VectorStore is functionally implemented, not present-but-inert; checked
+// at open (index.ts) before a config with an "embed" block is allowed onto a store lacking it.
+// 'segment': the engine can run segment() (Intl.Segmenter grapheme clustering) as a SQL function;
+// turso's client cannot register it and has no rewrite for it, unlike has()/basename(), which now
+// work everywhere. An array, not a bare union, so a runtime check reads the same list the type does.
+export const CAPABILITY_NAMES = ['vectors', 'segment'] as const;
 export type Capability = (typeof CAPABILITY_NAMES)[number];
 
 export interface RunResult {
@@ -106,9 +107,10 @@ export interface DocumentStore {
   fieldStats(columns: string[], scopeWhere: string): Promise<FieldStat[]>;
 }
 
+// A ranked match, nothing more. Snippets are cut from the document above the store
+// (commands/search.ts), identically for every engine, so no store carries them.
 export interface LexicalHit {
   path: string;
-  hit: string | null;
 }
 
 export interface LexicalQueryOptions {
@@ -119,7 +121,7 @@ export interface LexicalQueryOptions {
 }
 
 export interface LexicalIndex {
-  // Ranked word-match query with excerpt, scoped by the caller-built SQL fragments (the same
+  // Ranked word-match query with snippet, scoped by the caller-built SQL fragments (the same
   // fragments narrowByWhere/materializeScope produce elsewhere).
   query(terms: string, opts: LexicalQueryOptions): Promise<LexicalHit[]>;
 }

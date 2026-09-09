@@ -5,6 +5,7 @@ import { setMeta } from '../shared.ts';
 import { BEGIN_WRITE, withTransaction } from '../transaction.ts';
 import type { Connection, RunResult, Statement } from '../types.ts';
 import { CONNECT_OPTS, tursoApi } from './native.ts';
+import { rewriteFunctions } from './sql-functions.ts';
 
 // The client's own Statement class isn't re-exported by name from '@tursodatabase/database',
 // so its type is derived structurally from Database.prepare()'s return type instead.
@@ -95,7 +96,7 @@ export function createConnection(db: Database): Connection {
       await db.exec(sql);
     },
     async prepare(sql: string): Promise<Statement> {
-      return new TursoStatementWrapper(await db.prepare(sql));
+      return new TursoStatementWrapper(await db.prepare(rewriteFunctions(sql)));
     },
     // Folds a plain INSERT into one multi-row VALUES statement (shared rewriteInsert, ../batch.ts):
     // no bind-variable ceiling to chunk against, measured empirically. UPDATE/DELETE keep the per-row loop.
@@ -117,7 +118,7 @@ export function createConnection(db: Database): Connection {
             return;
           }
           // Finalized here because nothing else will: open() hands back a connection the caller
-          // can hold across many batches, and the db.batch() this replaced finalized its own.
+          // can hold across many batches, and nothing else owns this statement's lifetime.
           const stmt = await db.prepare(sql);
           try {
             for (const row of paramRows) await stmt.run(...row);

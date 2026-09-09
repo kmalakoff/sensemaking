@@ -1,7 +1,26 @@
 import assert from 'node:assert';
 import { search } from 'sensemaking';
+import { computeSnippets } from '../../../src/commands/search.ts';
 import { writeModel } from '../../lib/model.ts';
 import { openConfig, tmpTree, writeNote } from '../../lib/tree.ts';
+
+describe('snippet marking uses the lexical contract without rewriting authored text', () => {
+  it('marks an accent-insensitive word while retaining a decomposed source span', () => {
+    const source = 'A cafe\u0301 appears here.';
+    const result = computeSnippets(source, ['cafe'], 80, 1);
+    assert.equal(result.snippets[0], '…«cafe\u0301» appears here.');
+  });
+
+  it('marks each word of a punctuated quoted phrase', () => {
+    const result = computeSnippets('A customer-facing dashboard.', ['customer', 'facing'], 80, 1);
+    assert.equal(result.snippets[0], '…«customer»-«facing» dashboard.');
+  });
+
+  it('retains a Porter stem match after words with other initials', () => {
+    const result = computeSnippets(`${'oak '.repeat(1000)}She runs here.`, ['running'], 80, 1);
+    assert.equal(result.snippets[0], '…«runs» here.');
+  });
+});
 
 describe('scoped search does not starve on a truncated global pool', () => {
   it('narrow scope: 200 decoys fill the tie-order pool, the one in-scope match still surfaces via vector', async () => {

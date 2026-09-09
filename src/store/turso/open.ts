@@ -16,7 +16,7 @@ import { createStore } from './store.ts';
 export const DB_FILENAME = 'cache.turso.db';
 // Independent of sqlite's and duckdb's SCHEMA_VERSION: each store's cache shape evolves
 // separately. Covers the FTS indexes, the "_ngram" sidecar columns, and embeddings.vector's width.
-export const SCHEMA_VERSION = '5';
+export const SCHEMA_VERSION = '8';
 
 export type { OpenResult };
 
@@ -24,7 +24,7 @@ export type { OpenResult };
 // extra native state to thread, unlike duckdb's separate instance/connection pair.
 async function ensureSchema(_handle: Database, conn: Connection, cfg: Config): Promise<void> {
   await conn.exec(`CREATE TABLE IF NOT EXISTS frontmatter ("path" TEXT PRIMARY KEY, "_mtime" REAL, "_ctime" REAL, "_size" INTEGER, "_parse_error" TEXT)`);
-  await conn.exec(`CREATE TABLE IF NOT EXISTS content ("path" TEXT PRIMARY KEY, title TEXT, summary TEXT, text TEXT, title_ngram TEXT, summary_ngram TEXT, text_ngram TEXT)`);
+  await conn.exec(`CREATE TABLE IF NOT EXISTS content ("path" TEXT PRIMARY KEY, title TEXT, summary TEXT, text TEXT, title_stem TEXT, summary_stem TEXT, text_stem TEXT, title_ngram TEXT, summary_ngram TEXT, text_ngram TEXT)`);
   for (const ddl of CONTENT_FTS_DDL) await conn.exec(ddl);
   await conn.exec(`CREATE TABLE IF NOT EXISTS preset_files ("path" TEXT, preset TEXT, PRIMARY KEY ("path", preset))`);
   await conn.exec('CREATE INDEX IF NOT EXISTS preset_files_preset ON preset_files(preset)');

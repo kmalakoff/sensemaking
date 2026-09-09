@@ -9,14 +9,15 @@
 //                                              [--scenario cold|incremental|warm|schema-bump|signature|embed-identity]
 //        node benchmark/steps/store-dump.mjs compare <dirA> <dirB> [--out <file>]
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import assert from 'assert';
 import { safeRmSync } from 'fs-remove-compat';
 import { CORPUS_NAMES, corpusPath, writeTreeConfig } from '../lib/corpus.mjs';
 import { writeOut } from '../lib/out.mjs';
+import { captureIdentity, compareCaptureDirectories } from '../lib/store-dump-evidence.mjs';
 import { ephemeralWorkTree } from '../lib/work-tree.mjs';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -52,9 +53,9 @@ const TABLES = [
 // plain number array depending on engine; both need a stable text form, hence the hex/array cases.
 function serializeValue(v) {
   if (v === null || v === undefined) return 'null';
-  if (typeof v === 'bigint') return `${v}n`;
-  if (Buffer.isBuffer(v)) return `hex:${v.toString('hex')}`;
-  if (v instanceof Uint8Array) return `hex:${Buffer.from(v.buffer, v.byteOffset, v.byteLength).toString('hex')}`;
+  if (typeof v === 'bigint') return JSON.stringify(`bigint:${v}`);
+  if (Buffer.isBuffer(v)) return JSON.stringify(`hex:${v.toString('hex')}`);
+  if (v instanceof Uint8Array) return JSON.stringify(`hex:${Buffer.from(v.buffer, v.byteOffset, v.byteLength).toString('hex')}`);
   if (Array.isArray(v)) return `[${v.map(serializeValue).join(',')}]`;
   return JSON.stringify(v);
 }
@@ -384,66 +385,6 @@ async function runCapture(outDirArg) {
   console.log(`capture complete: ${stores.join(', ')} -> ${outDir}`);
 }
 
-// First differing lines, both sides, with two lines of context -- enough to see which row (its
-// serialized "path"/query header) diverged without dumping the whole file.
-function compareLines(label, a, b) {
-  if (a.length !== b.length) console.error(`${label}: line count differs (${a.length} vs ${b.length})`);
-  const max = Math.max(a.length, b.length);
-  let firstDiff = -1;
-  for (let i = 0; i < max; i++) {
-    if (a[i] !== b[i]) {
-      firstDiff = i;
-      break;
-    }
-  }
-  if (firstDiff === -1 && a.length === b.length) {
-    console.log(`${label}: clean (${a.length} lines)`);
-    return true;
-  }
-  console.error(`${label}: differs at line ${firstDiff + 1}${clockOnly(a, b) ? ', in _mtime/_ctime only' : ''}`);
-  // Filesystem timestamps, not reconcile output: a corpus touched between the two captures moves
-  // them on every row. Named so a stale baseline is not mistaken for a behaviour change.
-  if (clockOnly(a, b)) console.error(`${label}: both captures must come from one sitting with the corpus unchanged between them; re-capture the baseline`);
-  const from = Math.max(0, firstDiff - 2);
-  const to = Math.min(max, firstDiff + 3);
-  for (let i = from; i < to; i++) {
-    const marker = i === firstDiff ? '>' : ' ';
-    console.error(`${marker} ${i + 1} A: ${a[i] ?? '<EOF>'}`);
-    console.error(`${marker} ${i + 1} B: ${b[i] ?? '<EOF>'}`);
-  }
-  return false;
-}
-
-// True when every differing line differs only in the filesystem-derived timestamp columns.
-function clockOnly(a, b) {
-  if (a.length !== b.length) return false;
-  const CLOCK = new Set(['_mtime', '_ctime']);
-  for (let i = 0; i < a.length; i++) {
-    if (a[i] === b[i]) continue;
-    let rowA;
-    let rowB;
-    try {
-      rowA = JSON.parse(a[i]);
-      rowB = JSON.parse(b[i]);
-    } catch {
-      return false;
-    }
-    const keys = new Set([...Object.keys(rowA), ...Object.keys(rowB)]);
-    for (const k of keys) if (rowA[k] !== rowB[k] && !CLOCK.has(k)) return false;
-  }
-  return true;
-}
-
-function compareFile(label, pathA, pathB) {
-  const aExists = existsSync(pathA);
-  const bExists = existsSync(pathB);
-  if (!aExists || !bExists) {
-    console.error(`${label}: missing (${aExists ? pathB : pathA} not found)`);
-    return false;
-  }
-  return compareLines(label, readFileSync(pathA, 'utf8').split('\n'), readFileSync(pathB, 'utf8').split('\n'));
-}
-
 function runCompare([dirAArg, dirBArg]) {
   if (!dirAArg || !dirBArg) {
     console.error('usage: node benchmark/steps/store-dump.mjs compare <dirA> <dirB> [--out <file>]');
@@ -451,34 +392,17 @@ function runCompare([dirAArg, dirBArg]) {
   }
   const dirA = resolve(dirAArg);
   const dirB = resolve(dirBArg);
-  const subdirs = (dir) => readdirSync(dir).filter((d) => statSync(join(dir, d)).isDirectory());
-  const storesA = new Set(subdirs(dirA));
-  const storesB = new Set(subdirs(dirB));
-  const stores = [...new Set([...storesA, ...storesB])].sort();
-
-  let ok = true;
-  const perStore = {};
-  for (const s of stores) {
-    if (!storesA.has(s) || !storesB.has(s)) {
-      console.error(`store "${s}": present in only one directory`);
-      ok = false;
-      perStore[s] = { ok: false, reason: 'present in only one directory' };
-      continue;
-    }
-    // notices.txt only exists for the reopen scenarios; comparing it when either side has one
-    // catches a missing/extra file, and skipping it entirely for cold/incremental is correct too.
-    const artifacts = ['tables.txt', 'ranking.txt'];
-    if (existsSync(join(dirA, s, 'notices.txt')) || existsSync(join(dirB, s, 'notices.txt'))) artifacts.push('notices.txt');
-    let storeOk = true;
-    for (const artifact of artifacts) {
-      storeOk = compareFile(`${s}/${artifact}`, join(dirA, s, artifact), join(dirB, s, artifact)) && storeOk;
-    }
-    perStore[s] = { ok: storeOk, artifacts };
-    ok = storeOk && ok;
+  const structured = compareCaptureDirectories(dirA, dirB);
+  const stores = Object.keys(structured.stores).sort();
+  for (const [store, result] of Object.entries(structured.stores)) {
+    if (result.ok) console.log(`${store}: retained capture artifacts agree`);
+    else console.error(`${store}: retained capture artifacts differ or are incomplete`);
   }
-  if (ok) console.log(`compare: clean across ${stores.length} store(s) (${stores.join(', ')})`);
-  writeOut(outArg, { dirA, dirB, stores: perStore, ok });
-  process.exit(ok ? 0 : 1);
+  const outputRoot = outArg ? dirname(resolve(outArg)) : dirname(dirA);
+  const result = { baseline: null, ok: structured.ok, captures: { before: relative(outputRoot, dirA), after: relative(outputRoot, dirB) }, capture_identity: { before: captureIdentity(dirA), after: captureIdentity(dirB) }, stores: structured.stores, diff: structured.diff };
+  if (structured.ok) console.log(`compare: clean across ${stores.length} store(s) (${stores.join(', ')})`);
+  writeOut(outArg, result);
+  process.exit(structured.ok ? 0 : 1);
 }
 
 if (mode === 'capture') {

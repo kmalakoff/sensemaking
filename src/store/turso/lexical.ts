@@ -1,11 +1,14 @@
 // T1: Tantivy FTS via fts_match/fts_score on the default-tokenizer index for bare words and
 // quoted phrases, plus a second ngram-tokenized index over "_ngram" sidecars for unspaced-script runs.
 import { SenseError } from '../../errors.ts';
-import { hasUnspacedRun } from '../../text/segment.ts';
+import { matchesSearchPhrase, type SearchToken, searchTokens } from '../../text/segment.ts';
 import type { Connection, LexicalHit, LexicalQueryOptions } from '../types.ts';
+import { stemFolded } from './lexical-text.ts';
 
-const FIELDS = ['title', 'summary', 'text'] as const;
+const FIELDS = ['title_stem', 'summary_stem', 'text_stem'] as const;
 const NGRAM_FIELDS = ['title_ngram', 'summary_ngram', 'text_ngram'] as const;
+const AUTHORED_FIELDS = ['title', 'summary', 'text'] as const;
+type AuthoredField = (typeof AUTHORED_FIELDS)[number];
 
 // FTS5 operator syntax a bare query would otherwise treat as literal text (PRINCIPLES:
 // no-silent-modes). `^` is rejected either way: boost to Tantivy, initial-token match to FTS5.
@@ -28,23 +31,30 @@ function unsupportedOperator(terms: string): { label: string; token: string } | 
 
 // A run whose script marks no word boundaries indexes as one opaque token under every tokenizer
 // but ngram, so such runs -- bare or quoted -- go to the ngram sidecar index instead.
-function splitTerms(terms: string): { words: string[]; phrases: string[]; unspaced: string[] } {
+function splitTerms(terms: string): { words: string[]; phrases: SearchToken[][]; unspaced: string[]; emptyPhrase: boolean } {
   const words: string[] = [];
-  const phrases: string[] = [];
+  const phrases: SearchToken[][] = [];
   const unspaced: string[] = [];
+  let emptyPhrase = false;
   const withoutPhrases = terms.replace(/"([^"]*)"/g, (_m, inner: string) => {
     const phrase = inner.trim();
-    if (phrase.length === 0) return ' ';
-    if (hasUnspacedRun(phrase)) unspaced.push(phrase);
-    else phrases.push(phrase);
+    const tokens = searchTokens(phrase);
+    if (tokens.length === 0) {
+      emptyPhrase = true;
+      return ' ';
+    }
+    unspaced.push(...tokens.filter((token) => token.unspaced).map((token) => token.text));
+    phrases.push(tokens);
     return ' ';
   });
   for (const tok of withoutPhrases.split(/\s+/)) {
     if (tok.length === 0) continue;
-    if (hasUnspacedRun(tok)) unspaced.push(tok);
-    else words.push(tok);
+    for (const token of searchTokens(tok)) {
+      if (token.unspaced) unspaced.push(token.text);
+      else words.push(token.text);
+    }
   }
-  return { words, phrases, unspaced };
+  return { words, phrases, unspaced, emptyPhrase };
 }
 
 // fts_match/fts_score's query argument must be a SQL literal: bound as `?`, the row set stays
@@ -55,8 +65,13 @@ function escapeFtsLiteral(query: string): string {
 
 // Terms are quoted ("O'Brien's" is a parse error bare) and AND-joined: Tantivy's default for
 // bare terms is disjunctive, so space-joining would loosen "apple banana" into "apple OR banana".
-function buildQueries(words: string[], phrases: string[], unspaced: string[]): { defaultQuery: string; ngramQuery: string } {
-  const defaultParts = [...words, ...phrases].map((t) => `"${t}"`);
+function buildQueries(words: string[], phrases: SearchToken[][], unspaced: string[]): { defaultQuery: string; ngramQuery: string } {
+  const phraseParts = phrases.flatMap((phrase) => {
+    const latin = phrase.filter((token) => !token.unspaced).map((token) => stemFolded(token.text));
+    if (latin.length === 0) return [];
+    return phrase.some((token) => token.unspaced) ? latin : [latin.join(' ')];
+  });
+  const defaultParts = [...words.map(stemFolded), ...phraseParts].map((t) => `"${t}"`);
   const unspacedParts = unspaced.map((t) => `"${t}"`);
   return { defaultQuery: defaultParts.join(' AND '), ngramQuery: unspacedParts.join(' AND ') };
 }
@@ -71,13 +86,14 @@ function ftsBranch(cols: readonly string[], query: string, opts: LexicalQueryOpt
 }
 
 // Ranked query, scoped by the caller-built SQL fragments (same shape sqlite's/duckdb's
-// queryLexical take). `hit` is always NULL: fts_highlight returns the full column text, not a bounded snippet, so every row goes through the caller's JS excerpt fallback (commands/search.ts).
+// queryLexical take). `snippets` is always NULL: fts_highlight returns the full column text, not a bounded snippet, so every row goes through the caller's JS snippet fallback (commands/search.ts).
 export async function queryLexical(conn: Connection, terms: string, opts: LexicalQueryOptions): Promise<LexicalHit[]> {
   const unsupported = unsupportedOperator(terms);
   if (unsupported !== null) {
     throw new SenseError('STORE_CAPABILITY_MISSING', `store "turso" does not implement FTS5's ${unsupported.label} ("${unsupported.token}") in this build; rephrase "${terms.trim()}" without it, or set "store" to "sqlite" in this tree's config to search it as written`);
   }
-  const { words, phrases, unspaced } = splitTerms(terms);
+  const { words, phrases, unspaced, emptyPhrase } = splitTerms(terms);
+  if (emptyPhrase) return [];
   const { defaultQuery, ngramQuery } = buildQueries(words, phrases, unspaced);
   if (defaultQuery === '' && ngramQuery === '') return [];
 
@@ -86,18 +102,24 @@ export async function queryLexical(conn: Connection, terms: string, opts: Lexica
   if (ngramQuery !== '') branches.push(ftsBranch(NGRAM_FIELDS, ngramQuery, opts));
 
   // HAVING COUNT(*) = branches.length is the AND across indexes; with one branch it is a no-op,
-  // `path` being content's primary key. fts_score is higher-is-better BM25, so DESC.
-  const sql = `SELECT path, NULL AS hit FROM (
-    SELECT path, SUM(score) AS score FROM (
+  // `path` being content's primary key. fts_score is higher-is-better BM25, so DESC. Phrase
+  // candidates carry authored fields through the join below so the shared verifier can reject
+  // cross-field, reordered, and non-adjacent matches before applying the caller's limit.
+  const ranked = `SELECT path, SUM(score) AS score FROM (
       ${branches.join(' UNION ALL ')}
-    ) parts GROUP BY path HAVING COUNT(*) = ${branches.length}
-  ) sq ORDER BY score DESC, path LIMIT ?`;
+    ) parts GROUP BY path HAVING COUNT(*) = ${branches.length}`;
+  const phraseSelect = phrases.length > 0 ? ', content.title, content.summary, content.text' : '';
+  const phraseJoin = phrases.length > 0 ? ' JOIN content ON content.path = sq.path' : '';
+  const sql = `SELECT sq.path, sq.score${phraseSelect} FROM (
+    ${ranked}
+  ) sq${phraseJoin} ORDER BY sq.score DESC, sq.path${phrases.length > 0 ? '' : ' LIMIT ?'}`;
   const stmt = await conn.prepare(sql);
-  const rows = (await stmt.all(opts.limit)) as unknown as LexicalHit[];
+  const rows = (await stmt.all(...(phrases.length > 0 ? [] : [opts.limit]))) as Array<LexicalHit & Partial<Record<AuthoredField, string>>>;
   // A concurrent FTS read during an open write transaction can yield a {path: null} row. Raised,
   // not filtered: filtering returns a silently short result (PRINCIPLES: no-silent-modes).
   if (rows.some((r) => r.path === null)) {
     throw new SenseError('LEXICAL_NULL_PATH', 'store "turso" returned a search hit with no path (a known engine anomaly under concurrent FTS reads); retry the query');
   }
-  return rows;
+  const matches = phrases.length === 0 ? rows : rows.filter((row) => phrases.every((phrase) => AUTHORED_FIELDS.some((field) => matchesSearchPhrase(row[field] ?? '', phrase))));
+  return matches.slice(0, opts.limit).map(({ path }) => ({ path }));
 }

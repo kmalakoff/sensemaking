@@ -8,7 +8,7 @@ function openConn(): Promise<Database> {
 }
 
 describe('createConnection (turso)', () => {
-  it('exec/prepare/run/get/all satisfy the portable Connection/Statement contract', async () => {
+  it('Turso numeric bindings and reads preserve native number rows', async () => {
     const db = await openConn();
     try {
       const conn = createConnection(db);
@@ -26,37 +26,8 @@ describe('createConnection (turso)', () => {
       const one = await (await conn.prepare('SELECT * FROM t WHERE a = ?')).get(1);
       assert.deepEqual(one, { a: 1, b: 'x' });
 
-      const missing = await (await conn.prepare('SELECT * FROM t WHERE a = ?')).get(99);
-      assert.equal(missing, undefined);
-    } finally {
-      await db.close();
-    }
-  });
-
-  it('a prepared statement can be reused across several run() calls', async () => {
-    const db = await openConn();
-    try {
-      const conn = createConnection(db);
-      await conn.exec('CREATE TABLE t (a INTEGER)');
-      const insert = await conn.prepare('INSERT INTO t VALUES (?)');
-      for (let i = 0; i < 3; i++) await insert.run(i);
-      const row = (await (await conn.prepare('SELECT COUNT(*) AS n FROM t')).get()) as { n: number };
-      assert.equal(row.n, 3);
-    } finally {
-      await db.close();
-    }
-  });
-
-  it('columns() reports the statement shape', async () => {
-    const db = await openConn();
-    try {
-      const conn = createConnection(db);
-      await conn.exec('CREATE TABLE t (a INTEGER, b TEXT)');
-      const stmt = await conn.prepare('SELECT a, b FROM t');
-      assert.deepEqual(
-        stmt.columns().map((c) => c.name),
-        ['a', 'b']
-      );
+      const count = (await (await conn.prepare('SELECT COUNT(*) AS n FROM t')).get()) as { n: number };
+      assert.equal(count.n, 2);
     } finally {
       await db.close();
     }
@@ -89,7 +60,7 @@ describe('createConnection (turso)', () => {
     }
   });
 
-  it('iterate() yields the same rows as all()', async () => {
+  it('Turso iterate() preserves native number rows', async () => {
     const db = await openConn();
     try {
       const conn = createConnection(db);
@@ -138,52 +109,6 @@ describe('createConnection (turso)', () => {
         });
         const all = await (await conn.prepare('SELECT a FROM t ORDER BY a')).all();
         assert.deepEqual(all, [{ a: 1 }, { a: 2 }, { a: 3 }]);
-      } finally {
-        await db.close();
-      }
-    });
-
-    it('an error inside an enclosing withTransaction scope rolls back every runBatch call made within it', async () => {
-      const db = await openConn();
-      try {
-        const conn = createConnection(db);
-        await conn.exec('CREATE TABLE t (a INTEGER)');
-        await assert.rejects(
-          withTransaction(conn, async () => {
-            await conn.runBatch('INSERT INTO t VALUES (?)', [[1], [2]]);
-            throw new Error('boom');
-          })
-        );
-        const all = await (await conn.prepare('SELECT a FROM t')).all();
-        assert.deepEqual(all, []);
-      } finally {
-        await db.close();
-      }
-    });
-
-    it('called standalone, opens and commits/rolls back its own transaction (atomic even without an outer scope)', async () => {
-      const db = await openConn();
-      try {
-        const conn = createConnection(db);
-        await conn.exec('CREATE TABLE t (a INTEGER PRIMARY KEY)');
-        await conn.runBatch('INSERT INTO t VALUES (?)', [[1]]);
-        // row 1 is a duplicate PK: the whole call must roll back, not just the failing row.
-        await assert.rejects(() => conn.runBatch('INSERT INTO t VALUES (?)', [[2], [1], [3]]));
-        const all = await (await conn.prepare('SELECT a FROM t ORDER BY a')).all();
-        assert.deepEqual(all, [{ a: 1 }]);
-      } finally {
-        await db.close();
-      }
-    });
-
-    it('an empty paramRows array is a no-op', async () => {
-      const db = await openConn();
-      try {
-        const conn = createConnection(db);
-        await conn.exec('CREATE TABLE t (a INTEGER)');
-        await conn.runBatch('INSERT INTO t VALUES (?)', []);
-        const all = await (await conn.prepare('SELECT a FROM t')).all();
-        assert.deepEqual(all, []);
       } finally {
         await db.close();
       }

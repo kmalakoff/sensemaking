@@ -1,15 +1,15 @@
 // Shape sweep: synthetic corpora isolating one dimension at a time, the rest held hub-like.
-// Every point runs against a working copy, strictly serially -- a shared CPU swamps the signal. usage: node benchmark/tools/sweep.mjs [dimension ...] [--quick] [--out file]
+// Every point runs against a working copy, strictly serially -- a shared CPU swamps the signal. usage: node benchmark/tools/sweep.mjs [dimension ...] [--quick|--smoke] [--out file]
 import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { appendFileSync, mkdirSync, statSync, utimesSync } from 'node:fs';
+import { appendFileSync, mkdirSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { safeRmSync } from 'fs-remove-compat';
-import { syntheticPath } from '../lib/corpus.mjs';
-import { futureDate, median, medianAsync, timedCli, walkMd } from '../lib/measure.mjs';
-import { copyTree } from '../lib/work-tree.mjs';
+import { syntheticPath, writeTreeConfig } from '../lib/corpus.mjs';
+import { median, medianAsync, timedCli, walkMd } from '../lib/measure.mjs';
+import { applyDeterministicMutation, captureFileManifest, captureMutationFiles, copyTree, deterministicMutationMtime, verifyFileManifest } from '../lib/work-tree.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const CLI = join(ROOT, 'bin', 'cli.js');
@@ -18,10 +18,10 @@ const WORK_ROOT = join(ROOT, '.tmp', 'sweep-work');
 const DIMENSION_NAMES = ['fields', 'headings', 'links', 'filesize', 'notes', 'bulk', 'probes', 'presets'];
 
 const {
-  values: { quick: QUICK, out: outArg },
+  values: { quick: QUICK, smoke: SMOKE, out: outArg },
   positionals: requested,
 } = parseArgs({
-  options: { quick: { type: 'boolean', default: false }, out: { type: 'string' } },
+  options: { quick: { type: 'boolean', default: false }, smoke: { type: 'boolean', default: false }, out: { type: 'string' } },
   allowPositionals: true,
 });
 const OUT = outArg ? resolve(outArg) : join(ROOT, '.tmp', 'sweep-results.jsonl');
@@ -56,7 +56,29 @@ function workingCopy(tree) {
 
 const runCli = (cwd, args) => spawnSync(process.execPath, [CLI, ...args], { cwd, encoding: 'utf8', maxBuffer: 64e6 });
 
-const timed = (cwd, args, runs = 3) => timedCli(() => runCli(cwd, args), runs);
+function requireCommand(result, label) {
+  if (result.status === 0 && !result.signal && !result.error) return result;
+  throw new Error(`${label} failed: ${result.error?.message ?? `exit ${result.status ?? 'null'}${result.signal ? ` (${result.signal})` : ''}: ${(result.stderr ?? '').split('\n').find(Boolean) ?? 'no stderr'}`}`);
+}
+
+const timed = (cwd, args, runs = 3) => {
+  const result = timedCli(() => runCli(cwd, args), runs);
+  if (result.error || result.status !== 0) throw new Error(`${args.join(' ')} failed: ${result.error?.message ?? result.stderr}`);
+  return result;
+};
+
+function configureWork(tree, { embed = false } = {}) {
+  writeTreeConfig(tree, {
+    version: lib.SUPPORTED_CONFIG_VERSION,
+    presets: {
+      default: { include: ['**/*.md'] },
+      lexical: { include: ['**/*.md'], signals: { words: 1, links: 1 } },
+      words: { include: ['**/*.md'], signals: { words: 1 } },
+    },
+    queries: {},
+    ...(embed ? { embed: { model: 'minishlab/potion-retrieval-32M', provider: 'static' } } : {}),
+  });
+}
 
 // Three in-process measurements plus three wall CLI ones. peek and the touch target the
 // largest note: on the filesize dimension that note is the whole point.
@@ -64,6 +86,7 @@ async function measurePoint(spec) {
   const src = syntheticPath(spec);
   const work = workingCopy(src);
   try {
+    configureWork(work, { embed: spec.embed === true });
     const mdFiles = walkMd(work);
     const target = mdFiles.reduce((a, b) => (statSync(join(work, b)).size > statSync(join(work, a)).size ? b : a));
     const cfg = lib.loadConfig(join(work, 'sense.config.json'));
@@ -81,14 +104,30 @@ async function measurePoint(spec) {
     const cold_build_ms = Math.round(Number(process.hrtime.bigint() - t0) / 1e6);
     const open_nochange_ms = await medianAsync(openClose, 5);
     const update_1_file_ms = await medianAsync(async () => {
-      utimesSync(join(work, target), futureDate(), futureDate());
-      return openClose();
+      const updateWork = workingCopy(src);
+      try {
+        configureWork(updateWork, { embed: spec.embed === true });
+        const canonicalManifest = captureFileManifest(updateWork);
+        const mutationMtimeMs = deterministicMutationMtime(canonicalManifest);
+        const updateCfg = lib.loadConfig(join(updateWork, 'sense.config.json'));
+        const baseline = await lib.open(updateCfg);
+        await baseline.store.close();
+        const mutationFiles = captureMutationFiles(updateWork, canonicalManifest, [target]);
+        const expected = applyDeterministicMutation(updateWork, canonicalManifest, mutationFiles, { append: null, mtimeMs: mutationMtimeMs });
+        const t = process.hrtime.bigint();
+        const updated = await lib.open(updateCfg);
+        const ms = Number(process.hrtime.bigint() - t) / 1e6;
+        await updated.store.close();
+        verifyFileManifest(updateWork, expected, 'sweep update final filesystem');
+        return ms;
+      } finally {
+        safeRmSync(updateWork, { recursive: true, force: true });
+      }
     }, 3);
 
     const mapR = timed(work, ['map']);
     const peekR = timed(work, ['peek', target]);
-    // find_ms: lexical ranked search, no vectors -- --lexical is search's opt-out (default participates).
-    const findR = timed(work, ['search', 'the', '--lexical', '--k', '10']);
+    const findR = timed(work, ['search', 'the', '--preset', 'lexical', '--k', '10']);
 
     return {
       cold_build_ms,
@@ -210,13 +249,14 @@ async function semanticProbe() {
     const src = syntheticPath(spec);
     const work = workingCopy(src);
     try {
+      configureWork(work, { embed: true });
       let t = process.hrtime.bigint();
-      const warm = runCli(work, ['search', 'the', '--k', '10']);
+      const warm = requireCommand(runCli(work, ['search', 'the', '--k', '10']), 'semantic warm-up');
       const warmup_ms = Math.round(Number(process.hrtime.bigint() - t) / 1e6);
       const semantic_find_ms = Math.round(
         median(() => {
           t = process.hrtime.bigint();
-          runCli(work, ['search', 'the', '--k', '10']);
+          requireCommand(runCli(work, ['search', 'the', '--k', '10']), 'semantic repetition');
           return Number(process.hrtime.bigint() - t) / 1e6;
         }, 3)
       );
@@ -248,15 +288,16 @@ async function presetsProbe() {
   const work = workingCopy(src);
   try {
     const t = process.hrtime.bigint();
-    const cold = runCli(work, ['status']);
+    const cold = requireCommand(runCli(work, ['status']), 'preset cold crawl');
     const cold_crawl_ms = Math.round(Number(process.hrtime.bigint() - t) / 1e6);
 
-    runCli(work, ['search', 'the', '--k', '10']); // warm-up: triggers embedding for the default preset's coverage
+    requireCommand(runCli(work, ['search', 'the', '--k', '10']), 'preset semantic warm-up');
 
-    const statusOut = runCli(work, ['status', '--format', 'json']);
+    const statusOut = requireCommand(runCli(work, ['status', '--format', 'json']), 'preset coverage status');
     const status = JSON.parse(statusOut.stdout);
     const coverage = Object.fromEntries(status.presets.map((p) => [p.name, p]));
     const pass = coverage.raw?.embedded === 0 && coverage.raw?.files > 0 && coverage.default?.embedded === coverage.default?.files && coverage.default?.files > 0;
+    if (!pass) throw new Error(`preset embedding derivation failed: ${JSON.stringify(coverage)}`);
     record('presets', { notes: spec.notes }, { cold_crawl_ms, coverage, pass });
     console.log(`  cold crawl: ${cold_crawl_ms} ms (status exit ${cold.status})`);
     console.log(`  embedding derivation: ${pass ? 'PASS' : 'FAIL'} -- default files=${coverage.default?.files} embedded=${coverage.default?.embedded}; raw files=${coverage.raw?.files} embedded=${coverage.raw?.embedded} (must be 0)`);
@@ -286,7 +327,7 @@ for (const dimension of dimensions) {
   } else if (dimension === 'filesize') {
     await sweepOne('filesize', 'bigNoteBytes', [100_000, 1_000_000, 10_000_000], (bigNoteBytes) => ({ ...HUB, notes: 20, bigNoteBytes }));
   } else if (dimension === 'notes') {
-    const values = QUICK ? [6000, 26000] : [6000, 26000, 50000, 100000];
+    const values = SMOKE ? [4, 8] : QUICK ? [6000, 26000] : [6000, 26000, 50000, 100000];
     await sweepOne('notes', 'notes', values, (notes) => ({ ...HUB, notes }));
   } else if (dimension === 'bulk') {
     console.log('\n### bulk (notes=26000, touch N files, time the next open)\n');
@@ -298,15 +339,18 @@ for (const dimension of dimensions) {
       const work = workingCopy(src);
       let bulk_open_ms;
       try {
+        configureWork(work);
         const mdFiles = walkMd(work);
         const { store } = await lib.open(lib.loadConfig(join(work, 'sense.config.json')));
         await store.close();
-        const future = () => new Date(Date.now() + 120_000 + Math.random() * 60_000);
-        for (const f of mdFiles.slice(0, touchFiles)) utimesSync(join(work, f), future(), future());
+        const manifest = captureFileManifest(work);
+        const selected = captureMutationFiles(work, manifest, mdFiles.slice(0, touchFiles));
+        const expected = applyDeterministicMutation(work, manifest, selected, { append: null, mtimeMs: deterministicMutationMtime(manifest) });
         const t = process.hrtime.bigint();
         const { store: store2 } = await lib.open(lib.loadConfig(join(work, 'sense.config.json')));
         bulk_open_ms = Math.round(Number(process.hrtime.bigint() - t) / 1e6);
         await store2.close();
+        verifyFileManifest(work, expected, 'sweep bulk final filesystem');
       } finally {
         safeRmSync(work, { recursive: true, force: true });
       }

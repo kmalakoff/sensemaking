@@ -1,7 +1,7 @@
 {
   "name": "sensemaking",
   "version": "0.23.1",
-  "description": "Query and search your markdown notes with context-aware progressive disclosure: SQL over frontmatter, links, and text, plus semantic search and link-graph ranking. No server, no build step",
+  "description": "Query and search your markdown notes with context-aware progressive disclosure: SQL over frontmatter, links, and text, plus semantic search and link-graph ranking. No server, no build step.",
   "keywords": [
     "markdown",
     "frontmatter",
@@ -81,12 +81,13 @@
     "version": "tsds version"
   },
   "dependencies": {
-    "@huggingface/tokenizers": "^0.1.3",
+    "@huggingface/tokenizers": "^0.2.0",
     "franc-min": "^6.2.0",
     "install-module-linked": "^2.0.0",
     "markdown-it": "^15.0.1",
     "markdown-it-footnote": "^4.0.0",
     "markdown-it-task-lists": "^2.1.1",
+    "stemmer": "^2.0.1",
     "tinypool": "^2.1.2",
     "yaml": "^2.9.0"
   },

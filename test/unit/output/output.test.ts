@@ -1,7 +1,24 @@
 import assert from 'node:assert';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { printRows } from '../../../src/output/output.ts';
 import { configTestTree } from '../../lib/cli.ts';
+
+// Captures printRows' one console.log call rather than mocking it: the function under test
+// really runs, this only observes the side effect a spawned CLI would otherwise print.
+function captureLog(fn: () => void): string {
+  let out = '';
+  const original = console.log;
+  console.log = (msg: string) => {
+    out += `${msg}\n`;
+  };
+  try {
+    fn();
+  } finally {
+    console.log = original;
+  }
+  return out;
+}
 
 const { tempDir, makeTree, runCli } = configTestTree();
 
@@ -129,5 +146,31 @@ describe('sql output formats', () => {
       { path: 'one.md', v: 1 },
       { path: 'two.md', v: '9223372036854775807' },
     ]);
+  });
+});
+
+// renderRows is shared by search, related, path and saved queries; this is the pin PLAN 3.65
+// asks for before the writer changes: a single-line row must not move.
+describe('table rendering: multi-line cells (search snippets)', () => {
+  it('a one-element array cell renders byte-identically to the same value as a plain string', () => {
+    const plain = captureLog(() => printRows([{ path: 'a.md', hit: 'first line about widgets' }], 'table'));
+    const arrayed = captureLog(() => printRows([{ path: 'a.md', hit: ['first line about widgets'] }], 'table'));
+    assert.equal(arrayed, plain);
+  });
+
+  it('a two-element array cell renders as two physical lines, the row as tall as its tallest cell, other columns blank-padded on the continuation line', () => {
+    const out = captureLog(() => printRows([{ path: 'a.md', via: 'match', hit: ['first snippet', 'second snippet'] }], 'table'));
+    const lines = out.split('\n');
+    assert.equal(lines.length, 5, `expected header, separator, two body lines, trailing newline: ${JSON.stringify(out)}`);
+    const [header, , body1, body2] = lines;
+    assert.match(header, /^path\s+via\s+hit$/);
+    assert.match(body1, /^a\.md\s+match\s+first snippet$/);
+    assert.match(body2, /^\s+second snippet$/);
+    assert.ok(!body2.includes('a.md') && !body2.includes('match'), `continuation line must blank-pad the other columns: ${JSON.stringify(body2)}`);
+  });
+
+  it('csv joins an array cell with a newline inside its quoted field', () => {
+    const result = captureLog(() => printRows([{ path: 'a.md', hit: ['first snippet', 'second snippet'] }], 'csv'));
+    assert.equal(result, 'path,hit\na.md,"first snippet\nsecond snippet"\n');
   });
 });

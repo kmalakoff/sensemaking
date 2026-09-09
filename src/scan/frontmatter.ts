@@ -83,7 +83,7 @@ function warnStringifiedKeys(relPath: string, doc: ReturnType<typeof parseDocume
 }
 
 // Anything past ACCEPTED_YAML_CODES is quarantined: no frontmatter columns, `_parse_error` carries the reason. Recovering it would write values nobody wrote, worse than absence since no query can see it; content, links and sections never touch frontmatter, so a broken note stays searchable.
-// yaml's message continues onto a source excerpt, so the first line is the sentence, minus the colon that introduced the part being dropped.
+// yaml's message continues onto a source snippet, so the first line is the sentence, minus the colon that introduced the part being dropped.
 function firstLine(message: string): string {
   return message.split('\n')[0].replace(/:\s*$/, '');
 }

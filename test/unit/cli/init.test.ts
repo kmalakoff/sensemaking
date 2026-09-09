@@ -1,10 +1,10 @@
-import assert from 'node:assert';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import assert from 'assert';
 import { CONFIG_FILENAME, initConfig, loadConfig, SenseError, SUPPORTED_CONFIG_VERSION } from 'sensemaking';
+import { COMMANDS } from '../../../dist/esm/cli/index.js';
 import { runCli } from '../../lib/cli.ts';
-import { packageRoot, scratchDir } from '../../lib/scratch.ts';
+import { scratchDir } from '../../lib/scratch.ts';
 
 describe('init', () => {
   it('writes the exact v5 starter, model named explicitly, and it round-trips loadConfig cleanly', () => {
@@ -83,11 +83,10 @@ describe('init flags', () => {
 // init's output is the first thing a new tree sees, so a command it names has to exist. It
 // pointed at `sense query` for a release after that became `sense sql`.
 describe('init next steps name real commands', () => {
-  it('every command init suggests is in the registry', async () => {
+  it('every command init suggests is in the registry', () => {
     const dir = scratchDir('init');
     const result = runCli(['init'], { cwd: dir });
     assert.equal(result.status, 0, result.stderr);
-    const { COMMANDS } = (await import(pathToFileURL(join(packageRoot, 'dist', 'esm', 'cli', 'index.js')).href)) as { COMMANDS: Record<string, unknown> };
     const suggested = [...result.stdout.matchAll(/\bsense ([a-z]+)/g)].map((m) => m[1]);
     assert.ok(suggested.length > 0, result.stdout);
     for (const name of suggested) {

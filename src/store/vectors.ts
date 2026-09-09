@@ -11,10 +11,17 @@ export function sampleEvenly<T>(rows: T[], cap: number = TARGET_CHUNK_CAP): T[] 
   return rows.filter((_, i) => i % step === 0);
 }
 
-// Dequantised int8 dot products (sqlite) land a little either side of a true cosine (an identical
-// pair can print 1.001); array_cosine_similarity (duckdb) has no such error but is rounded the same way, so both stores print the same bounded number.
+// Every store computes a real cosine; clamp float error at the ends and round for the public score.
 export function asCosine(score: number): number {
   return Math.round(Math.min(1, Math.max(-1, score)) * 1000) / 1000;
+}
+
+// Rank by the computed cosine before rounding for display. Bytewise path order resolves only an
+// exact score tie, so two distinguishable similarities never cross a caller's result boundary.
+export function compareVectorScores(a: { path: string; score: number }, b: { path: string; score: number }): number {
+  const byScore = b.score - a.score;
+  if (byScore !== 0) return byScore;
+  return Buffer.compare(Buffer.from(a.path), Buffer.from(b.path));
 }
 
 export async function pendingRows(conn: Connection): Promise<Array<{ path: string; chunk: number }>> {
