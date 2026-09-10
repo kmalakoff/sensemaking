@@ -43,7 +43,12 @@ async function prepareUpdate(changed = CHANGED): Promise<PreparedUpdate> {
   }
   const baseline = await openConfig(cfg);
   const dbPath = baseline.dbPath;
-  await baseline.store.close();
+  try {
+    const initialBaselinePaths = (await baseline.store.lexical.query(INPUTS.queries.baseline.text, QUERY_OPTIONS)).map(({ path }) => path).sort();
+    assert.deepEqual(initialBaselinePaths, nativeUpdatePaths(NOTES), 'the prepared index must return every authored baseline path before close');
+  } finally {
+    await baseline.store.close();
+  }
 
   const touched = Array.from({ length: changed }, (_, index) => pathFor(index));
   for (let index = 0; index < changed; index++) {
