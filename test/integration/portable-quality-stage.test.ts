@@ -3,7 +3,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import assert from 'assert';
 import { MEASURE_VERSION } from '../../benchmark/lib/measure.mjs';
-import { comparePortableQualityArtifacts, PORTABLE_QUALITY_STORES } from '../../benchmark/lib/portable-quality.mjs';
+import { comparePortableQualityArtifacts, PORTABLE_QUALITY_STORES, revalidateQualityArtifact } from '../../benchmark/lib/portable-quality.mjs';
 import { buildStages } from '../../benchmark/lib/stages.mjs';
 import { aggregateVerdict } from '../../benchmark/lib/verdict.mjs';
 import { logicalWorkloadIdentity } from '../../benchmark/lib/workload-identity.mjs';
@@ -70,6 +70,9 @@ function authoredFractionArtifact(store: string, reverseKeys = false) {
 }
 
 describe('portable quality release track', () => {
+  it('returns a consistent failed revalidation result for malformed artifacts', () => {
+    for (const malformed of [null, []]) assert.deepEqual(revalidateQualityArtifact(malformed, { store: 'sqlite' }), { errors: ['artifact is not an object'], artifact: null });
+  });
   it('uses sorted query IDs and sum-then-divide means for authored fractional metrics', () => {
     const artifacts = STORES.map((store, index) => authoredFractionArtifact(store, index % 2 === 1));
     const valid = comparePortableQualityArtifacts(artifacts);
@@ -117,6 +120,36 @@ describe('portable quality release track', () => {
     const missingQueryResult = comparePortableQualityArtifacts([artifact('sqlite'), missingQuery, artifact('turso')]);
     assert.equal(missingQueryResult.valid, false);
     assert.match(missingQueryResult.errors.join('\n'), /q1: query evidence is incomplete/);
+  });
+
+  it('ignores physical quality paths but rejects a logical configuration difference', () => {
+    const withConfig = (store: string, words = 1) => {
+      const current = artifact(store);
+      const rootDir = `/physical/${store}/root`;
+      const configDir = `/physical/${store}/config`;
+      for (const [name, variant] of Object.entries(current.variants)) {
+        const logical = { signals: { words } };
+        variant.execution.config = { ...logical, baseDir: rootDir, configPath: `${configDir}/sensemaking.config.js`, rootDir, configDir, store } as typeof variant.execution.config & Record<string, unknown>;
+        variant.workload_identity = logicalWorkloadIdentity({
+          corpus: { fingerprint: 'fixture' },
+          operation: { kind: 'quality', corpus: 'fixture', split: 'test', k: 2, query_form: 'bare-and', query_evidence: current.query_evidence, qrels: current.qrels },
+          requested: { variant: name, config: { ...logical, rootDir, configDir }, model: { status: 'not-applicable' } },
+        });
+      }
+      return current;
+    };
+
+    const physicalPathsDiffer = STORES.map((store) => withConfig(store));
+    const valid = comparePortableQualityArtifacts(physicalPathsDiffer);
+    assert.equal(valid.valid, true, valid.errors.join('; '));
+    const revalidated = revalidateQualityArtifact(physicalPathsDiffer[0], { store: 'sqlite' });
+    if (Array.isArray(revalidated)) assert.fail('revalidation must return the normalized artifact');
+    assert.deepEqual(revalidated.errors, []);
+    assert.deepEqual(revalidated.artifact.variants.semantic.workload_identity.inputs.requested.config, { signals: { words: 1 } });
+
+    const logicalConfigDiffers = comparePortableQualityArtifacts([withConfig('sqlite'), withConfig('duckdb'), withConfig('turso', 2)]);
+    assert.equal(logicalConfigDiffers.valid, false);
+    assert.match(logicalConfigDiffers.errors.join('\n'), /workload identity differs between sqlite and turso/);
   });
 
   it('recomputes persisted rankings and metrics while preserving valid empty rankings', () => {
@@ -286,7 +319,7 @@ describe('portable quality release track', () => {
     assert.ok(quality);
     assert.deepEqual(
       quality.steps.map((step) => step.id),
-      ['eval-nfcorpus', ...STORES.map((store) => `portable-eval-nfcorpus-${store}`), 'portable-eval-nfcorpus-comparison', 'eval-fever', ...STORES.map((store) => `portable-eval-fever-${store}`), 'portable-eval-fever-comparison']
+      ['retained-quality', 'eval-nfcorpus', ...STORES.map((store) => `portable-eval-nfcorpus-${store}`), 'portable-eval-nfcorpus-comparison', 'eval-fever', ...STORES.map((store) => `portable-eval-fever-${store}`), 'portable-eval-fever-comparison']
     );
     assert.deepEqual(quality.steps.find((step) => step.id === 'eval-nfcorpus')?.argv, ['node', 'benchmark/steps/quality.mjs', 'nfcorpus']);
     assert.deepEqual(quality.steps.find((step) => step.id === 'eval-fever')?.argv, ['node', 'benchmark/steps/quality.mjs', 'fever']);

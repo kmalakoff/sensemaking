@@ -19,7 +19,58 @@
 // stage-level "owed when" columns for stage 2 (compare + hub battery) and stage 4's nfcorpus leg,
 // which are broader than any single diff-map row. They live here anyway because release.mjs needs
 // one function answering "what does this diff owe", not two.
+
+import { QUALITY_RETRIEVAL_PATHS } from './quality-retrieval-identity.mjs';
 import { shouldRunReversedCompare } from './verdict.mjs';
+import { identityHash } from './workload-identity.mjs';
+
+export const DEFAULT_PROFILE = 'ordinary';
+export const PROFILES = [DEFAULT_PROFILE, 'deep'];
+const DEEP_PROFILE_GATES = ['baseline', 'scale', 'quality-baseline', 'fever'];
+const KNOWN_SOURCE_ROOTS = [
+  'src/chunk/',
+  'src/cli/',
+  'src/commands/index.ts',
+  'src/commands/map.ts',
+  'src/commands/peek.ts',
+  'src/commands/related.ts',
+  'src/commands/scope.ts',
+  'src/commands/search.ts',
+  'src/commands/signals.ts',
+  'src/commands/status.ts',
+  'src/config/',
+  'src/embed/',
+  'src/errors.ts',
+  'src/features/',
+  'src/graph/',
+  'src/index.ts',
+  'src/lib/',
+  'src/output/',
+  'src/scan/',
+  'src/store/',
+  'src/text/',
+  'src/types/',
+  'src/watch.ts',
+  'src/workers/',
+];
+
+const QUALITY_COLLECTION_PATHS = [...QUALITY_RETRIEVAL_PATHS.map((path) => (path.endsWith('.ts') ? path : `${path}/`)), 'benchmark/lib/corpus.mjs', 'benchmark/lib/labels.mjs', 'benchmark/lib/quality.mjs', 'benchmark/lib/quality-work-tree.mjs', 'benchmark/steps/quality.mjs', 'package-lock.json', 'package.json'];
+
+const QUALITY_EVALUATOR_PATHS = [
+  'benchmark/gate.mjs',
+  'benchmark/report.mjs',
+  'benchmark/lib/changes.mjs',
+  'benchmark/lib/gates.mjs',
+  'benchmark/lib/metrics.mjs',
+  'benchmark/lib/portable-quality.mjs',
+  'benchmark/lib/retained-quality.mjs',
+  'benchmark/lib/rows.mjs',
+  'benchmark/lib/stages.mjs',
+  'benchmark/lib/verdict.mjs',
+  'benchmark/lib/workload-identity.mjs',
+  'benchmark/steps/retained-quality.mjs',
+  'benchmark/tools/portable-quality-compare.mjs',
+];
 
 const DIFF_MAP = [
   { gate: 'test-engines', when: ['src/store/sqlite/', 'src/watch.ts', 'src/scan/', 'src/workers/', 'package.json'] },
@@ -27,9 +78,10 @@ const DIFF_MAP = [
   { gate: 'store-dump', when: ['src/store/', 'src/chunk/', 'src/features/'] },
   { gate: 'oracle', when: ['src/chunk/', 'src/text/', 'src/scan/frontmatter.ts', 'src/features/tags.ts', 'src/features/links.ts', 'src/features/sections.ts', 'src/features/fences.ts'] },
   { gate: 'scale', when: ['src/store/', 'src/scan/', 'src/chunk/', 'src/features/', 'src/graph/'] },
-  { gate: 'fever', when: ['src/commands/search.ts', 'src/features/', 'src/chunk/', 'src/embed/', 'src/text/', 'src/scan/frontmatter.ts'] },
+  { gate: 'fever', when: QUALITY_COLLECTION_PATHS },
   { gate: 'baseline', when: ['src/', 'benchmark/', 'package.json', 'package-lock.json'] },
-  { gate: 'quality-baseline', when: ['src/'] },
+  { gate: 'quality-baseline', when: QUALITY_COLLECTION_PATHS },
+  { gate: 'quality-revalidation', when: QUALITY_EVALUATOR_PATHS },
 ];
 
 export const GATE_NAMES = DIFF_MAP.map((row) => row.gate);
@@ -63,6 +115,70 @@ export function owedReasons(paths, lastTag) {
 
 export function owedGates(paths, lastTag) {
   return new Set(owedReasons(paths, lastTag).keys());
+}
+
+export function profileReasons(paths, lastTag, profile = DEFAULT_PROFILE) {
+  if (!PROFILES.includes(profile)) throw new Error(`profile must be ${PROFILES.join(' or ')}`);
+  const reasons = owedReasons(paths, lastTag);
+  if (profile === 'deep') {
+    for (const gate of DEEP_PROFILE_GATES) {
+      if (!reasons.has(gate)) reasons.set(gate, ['deep profile']);
+    }
+    reasons.delete('quality-revalidation');
+  }
+  const unknownSource = paths.filter((path) => path.startsWith('src/') && !pathOwesRow(path, KNOWN_SOURCE_ROOTS));
+  const dependencyInputs = paths.filter((path) => path === 'package.json' || path === 'package-lock.json');
+  const conservative = [...unknownSource.map((path) => `${path} (unclassified source path)`), ...dependencyInputs.map((path) => `${path} (dependency input)`)];
+  if (conservative.length > 0) {
+    for (const gate of DEEP_PROFILE_GATES) {
+      const current = reasons.get(gate) ?? [];
+      reasons.set(gate, [...new Set([...current, ...conservative])]);
+    }
+    reasons.delete('quality-revalidation');
+  }
+  if (reasons.has('quality-baseline') || reasons.has('fever')) reasons.delete('quality-revalidation');
+  else if (reasons.has('baseline') && !reasons.has('quality-revalidation')) reasons.set('quality-revalidation', ['ordinary baseline requires a current quality view']);
+  return reasons;
+}
+
+export function requireFreshQuality(reasons, detail) {
+  const next = new Map(reasons);
+  next.delete('quality-revalidation');
+  for (const gate of ['quality-baseline', 'fever']) {
+    const current = next.get(gate) ?? [];
+    next.set(gate, [...new Set([...current, detail])]);
+  }
+  return next;
+}
+
+export function resolveRetainedQualityRequirement(reasons, evidence) {
+  if (!reasons.has('quality-revalidation') || evidence?.valid === true) return new Map(reasons);
+  return requireFreshQuality(reasons, `retained raw quality unavailable: ${evidence?.errors?.[0] ?? evidence?.status ?? 'unknown'}`);
+}
+
+export function retainedQualityForSitting(prior, selected, reasons) {
+  const freshReplacement = reasons.has('quality-baseline') && reasons.has('fever') && !reasons.has('quality-revalidation');
+  if (!freshReplacement) return selected;
+  if (!prior && !selected) return null;
+  return {
+    ...prior,
+    ...selected,
+    valid: false,
+    status: 'superseded-by-fresh-quality',
+    source: selected?.source ?? prior?.source ?? null,
+    reason: selected?.errors?.[0] ?? prior?.reason ?? 'fresh quality replaces retained revalidation',
+  };
+}
+
+/** @param {Record<string, unknown> | null} priorSitting @param {{ lastTag: string, paths: string[], reasons: Map<string, string[]>, profile: string, retainedQuality?: { source?: unknown } | null }} selection */
+export function assertCompatibleSelection(priorSitting, { lastTag, paths, reasons, profile, retainedQuality = null }) {
+  if (!priorSitting) return;
+  if (priorSitting.last_tag !== lastTag || JSON.stringify(priorSitting.changed_paths) !== JSON.stringify(paths)) throw new Error('the existing sitting has an incompatible changed-path selection; start a clean sitting');
+  if (priorSitting.profile === 'deep' && profile !== 'deep') throw new Error('the existing sitting used the deep profile; resume with --profile deep');
+  const priorRequired = new Set(Object.keys(priorSitting.effective_requirements ?? priorSitting.owed ?? {}));
+  const freshQualityReplacement = reasons.has('quality-baseline') && reasons.has('fever');
+  for (const gate of priorRequired) if (!reasons.has(gate) && !(gate === 'quality-revalidation' && freshQualityReplacement)) throw new Error(`the existing sitting requires ${gate}, which profile ${profile} would omit; resume with a compatible profile`);
+  if (priorRequired.has('quality-revalidation') && reasons.has('quality-revalidation') && identityHash(priorSitting.retained_quality?.source ?? null) !== identityHash(retainedQuality?.source ?? null)) throw new Error('the existing sitting selected different retained quality evidence; start a clean sitting');
 }
 
 export function stepStatus(step, result) {

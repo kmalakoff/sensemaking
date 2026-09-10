@@ -3,7 +3,7 @@ import { cpSync, mkdirSync, readdirSync, readFileSync, statSync, symlinkSync, ut
 import { join } from 'node:path';
 import assert from 'assert';
 import { signalProcessTree } from '../../benchmark/lib/native-observer.mjs';
-import { observeQualityModel, prepareQualityWorkTree } from '../../benchmark/lib/quality-work-tree.mjs';
+import { needsQualityModelDownload, observeQualityModel, prepareQualityWorkTree } from '../../benchmark/lib/quality-work-tree.mjs';
 import { writeModel } from '../lib/model.ts';
 import { packageRoot, scratchDir } from '../lib/scratch.ts';
 import { forEachStore, openTreeForStore, type ParityStoreName } from '../lib/stores.ts';
@@ -84,6 +84,18 @@ async function seedPublished(store: ParityStoreName, workRoot: string, key: stri
 }
 
 describe('quality cache work trees', () => {
+  it('routes only absent downloadable static models to prefetch', () => {
+    const modelApi = {
+      isDownloadable: (model: string) => model.startsWith('org/'),
+      hasModelFiles: (model: string) => model === 'org/present',
+    };
+
+    assert.equal(needsQualityModelDownload({ provider: 'static', model: 'org/model' }, modelApi), true);
+    assert.equal(needsQualityModelDownload({ provider: 'static', model: 'org/present' }, modelApi), false);
+    assert.equal(needsQualityModelDownload({ provider: 'openai', model: 'org/model' }, modelApi), false);
+    assert.equal(needsQualityModelDownload({ provider: 'static', model: 'local-model' }, modelApi), false);
+  });
+
   it('rejects cache keys that can escape their private namespace', () => {
     const source = sourceTree();
     const workRoot = scratchDir('quality-invalid-key');
@@ -260,6 +272,7 @@ describe('quality cache work trees', () => {
     cpSync(join(packageRoot, 'dist'), join(root, 'dist'), { recursive: true });
     cpSync(join(packageRoot, 'src'), join(root, 'src'), { recursive: true });
     cpSync(join(packageRoot, 'package.json'), join(root, 'package.json'));
+    cpSync(join(packageRoot, 'package-lock.json'), join(root, 'package-lock.json'));
     symlinkSync(join(packageRoot, 'node_modules'), join(root, 'node_modules'), 'junction');
     const corpus = join(root, '.tmp', 'cache', 'nfcorpus-beir-1');
     mkdirSync(join(corpus, 'tree'), { recursive: true });
@@ -292,6 +305,8 @@ describe('quality cache work trees', () => {
       assert.equal(second.cache.reuse_state, 'copied-completed-index');
       assert.notEqual(first.work_tree, second.work_tree);
       assert.equal(second.cache.cache_fingerprint, first.cache.cache_fingerprint);
+      assert.equal(typeof first.cache.cache_inputs.retrieval.fingerprint, 'string');
+      assert.equal(second.cache.cache_inputs.retrieval.fingerprint, first.cache.cache_inputs.retrieval.fingerprint);
     });
   });
 });

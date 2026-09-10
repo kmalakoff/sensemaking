@@ -28,6 +28,21 @@ export async function observeQualityModel(packageRoot, embed) {
   }
 }
 
+export function needsQualityModelDownload(embed, modelApi) {
+  return embed.provider === 'static' && modelApi.isDownloadable(embed.model) && !modelApi.hasModelFiles(embed.model);
+}
+
+export async function prepareQualityModel(packageRoot, embed) {
+  const moduleUrl = pathToFileURL(join(packageRoot, 'dist', 'esm', 'embed', 'store.js')).href;
+  const modelApi = await import(moduleUrl);
+  if (!needsQualityModelDownload(embed, modelApi)) return false;
+
+  await modelApi.downloadModel(embed.model, (file, dir) => {
+    console.error(`quality: fetching ${embed.model}/${file} into ${dir}`);
+  });
+  return true;
+}
+
 function assertTree(path) {
   const stat = lstatSync(path);
   if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error(`quality cache path is not a regular directory: ${path}`);

@@ -9,10 +9,11 @@ import { MEASURE_VERSION } from '../lib/measure.mjs';
 import { mean } from '../lib/metrics.mjs';
 import { writeOut } from '../lib/out.mjs';
 import { buildQualityArtifactBase, evaluateVariant, qualityVariantEvidence, queryFormFor } from '../lib/quality.mjs';
-import { observeQualityModel, prepareQualityWorkTree } from '../lib/quality-work-tree.mjs';
+import { qualityRetrievalIdentity } from '../lib/quality-retrieval-identity.mjs';
+import { observeQualityModel, prepareQualityModel, prepareQualityWorkTree } from '../lib/quality-work-tree.mjs';
 import { mdTable } from '../lib/render.mjs';
 import { ROWS } from '../lib/rows.mjs';
-import { executionEvidence, identityHash, implementationProvenance, logicalWorkloadIdentity, manifestIdentity } from '../lib/workload-identity.mjs';
+import { executionEvidence, identityHash, implementationProvenance, logicalConfig, logicalWorkloadIdentity, manifestIdentity } from '../lib/workload-identity.mjs';
 
 const { values: flags, positionals } = parseArgs({
   options: {
@@ -97,7 +98,7 @@ const configFor = (variant, baseDir) => ({
   configPath: null,
   ...(STORE ? { store: STORE } : {}),
 });
-const logicalConfig = ({ baseDir: _baseDir, configPath: _configPath, store: _store, ...config }) => config;
+await prepareQualityModel(ROOT, EMBED);
 const modelObservation = await observeQualityModel(ROOT, EMBED);
 const provenanceFor = (model) =>
   implementationProvenance({
@@ -114,6 +115,7 @@ const cacheInputsFor = (model) => {
     version: 1,
     configs: VARIANTS.map((variant) => ({ name: variant.name, config: executionEvidence({ argv: [], config: configFor(variant, '<private-tree>') }).config })),
     implementation: { measured_package: provenance.measured_package, runtime: provenance.runtime, native: provenance.native, harness: provenance.harness },
+    retrieval: qualityRetrievalIdentity(ROOT),
     model,
   };
 };

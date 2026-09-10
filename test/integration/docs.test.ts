@@ -584,6 +584,23 @@ describe('benchmark store-dump: retained captures and structured differences', (
 });
 
 describe('benchmark release-gate: generated report re-render is idempotent', () => {
+  it('renders a profile only when the report records one', async () => {
+    const { buildReport, renderMarkdown } = await import('../../benchmark/report.mjs');
+    const sitting = scratchDir('report-profile-fixture-sitting');
+    fixtureSitting(sitting, '2099-06-01', [71, 71]);
+    const report = buildReport(sitting, { reportsDir: scratchDir('report-profile-fixture-reports') });
+    const missingProfile = { ...report };
+    delete missingProfile.profile;
+
+    assert.equal(report.profile, null);
+    for (const legacy of [missingProfile, { ...report, profile: undefined }, report]) {
+      assert.ok(!renderMarkdown(legacy).includes('\n- profile:'), 'a legacy report must not gain profile metadata during regeneration');
+    }
+    for (const profile of ['ordinary', 'deep']) {
+      assert.match(renderMarkdown({ ...report, profile }), new RegExp(`^\\- profile: ${profile}$`, 'm'));
+    }
+  });
+
   it('fixture: a tracked record is compact, keeps identities, and renders from saved JSON', async () => {
     const { buildReport, compactReleaseRecord, persist, renderMarkdown } = await import('../../benchmark/report.mjs');
     const { classifyCrossGroup, classifyEval, priorStepLookup } = await import('../../benchmark/lib/verdict.mjs');

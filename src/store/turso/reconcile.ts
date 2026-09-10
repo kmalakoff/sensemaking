@@ -1,3 +1,4 @@
+import type { Config } from '../../config/index.ts';
 import { SenseError } from '../../errors.ts';
 import type { ReconcileDelta } from '../../features/types.ts';
 import type { ParsedDoc } from '../../scan/index.ts';
@@ -34,6 +35,8 @@ const MAX_FRONTMATTER_COLUMNS = 2000;
 // 2026-08-30; the derivation and its bounds are pinned in this file's spec.
 export const FTS_REBUILD_THRESHOLD = 250;
 
+export type TursoFtsStrategy = 'incremental' | 'rebuild';
+
 // No rowid coupling (unlike sqlite's FTS5 content): `path` is content's own primary key.
 const INSERT_CONTENT_SQL = `INSERT INTO content ("path", title, summary, text, title_stem, summary_stem, text_stem, title_ngram, summary_ngram, text_ngram) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 
@@ -42,12 +45,17 @@ function contentRow(doc: ParsedDoc): unknown[] {
   return [doc.relPath, title, summary, text, stemFolded(title), stemFolded(summary), stemFolded(text), ngramSidecar(title), ngramSidecar(summary), ngramSidecar(text)];
 }
 
-async function reconcileContent(conn: Connection, touched: string[], docs: ParsedDoc[], delta: ReconcileDelta): Promise<void> {
+export function tursoFtsStrategy(delta: ReconcileDelta): TursoFtsStrategy {
   const churn = delta.reparsed.length + delta.vanished.length;
+  return delta.files.length === 0 || churn > FTS_REBUILD_THRESHOLD ? 'rebuild' : 'incremental';
+}
 
+// Kept transaction-free because the shared reconcile owns the one write transaction. The explicit
+// strategy is internal composition for real-engine diagnostics; production selects it from delta.
+export async function reconcileTursoContentWithStrategy(conn: Connection, touched: string[], docs: ParsedDoc[], strategy: TursoFtsStrategy): Promise<void> {
   // Tantivy indexes per inserted row at a cost that grows with the batch, so a large insert is
   // superlinear and a rebuild wins past the threshold.
-  const bulk = delta.files.length === 0 || churn > FTS_REBUILD_THRESHOLD;
+  const bulk = strategy === 'rebuild';
   if (bulk) for (const name of CONTENT_FTS_NAMES) await conn.exec(`DROP INDEX IF EXISTS ${name}`);
 
   // content is a plain table keyed by its own path (no rowid subquery, unlike sqlite's FTS5
@@ -59,6 +67,10 @@ async function reconcileContent(conn: Connection, touched: string[], docs: Parse
     );
   if (docs.length > 0) await conn.runBatch(INSERT_CONTENT_SQL, docs.map(contentRow));
   if (bulk) for (const ddl of CONTENT_FTS_DDL) await conn.exec(ddl);
+}
+
+async function reconcileTursoContent(conn: Connection, touched: string[], docs: ParsedDoc[], delta: ReconcileDelta, _cfg: Config): Promise<void> {
+  await reconcileTursoContentWithStrategy(conn, touched, docs, tursoFtsStrategy(delta));
 }
 
 // turso's ADD COLUMN is metadata-only, so a loop costs nothing extra over one statement.
@@ -77,6 +89,6 @@ export const tursoDialect: ReconcileDialect = {
     }
   },
   addColumns,
-  reconcileContent,
+  reconcileContent: reconcileTursoContent,
   recordDuration: recordReconcileDuration,
 };

@@ -9,11 +9,35 @@ Subagents dispatched during a release are spawned with `model: sonnet`. Reviews 
 1. **Run the gate.** One command, and it decides what to run from the diff since the last tag:
 
    ```bash
-   npm run benchmark              # runs the owed stages, writes the report, prints the verdict
-   npm run benchmark -- --dry-run # what it would run, without measuring
+   npm run benchmark                     # ordinary assessment: selected required stages, report, verdict
+   npm run benchmark -- --profile deep   # explicit deep assessment
+   npm run benchmark -- --dry-run        # selected stages, reasons, and historical-cost estimate; no measurement
    ```
 
-   Stages run in order: static checks, functional suites, hub baseline, scale and stress, then retrieval quality. Independent benchmark and evidence failures accumulate so the final report lists them together. Failed build/test prerequisites prevent dependent work unless their identified failure has an existing owner acceptance. Failed artifact producers prevent their dependent comparators, even when that producer failure was accepted. Store-dump differences and other independent evidence failures remain BLOCK reasons but do not stop unrelated collection. Skipped steps name their unmet prerequisites. Run on an otherwise idle machine: timing refuses excessive load and has no override. A rerun on unchanged code reuses successful work and retries failed or incomplete steps; a changed measured tree requires new evidence. No failure disappears merely because later steps ran.
+   `ordinary` is the default assessment. `deep` explicitly adds the large scale/stress and fresh
+   retrieval-quality collection. The dry run exposes the profile, selected requirements, reasons,
+   and a historical execution estimate before work begins. The ordinary 10–20 minute target is an
+   estimate, not a measured promise for this machine or diff.
+
+   **Changed capabilities expand the gate before it runs.** Required work cannot be skipped by a
+   profile or flag. When an ordinary run owes a baseline assessment but no changed capability requires fresh retrieval collection, it
+   revalidates retained raw quality against the current retrieval, model, and corpus identities.
+   Missing or incompatible raw evidence selects fresh quality before work starts; a compact report
+   cannot revalidate quality it omitted. A sitting and its report retain the profile and effective
+   requirements, and resume refuses an incompatible selection. Native diagnostic matrices and
+   historical sweeps are omitted unless explicitly requested; neither profile selects them
+   automatically.
+
+   Stages run in order: static checks, functional suites, hub baseline, scale and stress when
+   selected, then retrieval quality when selected. Independent benchmark and evidence failures
+   accumulate so the final report lists them together. Failed build/test prerequisites prevent
+   dependent work unless their identified failure has an existing owner acceptance. Failed artifact
+   producers prevent their dependent comparators, even when that producer failure was accepted.
+   Store-dump differences and other independent evidence failures remain BLOCK reasons but do not
+   stop unrelated collection. Skipped steps name their unmet prerequisites. Run on an otherwise idle
+   machine: timing refuses excessive load and has no override. A rerun on unchanged code reuses
+   successful work and retries failed or incomplete steps; a changed measured tree requires new
+   evidence. No failure disappears merely because later steps ran.
 
    **The diff picks the gates, not the person running it.** `benchmark/lib/gates.mjs` maps changed paths to the gates they owe: a change under `src/embed/` owes the live endpoint suite and the fever eval, a change under `src/chunk/` owes the Obsidian parity gate, a docs-only change owes the tests and nothing else. A gate the map owes cannot be skipped by a flag. This exists because the fever eval was skipped by every sitting from 0.6.0 until something forced it.
 

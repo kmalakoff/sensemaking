@@ -49,6 +49,12 @@ export function executionEvidence({ argv, config, resolvedEquivalence = 'unverif
   return { argv: persistedValue(argv), config_fingerprint: identityHash(safe), config: safe, resolved_equivalence: resolvedEquivalence };
 }
 
+export function logicalConfig(config) {
+  if (!config || typeof config !== 'object' || Array.isArray(config)) return null;
+  const { baseDir: _baseDir, configPath: _configPath, rootDir: _rootDir, configDir: _configDir, store: _store, ...logical } = config;
+  return logical;
+}
+
 function fileHash(path) {
   return createHash('sha256').update(readFileSync(path)).digest('hex');
 }
@@ -64,7 +70,7 @@ function walkFiles(root, dir = root) {
   return out;
 }
 
-function pathSetIdentity(root, paths) {
+export function pathSetIdentity(root, paths) {
   const absoluteRoot = resolve(root);
   const files = [];
   for (const rel of [...paths].sort()) {
@@ -84,7 +90,7 @@ export function directoryIdentity(path) {
   return { status: 'recorded', ...pathSetIdentity(path, walkFiles(path)) };
 }
 
-function installedPackageVersion(packageRoot, name) {
+export function installedPackageVersion(packageRoot, name) {
   try {
     const require = createRequire(join(packageRoot, 'package.json'));
     let entry = require.resolve(name);

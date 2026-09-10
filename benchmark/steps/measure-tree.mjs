@@ -509,15 +509,16 @@ if (VERBS.has('watch')) {
       await freshBulkTree(`bulk-watch repetition ${i + 1}`, async (repTree, copyMs) => {
         const baseline = await baselineBulk(repTree, i + 1);
         const watcher = startMeasuredWatcher({ pkgRoot, configPath: join(repTree, 'sense.config.json') });
+        const watcherDeadlineMs = 5_000 + baseline.deadlineMs;
         const watcherStarted = process.hrtime.bigint();
         let operationError;
         let closeError;
         try {
-          const started = await watcher.waitFor('started', 0, baseline.deadlineMs);
+          const started = await watcher.waitFor('started', 0, watcherDeadlineMs);
           const startupMs = Number(process.hrtime.bigint() - watcherStarted) / 1e6;
           const expected = mutateBulk(repTree);
           const readyStarted = process.hrtime.bigint();
-          await watcher.waitFor('reconciled', started.next, baseline.deadlineMs);
+          await watcher.waitFor('reconciled', started.next, watcherDeadlineMs);
           const observed = await waitForNativeIndex(observerPayload(repTree, expected, baseline.observed.content), baseline.deadlineMs);
           if (observed.fingerprint !== baseline.observed.fingerprint) throw new Error(`bulk-watch content fingerprint changed after an mtime-only mutation: expected ${baseline.observed.fingerprint}, got ${observed.fingerprint}`);
           const readinessMs = Number(process.hrtime.bigint() - readyStarted) / 1e6;
@@ -534,6 +535,7 @@ if (VERBS.has('watch')) {
             copy_ms: copyMs,
             baseline_build_ms: baseline.buildMs,
             observer_deadline_ms: baseline.deadlineMs,
+            watcher_event_deadline_ms: watcherDeadlineMs,
             baseline_observer: compactObserver(baseline.observed),
             watcher_startup_ms: startupMs,
             readiness_ms: readinessMs,

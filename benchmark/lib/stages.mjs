@@ -109,6 +109,7 @@ export function buildStages() {
       id: 'quality',
       label: '4 quality',
       steps: [
+        { id: 'retained-quality', argv: ['node', 'benchmark/steps/retained-quality.mjs'], timeout: 10 * MINUTES, quiet: false, owedBy: 'quality-revalidation', out: true },
         // nDCG/MRR/hit@10 on a fixed corpus and model: load changes wall time, not the digits, so
         // this stage runs on any machine.
         { id: 'eval-nfcorpus', argv: ['node', 'benchmark/steps/quality.mjs', 'nfcorpus'], timeout: 20 * MINUTES, quiet: false, owedBy: 'quality-baseline', out: true },

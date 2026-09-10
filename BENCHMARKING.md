@@ -12,11 +12,25 @@ which: `benchmark/gate.mjs` is the entry, `benchmark/steps/` is what the gate ru
 `benchmark/tools/` is decision support that is never part of a release.
 
 ```bash
-npm run benchmark                     # the gate: the stages the diff owes, a report, a verdict
-npm run benchmark -- --dry-run        # what it would run, measuring nothing
+npm run benchmark                     # ordinary assessment: required stages selected from the diff
+npm run benchmark -- --profile deep   # explicit deep assessment
+npm run benchmark -- --dry-run        # selected stages, reasons, and historical-cost estimate; measures nothing
 node benchmark/report.mjs             # re-render a report from its sitting, measuring nothing
 node benchmark/report.mjs --sitting <archived-sitting> --out <assessment-dir> [--native-matrix <matrix.json>] # render isolated assessment files without changing retained evidence
 ```
+
+`ordinary` is the default release assessment. The changed capabilities select its work; required
+capabilities expand the selection before execution and cannot be skipped by a profile or flag.
+`deep` explicitly includes the large scale/stress and fresh retrieval-quality collection. The dry
+run records the selected profile, reasons, and an estimate based on historical execution data. Its
+10–20 minute ordinary target is an estimate, not a proven current duration.
+
+When an ordinary run owes a baseline assessment but no changed capability requires fresh retrieval collection, it first revalidates retained
+raw quality against the current retrieval, model, and corpus identities. Missing or incompatible raw
+evidence selects fresh quality before any work starts; compact report summaries alone cannot stand in
+for that revalidation. The sitting and final report retain the selected profile and requirements, and
+a resume must be compatible with both. Native diagnostic matrices and historical sweeps are omitted
+unless explicitly requested; neither profile selects them automatically.
 
 The steps, each runnable alone when investigating one thing:
 
@@ -29,8 +43,17 @@ node benchmark/steps/oracle.mjs <corpus> <path>                     # tags/links
 node benchmark/steps/store-dump.mjs capture <dir>                   # every store's rows and ranked output, for an A/B against a refactor
 node benchmark/steps/store-dump.mjs compare <dirA> <dirB>           # diffs two captures, non-zero on any difference
 node benchmark/tools/native-capability.mjs [--store STORE] [--case CASE] [--notes N] [--out FILE] # tiny native API diagnostic
+node benchmark/tools/duckdb-lexical-cost.mjs --out FILE             # optional DuckDB lexical-path diagnostic
+node benchmark/tools/turso-update-cost.mjs --out FILE               # optional Turso 250-file update-strategy diagnostic
 node benchmark/tools/result-sets.mjs [corpus ...] [--queries lexical,words,default] [--k 10] [--out FILE] # ranked-path overlap evidence
 ```
+
+The DuckDB diagnostic records the real adapter's prepare and execute/read/JavaScript-conversion
+boundaries; query construction and phrase verification remain outside those connection spans. The
+Turso diagnostic runs both real content-index strategies on the same 250 changed paths and records
+transaction, drop/delete/insert/create/commit boundaries while excluding outer reconciliation.
+Both are optional fixed-work diagnostics, not release rows: they do not establish a pure-native
+cost, select an optimization, or change a production threshold.
 
 The native-capability v3 diagnostic defaults to SQLite, the `baseline` case, four authored notes, and three fresh repetitions. It accepts one store at a time. Generate one artifact per store, keeping `--case` identical, then compare exactly the SQLite, DuckDB, and Turso artifacts:
 

@@ -18,13 +18,16 @@ import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:pat
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { stringify } from 'yaml';
+import { PROFILES } from './lib/gates.mjs';
 import { MEASURE_VERSION } from './lib/measure.mjs';
 import { compareNativeCapabilityArtifacts } from './lib/native-capability-compare.mjs';
 import { compareNativeHydrationArtifacts } from './lib/native-hydration-compare.mjs';
 import { compareNativeUpdateArtifacts, nativeEvidenceExecutionPlan } from './lib/native-update-contract.mjs';
 import { comparePortableQualityArtifacts, PORTABLE_QUALITY_STORES } from './lib/portable-quality.mjs';
 import { mdTable } from './lib/render.mjs';
+import { compactRetainedQuality, compactStep } from './lib/report-compaction.mjs';
 import { validateResultSetArtifact } from './lib/result-sets.mjs';
+import { validateRetainedQualityRecord } from './lib/retained-quality.mjs';
 import { COMPARISON_CLASSES, ROW_BY_KEY, ROWS } from './lib/rows.mjs';
 import { validateSharedSnippetArtifact } from './lib/shared-snippet-contract.mjs';
 import { DEFAULT_STORE, OFFERED, ROOT, STAGES } from './lib/stages.mjs';
@@ -185,6 +188,10 @@ function owedStepMap(sitting) {
 function coverageErrors(sitting) {
   const known = owedStepMap(sitting);
   const errors = [];
+  if (sitting.profile !== undefined || sitting.effective_requirements !== undefined) {
+    if (!PROFILES.includes(sitting.profile)) errors.push(`coverage: profile must be ${PROFILES.join(' or ')}`);
+    if (!sitting.effective_requirements || identityHash(sitting.effective_requirements) !== identityHash(sitting.owed ?? {})) errors.push('coverage: effective_requirements must match owed selection');
+  }
   for (const [id, recorded] of Object.entries(sitting.steps ?? {})) {
     const definition = known.get(id) ?? (id === 'compare-reversed' ? { step: { id, out: true }, owed: true } : null);
     if (!definition) {
@@ -241,7 +248,7 @@ function newestSittingDir(sittingsDir = SITTINGS_DIR) {
 
 // Every step JSON this sitting could have produced, grouped into the same-sitting compare table,
 // the hub/13k/26k growth group, a lone group per stress and per battery, and one per eval corpus.
-function classifySitting(sittingDir, sitting, priorLookup) {
+function classifySitting(sittingDir, sitting, priorLookup, { reportsDir = REPORTS_DIR, sittingsDir = SITTINGS_DIR, currentRoot = ROOT } = {}) {
   // priorFrom records which report supplied each step's prior, for the run summary.
   const priorFrom = {};
   const priorHarnessMismatch = {};
@@ -349,6 +356,35 @@ function classifySitting(sittingDir, sitting, priorLookup) {
     return artifact;
   };
 
+  let retainedArtifacts = {};
+  const retainedQuality = sitting.owed?.['quality-revalidation'] ? loadCurrent('retained-quality') : null;
+  let retainedQualityErrors = [];
+  if (retainedQuality) {
+    let errors;
+    try {
+      errors = validateRetainedQualityRecord(retainedQuality, {
+        reportsDir,
+        sittingsDir,
+        currentRoot,
+        expectedSource: sitting.retained_quality?.source ?? null,
+      });
+    } catch (error) {
+      errors = [error?.message ?? String(error)];
+    }
+    retainedQualityErrors = errors;
+    if (errors.length > 0) invalidArtifact('retained-quality', `retained-quality: ${errors.join('; ')}`);
+    else {
+      retainedArtifacts = retainedQuality.artifacts;
+      verified.add('retained-quality');
+    }
+  }
+  if (sitting.owed?.['quality-revalidation'] && !verified.has('retained-quality') && retainedQualityErrors.length === 0) retainedQualityErrors = ['retained-quality step did not yield verified evidence'];
+  const loadQuality = (id) => {
+    if (!retainedArtifacts[id]) return loadCurrent(id);
+    steps[id] = retainedArtifacts[id];
+    return retainedArtifacts[id];
+  };
+
   const compareJson = loadCurrent('compare', { compareWrapper: true });
   const reversedJson = loadCurrent('compare-reversed', { compareWrapper: true });
   if (compareJson && shouldRunReversedCompare(compareJson) && !sitting.steps?.['compare-reversed']?.status) {
@@ -431,7 +467,7 @@ function classifySitting(sittingDir, sitting, priorLookup) {
   const retrievalOwed = !!sitting.owed?.fever;
   const evalIds = ['eval-nfcorpus', 'eval-fever'];
   for (const id of evalIds) {
-    const j = loadCurrent(id);
+    const j = loadQuality(id);
     if (j) {
       classifications.push(...classifyEval(id, j, priorStep(id), retrievalOwed, { requireIdentity: true }));
     }
@@ -442,18 +478,21 @@ function classifySitting(sittingDir, sitting, priorLookup) {
   // `no-compatible-prior` until the maintainer deliberately records one.
   for (const corpus of ['nfcorpus', 'fever']) {
     const portableRetrievalOwed = corpus === 'fever' ? !!sitting.owed?.fever : !!sitting.owed?.['quality-baseline'];
-    const artifacts = PORTABLE_QUALITY_STORES.map((store) => loadCurrent(`portable-eval-${corpus}-${store}`)).filter(Boolean);
+    const artifacts = PORTABLE_QUALITY_STORES.map((store) => loadQuality(`portable-eval-${corpus}-${store}`)).filter(Boolean);
     const comparisonId = `portable-eval-${corpus}-comparison`;
-    const comparison = loadCurrent(comparisonId);
+    const comparison = loadQuality(comparisonId);
     const persistedComparison = comparison ?? steps[comparisonId];
     if (persistedComparison) {
-      const recomputed = comparePortableQualityArtifacts(artifacts);
-      if (!recomputed.valid || identityHash(recomputed) !== identityHash(persistedComparison)) invalidArtifact(comparisonId, `${comparisonId}: recomputation from retained inputs is invalid: ${recomputed.errors.join('; ') || 'persisted comparison disagrees with source artifacts'}`);
-      else if (comparison) verified.add(comparisonId);
+      if (retainedArtifacts[comparisonId]) verified.add(comparisonId);
+      else {
+        const recomputed = comparePortableQualityArtifacts(artifacts);
+        if (!recomputed.valid || identityHash(recomputed) !== identityHash(persistedComparison)) invalidArtifact(comparisonId, `${comparisonId}: recomputation from retained inputs is invalid: ${recomputed.errors.join('; ') || 'persisted comparison disagrees with source artifacts'}`);
+        else if (comparison) verified.add(comparisonId);
+      }
     }
     for (const store of PORTABLE_QUALITY_STORES) {
       const id = `portable-eval-${corpus}-${store}`;
-      const artifact = loadCurrent(id);
+      const artifact = loadQuality(id);
       if (artifact) classifications.push(...classifyEval(id, artifact, priorStep(id), portableRetrievalOwed, { requireIdentity: true }));
     }
   }
@@ -469,7 +508,7 @@ function classifySitting(sittingDir, sitting, priorLookup) {
     invalidArtifact(id, reason);
   }
 
-  return { classifications, steps, verified, priorFrom, priorHarnessMismatch };
+  return { classifications, steps, verified, priorFrom, priorHarnessMismatch, retainedQuality: retainedQualityErrors.length === 0 && verified.has('retained-quality') ? retainedQuality : null, retainedQualityErrors };
 }
 
 // notes and largest note size per measured context: properties of the corpus, not measurements of
@@ -755,7 +794,9 @@ export function renderMarkdown(report) {
   lines.push('#### Run summary');
   lines.push('');
   lines.push(`- provenance: last tag \`${report.last_tag ?? 'unknown'}\`, package version ${report.package_version ?? 'unknown'}, ${report.changed_paths?.length ?? 0} changed path(s) read to decide what was owed (no commit hash: RELEASING.md's rule, since a rebase or squash can orphan one)`);
+  if (report.profile != null) lines.push(`- profile: ${report.profile}`);
   lines.push(`- owed: ${Object.keys(report.owed ?? {}).length > 0 ? Object.keys(report.owed).join(', ') : 'nothing beyond the always-owed stages'}`);
+  if (report.retained_quality) lines.push(`- retained quality: ${report.retained_quality.status}${report.retained_quality.source ? ` from ${report.retained_quality.source.report} (${report.retained_quality.source.sitting})` : ''}`);
   lines.push(
     `- ran: ${Object.values(report.steps_status ?? {}).filter((s) => s?.status === 'ok').length} step(s) ok, ${Object.values(report.steps_status ?? {}).filter((s) => s?.status === 'not-owed').length} not owed, ${Object.values(report.steps_status ?? {}).filter((s) => s?.status === 'owed-unmet').length} owed-unmet`
   );
@@ -940,14 +981,14 @@ export function unmeasuredSteps(sitting) {
     .map((s) => (Array.isArray(s.blocked_by) && s.blocked_by.length > 0 ? `${s.id}: not run (blocked by ${s.blocked_by.join(', ')}); run the gate again to resume it` : `${s.id}: not run (the gate stopped at an earlier failure); run the gate again to resume it`));
 }
 
-/** @param {string} sittingDir @param {{ reportsDir?: string, releaseVersionOverride?: string, nativeMatrixPath?: string }} [opts] */
-export function buildReport(sittingDir, { reportsDir = REPORTS_DIR, releaseVersionOverride, nativeMatrixPath = null } = {}) {
+/** @param {string} sittingDir @param {{ reportsDir?: string, sittingsDir?: string, currentRoot?: string, releaseVersionOverride?: string, nativeMatrixPath?: string }} [opts] */
+export function buildReport(sittingDir, { reportsDir = REPORTS_DIR, sittingsDir = SITTINGS_DIR, currentRoot = ROOT, releaseVersionOverride, nativeMatrixPath = null } = {}) {
   const sitting = JSON.parse(readFileSync(join(sittingDir, 'sitting.json'), 'utf8'));
   const existing = existingSittingReport(sittingDir);
   const recordedAcceptances = { ...(existing?.accepted ?? {}), ...(existing?.stale_acceptances ?? {}) };
 
   const priorReports = findPriorReports(reportsDir, sitting.baseline_version);
-  let { classifications, steps, verified, priorFrom, priorHarnessMismatch } = classifySitting(sittingDir, sitting, priorStepLookup(priorReports, MEASURE_VERSION));
+  let { classifications, steps, verified, priorFrom, priorHarnessMismatch, retainedQuality, retainedQualityErrors } = classifySitting(sittingDir, sitting, priorStepLookup(priorReports, MEASURE_VERSION), { reportsDir, sittingsDir, currentRoot });
   // stageReasons is the only thing --accept may ever name (a stage failure the owner can judge
   // and choose to ship past). unmeasured is a different kind of reason -- work the gate never
   // reached at all -- and blocks unconditionally: it is never in stage_reasons, so acceptRow can
@@ -979,7 +1020,14 @@ export function buildReport(sittingDir, { reportsDir = REPORTS_DIR, releaseVersi
   }
   classifications = withSeverity(classifications);
   const unmeasured = [...interruptedSteps(sittingDir, sitting), ...unmeasuredSteps(sitting)];
-  const acceptanceView = { measure_version: MEASURE_VERSION, classifications, steps_status: sitting.steps ?? {} };
+  const acceptanceView = {
+    measure_version: MEASURE_VERSION,
+    classifications,
+    steps_status: sitting.steps ?? {},
+    profile: sitting.profile,
+    effective_requirements: sitting.effective_requirements ?? sitting.owed ?? {},
+    retained_quality: sitting.retained_quality ?? null,
+  };
   const accepted = Object.fromEntries(Object.entries(recordedAcceptances).filter(([id, entry]) => acceptanceApplies(id, entry, acceptanceView, sittingDir)));
   const staleAcceptances = Object.fromEntries(Object.entries(recordedAcceptances).filter(([id, entry]) => !acceptanceApplies(id, entry, acceptanceView, sittingDir)));
   const { verdict, reasons } = aggregateVerdict(classifications, [...blockingStageReasons(stageReasons, accepted), ...unmeasured], accepted);
@@ -1034,6 +1082,25 @@ export function buildReport(sittingDir, { reportsDir = REPORTS_DIR, releaseVersi
     // so their rows read no-prior rather than a (possibly false) delta across harnesses.
     prior_harness_mismatch: priorHarnessMismatch,
     changed_paths: sitting.changed_paths ?? [],
+    untracked_paths: sitting.untracked_paths ?? [],
+    profile: sitting.profile ?? null,
+    effective_requirements: sitting.effective_requirements ?? sitting.owed ?? {},
+    estimated_cost: sitting.estimated_cost ?? null,
+    retained_quality: retainedQuality
+      ? compactRetainedQuality({
+          ...sitting.retained_quality,
+          status: 'revalidated',
+          valid: true,
+          source: retainedQuality.source,
+          raw_evidence: retainedQuality.raw_evidence,
+          source_compact: retainedQuality.source_compact,
+          source_steps_status: retainedQuality.source_steps_status,
+        })
+      : retainedQualityErrors.length > 0
+        ? { ...sitting.retained_quality, status: 'invalid', valid: false, errors: retainedQualityErrors }
+        : sitting.retained_quality && (sitting.owed?.['quality-baseline'] || sitting.owed?.fever)
+          ? { ...sitting.retained_quality, status: 'superseded-by-fresh-quality', valid: false }
+          : (sitting.retained_quality ?? null),
     owed: sitting.owed ?? {},
     steps_status: sitting.steps ?? {},
     changelog_entry: changelogEntry(releaseVersionOverride ?? existing?.release_version ?? null),
@@ -1047,55 +1114,12 @@ export function buildReport(sittingDir, { reportsDir = REPORTS_DIR, releaseVersi
   };
 }
 
-const evidenceSummary = (field, value) => ({
-  field,
-  canonical_sha256: identityHash(value),
-  bytes: Buffer.byteLength(JSON.stringify(value)),
-  ...(Array.isArray(value) ? { items: value.length } : {}),
-});
-
-// Retain workload_identity.inputs: priorStepLookup verifies their hashes before comparing rows.
-function compactStep(id, step) {
-  if (!step || typeof step !== 'object' || Array.isArray(step)) return step;
-  const compact = JSON.parse(JSON.stringify(step));
-  const omitted = [];
-  const omit = (object, field, label = field) => {
-    if (!Object.hasOwn(object, field)) return;
-    omitted.push(evidenceSummary(label, object[field]));
-    delete object[field];
-  };
-
-  if (id === 'store-dump') {
-    omit(compact, 'stores');
-    if (compact.diff && typeof compact.diff === 'object') {
-      const rawDiff = compact.diff;
-      const categories = rawDiff.categories;
-      compact.diff = {
-        categories: Object.fromEntries(Object.entries(categories ?? {}).map(([category, entries]) => [category, Array.isArray(entries) ? entries.length : Number.isSafeInteger(entries) ? entries : 0])),
-      };
-      omitted.push(evidenceSummary('diff', rawDiff));
-    }
-  }
-  for (const field of ['query_evidence', 'qrels']) omit(compact, field);
-  for (const [name, variant] of Object.entries(compact.variants ?? {})) {
-    if (variant && typeof variant === 'object') omit(variant, 'per_query', `variants.${name}.per_query`);
-  }
-  return omitted.length === 0
-    ? compact
-    : {
-        ...compact,
-        omitted_evidence: {
-          retention: 'Raw evidence is retained only in the named sitting. This compact release record cannot revalidate omitted evidence.',
-          fields: omitted,
-        },
-      };
-}
-
 // Only a tracked release record is compact; its sitting report remains raw for acceptance recovery.
 export function compactReleaseRecord(report) {
   if (report.raw_evidence_retention) return report;
   return {
     ...report,
+    retained_quality: compactRetainedQuality(report.retained_quality),
     steps: Object.fromEntries(Object.entries(report.steps ?? {}).map(([id, step]) => [id, compactStep(id, step)])),
     raw_evidence_retention: {
       sitting: report.sitting,

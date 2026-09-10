@@ -7,9 +7,10 @@ import { safeRmSync } from 'fs-remove-compat';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 export const CACHE_DIR = join(ROOT, '.tmp', 'cache');
+export const cachePath = (key, cacheDir = CACHE_DIR) => join(cacheDir, key);
 
 export function cached(key, build) {
-  const dest = join(CACHE_DIR, key);
+  const dest = cachePath(key);
   if (existsSync(dest)) return dest;
   const staging = `${dest}.building`;
   safeRmSync(staging, { recursive: true, force: true });

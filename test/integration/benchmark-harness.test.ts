@@ -6,6 +6,7 @@ import assert from 'assert';
 import { safeRmSync } from 'fs-remove-compat';
 import { search } from 'sensemaking';
 import { classify } from '../../benchmark/lib/classify.mjs';
+import { syntheticPath } from '../../benchmark/lib/corpus.mjs';
 import { runStageSteps } from '../../benchmark/lib/gate-runner.mjs';
 import { DIFF_MAP_PATHS, GATE_NAMES, owedReasons, reversedCompareAction, stepStatus } from '../../benchmark/lib/gates.mjs';
 import { MEASURE_VERSION, structuredSearchEvidence, timedCli, verbsFrom, warmFileCache } from '../../benchmark/lib/measure.mjs';
@@ -35,7 +36,6 @@ import {
 } from '../../benchmark/lib/work-tree.mjs';
 import { identityHash } from '../../benchmark/lib/workload-identity.mjs';
 import { acceptanceFingerprint, acceptedIds, buildReport, classificationEvidence, doneOnResume, renderMarkdown } from '../../benchmark/report.mjs';
-import { gate } from '../lib/gate.ts';
 import { packageRoot, scratchDir } from '../lib/scratch.ts';
 import { forEachStore, openTreeForStore } from '../lib/stores.ts';
 import { openConfig, writeNote } from '../lib/tree.ts';
@@ -512,6 +512,7 @@ describe('native watcher readiness observer', () => {
       }
 
       const deadlineMs = await nativeObserverDeadlineMs(packageRoot, tree);
+      const watcherDeadlineMs = 5_000 + deadlineMs;
       writeNote(tree, 'a.md', { frontmatter: { title: 'Before watcher', summary: 'Readiness', private: 'excluded' }, body: 'First mutation.' });
       const beforeManifest = captureFileManifest(tree);
       const beforeRow = { title: 'Before watcher', summary: 'Readiness', text: 'First mutation.' };
@@ -520,11 +521,11 @@ describe('native watcher readiness observer', () => {
 
       const watcher = startMeasuredWatcher({ pkgRoot: packageRoot, configPath });
       try {
-        const started = await watcher.waitFor('started', 0, deadlineMs);
+        const started = await watcher.waitFor('started', 0, watcherDeadlineMs);
         writeNote(tree, 'a.md', { frontmatter: { title: 'After watcher', summary: 'Readiness', private: 'excluded' }, body: 'Watcher mutation.' });
         const expectedManifest = captureFileManifest(tree);
         const expectedRow = { title: 'After watcher', summary: 'Readiness', text: 'Watcher mutation.' };
-        await watcher.waitFor('reconciled', started.next, deadlineMs);
+        await watcher.waitFor('reconciled', started.next, watcherDeadlineMs);
         const observed = await waitForNativeIndex({ pkgRoot: packageRoot, store, configPath, manifest: expectedManifest, expectedContent: [['a.md', rowHash(expectedRow)]], authoredContent: [['a.md', expectedRow]] }, deadlineMs);
         assert.equal(observed.state, 'ready');
         assert.equal(observed.paths, 1);
@@ -1186,6 +1187,8 @@ describe('classification acceptance fingerprints retain the actual quality artif
     assert.equal(portableEvidence[0].id, 'portable-eval-nfcorpus-sqlite');
     const evalReport = { ...report, classifications: [evalClassification] };
     const before = acceptanceFingerprint('eval-nfcorpus/semantic/ndcg', evalReport, sitting);
+    const expandedProfile = acceptanceFingerprint('eval-nfcorpus/semantic/ndcg', { ...evalReport, profile: 'deep', effective_requirements: { baseline: ['deep profile'], scale: ['deep profile'] } }, sitting);
+    assert.equal(expandedProfile, before, 'unrelated profile expansion must not stale unchanged evidence acceptance');
     writeFileSync(join(sitting, 'eval-nfcorpus.json'), JSON.stringify({ ...artifacts['eval-nfcorpus.json'], marker: 'tampered' }));
     const after = acceptanceFingerprint('eval-nfcorpus/semantic/ndcg', evalReport, sitting);
     assert.notEqual(before, after);
@@ -1376,11 +1379,11 @@ describe('owedReasons: a tree with no diff since its tag owes everything', () =>
     for (const matched of reasons.values()) assert.deepEqual(matched, ['no diff since v9.9.8: this tree is the release']);
   });
 
-  it('a real diff is unchanged: only the gates it matches are owed', () => {
+  it('a real diff owes only its documented gates, including quality for native ranking changes', () => {
     assert.deepEqual([...owedReasons(['README.md'], 'v9.9.8').keys()], []);
     const srcOnly = owedReasons(['src/store/sqlite/connection.ts'], 'v9.9.8');
     assert.ok(srcOnly.has('test-engines'));
-    assert.ok(!srcOnly.has('fever'));
+    assert.ok(srcOnly.has('fever'));
   });
 });
 
@@ -1436,9 +1439,8 @@ describe('timeline-skips.json: a typo cannot silently skip nothing', () => {
 describe('catalog / run.mjs key agreement', () => {
   it('a run.mjs row on the 20-note synthetic corpus has exactly the catalog wall/inproc/tokens keys', function () {
     this.timeout(120_000);
-    const corpus = join(packageRoot, '.tmp', 'cache', 'synthetic-n20-t500-h8-l5-f30-fpn8-s1-c63b9320');
-    gate(this, 'benchmark-corpus', existsSync(corpus), `${corpus} is not built; run a benchmark once on this machine to cache it`);
-    const outPath = join(packageRoot, '.tmp', 'test', `harness-run-${Date.now()}.json`);
+    const corpus = syntheticPath({ notes: 20, noteTokens: 500, headingsPerNote: 8, linksPerNote: 5, distinctFields: 30, fieldsPerNote: 8, seed: 1 });
+    const outPath = join(scratchDir('benchmark-harness-run'), 'row.json');
     execFileSync(process.execPath, [join(packageRoot, 'benchmark', 'steps', 'measure-tree.mjs'), packageRoot, corpus, '--out', outPath], { cwd: packageRoot, encoding: 'utf8' });
     const row = JSON.parse(readFileSync(outPath, 'utf8'));
     assert.equal(row.measure_version, MEASURE_VERSION);
@@ -1451,6 +1453,9 @@ describe('catalog / run.mjs key agreement', () => {
     assert.equal(row.bulk_state.watch.verified, true);
     assert.equal(row.bulk_state.change.preparation.length, 3);
     assert.equal(row.bulk_state.watch.preparation.length, 3);
+    for (const preparation of row.bulk_state.watch.preparation) {
+      assert.equal(preparation.watcher_event_deadline_ms, 5_000 + preparation.observer_deadline_ms);
+    }
     assert.deepEqual(Object.keys(row.inproc.repeat_state).sort(), ['canonical', 'cold_build', 'open_nochange', 'source', 'update_10_files', 'update_1_file']);
     assert.match(row.inproc.repeat_state.source.fingerprint, /^[0-9a-f]{64}$/);
     assert.match(row.inproc.repeat_state.canonical.fingerprint, /^[0-9a-f]{64}$/);

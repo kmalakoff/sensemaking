@@ -3,7 +3,7 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { cached } from './cache.mjs';
+import { cached, cachePath } from './cache.mjs';
 import { canonicalJson } from './canonical-json.mjs';
 
 // mulberry32: tiny deterministic PRNG so a spec reproduces byte-identical trees across runs/machines.
@@ -448,11 +448,16 @@ export function syntheticPath(spec) {
   return cached(syntheticSpecKey(spec), (staging) => BUILDERS.synthetic(spec, staging));
 }
 
-function entryDir(name) {
+function entryKey(name) {
   const spec = CORPORA[name];
   if (!spec) return null;
-  const key = `${name}-${(spec.commit ?? spec.version).slice(0, 8)}`;
-  return cached(key, (staging) => BUILDERS[spec.type](spec, staging));
+  return `${name}-${(spec.commit ?? spec.version).slice(0, 8)}`;
+}
+
+function entryDir(name) {
+  const key = entryKey(name);
+  if (key === null) return null;
+  return cached(key, (staging) => BUILDERS[CORPORA[name].type](CORPORA[name], staging));
 }
 
 // The markdown tree for a corpus name; null for unknown names.
@@ -469,4 +474,16 @@ export function corpusLabels(name) {
   if (dir === null) return null;
   const labels = join(dir, 'labels');
   return existsSync(labels) ? labels : null;
+}
+
+// Retained-evidence checks must stay read-only. A cache miss means reuse is unavailable; it must
+// never turn a dry-run or report render into a corpus download.
+export function cachedCorpusPaths(name, cacheDir) {
+  const key = entryKey(name);
+  if (key === null) return { tree: null, labels: null };
+  const dir = cachePath(key, cacheDir);
+  if (!existsSync(dir)) return { tree: null, labels: null };
+  const tree = join(dir, 'tree');
+  const labels = join(dir, 'labels');
+  return { tree: existsSync(tree) ? tree : dir, labels: existsSync(labels) ? labels : null };
 }

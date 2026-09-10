@@ -1,7 +1,7 @@
 import { STORE_NAMES } from 'sensemaking';
 import { MEASURE_VERSION } from './measure.mjs';
 import { metrics, rankingInputError } from './metrics.mjs';
-import { identityHash } from './workload-identity.mjs';
+import { identityHash, logicalConfig } from './workload-identity.mjs';
 
 export const PORTABLE_QUALITY_SCHEMA = 'portable-quality-comparison-v1';
 export const PORTABLE_QUALITY_STORES = [...STORE_NAMES];
@@ -44,10 +44,9 @@ function expectedOperation(artifact) {
   };
 }
 
-function comparableConfig(config) {
-  if (!isObject(config)) return null;
-  const { baseDir: _baseDir, configPath: _configPath, store: _store, ...logical } = config;
-  return logical;
+function comparableIdentity(identity) {
+  const inputs = { ...identity.inputs, requested: { ...identity.inputs.requested, config: logicalConfig(identity.inputs.requested.config) } };
+  return { ...identity, fingerprint: identityHash(inputs), inputs };
 }
 
 function validateIdentity(identity, variantName, artifact, variant) {
@@ -58,17 +57,19 @@ function validateIdentity(identity, variantName, artifact, variant) {
   if (!isObject(inputs)) return errors;
   if (!isObject(inputs.operation) || identityHash(inputs.operation) !== identityHash(expectedOperation(artifact))) errors.push(`${variantName}: workload identity does not match recorded query/corpus evidence`);
   if (!isObject(inputs.requested) || inputs.requested.variant !== variantName) errors.push(`${variantName}: workload identity does not identify the recorded variant`);
-  const executionConfig = comparableConfig(variant.execution?.config);
-  if (!executionConfig || !isObject(inputs.requested?.config) || identityHash(inputs.requested.config) !== identityHash(executionConfig)) errors.push(`${variantName}: workload identity does not match recorded configuration`);
+  const requestedConfig = logicalConfig(inputs.requested?.config);
+  const executionConfig = logicalConfig(variant.execution?.config);
+  if (!requestedConfig || !executionConfig || identityHash(requestedConfig) !== identityHash(executionConfig)) errors.push(`${variantName}: workload identity does not match recorded configuration`);
   return errors;
 }
 
-function validateArtifact(artifact, expectedStore) {
+function validateArtifact(artifact, expectedStore, expectedQueryForm = PORTABLE_QUALITY_QUERY_FORM, { recompute = false } = {}) {
   const errors = [];
-  if (!isObject(artifact)) return ['artifact is not an object'];
+  const normalized = recompute && isObject(artifact) ? JSON.parse(JSON.stringify(artifact)) : artifact;
+  if (!isObject(artifact)) return recompute ? { errors: ['artifact is not an object'], artifact: null } : ['artifact is not an object'];
   if (artifact.measure_version !== MEASURE_VERSION) errors.push(`measure_version ${artifact.measure_version ?? 'missing'} does not match current ${MEASURE_VERSION}`);
   if (artifact.store !== expectedStore) errors.push(`store is ${artifact.store ?? 'missing'}, expected ${expectedStore}`);
-  if (artifact.query_form !== PORTABLE_QUALITY_QUERY_FORM) errors.push(`query_form is ${artifact.query_form ?? 'missing'}, expected ${PORTABLE_QUALITY_QUERY_FORM}`);
+  if (artifact.query_form !== expectedQueryForm) errors.push(`query_form is ${artifact.query_form ?? 'missing'}, expected ${expectedQueryForm}`);
   if (artifact.error || artifact.incomplete === true) errors.push(`artifact is incomplete${artifact.error ? `: ${artifact.error}` : ''}`);
   if (typeof artifact.corpus !== 'string' || typeof artifact.split !== 'string' || !Number.isSafeInteger(artifact.queries) || artifact.queries < 1 || !Number.isSafeInteger(artifact.k) || artifact.k < 1) errors.push('corpus, split, queries, and k are incomplete');
   if (!isObject(artifact.query_evidence) || !isObject(artifact.qrels)) errors.push('query evidence or qrels are missing');
@@ -93,7 +94,9 @@ function validateArtifact(artifact, expectedStore) {
       continue;
     }
     if (variant.errors !== 0 || variant.incomplete === true) errors.push(`${name}: retrieval is incomplete (${variant.errors ?? 'missing'} error(s))`);
-    errors.push(...validateIdentity(variant.workload_identity, name, artifact, variant));
+    const identityErrors = validateIdentity(variant.workload_identity, name, artifact, variant);
+    errors.push(...identityErrors);
+    if (recompute && identityErrors.length === 0) normalized.variants[name].workload_identity = comparableIdentity(variant.workload_identity);
     if (!isObject(variant.per_query)) {
       errors.push(`${name}: per_query evidence is missing`);
       continue;
@@ -132,7 +135,8 @@ function validateArtifact(artifact, expectedStore) {
       for (const metric of METRICS) {
         if (!finiteMetric(result[metric])) errors.push(`${name}/${qid}: ${metric} is missing or out of range`);
         if (recomputed) {
-          if (result[metric] !== recomputed[metric]) errors.push(`${name}/${qid}: recorded ${metric} ${result[metric]} does not match recomputed ${recomputed[metric]}`);
+          if (!recompute && result[metric] !== recomputed[metric]) errors.push(`${name}/${qid}: recorded ${metric} ${result[metric]} does not match recomputed ${recomputed[metric]}`);
+          if (recompute) normalized.variants[name].per_query[qid][metric] = recomputed[metric];
         }
       }
       if (recomputed) recomputedMetrics.push(recomputed);
@@ -140,10 +144,19 @@ function validateArtifact(artifact, expectedStore) {
     for (const metric of METRICS) {
       const aggregate = recomputedMetrics.reduce((total, result) => total + result[metric], 0) / qids.length;
       if (!finiteMetric(variant[metric])) errors.push(`${name}: aggregate ${metric} is missing or out of range`);
-      else if (variant[metric] !== aggregate) errors.push(`${name}: aggregate ${metric} ${variant[metric]} does not match recomputed ${aggregate}`);
+      else if (!recompute && variant[metric] !== aggregate) errors.push(`${name}: aggregate ${metric} ${variant[metric]} does not match recomputed ${aggregate}`);
+      if (recompute && Number.isFinite(aggregate)) normalized.variants[name][metric] = aggregate;
     }
   }
-  return errors;
+  return recompute ? { errors, artifact: normalized } : errors;
+}
+
+export function validateQualityArtifact(artifact, { store, queryForm = PORTABLE_QUALITY_QUERY_FORM }) {
+  return validateArtifact(artifact, store, queryForm);
+}
+
+export function revalidateQualityArtifact(artifact, { store, queryForm = PORTABLE_QUALITY_QUERY_FORM }) {
+  return validateArtifact(artifact, store, queryForm, { recompute: true });
 }
 
 export function comparePortableQualityArtifacts(artifacts) {
@@ -166,8 +179,8 @@ export function comparePortableQualityArtifacts(artifacts) {
     const expected = workloadPart(first);
     for (const artifact of checked.slice(1)) if (identityHash(workloadPart(artifact)) !== identityHash(expected)) errors.push(`workload differs between ${first.store} and ${artifact.store}`);
     for (const variant of PORTABLE_QUALITY_VARIANTS) {
-      const expectedIdentity = first.variants[variant].workload_identity;
-      for (const artifact of checked.slice(1)) if (identityHash(artifact.variants[variant].workload_identity) !== identityHash(expectedIdentity)) errors.push(`${variant}: workload identity differs between ${first.store} and ${artifact.store}`);
+      const expectedIdentity = comparableIdentity(first.variants[variant].workload_identity);
+      for (const artifact of checked.slice(1)) if (identityHash(comparableIdentity(artifact.variants[variant].workload_identity)) !== identityHash(expectedIdentity)) errors.push(`${variant}: workload identity differs between ${first.store} and ${artifact.store}`);
     }
   }
   return {

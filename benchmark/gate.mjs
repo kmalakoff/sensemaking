@@ -1,4 +1,4 @@
-// Release benchmark gate: node benchmark/gate.mjs [--dry-run]
+// Release benchmark gate: node benchmark/gate.mjs [--profile ordinary|deep] [--dry-run]
 // Runs the staged pipeline benchmark/lib/stages.mjs defines, gated by what
 // benchmark/lib/gates.mjs says the diff since the last tag owes. Independent failures accumulate;
 // failed prerequisites skip dependent work. --dry-run prints what is owed. A run resumes by default:
@@ -18,8 +18,9 @@ import { arch, cpus, loadavg } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
+import { releaseChanges } from './lib/changes.mjs';
 import { runStageSteps, stepOutputEvidence } from './lib/gate-runner.mjs';
-import { owedReasons, reversedCompareAction, stepStatus } from './lib/gates.mjs';
+import { assertCompatibleSelection, DEFAULT_PROFILE, PROFILES, profileReasons, resolveRetainedQualityRequirement, retainedQualityForSitting, reversedCompareAction, stepStatus } from './lib/gates.mjs';
 import { describeLoad, topProcesses } from './lib/quiet-machine.mjs';
 import { assertBuilt } from './lib/require-build.mjs';
 import { treeFingerprint } from './lib/tree-fingerprint.mjs';
@@ -31,42 +32,75 @@ assertBuilt();
 const { buildStages, DEFAULT_STORE, MINUTES, OFFERED, ROOT } = await import('./lib/stages.mjs');
 const { acceptedIds, comparisonCounts, doneOnResume, failedStageReasons, SITTING_REPORT } = await import('./report.mjs');
 const { missingPrerequisites } = await import('./lib/gate-dependencies.mjs');
+const { inspectRetainedQuality, retainedQualitySummary } = await import('./lib/retained-quality.mjs');
 
 const {
-  values: { 'dry-run': dryRun },
-} = parseArgs({ options: { 'dry-run': { type: 'boolean', default: false } } });
+  values: { 'dry-run': dryRun, help, profile = DEFAULT_PROFILE },
+} = parseArgs({ options: { 'dry-run': { type: 'boolean', default: false }, help: { type: 'boolean', short: 'h' }, profile: { type: 'string', default: DEFAULT_PROFILE } } });
+if (help) {
+  console.log('usage: node benchmark/gate.mjs [--profile ordinary|deep] [--dry-run]');
+  console.log('ordinary selects required work from the diff; deep adds staged scale and fresh quality collection.');
+  console.log('dry-run resolves retained-quality availability and prints the effective requirements without running a gate step.');
+  process.exit(0);
+}
+if (!PROFILES.includes(profile)) {
+  console.error(`--profile must be ${PROFILES.join(' or ')}`);
+  process.exit(2);
+}
 const STAGES = buildStages();
+const ESTIMATE_REPORT = '2026-09-09-0.24.0-release-gate.json';
+
+function estimateEvidence() {
+  const report = JSON.parse(readFileSync(join(ROOT, 'benchmark', 'reports', ESTIMATE_REPORT), 'utf8'));
+  return {
+    steps: Object.fromEntries(Object.entries(report.steps_status ?? {}).map(([id, step]) => [id, Number.isFinite(step?.elapsed_ms) ? step.elapsed_ms : null])),
+    source: `${ESTIMATE_REPORT}, release ${report.release_version ?? 'unknown'} on ${report.machine ?? 'unknown machine'}; execution only, excludes setup and quiet waits`,
+  };
+}
+
+const estimates = estimateEvidence();
 function packageVersion() {
   return JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).version ?? null;
 }
 
 // Paths changed since the last tag, which decide what is owed. Uncommitted changes count, so the
 // question answered is "will this diff owe a gate if it ships".
-function changedPaths() {
-  const tag = spawnSync('git', ['describe', '--tags', '--abbrev=0'], { cwd: ROOT, encoding: 'utf8' });
-  if (tag.status !== 0) throw new Error(`git describe --tags failed: ${tag.stderr}`);
-  const lastTag = tag.stdout.trim();
-  const diff = spawnSync('git', ['diff', '--name-only', lastTag], { cwd: ROOT, encoding: 'utf8', maxBuffer: 16e6 });
-  if (diff.status !== 0) throw new Error(`git diff --name-only ${lastTag} failed: ${diff.stderr}`);
-  return { lastTag, paths: diff.stdout.split('\n').filter(Boolean) };
-}
-
 const owedFor = (step, owed) => step.owedBy === 'always' || owed.has(step.owedBy);
 
-if (dryRun) {
-  const { lastTag, paths } = changedPaths();
-  const reasons = owedReasons(paths, lastTag);
+async function selection(profileName, changes) {
+  let reasons = profileReasons(changes.paths, changes.lastTag, profileName);
+  let retainedQuality = null;
+  if (reasons.has('quality-revalidation')) {
+    const evidence = await inspectRetainedQuality({ reportsDir: join(ROOT, 'benchmark', 'reports'), sittingsDir: join(ROOT, '.tmp', 'sittings'), baselineVersion: packageVersion(), currentRoot: ROOT });
+    retainedQuality = retainedQualitySummary(evidence);
+    reasons = resolveRetainedQualityRequirement(reasons, evidence);
+  }
   const owed = new Set(reasons.keys());
+  const selected = STAGES.flatMap((stage) => stage.steps).filter((step) => owedFor(step, owed));
+  const knownMs = selected.reduce((total, step) => total + (estimates.steps[step.id] ?? 0), 0);
+  const unknown = selected.filter((step) => estimates.steps[step.id] === null || estimates.steps[step.id] === undefined).map((step) => step.id);
+  return { reasons, owed, selected, estimate: { source: estimates.source, known_ms: knownMs, unknown_steps: unknown }, retainedQuality };
+}
+
+if (dryRun) {
+  const changes = releaseChanges(ROOT);
+  const { lastTag, paths } = changes;
+  const { reasons, owed, estimate, retainedQuality } = await selection(profile, changes);
+  console.log(`profile: ${profile}`);
   console.log(`diff since ${lastTag}: ${paths.length} path(s) changed`);
   for (const [gate, matched] of reasons) console.log(`  owes ${gate}: ${matched.slice(0, 3).join(', ')}${matched.length > 3 ? `, +${matched.length - 3} more` : ''}`);
+  if (retainedQuality) console.log(`  retained quality: ${retainedQuality.status}${retainedQuality.source ? ` from ${retainedQuality.source.report}` : ''}`);
   for (const stage of STAGES) {
     console.log(`\n${stage.label}`);
     for (const step of stage.steps) {
       const isOwed = owedFor(step, owed);
-      const tag = !isOwed ? 'not owed' : 'OWED';
+      const estimateMs = estimates.steps[step.id];
+      const tag = !isOwed ? 'not owed' : `OWED${estimateMs === null || estimateMs === undefined ? ' (cost unknown)' : ` (~${(estimateMs / 60000).toFixed(1)} min)`}`;
       console.log(`  ${step.id}: ${tag}`);
     }
   }
+  console.log(`\nprior execution estimate: ~${(estimate.known_ms / 60000).toFixed(1)} min known${estimate.unknown_steps.length > 0 ? `; unknown: ${estimate.unknown_steps.join(', ')}` : ''}`);
+  console.log(`estimate basis: ${estimate.source}`);
   process.exit(0);
 }
 
@@ -117,9 +151,12 @@ if (resuming) console.log(`resuming ${sittingDir}; steps recorded ok, and failur
 
 const priorSitting = existsSync(join(sittingDir, 'sitting.json')) ? JSON.parse(readFileSync(join(sittingDir, 'sitting.json'), 'utf8')) : null;
 
-const { lastTag, paths } = changedPaths();
-const reasons = owedReasons(paths, lastTag);
-const owed = new Set(reasons.keys());
+const changes = releaseChanges(ROOT);
+const { lastTag, paths } = changes;
+const { reasons, owed, estimate, retainedQuality } = await selection(profile, changes);
+
+assertCompatibleSelection(priorSitting, { lastTag, paths, reasons, profile, retainedQuality });
+const sittingRetainedQuality = retainedQualityForSitting(priorSitting?.retained_quality, retainedQuality, reasons);
 
 const sitting = {
   date: priorSitting?.date ?? today,
@@ -130,6 +167,11 @@ const sitting = {
   chunk_version: priorSitting?.chunk_version ?? null,
   schema_version: priorSitting?.schema_version ?? null,
   changed_paths: paths,
+  untracked_paths: changes.untracked,
+  profile,
+  effective_requirements: Object.fromEntries(reasons),
+  estimated_cost: estimate,
+  retained_quality: sittingRetainedQuality,
   owed: Object.fromEntries(reasons),
   steps: priorSitting?.steps ?? {},
   failed_stage_reasons: priorSitting?.failed_stage_reasons ?? [],
