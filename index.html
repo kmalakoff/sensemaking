@@ -9,7 +9,8 @@
 <div class="tsd-page-title">
 <h1>sensemaking</h1></div>
 <div class="tsd-panel tsd-typography"><h1 id="sensemaking" class="tsd-anchor-link">sensemaking<a href="#sensemaking" aria-label="Permalink" class="tsd-anchor-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="assets/icons.svg#icon-anchor"></use></svg></a></h1>
-<p>Query and search your markdown notes with context-aware progressive disclosure: SQL over frontmatter, links, and text, plus semantic search and link-graph ranking. No server, no build step.</p>
+<p>Search and query a directory of Markdown notes from the command line. <code>sense</code> indexes frontmatter, prose and links in a local database. It can also combine word matches with links and semantic similarity.</p>
+<p>Results contain file paths, snippets and line ranges. A person or agent can inspect the relevant passages without loading every note. No server or build step is required.</p>
 <h2 id="problem" class="tsd-anchor-link">Problem<a href="#problem" aria-label="Permalink" class="tsd-anchor-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="assets/icons.svg#icon-anchor"></use></svg></a></h2>
 <p>Markdown notes accumulate: research, decisions, meeting notes, agent output. Past a few dozen, finding the ones relevant to what you're doing means grepping or reading whole folders into context. The structure that makes notes navigable (frontmatter, wikilinks, headings) is exactly what a query needs, but nothing exposes it as a query surface.</p>
 <p><code>sense</code> indexes all of it into a local database (SQLite by default, or the experimental DuckDB store, see Config) and reconciles against file timestamps on every query, so results are never stale and nothing has to be running.</p>
@@ -17,11 +18,17 @@
 <pre><code class="bash"><span class="hl-0">npm</span><span class="hl-1"> </span><span class="hl-2">install</span><span class="hl-1"> </span><span class="hl-3">-g</span><span class="hl-1"> </span><span class="hl-2">sensemaking</span><br/><span class="hl-0">cd</span><span class="hl-1"> </span><span class="hl-2">your-notes</span><span class="hl-1"> &amp;&amp; </span><span class="hl-0">sense</span><span class="hl-1"> </span><span class="hl-2">init</span><br/><span class="hl-0">sense</span><span class="hl-1"> </span><span class="hl-2">download</span><span class="hl-1">          </span><span class="hl-4"># the embedding model, once per machine; the first vector search fetches it otherwise</span>
 </code><button type="button">Copy</button></pre>
 
-<p>Needs Node 22.20 or newer: the first release whose built-in SQLite has both FTS5, which <code>sense search</code> indexes prose with, and row-returning <code>INSERT ... RETURNING</code>, which <code>sense path</code> and <code>peek</code> walk the link graph with.</p>
+<p>Requires Node.js 22.20 or newer. The default store uses Node's built-in SQLite.</p>
 <pre><code class="bash"><span class="hl-0">sense</span><span class="hl-1"> </span><span class="hl-2">map</span><span class="hl-1">                                        </span><span class="hl-4"># orient: fields, hub notes, recent changes</span><br/><span class="hl-0">sense</span><span class="hl-1"> </span><span class="hl-2">search</span><span class="hl-1"> </span><span class="hl-2">&quot;revenue OR earnings&quot;</span><span class="hl-1"> </span><span class="hl-3">--k</span><span class="hl-1"> </span><span class="hl-5">10</span><span class="hl-1">        </span><span class="hl-4"># locate: words + links + meaning, one ranked list</span><br/><span class="hl-0">sense</span><span class="hl-1"> </span><span class="hl-2">peek</span><span class="hl-1"> </span><span class="hl-2">notes/q3-report.md</span><span class="hl-1">                    </span><span class="hl-4"># structure: outline + links, before reading</span><br/><span class="hl-0">sense</span><span class="hl-1"> </span><span class="hl-2">sql</span><span class="hl-1"> </span><span class="hl-2">&quot;SELECT path FROM frontmatter WHERE has(tags, ?)&quot;</span><span class="hl-1"> </span><span class="hl-2">urgent</span>
 </code><button type="button">Copy</button></pre>
 
-<h2 id="model" class="tsd-anchor-link">Model<a href="#model" aria-label="Permalink" class="tsd-anchor-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="assets/icons.svg#icon-anchor"></use></svg></a></h2>
+<p>A search result identifies the matching note, the evidence used to rank it and the relevant line range:</p>
+<pre><code class="text">path                 snippets                                  via    score   lines
+pricing-decision.md  …«pricing» decision … renewal «price»…    match  0.0167  L4-7
+</code><button type="button">Copy</button></pre>
+
+<p>The row is illustrative. Actual paths, snippets and scores depend on the notes and configured search signals.</p>
+<h2 id="what-sense-indexes" class="tsd-anchor-link">What sense indexes<a href="#what-sense-indexes" aria-label="Permalink" class="tsd-anchor-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="assets/icons.svg#icon-anchor"></use></svg></a></h2>
 <p>Every file becomes rows in these tables, plus whatever an enabled feature adds of its own:</p>
 <table>
 <thead>
@@ -193,7 +200,7 @@
 <li><strong>Output is flat.</strong> <code>map</code>, <code>peek</code>, and a search row cost the same on a small tree as a large one: context cost is bounded by what you ask for, not by how much there is.</li>
 <li><strong>Bulk changes are paid by whoever queries next.</strong> <code>sense watch</code> moves that re-parse into the background (<a href="media/DESIGN.md#watch-coordination">DESIGN.md</a>): it changes latency, never answers, since every query reconciles for itself. To start the cache over, delete the directory <code>sense status</code> prints.</li>
 </ul>
-<p>These are release gates rather than hopes: every release regenerates the numbers on pinned corpora spanning a 4x range in note count plus a stress tree that packs the worst measured shapes into one place: a megabyte-scale note, heading-dense outlines, dense link graphs, hundreds of frontmatter fields. Configured performance and output-size bands remain release gates. Report-only total rows are exempt from performance thresholds only; invocation failures and invalid artifacts block independently. Current figures: <a href="media/BENCHMARKING.md">BENCHMARKING.md</a>.</p>
+<p>Release assessments keep these claims measured. The ordinary assessment runs required common behavior and current-store work plus full portable NFCorpus on all three stores. The explicit deep profile adds portable FEVER, pinned corpora spanning a 4x range in note count, a stress tree that packs the worst measured shapes into one place, and legacy SQLite OR-bag continuity. Historical performance, quality, and output bands warn; failed required behavior, invalid or missing required evidence, explicit caller bounds or quality floors, and approved performance guards block. Current figures: <a href="media/BENCHMARKING.md">BENCHMARKING.md</a>.</p>
 <h2 id="for-ai-agents" class="tsd-anchor-link">For AI agents<a href="#for-ai-agents" aria-label="Permalink" class="tsd-anchor-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="assets/icons.svg#icon-anchor"></use></svg></a></h2>
 <pre><code class="bash"><span class="hl-0">npx</span><span class="hl-1"> </span><span class="hl-2">skills</span><span class="hl-1"> </span><span class="hl-2">add</span><span class="hl-1"> </span><span class="hl-2">kmalakoff/sensemaking</span><span class="hl-1">   </span><span class="hl-4"># -g for global, -a claude-code to target</span>
 </code><button type="button">Copy</button></pre>
@@ -280,7 +287,7 @@ autolinks are built in:</p>
 <ul>
 <li><a href="#problem"><span>Problem</span></a></li>
 <li><a href="#quick-start"><span>Quick start</span></a></li>
-<li><a href="#model"><span>Model</span></a></li>
+<li><a href="#what-sense-indexes"><span>What sense indexes</span></a></li>
 <li><a href="#commands"><span>Commands</span></a></li>
 <li><a href="#config"><span>Config</span></a></li>
 <li><a href="#providers"><span>Providers</span></a></li>

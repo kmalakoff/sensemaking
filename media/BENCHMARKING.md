@@ -19,18 +19,24 @@ node benchmark/report.mjs             # re-render a report from its sitting, mea
 node benchmark/report.mjs --sitting <archived-sitting> --out <assessment-dir> [--native-matrix <matrix.json>] # render isolated assessment files without changing retained evidence
 ```
 
-`ordinary` is the default release assessment. The changed capabilities select its work; required
-capabilities expand the selection before execution and cannot be skipped by a profile or flag.
-`deep` explicitly includes the large scale/stress and fresh retrieval-quality collection. The dry
-run records the selected profile, reasons, and an estimate based on historical execution data. Its
+`ordinary` is the default release assessment. The changed capabilities select its common
+correctness and matched-input current-store work. Its fresh or retained relevance view is the full
+portable NFCorpus workload on every offered store. `deep` explicitly adds the large scale/stress
+workloads, portable FEVER on every store, and the legacy SQLite OR-bag continuity rows. The dry run
+records the selected profile, reasons, and an estimate based on historical execution data. Its
 10–20 minute ordinary target is an estimate, not a proven current duration.
 
-When an ordinary run owes a baseline assessment but no changed capability requires fresh retrieval collection, it first revalidates retained
-raw quality against the current retrieval, model, and corpus identities. Missing or incompatible raw
-evidence selects fresh quality before any work starts; compact report summaries alone cannot stand in
-for that revalidation. The sitting and final report retain the selected profile and requirements, and
-a resume must be compatible with both. Native diagnostic matrices and historical sweeps are omitted
-unless explicitly requested; neither profile selects them automatically.
+When an ordinary run owes a baseline assessment but no changed capability requires fresh retrieval
+collection, it first revalidates retained raw portable NFCorpus quality against the current
+retrieval, model, corpus, query, judgment, and all-store identities. Missing or incompatible raw
+evidence selects fresh portable NFCorpus before any work starts; compact report summaries alone
+cannot stand in for that revalidation. If the retained revalidation step has no historical cost and
+is still pending, ordinary uses the known bounded fresh NFCorpus path rather than escalating to
+FEVER. An applicable completed retained step is still reused on resume. The fallback is not a
+calibrated retained-revalidation estimate. The sitting and final report retain the selected profile,
+scope, and requirements, and a resume must be compatible with them. Native diagnostic matrices and
+historical sweeps are omitted unless explicitly requested; neither profile selects them
+automatically.
 
 The steps, each runnable alone when investigating one thing:
 
@@ -211,11 +217,13 @@ Current numbers: see "Numbers of record" below.
 
 Use `--query-form or-bag|bare-and` to select the quality workload. `or-bag` is the default and preserves the historical series; `bare-and` is the portable track, which uses one required query form and the same qids, qrels, corpus, and `k` for each store. Quality artifacts record the exact source and canonical query text, qrels, store, query form, and returned paths, so a result identifies the workload it measured without treating path agreement as a correctness oracle.
 
-The release gate preserves the historical SQLite OR-bag rows and additionally runs both labeled
-corpora as a portable `bare-and` track on every offered store. The comparator checks the exact
-corpus, split, qrels, query form, `k`, model/config identity, and complete per-query coverage before
-relevance results are classified. A new portable workload is visible as `no-compatible-prior`
-until it has its own baseline; retrieval errors, incomplete coverage, and invalid artifacts block.
+The ordinary release gate runs NFCorpus as a portable `bare-and` track on every offered store.
+Deep adds portable FEVER and retains the historical SQLite OR-bag rows for both corpora. The
+comparator checks the exact corpus, split, qrels, query form, `k`, model/config identity, and
+complete per-query coverage before relevance results are classified. A new portable workload is
+visible as `no-compatible-prior` until it has its own baseline; retrieval errors, incomplete
+coverage, and invalid artifacts block. Ordinary does not relabel omitted FEVER or legacy rows as
+passing evidence.
 
 Quality index reuse is identity-keyed and private per invocation. Each run copies Markdown from the pinned source, optionally carries a verified completed `.sense` cache into that private copy, and publishes a new immutable generation only after every variant, guard, and native close succeeds. The identity includes source bytes and mtimes, exact index configs, source/dist/harness and native-package provenance, and byte hashes of both supported static-model files (with the local Hugging Face ref recorded separately). A missing local model or unknown remote revision is never presumed reusable. Completed Markdown and native-cache files are hash-verified before reuse; malformed or changed generations fail preflight instead of being trusted by file count. Query text, qrels, split, and `k` remain separate result-workload evidence because they do not shape the stored index. These checks establish cache identity, not retrieval correctness; the authored qrels and guard passes remain the oracle.
 
@@ -414,13 +422,13 @@ The rows below come from the accepted 0.24.0 full release-gate sitting. They inc
 | duckdb: hub battery (total wall) | 68.6 s | [2026-08-30](benchmark/reports/2026-08-30-0.20.0-release-gate.md) |
 | turso: 13k tree battery (total wall) | 84.4 s | [2026-08-30](benchmark/reports/2026-08-30-0.20.0-release-gate.md) |
 | duckdb: 13k tree battery (total wall) | 119.3 s | [2026-08-30](benchmark/reports/2026-08-30-0.20.0-release-gate.md) |
-| hub_cold_crawl_ms | 1204 | [2026-09-09 release gate](benchmark/reports/2026-09-09-0.24.0-release-gate.md) |
-| hub_version_canary_ms | 29 | [2026-09-09 release gate](benchmark/reports/2026-09-09-0.24.0-release-gate.md) |
-| hub_warm_query_ms | 129 | [2026-09-09 release gate](benchmark/reports/2026-09-09-0.24.0-release-gate.md) |
-| hub_find_ms | 194 | [2026-09-09 release gate](benchmark/reports/2026-09-09-0.24.0-release-gate.md) |
-| hub_find_row_tokens | 81 | [2026-09-09 release gate](benchmark/reports/2026-09-09-0.24.0-release-gate.md) |
-| hub_inproc_cold_build_ms | 872 | [2026-09-09 release gate](benchmark/reports/2026-09-09-0.24.0-release-gate.md) |
-| hub_inproc_open_nochange_ms | 34.9 | [2026-09-09 release gate](benchmark/reports/2026-09-09-0.24.0-release-gate.md) |
+| hub_cold_crawl_ms | 1471 | [2026-09-10 release gate](benchmark/reports/2026-09-10-0.24.3-release-gate.md) |
+| hub_version_canary_ms | 27 | [2026-09-10 release gate](benchmark/reports/2026-09-10-0.24.3-release-gate.md) |
+| hub_warm_query_ms | 138 | [2026-09-10 release gate](benchmark/reports/2026-09-10-0.24.3-release-gate.md) |
+| hub_find_ms | 193 | [2026-09-10 release gate](benchmark/reports/2026-09-10-0.24.3-release-gate.md) |
+| hub_find_row_tokens | 81 | [2026-09-10 release gate](benchmark/reports/2026-09-10-0.24.3-release-gate.md) |
+| hub_inproc_cold_build_ms | 1034 | [2026-09-10 release gate](benchmark/reports/2026-09-10-0.24.3-release-gate.md) |
+| hub_inproc_open_nochange_ms | 42.1 | [2026-09-10 release gate](benchmark/reports/2026-09-10-0.24.3-release-gate.md) |
 | scale_13k_cold_crawl_ms | 2025 | [2026-09-09 release gate](benchmark/reports/2026-09-09-0.24.0-release-gate.md) |
 | scale_13k_version_canary_ms | 28 | [2026-09-09 release gate](benchmark/reports/2026-09-09-0.24.0-release-gate.md) |
 | scale_13k_warm_query_ms | 195 | [2026-09-09 release gate](benchmark/reports/2026-09-09-0.24.0-release-gate.md) |
@@ -442,13 +450,13 @@ The rows below come from the accepted 0.24.0 full release-gate sitting. They inc
 | stress_find_row_tokens | 68 | [2026-09-09 release gate](benchmark/reports/2026-09-09-0.24.0-release-gate.md) |
 | stress_inproc_cold_build_ms | 2741 | [2026-09-09 release gate](benchmark/reports/2026-09-09-0.24.0-release-gate.md) |
 | stress_inproc_open_nochange_ms | 11.9 | [2026-09-09 release gate](benchmark/reports/2026-09-09-0.24.0-release-gate.md) |
-| battery_duckdb_hub_cold_crawl_ms | 1848 | [2026-09-09 release gate](benchmark/reports/2026-09-09-0.24.0-release-gate.md) |
-| battery_duckdb_hub_version_canary_ms | 30 | [2026-09-09 release gate](benchmark/reports/2026-09-09-0.24.0-release-gate.md) |
-| battery_duckdb_hub_warm_query_ms | 162 | [2026-09-09 release gate](benchmark/reports/2026-09-09-0.24.0-release-gate.md) |
-| battery_duckdb_hub_find_ms | 273 | [2026-09-09 release gate](benchmark/reports/2026-09-09-0.24.0-release-gate.md) |
-| battery_duckdb_hub_find_row_tokens | 80 | [2026-09-09 release gate](benchmark/reports/2026-09-09-0.24.0-release-gate.md) |
-| battery_duckdb_hub_inproc_cold_build_ms | 1063 | [2026-09-09 release gate](benchmark/reports/2026-09-09-0.24.0-release-gate.md) |
-| battery_duckdb_hub_inproc_open_nochange_ms | 41.4 | [2026-09-09 release gate](benchmark/reports/2026-09-09-0.24.0-release-gate.md) |
+| battery_duckdb_hub_cold_crawl_ms | 2147 | [2026-09-10 release gate](benchmark/reports/2026-09-10-0.24.3-release-gate.md) |
+| battery_duckdb_hub_version_canary_ms | 27 | [2026-09-10 release gate](benchmark/reports/2026-09-10-0.24.3-release-gate.md) |
+| battery_duckdb_hub_warm_query_ms | 164 | [2026-09-10 release gate](benchmark/reports/2026-09-10-0.24.3-release-gate.md) |
+| battery_duckdb_hub_find_ms | 266 | [2026-09-10 release gate](benchmark/reports/2026-09-10-0.24.3-release-gate.md) |
+| battery_duckdb_hub_find_row_tokens | 80 | [2026-09-10 release gate](benchmark/reports/2026-09-10-0.24.3-release-gate.md) |
+| battery_duckdb_hub_inproc_cold_build_ms | 1265 | [2026-09-10 release gate](benchmark/reports/2026-09-10-0.24.3-release-gate.md) |
+| battery_duckdb_hub_inproc_open_nochange_ms | 45.6 | [2026-09-10 release gate](benchmark/reports/2026-09-10-0.24.3-release-gate.md) |
 | battery_duckdb_13k_cold_crawl_ms | 3242 | [2026-09-09 release gate](benchmark/reports/2026-09-09-0.24.0-release-gate.md) |
 | battery_duckdb_13k_version_canary_ms | 28 | [2026-09-09 release gate](benchmark/reports/2026-09-09-0.24.0-release-gate.md) |
 | battery_duckdb_13k_warm_query_ms | 230 | [2026-09-09 release gate](benchmark/reports/2026-09-09-0.24.0-release-gate.md) |
@@ -470,13 +478,13 @@ The rows below come from the accepted 0.24.0 full release-gate sitting. They inc
 | battery_duckdb_stress_find_row_tokens | 68 | [2026-09-09 release gate](benchmark/reports/2026-09-09-0.24.0-release-gate.md) |
 | battery_duckdb_stress_inproc_cold_build_ms | 4023 | [2026-09-09 release gate](benchmark/reports/2026-09-09-0.24.0-release-gate.md) |
 | battery_duckdb_stress_inproc_open_nochange_ms | 19 | [2026-09-09 release gate](benchmark/reports/2026-09-09-0.24.0-release-gate.md) |
-| battery_turso_hub_cold_crawl_ms | 2157 | [2026-09-09 release gate](benchmark/reports/2026-09-09-0.24.0-release-gate.md) |
-| battery_turso_hub_version_canary_ms | 31 | [2026-09-09 release gate](benchmark/reports/2026-09-09-0.24.0-release-gate.md) |
-| battery_turso_hub_warm_query_ms | 139 | [2026-09-09 release gate](benchmark/reports/2026-09-09-0.24.0-release-gate.md) |
-| battery_turso_hub_find_ms | 237 | [2026-09-09 release gate](benchmark/reports/2026-09-09-0.24.0-release-gate.md) |
-| battery_turso_hub_find_row_tokens | 80 | [2026-09-09 release gate](benchmark/reports/2026-09-09-0.24.0-release-gate.md) |
-| battery_turso_hub_inproc_cold_build_ms | 1510 | [2026-09-09 release gate](benchmark/reports/2026-09-09-0.24.0-release-gate.md) |
-| battery_turso_hub_inproc_open_nochange_ms | 41 | [2026-09-09 release gate](benchmark/reports/2026-09-09-0.24.0-release-gate.md) |
+| battery_turso_hub_cold_crawl_ms | 2384 | [2026-09-10 release gate](benchmark/reports/2026-09-10-0.24.3-release-gate.md) |
+| battery_turso_hub_version_canary_ms | 27 | [2026-09-10 release gate](benchmark/reports/2026-09-10-0.24.3-release-gate.md) |
+| battery_turso_hub_warm_query_ms | 135 | [2026-09-10 release gate](benchmark/reports/2026-09-10-0.24.3-release-gate.md) |
+| battery_turso_hub_find_ms | 229 | [2026-09-10 release gate](benchmark/reports/2026-09-10-0.24.3-release-gate.md) |
+| battery_turso_hub_find_row_tokens | 80 | [2026-09-10 release gate](benchmark/reports/2026-09-10-0.24.3-release-gate.md) |
+| battery_turso_hub_inproc_cold_build_ms | 1673 | [2026-09-10 release gate](benchmark/reports/2026-09-10-0.24.3-release-gate.md) |
+| battery_turso_hub_inproc_open_nochange_ms | 41.6 | [2026-09-10 release gate](benchmark/reports/2026-09-10-0.24.3-release-gate.md) |
 | battery_turso_13k_cold_crawl_ms | 3933 | [2026-09-09 release gate](benchmark/reports/2026-09-09-0.24.0-release-gate.md) |
 | battery_turso_13k_version_canary_ms | 29 | [2026-09-09 release gate](benchmark/reports/2026-09-09-0.24.0-release-gate.md) |
 | battery_turso_13k_warm_query_ms | 209 | [2026-09-09 release gate](benchmark/reports/2026-09-09-0.24.0-release-gate.md) |
@@ -502,11 +510,11 @@ The rows below come from the accepted 0.24.0 full release-gate sitting. They inc
 | eval_nfcorpus_hit | 0.7121 | [2026-09-09 release gate](benchmark/reports/2026-09-09-0.24.0-release-gate.md) |
 | eval_fever_ndcg | 0.9337 | [2026-09-09 release gate](benchmark/reports/2026-09-09-0.24.0-release-gate.md) |
 | eval_fever_hit | 0.9965 | [2026-09-09 release gate](benchmark/reports/2026-09-09-0.24.0-release-gate.md) |
-| hub_semantic_find_ms | 322 | [2026-09-09 release gate](benchmark/reports/2026-09-09-0.24.0-release-gate.md) |
-| hub_map_ms | 169 | [2026-09-09 release gate](benchmark/reports/2026-09-09-0.24.0-release-gate.md) |
-| hub_map_tokens | 548 | [2026-09-09 release gate](benchmark/reports/2026-09-09-0.24.0-release-gate.md) |
-| hub_peek_ms | 140 | [2026-09-09 release gate](benchmark/reports/2026-09-09-0.24.0-release-gate.md) |
-| hub_peek_tokens | 581 | [2026-09-09 release gate](benchmark/reports/2026-09-09-0.24.0-release-gate.md) |
+| hub_semantic_find_ms | 333 | [2026-09-10 release gate](benchmark/reports/2026-09-10-0.24.3-release-gate.md) |
+| hub_map_ms | 175 | [2026-09-10 release gate](benchmark/reports/2026-09-10-0.24.3-release-gate.md) |
+| hub_map_tokens | 548 | [2026-09-10 release gate](benchmark/reports/2026-09-10-0.24.3-release-gate.md) |
+| hub_peek_ms | 134 | [2026-09-10 release gate](benchmark/reports/2026-09-10-0.24.3-release-gate.md) |
+| hub_peek_tokens | 581 | [2026-09-10 release gate](benchmark/reports/2026-09-10-0.24.3-release-gate.md) |
 | scale_13k_semantic_find_ms | 521 | [2026-09-09 release gate](benchmark/reports/2026-09-09-0.24.0-release-gate.md) |
 | scale_13k_map_ms | 279 | [2026-09-09 release gate](benchmark/reports/2026-09-09-0.24.0-release-gate.md) |
 | scale_13k_map_tokens | 555 | [2026-09-09 release gate](benchmark/reports/2026-09-09-0.24.0-release-gate.md) |
@@ -522,11 +530,11 @@ The rows below come from the accepted 0.24.0 full release-gate sitting. They inc
 | stress_map_tokens | 411 | [2026-09-09 release gate](benchmark/reports/2026-09-09-0.24.0-release-gate.md) |
 | stress_peek_ms | 94 | [2026-09-09 release gate](benchmark/reports/2026-09-09-0.24.0-release-gate.md) |
 | stress_peek_tokens | 476 | [2026-09-09 release gate](benchmark/reports/2026-09-09-0.24.0-release-gate.md) |
-| battery_duckdb_hub_semantic_find_ms | 380 | [2026-09-09 release gate](benchmark/reports/2026-09-09-0.24.0-release-gate.md) |
-| battery_duckdb_hub_map_ms | 231 | [2026-09-09 release gate](benchmark/reports/2026-09-09-0.24.0-release-gate.md) |
-| battery_duckdb_hub_map_tokens | 580 | [2026-09-09 release gate](benchmark/reports/2026-09-09-0.24.0-release-gate.md) |
-| battery_duckdb_hub_peek_ms | 184 | [2026-09-09 release gate](benchmark/reports/2026-09-09-0.24.0-release-gate.md) |
-| battery_duckdb_hub_peek_tokens | 581 | [2026-09-09 release gate](benchmark/reports/2026-09-09-0.24.0-release-gate.md) |
+| battery_duckdb_hub_semantic_find_ms | 385 | [2026-09-10 release gate](benchmark/reports/2026-09-10-0.24.3-release-gate.md) |
+| battery_duckdb_hub_map_ms | 249 | [2026-09-10 release gate](benchmark/reports/2026-09-10-0.24.3-release-gate.md) |
+| battery_duckdb_hub_map_tokens | 580 | [2026-09-10 release gate](benchmark/reports/2026-09-10-0.24.3-release-gate.md) |
+| battery_duckdb_hub_peek_ms | 198 | [2026-09-10 release gate](benchmark/reports/2026-09-10-0.24.3-release-gate.md) |
+| battery_duckdb_hub_peek_tokens | 581 | [2026-09-10 release gate](benchmark/reports/2026-09-10-0.24.3-release-gate.md) |
 | battery_duckdb_13k_semantic_find_ms | 605 | [2026-09-09 release gate](benchmark/reports/2026-09-09-0.24.0-release-gate.md) |
 | battery_duckdb_13k_map_ms | 413 | [2026-09-09 release gate](benchmark/reports/2026-09-09-0.24.0-release-gate.md) |
 | battery_duckdb_13k_map_tokens | 587 | [2026-09-09 release gate](benchmark/reports/2026-09-09-0.24.0-release-gate.md) |
@@ -542,11 +550,11 @@ The rows below come from the accepted 0.24.0 full release-gate sitting. They inc
 | battery_duckdb_stress_map_tokens | 449 | [2026-09-09 release gate](benchmark/reports/2026-09-09-0.24.0-release-gate.md) |
 | battery_duckdb_stress_peek_ms | 167 | [2026-09-09 release gate](benchmark/reports/2026-09-09-0.24.0-release-gate.md) |
 | battery_duckdb_stress_peek_tokens | 476 | [2026-09-09 release gate](benchmark/reports/2026-09-09-0.24.0-release-gate.md) |
-| battery_turso_hub_semantic_find_ms | 566 | [2026-09-09 release gate](benchmark/reports/2026-09-09-0.24.0-release-gate.md) |
-| battery_turso_hub_map_ms | 283 | [2026-09-09 release gate](benchmark/reports/2026-09-09-0.24.0-release-gate.md) |
-| battery_turso_hub_map_tokens | 548 | [2026-09-09 release gate](benchmark/reports/2026-09-09-0.24.0-release-gate.md) |
-| battery_turso_hub_peek_ms | 156 | [2026-09-09 release gate](benchmark/reports/2026-09-09-0.24.0-release-gate.md) |
-| battery_turso_hub_peek_tokens | 581 | [2026-09-09 release gate](benchmark/reports/2026-09-09-0.24.0-release-gate.md) |
+| battery_turso_hub_semantic_find_ms | 558 | [2026-09-10 release gate](benchmark/reports/2026-09-10-0.24.3-release-gate.md) |
+| battery_turso_hub_map_ms | 280 | [2026-09-10 release gate](benchmark/reports/2026-09-10-0.24.3-release-gate.md) |
+| battery_turso_hub_map_tokens | 548 | [2026-09-10 release gate](benchmark/reports/2026-09-10-0.24.3-release-gate.md) |
+| battery_turso_hub_peek_ms | 151 | [2026-09-10 release gate](benchmark/reports/2026-09-10-0.24.3-release-gate.md) |
+| battery_turso_hub_peek_tokens | 581 | [2026-09-10 release gate](benchmark/reports/2026-09-10-0.24.3-release-gate.md) |
 | battery_turso_13k_semantic_find_ms | 984 | [2026-09-09 release gate](benchmark/reports/2026-09-09-0.24.0-release-gate.md) |
 | battery_turso_13k_map_ms | 505 | [2026-09-09 release gate](benchmark/reports/2026-09-09-0.24.0-release-gate.md) |
 | battery_turso_13k_map_tokens | 555 | [2026-09-09 release gate](benchmark/reports/2026-09-09-0.24.0-release-gate.md) |
