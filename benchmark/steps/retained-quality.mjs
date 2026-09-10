@@ -11,5 +11,5 @@ const { values } = parseArgs({ options: { out: { type: 'string' } } });
 const baselineVersion = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).version;
 const record = await inspectRetainedQuality({ reportsDir: join(ROOT, 'benchmark', 'reports'), sittingsDir: join(ROOT, '.tmp', 'sittings'), baselineVersion, currentRoot: ROOT });
 writeOut(values.out, record);
-console.log(record.valid ? `revalidated retained quality from ${record.source.report} (${record.source.sitting})` : `retained quality unavailable: ${record.errors.join('; ')}`);
+console.log(record.valid ? `revalidated retained portable NFCorpus quality on ${record.scope.stores.join(', ')} from ${record.source.report} (${record.source.sitting})` : `retained quality unavailable: ${record.errors.join('; ')}`);
 process.exitCode = record.valid ? 0 : 1;

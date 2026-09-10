@@ -314,15 +314,20 @@ describe('portable quality release track', () => {
     assert.equal(existsSync(join(dir, 'portable-quality-comparison.json')), true);
   });
 
-  it('keeps the historical commands and finishes the smaller corpus before FEVER', () => {
+  it('keeps ordinary on portable NFCorpus and moves FEVER plus historical continuity to deep', () => {
     const quality = buildStages().find((stage) => stage.id === 'quality');
     assert.ok(quality);
     assert.deepEqual(
       quality.steps.map((step) => step.id),
-      ['retained-quality', 'eval-nfcorpus', ...STORES.map((store) => `portable-eval-nfcorpus-${store}`), 'portable-eval-nfcorpus-comparison', 'eval-fever', ...STORES.map((store) => `portable-eval-fever-${store}`), 'portable-eval-fever-comparison']
+      ['retained-quality', ...STORES.map((store) => `portable-eval-nfcorpus-${store}`), 'portable-eval-nfcorpus-comparison', 'eval-nfcorpus', 'eval-fever', ...STORES.map((store) => `portable-eval-fever-${store}`), 'portable-eval-fever-comparison']
     );
     assert.deepEqual(quality.steps.find((step) => step.id === 'eval-nfcorpus')?.argv, ['node', 'benchmark/steps/quality.mjs', 'nfcorpus']);
     assert.deepEqual(quality.steps.find((step) => step.id === 'eval-fever')?.argv, ['node', 'benchmark/steps/quality.mjs', 'fever']);
+    assert.equal(quality.steps.find((step) => step.id === 'eval-nfcorpus')?.owedBy, 'fever');
+    assert.deepEqual(
+      quality.steps.filter((step) => step.owedBy === 'quality-baseline').map((step) => step.id),
+      [...STORES.map((store) => `portable-eval-nfcorpus-${store}`), 'portable-eval-nfcorpus-comparison']
+    );
     assert.deepEqual(
       quality.steps.filter((step) => step.id.startsWith('portable-eval-')).map((step) => step.id),
       [...['nfcorpus', 'fever'].flatMap((corpus) => [...STORES.map((store) => `portable-eval-${corpus}-${store}`), `portable-eval-${corpus}-comparison`])]
@@ -424,9 +429,7 @@ describe('portable quality release track', () => {
       const steps: Record<string, { id: string; status: string; owed: boolean }> = {
         validate: { id: 'validate', status: 'ok', owed: true },
         'npm-test': { id: 'npm-test', status: 'ok', owed: true },
-        'eval-nfcorpus': { id: 'eval-nfcorpus', status: 'ok', owed: true },
       };
-      writeFileSync(join(sitting, 'eval-nfcorpus.json'), JSON.stringify(artifact('sqlite', { corpus: 'nfcorpus' })));
       for (const current of artifacts) {
         const id = `portable-eval-nfcorpus-${current.store}`;
         steps[id] = { id, status: 'ok', owed: true };
@@ -460,9 +463,7 @@ describe('portable quality release track', () => {
     const steps: Record<string, { id: string; status: string; owed: boolean }> = {
       validate: { id: 'validate', status: 'ok', owed: true },
       'npm-test': { id: 'npm-test', status: 'ok', owed: true },
-      'eval-nfcorpus': { id: 'eval-nfcorpus', status: 'ok', owed: true },
     };
-    writeFileSync(join(emptySitting, 'eval-nfcorpus.json'), JSON.stringify(artifact('sqlite', { corpus: 'nfcorpus' })));
     for (const current of emptyArtifacts) {
       const id = `portable-eval-nfcorpus-${current.store}`;
       steps[id] = { id, status: 'ok', owed: true };

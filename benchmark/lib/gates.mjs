@@ -26,7 +26,9 @@ import { identityHash } from './workload-identity.mjs';
 
 export const DEFAULT_PROFILE = 'ordinary';
 export const PROFILES = [DEFAULT_PROFILE, 'deep'];
+export const ORDINARY_COST_LIMIT_MS = 20 * 60_000;
 const DEEP_PROFILE_GATES = ['baseline', 'scale', 'quality-baseline', 'fever'];
+const DEEP_ONLY_GATES = ['scale', 'fever'];
 const KNOWN_SOURCE_ROOTS = [
   'src/chunk/',
   'src/cli/',
@@ -54,7 +56,7 @@ const KNOWN_SOURCE_ROOTS = [
   'src/workers/',
 ];
 
-const QUALITY_COLLECTION_PATHS = [...QUALITY_RETRIEVAL_PATHS.map((path) => (path.endsWith('.ts') ? path : `${path}/`)), 'benchmark/lib/corpus.mjs', 'benchmark/lib/labels.mjs', 'benchmark/lib/quality.mjs', 'benchmark/lib/quality-work-tree.mjs', 'benchmark/steps/quality.mjs', 'package-lock.json', 'package.json'];
+const QUALITY_COLLECTION_PATHS = [...QUALITY_RETRIEVAL_PATHS.map((path) => (path.endsWith('.ts') ? path : `${path}/`)), 'benchmark/lib/corpus.mjs', 'benchmark/lib/labels.mjs', 'benchmark/lib/quality.mjs', 'benchmark/lib/quality-work-tree.mjs', 'benchmark/steps/quality.mjs'];
 
 const QUALITY_EVALUATOR_PATHS = [
   'benchmark/gate.mjs',
@@ -117,9 +119,17 @@ export function owedGates(paths, lastTag) {
   return new Set(owedReasons(paths, lastTag).keys());
 }
 
-export function profileReasons(paths, lastTag, profile = DEFAULT_PROFILE) {
+/**
+ * @param {string[]} paths
+ * @param {string} lastTag
+ * @param {string} [profile]
+ * @param {{ classification: string, reason?: string } | null} [packageJson]
+ * @param {{ classification: string, reason?: string } | null} [packageLock]
+ */
+export function profileReasons(paths, lastTag, profile = DEFAULT_PROFILE, packageJson = null, packageLock = null) {
   if (!PROFILES.includes(profile)) throw new Error(`profile must be ${PROFILES.join(' or ')}`);
   const reasons = owedReasons(paths, lastTag);
+  if (profile === 'ordinary') for (const gate of DEEP_ONLY_GATES) reasons.delete(gate);
   if (profile === 'deep') {
     for (const gate of DEEP_PROFILE_GATES) {
       if (!reasons.has(gate)) reasons.set(gate, ['deep profile']);
@@ -127,8 +137,11 @@ export function profileReasons(paths, lastTag, profile = DEFAULT_PROFILE) {
     reasons.delete('quality-revalidation');
   }
   const unknownSource = paths.filter((path) => path.startsWith('src/') && !pathOwesRow(path, KNOWN_SOURCE_ROOTS));
-  const dependencyInputs = paths.filter((path) => path === 'package.json' || path === 'package-lock.json');
-  const conservative = [...unknownSource.map((path) => `${path} (unclassified source path)`), ...dependencyInputs.map((path) => `${path} (dependency input)`)];
+  const dependencyInputs = [];
+  if (paths.includes('package.json') && packageJson?.classification === 'dependency') dependencyInputs.push('package.json (dependency input)');
+  const unclassifiedPackage = paths.includes('package.json') && packageJson?.classification !== 'version-scripts-only' && packageJson?.classification !== 'dependency' ? [`package.json (${packageJson?.reason ?? 'package contents unclassified'})`] : [];
+  if (paths.includes('package-lock.json') && packageLock?.classification !== 'version-metadata-only') dependencyInputs.push(`package-lock.json (${packageLock?.reason ?? 'dependency or other lock content changed'})`);
+  const conservative = [...unknownSource.map((path) => `${path} (unclassified source path)`), ...dependencyInputs, ...unclassifiedPackage];
   if (conservative.length > 0) {
     for (const gate of DEEP_PROFILE_GATES) {
       const current = reasons.get(gate) ?? [];
@@ -141,23 +154,59 @@ export function profileReasons(paths, lastTag, profile = DEFAULT_PROFILE) {
   return reasons;
 }
 
+/**
+ * @param {{ id: string }[]} selected
+ * @param {Record<string, number | null | undefined>} stepEstimates
+ * @param {(step: { id: string }) => boolean} [reusable]
+ */
+export function remainingCost(selected, stepEstimates, reusable = () => false) {
+  const reusedSteps = [];
+  const remainingSteps = [];
+  for (const step of selected) {
+    if (reusable(step)) reusedSteps.push(step.id);
+    else remainingSteps.push({ id: step.id, estimated_ms: Number.isFinite(stepEstimates[step.id]) && stepEstimates[step.id] >= 0 ? stepEstimates[step.id] : null });
+  }
+  return {
+    known_ms: remainingSteps.reduce((total, step) => total + (step.estimated_ms ?? 0), 0),
+    unknown_steps: remainingSteps.filter((step) => step.estimated_ms === null).map((step) => step.id),
+    remaining_steps: remainingSteps,
+    reused_steps: reusedSteps,
+  };
+}
+
+export function ordinaryCostRefusal(profile, estimate, limitMs = ORDINARY_COST_LIMIT_MS) {
+  if (profile === 'deep') return null;
+  const overBudget = estimate.known_ms > limitMs;
+  if (!overBudget && estimate.unknown_steps.length === 0) return null;
+  const causes = [];
+  if (overBudget) causes.push(`~${(estimate.known_ms / 60_000).toFixed(1)} minutes of known work exceeds the ${(limitMs / 60_000).toFixed(1)} minute limit`);
+  if (estimate.unknown_steps.length > 0) causes.push(`cost is unknown for ${estimate.unknown_steps.join(', ')}`);
+  const work = estimate.remaining_steps.map(({ id, estimated_ms }) => `${id} (${estimated_ms === null ? 'unknown' : `~${(estimated_ms / 60_000).toFixed(1)} min`})`).join(', ');
+  return `ordinary assessment stopped before execution because ${causes.join(' and ')}. Remaining work: ${work}. Run with --profile deep to approve this costly assessment.`;
+}
+
 export function requireFreshQuality(reasons, detail) {
   const next = new Map(reasons);
   next.delete('quality-revalidation');
-  for (const gate of ['quality-baseline', 'fever']) {
-    const current = next.get(gate) ?? [];
-    next.set(gate, [...new Set([...current, detail])]);
-  }
+  const current = next.get('quality-baseline') ?? [];
+  next.set('quality-baseline', [...new Set([...current, detail])]);
   return next;
 }
 
-export function resolveRetainedQualityRequirement(reasons, evidence) {
-  if (!reasons.has('quality-revalidation') || evidence?.valid === true) return new Map(reasons);
-  return requireFreshQuality(reasons, `retained raw quality unavailable: ${evidence?.errors?.[0] ?? evidence?.status ?? 'unknown'}`);
+/**
+ * @param {Map<string, string[]>} reasons
+ * @param {{ valid?: boolean, errors?: string[], status?: string } | null} evidence
+ * @param {{ estimatedMs?: number | null, reusable?: boolean }} [options]
+ */
+export function resolveRetainedQualityRequirement(reasons, evidence, { estimatedMs = null, reusable = false } = {}) {
+  if (!reasons.has('quality-revalidation')) return new Map(reasons);
+  if (evidence?.valid !== true) return requireFreshQuality(reasons, `retained raw quality unavailable: ${evidence?.errors?.[0] ?? evidence?.status ?? 'unknown'}`);
+  if (reusable || (Number.isFinite(estimatedMs) && estimatedMs >= 0)) return new Map(reasons);
+  return requireFreshQuality(reasons, 'retained quality revalidation has no historical execution estimate; bounded ordinary fallback is fresh portable NFCorpus');
 }
 
 export function retainedQualityForSitting(prior, selected, reasons) {
-  const freshReplacement = reasons.has('quality-baseline') && reasons.has('fever') && !reasons.has('quality-revalidation');
+  const freshReplacement = reasons.has('quality-baseline') && !reasons.has('quality-revalidation');
   if (!freshReplacement) return selected;
   if (!prior && !selected) return null;
   return {
@@ -166,7 +215,7 @@ export function retainedQualityForSitting(prior, selected, reasons) {
     valid: false,
     status: 'superseded-by-fresh-quality',
     source: selected?.source ?? prior?.source ?? null,
-    reason: selected?.errors?.[0] ?? prior?.reason ?? 'fresh quality replaces retained revalidation',
+    reason: selected?.errors?.[0] ?? reasons.get('quality-baseline')?.at(-1) ?? prior?.reason ?? 'fresh quality replaces retained revalidation',
   };
 }
 
@@ -176,7 +225,7 @@ export function assertCompatibleSelection(priorSitting, { lastTag, paths, reason
   if (priorSitting.last_tag !== lastTag || JSON.stringify(priorSitting.changed_paths) !== JSON.stringify(paths)) throw new Error('the existing sitting has an incompatible changed-path selection; start a clean sitting');
   if (priorSitting.profile === 'deep' && profile !== 'deep') throw new Error('the existing sitting used the deep profile; resume with --profile deep');
   const priorRequired = new Set(Object.keys(priorSitting.effective_requirements ?? priorSitting.owed ?? {}));
-  const freshQualityReplacement = reasons.has('quality-baseline') && reasons.has('fever');
+  const freshQualityReplacement = reasons.has('quality-baseline') && !reasons.has('quality-revalidation');
   for (const gate of priorRequired) if (!reasons.has(gate) && !(gate === 'quality-revalidation' && freshQualityReplacement)) throw new Error(`the existing sitting requires ${gate}, which profile ${profile} would omit; resume with a compatible profile`);
   if (priorRequired.has('quality-revalidation') && reasons.has('quality-revalidation') && identityHash(priorSitting.retained_quality?.source ?? null) !== identityHash(retainedQuality?.source ?? null)) throw new Error('the existing sitting selected different retained quality evidence; start a clean sitting');
 }

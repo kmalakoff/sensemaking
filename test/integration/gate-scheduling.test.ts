@@ -4,11 +4,35 @@ import { join } from 'node:path';
 import assert from 'assert';
 import { missingPrerequisites } from '../../benchmark/lib/gate-dependencies.mjs';
 import { runStageSteps, stepOutputEvidence } from '../../benchmark/lib/gate-runner.mjs';
+import { ORDINARY_COST_LIMIT_MS, ordinaryCostRefusal, remainingCost } from '../../benchmark/lib/gates.mjs';
 import { buildStages } from '../../benchmark/lib/stages.mjs';
 import { buildReport, doneOnResume, failedStageReasons, renderMarkdown } from '../../benchmark/report.mjs';
 import { scratchDir } from '../lib/scratch.ts';
 
 describe('release gate independent failure collection', () => {
+  it('refuses costly or unknown ordinary work and subtracts only applicable resume work', () => {
+    const steps = [{ id: 'costly' }, { id: 'small' }];
+    const estimates = { costly: 19 * 60_000, small: 2 * 60_000 };
+    const recorded = { costly: { status: 'ok' } };
+    const fresh = remainingCost(steps, estimates);
+    assert.equal(fresh.known_ms, 21 * 60_000);
+    assert.deepEqual(fresh.reused_steps, []);
+    assert.match(ordinaryCostRefusal('ordinary', fresh) ?? '', /Remaining work: costly .*small /);
+
+    const applicableResume = remainingCost(steps, estimates, (step: { id: string }) => doneOnResume(step.id, recorded[step.id as keyof typeof recorded]));
+    assert.equal(applicableResume.known_ms, 2 * 60_000);
+    assert.deepEqual(applicableResume.reused_steps, ['costly']);
+    assert.equal(ordinaryCostRefusal('ordinary', applicableResume), null);
+
+    const boundary = remainingCost([{ id: 'boundary' }], { boundary: ORDINARY_COST_LIMIT_MS });
+    assert.equal(ordinaryCostRefusal('ordinary', boundary), null);
+    assert.match(ordinaryCostRefusal('ordinary', remainingCost([{ id: 'over' }], { over: ORDINARY_COST_LIMIT_MS + 1 })) ?? '', /exceeds the 20\.0 minute limit/);
+
+    const unknown = remainingCost([{ id: 'unknown-collection' }], {});
+    assert.match(ordinaryCostRefusal('ordinary', unknown) ?? '', /cost is unknown for unknown-collection/);
+    assert.equal(ordinaryCostRefusal('deep', unknown), null);
+  });
+
   it('records missing or malformed child output as failure without abandoning independent work', async () => {
     const dir = scratchDir('gate-bad-output');
     const records: Record<string, { id: string; status: string; detail?: string }> = {};

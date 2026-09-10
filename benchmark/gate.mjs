@@ -20,7 +20,7 @@ import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { releaseChanges } from './lib/changes.mjs';
 import { runStageSteps, stepOutputEvidence } from './lib/gate-runner.mjs';
-import { assertCompatibleSelection, DEFAULT_PROFILE, PROFILES, profileReasons, resolveRetainedQualityRequirement, retainedQualityForSitting, reversedCompareAction, stepStatus } from './lib/gates.mjs';
+import { assertCompatibleSelection, DEFAULT_PROFILE, ordinaryCostRefusal, PROFILES, profileReasons, remainingCost, resolveRetainedQualityRequirement, retainedQualityForSitting, reversedCompareAction, stepStatus } from './lib/gates.mjs';
 import { describeLoad, topProcesses } from './lib/quiet-machine.mjs';
 import { assertBuilt } from './lib/require-build.mjs';
 import { treeFingerprint } from './lib/tree-fingerprint.mjs';
@@ -39,8 +39,9 @@ const {
 } = parseArgs({ options: { 'dry-run': { type: 'boolean', default: false }, help: { type: 'boolean', short: 'h' }, profile: { type: 'string', default: DEFAULT_PROFILE } } });
 if (help) {
   console.log('usage: node benchmark/gate.mjs [--profile ordinary|deep] [--dry-run]');
-  console.log('ordinary selects required work from the diff; deep adds staged scale and fresh quality collection.');
+  console.log('ordinary uses portable NFCorpus on every offered store; deep adds FEVER, scale/stress, and legacy OR-bag continuity.');
   console.log('dry-run resolves retained-quality availability and prints the effective requirements without running a gate step.');
+  console.log('ordinary stops before execution when remaining work exceeds 20 minutes or has unknown cost; --profile deep explicitly approves that work.');
   process.exit(0);
 }
 if (!PROFILES.includes(profile)) {
@@ -67,41 +68,49 @@ function packageVersion() {
 // question answered is "will this diff owe a gate if it ships".
 const owedFor = (step, owed) => step.owedBy === 'always' || owed.has(step.owedBy);
 
-async function selection(profileName, changes) {
-  let reasons = profileReasons(changes.paths, changes.lastTag, profileName);
+/**
+ * @param {string} profileName
+ * @param {ReturnType<typeof releaseChanges>} changes
+ * @param {{ retainedQualityReusable?: boolean }} [options]
+ */
+async function selection(profileName, changes, { retainedQualityReusable = false } = {}) {
+  let reasons = profileReasons(changes.paths, changes.lastTag, profileName, changes.packageJson, changes.packageLock);
   let retainedQuality = null;
   if (reasons.has('quality-revalidation')) {
     const evidence = await inspectRetainedQuality({ reportsDir: join(ROOT, 'benchmark', 'reports'), sittingsDir: join(ROOT, '.tmp', 'sittings'), baselineVersion: packageVersion(), currentRoot: ROOT });
     retainedQuality = retainedQualitySummary(evidence);
-    reasons = resolveRetainedQualityRequirement(reasons, evidence);
+    reasons = resolveRetainedQualityRequirement(reasons, evidence, { estimatedMs: estimates.steps['retained-quality'], reusable: retainedQualityReusable });
   }
   const owed = new Set(reasons.keys());
   const selected = STAGES.flatMap((stage) => stage.steps).filter((step) => owedFor(step, owed));
-  const knownMs = selected.reduce((total, step) => total + (estimates.steps[step.id] ?? 0), 0);
-  const unknown = selected.filter((step) => estimates.steps[step.id] === null || estimates.steps[step.id] === undefined).map((step) => step.id);
-  return { reasons, owed, selected, estimate: { source: estimates.source, known_ms: knownMs, unknown_steps: unknown }, retainedQuality };
+  return { reasons, owed, selected, retainedQuality };
 }
 
-if (dryRun) {
-  const changes = releaseChanges(ROOT);
-  const { lastTag, paths } = changes;
-  const { reasons, owed, estimate, retainedQuality } = await selection(profile, changes);
+function printSelection(changes, selectionResult) {
+  const { reasons, owed, estimate, retainedQuality } = selectionResult;
+  const reused = new Set(estimate.reused_steps);
   console.log(`profile: ${profile}`);
-  console.log(`diff since ${lastTag}: ${paths.length} path(s) changed`);
+  console.log(`diff since ${changes.lastTag}: ${changes.paths.length} path(s) changed`);
+  if (changes.packageJson) console.log(`  package.json: ${changes.packageJson.classification}${changes.packageJson.changed_fields.length > 0 ? ` (${changes.packageJson.changed_fields.join(', ')})` : ''}`);
+  if (changes.packageLock) console.log(`  package-lock.json: ${changes.packageLock.classification}`);
   for (const [gate, matched] of reasons) console.log(`  owes ${gate}: ${matched.slice(0, 3).join(', ')}${matched.length > 3 ? `, +${matched.length - 3} more` : ''}`);
-  if (retainedQuality) console.log(`  retained quality: ${retainedQuality.status}${retainedQuality.source ? ` from ${retainedQuality.source.report}` : ''}`);
+  if (retainedQuality) {
+    const scope = retainedQuality.scope?.corpus ? `; scope ${retainedQuality.scope.corpus}/${retainedQuality.scope.query_form} on ${(retainedQuality.scope.stores ?? []).join(', ')}` : '';
+    console.log(`  retained quality: ${retainedQuality.status}${retainedQuality.source ? ` from ${retainedQuality.source.report}` : ''}${scope}`);
+  }
   for (const stage of STAGES) {
     console.log(`\n${stage.label}`);
     for (const step of stage.steps) {
       const isOwed = owedFor(step, owed);
       const estimateMs = estimates.steps[step.id];
-      const tag = !isOwed ? 'not owed' : `OWED${estimateMs === null || estimateMs === undefined ? ' (cost unknown)' : ` (~${(estimateMs / 60000).toFixed(1)} min)`}`;
+      const tag = !isOwed ? 'not owed' : reused.has(step.id) ? 'REUSE' : `OWED${estimateMs === null || estimateMs === undefined ? ' (cost unknown)' : ` (~${(estimateMs / 60000).toFixed(1)} min)`}`;
       console.log(`  ${step.id}: ${tag}`);
     }
   }
-  console.log(`\nprior execution estimate: ~${(estimate.known_ms / 60000).toFixed(1)} min known${estimate.unknown_steps.length > 0 ? `; unknown: ${estimate.unknown_steps.join(', ')}` : ''}`);
+  console.log(`\nprior execution estimate: ~${(estimate.known_ms / 60000).toFixed(1)} min known remaining${estimate.unknown_steps.length > 0 ? `; unknown: ${estimate.unknown_steps.join(', ')}` : ''}`);
+  console.log(`remaining work: ${estimate.remaining_steps.length > 0 ? estimate.remaining_steps.map((step) => step.id).join(', ') : 'none'}`);
+  console.log(`reused work: ${estimate.reused_steps.length > 0 ? estimate.reused_steps.join(', ') : 'none'}`);
   console.log(`estimate basis: ${estimate.source}`);
-  process.exit(0);
 }
 
 // Versions read from the built package, never typed. Absent (no build yet) reads as null rather
@@ -142,20 +151,30 @@ const baselineVersion = packageVersion();
 // it stopped. Delete the directory the run prints to start clean.
 const sittingDir = join(ROOT, '.tmp', 'sittings', `${today}-${baselineVersion}-${currentTreeFingerprint()}`);
 const resuming = existsSync(join(sittingDir, 'sitting.json'));
-mkdirSync(sittingDir, { recursive: true });
 // Read before anything is rewritten: the owner's accepted stage reasons decide which recorded
 // failures this resume keeps rather than re-runs.
 const accepted = acceptedIds(sittingDir);
-
-if (resuming) console.log(`resuming ${sittingDir}; steps recorded ok, and failures the owner accepted, are skipped. Delete that directory for a clean run.`);
-
-const priorSitting = existsSync(join(sittingDir, 'sitting.json')) ? JSON.parse(readFileSync(join(sittingDir, 'sitting.json'), 'utf8')) : null;
+const priorSitting = resuming ? JSON.parse(readFileSync(join(sittingDir, 'sitting.json'), 'utf8')) : null;
 
 const changes = releaseChanges(ROOT);
 const { lastTag, paths } = changes;
-const { reasons, owed, estimate, retainedQuality } = await selection(profile, changes);
+const retainedQualityReusable = resuming && doneOnResume('retained-quality', priorSitting?.steps?.['retained-quality'], accepted);
+const selectionResult = await selection(profile, changes, { retainedQualityReusable });
+const { reasons, owed, retainedQuality } = selectionResult;
 
 assertCompatibleSelection(priorSitting, { lastTag, paths, reasons, profile, retainedQuality });
+const reusable = (step) => resuming && doneOnResume(step.id, priorSitting?.steps?.[step.id], accepted);
+const estimate = { source: estimates.source, ...remainingCost(selectionResult.selected, estimates.steps, reusable) };
+printSelection(changes, { ...selectionResult, estimate });
+if (dryRun) process.exit(0);
+const refusal = ordinaryCostRefusal(profile, estimate);
+if (refusal) {
+  console.error(`\n${refusal}`);
+  process.exit(2);
+}
+
+mkdirSync(sittingDir, { recursive: true });
+if (resuming) console.log(`resuming ${sittingDir}; steps recorded ok, and failures the owner accepted, are skipped. Delete that directory for a clean run.`);
 const sittingRetainedQuality = retainedQualityForSitting(priorSitting?.retained_quality, retainedQuality, reasons);
 
 const sitting = {
@@ -168,6 +187,8 @@ const sitting = {
   schema_version: priorSitting?.schema_version ?? null,
   changed_paths: paths,
   untracked_paths: changes.untracked,
+  package_change: changes.packageJson,
+  package_lock_change: changes.packageLock,
   profile,
   effective_requirements: Object.fromEntries(reasons),
   estimated_cost: estimate,

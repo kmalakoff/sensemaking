@@ -110,13 +110,11 @@ export function buildStages() {
       label: '4 quality',
       steps: [
         { id: 'retained-quality', argv: ['node', 'benchmark/steps/retained-quality.mjs'], timeout: 10 * MINUTES, quiet: false, owedBy: 'quality-revalidation', out: true },
-        // nDCG/MRR/hit@10 on a fixed corpus and model: load changes wall time, not the digits, so
-        // this stage runs on any machine.
-        { id: 'eval-nfcorpus', argv: ['node', 'benchmark/steps/quality.mjs', 'nfcorpus'], timeout: 20 * MINUTES, quiet: false, owedBy: 'quality-baseline', out: true },
-        // The historical SQLite OR-bag rows above retain their old same-store series. These
-        // portable rows use one query form and qrels on every offered store; the comparator below
-        // validates that identity before any relevance result is classified.
+        // Portable NFCorpus is ordinary's all-store relevance view. The comparator checks its
+        // identity and full coverage before classification.
         ...portableQualitySteps('nfcorpus', 'quality-baseline'),
+        // Deep retains the SQLite OR-bag NFCorpus row for historical continuity alongside FEVER.
+        { id: 'eval-nfcorpus', argv: ['node', 'benchmark/steps/quality.mjs', 'nfcorpus'], timeout: 20 * MINUTES, quiet: false, owedBy: 'fever', out: true },
         { id: 'eval-fever', argv: ['node', 'benchmark/steps/quality.mjs', 'fever'], timeout: 45 * MINUTES, quiet: false, owedBy: 'fever', out: true },
         ...portableQualitySteps('fever', 'fever'),
       ],

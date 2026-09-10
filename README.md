@@ -1,6 +1,8 @@
 # sensemaking
 
-Query and search your markdown notes with context-aware progressive disclosure: SQL over frontmatter, links, and text, plus semantic search and link-graph ranking. No server, no build step.
+Search and query a directory of Markdown notes from the command line. `sense` indexes frontmatter, prose and links in a local database. It can also combine word matches with links and semantic similarity.
+
+Results contain file paths, snippets and line ranges. A person or agent can inspect the relevant passages without loading every note. No server or build step is required.
 
 ## Problem
 
@@ -16,7 +18,7 @@ cd your-notes && sense init
 sense download          # the embedding model, once per machine; the first vector search fetches it otherwise
 ```
 
-Needs Node 22.20 or newer: the first release whose built-in SQLite has both FTS5, which `sense search` indexes prose with, and row-returning `INSERT ... RETURNING`, which `sense path` and `peek` walk the link graph with.
+Requires Node.js 22.20 or newer. The default store uses Node's built-in SQLite.
 
 ```bash
 sense map                                        # orient: fields, hub notes, recent changes
@@ -25,7 +27,16 @@ sense peek notes/q3-report.md                    # structure: outline + links, b
 sense sql "SELECT path FROM frontmatter WHERE has(tags, ?)" urgent
 ```
 
-## Model
+A search result identifies the matching note, the evidence used to rank it and the relevant line range:
+
+```text
+path                 snippets                                  via    score   lines
+pricing-decision.md  …«pricing» decision … renewal «price»…    match  0.0167  L4-7
+```
+
+The row is illustrative. Actual paths, snippets and scores depend on the notes and configured search signals.
+
+## What sense indexes
 
 Every file becomes rows in these tables, plus whatever an enabled feature adds of its own:
 
@@ -144,7 +155,7 @@ Every query starts with a freshness check against the cache in `.sense/`; only c
 - **Output is flat.** `map`, `peek`, and a search row cost the same on a small tree as a large one: context cost is bounded by what you ask for, not by how much there is.
 - **Bulk changes are paid by whoever queries next.** `sense watch` moves that re-parse into the background ([DESIGN.md](DESIGN.md#watch-coordination)): it changes latency, never answers, since every query reconciles for itself. To start the cache over, delete the directory `sense status` prints.
 
-These are release gates rather than hopes: every release regenerates the numbers on pinned corpora spanning a 4x range in note count plus a stress tree that packs the worst measured shapes into one place: a megabyte-scale note, heading-dense outlines, dense link graphs, hundreds of frontmatter fields. Configured performance and output-size bands remain release gates. Report-only total rows are exempt from performance thresholds only; invocation failures and invalid artifacts block independently. Current figures: [BENCHMARKING.md](BENCHMARKING.md).
+Release assessments keep these claims measured. The ordinary assessment runs required common behavior and current-store work plus full portable NFCorpus on all three stores. The explicit deep profile adds portable FEVER, pinned corpora spanning a 4x range in note count, a stress tree that packs the worst measured shapes into one place, and legacy SQLite OR-bag continuity. Historical performance, quality, and output bands warn; failed required behavior, invalid or missing required evidence, explicit caller bounds or quality floors, and approved performance guards block. Current figures: [BENCHMARKING.md](BENCHMARKING.md).
 
 ## For AI agents
 

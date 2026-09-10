@@ -14,19 +14,22 @@ Subagents dispatched during a release are spawned with `model: sonnet`. Reviews 
    npm run benchmark -- --dry-run        # selected stages, reasons, and historical-cost estimate; no measurement
    ```
 
-   `ordinary` is the default assessment. `deep` explicitly adds the large scale/stress and fresh
-   retrieval-quality collection. The dry run exposes the profile, selected requirements, reasons,
-   and a historical execution estimate before work begins. The ordinary 10–20 minute target is an
+   `ordinary` is the default assessment. It runs the selected common correctness and matched-input
+   current-store work plus full portable NFCorpus on every offered store. `deep` explicitly adds
+   portable FEVER on every store, the large scale/stress workloads, and the legacy SQLite OR-bag
+   continuity rows. The dry run exposes the profile, selected requirements, reasons, and a
+   historical execution estimate before work begins. The ordinary 10–20 minute target is an
    estimate, not a measured promise for this machine or diff.
 
-   **Changed capabilities expand the gate before it runs.** Required work cannot be skipped by a
-   profile or flag. When an ordinary run owes a baseline assessment but no changed capability requires fresh retrieval collection, it
-   revalidates retained raw quality against the current retrieval, model, and corpus identities.
-   Missing or incompatible raw evidence selects fresh quality before work starts; a compact report
-   cannot revalidate quality it omitted. A sitting and its report retain the profile and effective
-   requirements, and resume refuses an incompatible selection. Native diagnostic matrices and
-   historical sweeps are omitted unless explicitly requested; neither profile selects them
-   automatically.
+   **Changed capabilities expand the common gate before it runs.** Common work owed by the diff
+   cannot be skipped by a profile or flag. When an ordinary run owes a baseline assessment but no
+   changed capability requires fresh retrieval collection, it revalidates retained raw portable
+   NFCorpus quality against the current retrieval, model, corpus, query, judgment, and all-store
+   identities. Missing or incompatible raw evidence selects fresh portable NFCorpus before work
+   starts; a compact report cannot revalidate quality it omitted. A sitting and its report retain
+   the profile and effective requirements, and resume refuses an incompatible selection. Native
+   diagnostic matrices and historical sweeps are omitted unless explicitly requested; neither
+   profile selects them automatically.
 
    Stages run in order: static checks, functional suites, hub baseline, scale and stress when
    selected, then retrieval quality when selected. Independent benchmark and evidence failures
@@ -39,7 +42,14 @@ Subagents dispatched during a release are spawned with `model: sonnet`. Reviews 
    successful work and retries failed or incomplete steps; a changed measured tree requires new
    evidence. No failure disappears merely because later steps ran.
 
-   **The diff picks the gates, not the person running it.** `benchmark/lib/gates.mjs` maps changed paths to the gates they owe: a change under `src/embed/` owes the live endpoint suite and the fever eval, a change under `src/chunk/` owes the Obsidian parity gate, a docs-only change owes the tests and nothing else. A gate the map owes cannot be skipped by a flag. This exists because the fever eval was skipped by every sitting from 0.6.0 until something forced it.
+   **The diff picks the common gates; the profile picks the bounded breadth.**
+   `benchmark/lib/gates.mjs` maps changed paths to the gates they owe. A change under `src/embed/`
+   owes the live endpoint suite and ordinary baseline relevance obligations, not FEVER; a change
+   under `src/chunk/` owes the common Obsidian parity and store checks, while deep adds scale. A
+   docs-only change owes the tests and nothing else. Known common gates cannot be skipped by a flag,
+   and unreadable or unclassified source and dependency changes expand the selection
+   conservatively. The explicit deep profile keeps FEVER visible after it was skipped by every
+   sitting from 0.6.0 until something forced it.
 
    The gate runs every owed gate itself, the Obsidian parity check and the `store-dump` A/B included: the parity step opens the vault named by `SENSE_TEST_OBSIDIAN_VAULT`, and the A/B captures the last release from the npm install `compare-versions` already caches, so nothing is checked out or built twice. A step whose prerequisite is genuinely absent on the machine is reported owed-and-unmet rather than skipped quietly.
 

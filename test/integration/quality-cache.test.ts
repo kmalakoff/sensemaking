@@ -1,9 +1,11 @@
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { cpSync, mkdirSync, readdirSync, readFileSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import assert from 'assert';
 import { signalProcessTree } from '../../benchmark/lib/native-observer.mjs';
 import { needsQualityModelDownload, observeQualityModel, prepareQualityWorkTree } from '../../benchmark/lib/quality-work-tree.mjs';
+import { buildStages } from '../../benchmark/lib/stages.mjs';
+import { buildReport, persist } from '../../benchmark/report.mjs';
 import { writeModel } from '../lib/model.ts';
 import { packageRoot, scratchDir } from '../lib/scratch.ts';
 import { forEachStore, openTreeForStore, type ParityStoreName } from '../lib/stores.ts';
@@ -161,11 +163,15 @@ describe('quality cache work trees', () => {
 
     const source = sourceTree();
     const workRoot = scratchDir('quality-identity-source');
-    await seedPublished('sqlite', workRoot, 'source-key', source);
-    writeFileSync(join(source, 'a.md'), '# Alpha\n\nchanged source\n');
+    const seeded = await seedPublished('sqlite', workRoot, 'source-key', source);
+    const sourcePath = join(source, 'a.md');
+    const original = statSync(sourcePath);
+    writeFileSync(sourcePath, '# Alpha\n\nneedle omega\n');
+    utimesSync(sourcePath, original.atime, original.mtime);
     const changedSource = prepareQualityWorkTree({ workRoot, key: 'source-key', source, cacheInputs: cacheInputs('sqlite'), reuseEligible: true });
     assert.equal(changedSource.reuse_state, 'source-copy');
     assert.equal(changedSource.reused_generation, null);
+    assert.notEqual(changedSource.cacheFingerprint, seeded.prepared.cacheFingerprint);
     changedSource.discard();
   });
 
@@ -265,7 +271,7 @@ describe('quality cache work trees', () => {
     });
   });
 
-  it('runs the real quality entrypoint twice per store with private verified reuse', async function () {
+  it('runs the real quality entrypoint twice per store, compares the artifacts, and persists the report', async function () {
     this.timeout(120_000);
     const root = scratchDir('quality-step-sandbox');
     cpSync(join(packageRoot, 'benchmark'), join(root, 'benchmark'), { recursive: true });
@@ -282,10 +288,11 @@ describe('quality cache work trees', () => {
     writeFileSync(join(corpus, 'labels', 'queries.jsonl'), '{"_id":"q1","text":"apple"}\n');
     writeFileSync(join(corpus, 'labels', 'test.tsv'), 'query-id\tcorpus-id\tscore\nq1\ta\t1\n');
     const model = writeModel();
+    const portableArtifacts: string[] = [];
 
     await forEachStore(async (store) => {
       const firstOut = join(root, `${store}-first.json`);
-      const secondOut = join(root, `${store}-second.json`);
+      const secondOut = join(root, `portable-eval-nfcorpus-${store}.json`);
       const firstStdout = await runQualityStep(root, store, model, firstOut);
       const secondStdout = await runQualityStep(root, store, model, secondOut);
       const first = JSON.parse(readFileSync(firstOut, 'utf8'));
@@ -307,6 +314,64 @@ describe('quality cache work trees', () => {
       assert.equal(second.cache.cache_fingerprint, first.cache.cache_fingerprint);
       assert.equal(typeof first.cache.cache_inputs.retrieval.fingerprint, 'string');
       assert.equal(second.cache.cache_inputs.retrieval.fingerprint, first.cache.cache_inputs.retrieval.fingerprint);
+      portableArtifacts.push(secondOut);
     });
+
+    const comparisonId = 'portable-eval-nfcorpus-comparison';
+    const comparisonOut = join(root, `${comparisonId}.json`);
+    const compared = spawnSync(process.execPath, [join(root, 'benchmark', 'tools', 'portable-quality-compare.mjs'), ...portableArtifacts, '--out', comparisonOut], { cwd: root, encoding: 'utf8', timeout: 30_000, maxBuffer: 4 * 1024 * 1024 });
+    assert.equal(compared.error, undefined, compared.error?.message ?? 'portable quality comparator failed to start');
+    assert.equal(compared.status, 0, compared.stderr);
+    const comparison = JSON.parse(readFileSync(comparisonOut, 'utf8'));
+    assert.equal(comparison.valid, true, comparison.errors.join('\n'));
+    assert.deepEqual(comparison.stores, ['duckdb', 'sqlite', 'turso']);
+
+    const focusedOnly = 'focused-framework-only';
+    const actualSteps = new Set([...portableArtifacts.map((path) => basename(path, '.json')), comparisonId]);
+    const selectedStepIds: string[] = [];
+    for (const stage of buildStages()) {
+      for (const step of stage.steps) {
+        if (step.owedBy === 'always' || step.owedBy === 'quality-baseline') selectedStepIds.push(step.id);
+      }
+    }
+    const steps = Object.fromEntries(selectedStepIds.map((id) => [id, actualSteps.has(id) ? { id, status: 'ok', owed: true } : { id, status: 'not-run', owed: true, blocked_by: [focusedOnly] }]));
+    writeFileSync(
+      join(root, 'sitting.json'),
+      JSON.stringify({
+        date: '2099-01-01',
+        baseline_version: null,
+        last_tag: null,
+        machine: { cpu_model: 'fixture' },
+        node: process.version,
+        changed_paths: ['src/commands/search.ts'],
+        profile: 'ordinary',
+        effective_requirements: { 'quality-baseline': ['tiny framework workflow'] },
+        owed: { 'quality-baseline': ['tiny framework workflow'] },
+        steps,
+        failed_stage_reasons: [],
+      })
+    );
+    const reportsDir = scratchDir('quality-workflow-reports');
+    const report = buildReport(root, { reportsDir, currentRoot: root });
+    assert.equal(report.verdict, 'BLOCK');
+    const requiredButNotRun = selectedStepIds.filter((id) => !actualSteps.has(id));
+    assert.deepEqual(requiredButNotRun, ['validate', 'npm-test']);
+    for (const id of requiredButNotRun)
+      assert.ok(
+        report.unmeasured_reasons.some((reason) => reason.startsWith(`${id}: not run (blocked by ${focusedOnly})`)),
+        `${id} must remain an explicit not-run blocker`
+      );
+    assert.ok(report.assessment.verified_artifacts.includes(comparisonId));
+    const classifications = report.classifications.filter((row) => row.context.startsWith('portable-eval-nfcorpus-') && ['ndcg', 'rr', 'hit'].includes(row.key));
+    assert.equal(classifications.length, 27);
+    assert.ok(classifications.every((row) => row.current === 1 && row.verdict === 'no-compatible-prior'));
+    assert.equal(report.assessment.current_common_query_relevance.length, 27);
+    assert.ok(report.assessment.current_common_query_relevance.every((row) => row[4] === '1.0000'));
+
+    const saved = persist(report, { sittingDir: root, reportsDir });
+    const persisted = JSON.parse(readFileSync(saved.jsonPath, 'utf8'));
+    assert.deepEqual(persisted.assessment.current_common_query_relevance, report.assessment.current_common_query_relevance);
+    assert.ok(persisted.assessment.verified_artifacts.includes(comparisonId));
+    assert.match(readFileSync(saved.mdPath, 'utf8'), /#### Verdict: BLOCK/);
   });
 });

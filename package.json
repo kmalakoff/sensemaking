@@ -77,6 +77,7 @@
     "format": "tsds format",
     "prepublishOnly": "tsds validate",
     "test": "tsds test:node --no-timeouts",
+    "test:benchmark-framework": "tsds test:node --no-timeouts test/integration/benchmark-workload-identity.test.ts test/integration/benchmark-row-classes.test.ts test/integration/gate-dependencies.test.ts test/integration/gate-profile.test.ts test/integration/gate-scheduling.test.ts test/integration/quality-retrieval-identity.test.ts test/integration/quality-validity.test.ts test/integration/portable-quality.test.ts test/integration/portable-quality-stage.test.ts test/integration/retained-quality.test.ts test/integration/benchmark-worker-lifetime.test.ts test/integration/benchmark-harness.test.ts test/integration/quality-cache.test.ts",
     "test:engines": "nvu engines tsds test:node --no-timeouts",
     "version": "tsds version"
   },

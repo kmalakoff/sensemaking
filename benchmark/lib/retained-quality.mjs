@@ -13,15 +13,18 @@ import { findPriorReports } from './verdict.mjs';
 import { captureFileManifest } from './work-tree.mjs';
 import { directoryIdentity, identityHash, manifestIdentity, pathSetIdentity } from './workload-identity.mjs';
 
-export const RETAINED_QUALITY_SCHEMA = 'retained-quality-v1';
+export const RETAINED_QUALITY_SCHEMA = 'retained-quality-v2';
 export const RETAINED_QUALITY_GATE = 'quality-revalidation';
 
-const groups = [
-  { corpus: 'nfcorpus', gate: 'quality-baseline' },
-  { corpus: 'fever', gate: 'fever' },
-];
+export const RETAINED_QUALITY_SCOPE = {
+  corpus: 'nfcorpus',
+  split: 'test',
+  k: 10,
+  query_form: 'bare-and',
+  stores: [...PORTABLE_QUALITY_STORES],
+};
 
-export const retainedQualityIds = groups.flatMap(({ corpus }) => [`eval-${corpus}`, ...PORTABLE_QUALITY_STORES.map((store) => `portable-eval-${corpus}-${store}`), `portable-eval-${corpus}-comparison`]);
+export const retainedQualityIds = [...PORTABLE_QUALITY_STORES.map((store) => `portable-eval-nfcorpus-${store}`), 'portable-eval-nfcorpus-comparison'];
 export const retainedQualityProducerIds = retainedQualityIds.filter((id) => !id.endsWith('-comparison'));
 
 const readJson = (path) => JSON.parse(readFileSync(path, 'utf8'));
@@ -65,7 +68,8 @@ function validateCacheProvenance(artifact, id, report) {
 function validateCurrentInputs(artifact, id, currentRoot, currentRetrieval) {
   const errors = [];
   let currentModel = null;
-  if (artifact.split !== 'test' || artifact.k !== 10) errors.push(`${id}: retained artifact is not the full gate workload (test split, k=10)`);
+  if (artifact.corpus !== RETAINED_QUALITY_SCOPE.corpus || artifact.split !== RETAINED_QUALITY_SCOPE.split || artifact.k !== RETAINED_QUALITY_SCOPE.k)
+    errors.push(`${id}: retained artifact is not the full ${RETAINED_QUALITY_SCOPE.corpus} gate workload (${RETAINED_QUALITY_SCOPE.split} split, k=${RETAINED_QUALITY_SCOPE.k})`);
   const cacheInputs = artifact.cache?.cache_inputs;
   const recordedRetrieval = cacheInputs?.retrieval;
   if (isObject(recordedRetrieval) && typeof recordedRetrieval.fingerprint === 'string') {
@@ -210,52 +214,36 @@ export async function inspectRetainedQuality({ reportsDir, sittingsDir, baseline
   } catch (error) {
     errors.push(`current retrieval identity: ${error?.message ?? String(error)}`);
   }
-  for (const { corpus } of groups) {
-    const sqliteId = `eval-${corpus}`;
-    const sqliteRaw = rawById[sqliteId];
-    if (sqliteRaw && currentRetrieval) {
-      try {
-        errors.push(...validateCacheProvenance(sqliteRaw, sqliteId, report));
-        const current = validateCurrentInputs(sqliteRaw, sqliteId, currentRoot, currentRetrieval);
-        errors.push(...current.errors);
-        currentInputs[sqliteId] = current.current;
-        const checked = revalidateQualityArtifact(sqliteRaw, { store: 'sqlite', queryForm: 'or-bag' });
-        errors.push(...checked.errors.map((error) => `${sqliteId}: ${error}`));
-        if (checked.errors.length === 0) artifacts[sqliteId] = summarizedArtifact(checked.artifact, sourceCompact[sqliteId]);
-      } catch (error) {
-        errors.push(`${sqliteId}: ${error?.message ?? String(error)}`);
+  const portable = [];
+  for (const store of PORTABLE_QUALITY_STORES) {
+    const id = `portable-eval-nfcorpus-${store}`;
+    const raw = rawById[id];
+    if (!raw || !currentRetrieval) continue;
+    try {
+      errors.push(...validateCacheProvenance(raw, id, report));
+      const current = validateCurrentInputs(raw, id, currentRoot, currentRetrieval);
+      errors.push(...current.errors);
+      currentInputs[id] = current.current;
+      const checked = revalidateQualityArtifact(raw, { store, queryForm: RETAINED_QUALITY_SCOPE.query_form });
+      errors.push(...checked.errors.map((error) => `${id}: ${error}`));
+      if (checked.errors.length === 0) {
+        portable.push(checked.artifact);
+        artifacts[id] = summarizedArtifact(checked.artifact, sourceCompact[id]);
       }
+    } catch (error) {
+      errors.push(`${id}: ${error?.message ?? String(error)}`);
     }
-    const portable = [];
-    for (const store of PORTABLE_QUALITY_STORES) {
-      const id = `portable-eval-${corpus}-${store}`;
-      const raw = rawById[id];
-      if (!raw || !currentRetrieval) continue;
-      try {
-        errors.push(...validateCacheProvenance(raw, id, report));
-        const current = validateCurrentInputs(raw, id, currentRoot, currentRetrieval);
-        errors.push(...current.errors);
-        currentInputs[id] = current.current;
-        const checked = revalidateQualityArtifact(raw, { store, queryForm: 'bare-and' });
-        errors.push(...checked.errors.map((error) => `${id}: ${error}`));
-        if (checked.errors.length === 0) {
-          portable.push(checked.artifact);
-          artifacts[id] = summarizedArtifact(checked.artifact, sourceCompact[id]);
-        }
-      } catch (error) {
-        errors.push(`${id}: ${error?.message ?? String(error)}`);
-      }
-    }
-    if (portable.length === PORTABLE_QUALITY_STORES.length) {
-      const comparison = comparePortableQualityArtifacts(portable);
-      if (!comparison.valid) errors.push(`portable-eval-${corpus}-comparison: ${comparison.errors.join('; ')}`);
-      else artifacts[`portable-eval-${corpus}-comparison`] = comparison;
-    }
+  }
+  if (portable.length === PORTABLE_QUALITY_STORES.length) {
+    const comparison = comparePortableQualityArtifacts(portable);
+    if (!comparison.valid) errors.push(`portable-eval-nfcorpus-comparison: ${comparison.errors.join('; ')}`);
+    else artifacts['portable-eval-nfcorpus-comparison'] = comparison;
   }
   const valid = errors.length === 0 && Object.keys(artifacts).length === retainedQualityIds.length;
   return {
     schema: RETAINED_QUALITY_SCHEMA,
     measure_version: MEASURE_VERSION,
+    scope: RETAINED_QUALITY_SCOPE,
     valid,
     status: valid ? 'revalidated' : 'invalid',
     errors,
@@ -271,51 +259,52 @@ export async function inspectRetainedQuality({ reportsDir, sittingsDir, baseline
 export function validateRetainedQualityRecord(record, { sittingsDir, currentRoot, expectedSource = null }) {
   const errors = [];
   if (!isObject(record) || record.schema !== RETAINED_QUALITY_SCHEMA || record.valid !== true || record.status !== 'revalidated') return ['retained-quality artifact is not a successful revalidation'];
+  if (identityHash(record.scope) !== identityHash(RETAINED_QUALITY_SCOPE)) errors.push('retained-quality scope is not portable NFCorpus on every offered store');
   if (expectedSource && identityHash(record.source) !== identityHash(expectedSource)) errors.push('retained-quality source differs from the selected source');
   const report = { package_version: record.source?.package_version };
   if (!isObject(record.source) || basename(record.source.sitting ?? '') !== record.source.sitting) errors.push('retained-quality source provenance is invalid');
   for (const id of retainedQualityProducerIds) if (record.source_steps_status?.[id]?.status !== 'ok') errors.push(`${id}: source producer did not complete successfully`);
+  if (identityHash(Object.keys(record.source_steps_status ?? {}).sort()) !== identityHash([...retainedQualityProducerIds].sort())) errors.push('retained-quality source producer coverage is not the required subset');
+  if (identityHash(Object.keys(record.raw_evidence ?? {}).sort()) !== identityHash([...retainedQualityProducerIds].sort())) errors.push('retained-quality raw evidence coverage is not the required subset');
   if (identityHash(Object.keys(record.source_compact ?? {}).sort()) !== identityHash([...retainedQualityProducerIds].sort())) errors.push('retained-quality compact source coverage is incomplete');
   if (identityHash(Object.keys(record.artifacts ?? {}).sort()) !== identityHash([...retainedQualityIds].sort())) errors.push('retained-quality summarized artifact coverage is incomplete');
   if (identityHash(Object.keys(record.current_inputs ?? {}).sort()) !== identityHash([...retainedQualityProducerIds].sort())) errors.push('retained-quality current input coverage is incomplete');
   const currentRetrieval = qualityRetrievalIdentity(currentRoot);
-  for (const { corpus } of groups) {
-    const normalizedPortable = [];
-    for (const id of [`eval-${corpus}`, ...PORTABLE_QUALITY_STORES.map((store) => `portable-eval-${corpus}-${store}`)]) {
-      const path = join(sittingsDir, record.source.sitting, `${id}.json`);
-      if (!existsSync(path)) {
-        errors.push(`${id}: retained raw artifact is missing`);
-        continue;
-      }
-      try {
-        const raw = readJson(path);
-        const compactSource = record.source_compact?.[id];
-        if (identityHash(raw) !== record.raw_evidence?.[id]) errors.push(`${id}: retained raw artifact changed after revalidation`);
-        if (identityHash(compactStep(id, raw)) !== identityHash(compactSource)) errors.push(`${id}: retained raw artifact no longer matches the source report`);
-        errors.push(...validateCacheProvenance(raw, id, report));
-        const current = validateCurrentInputs(raw, id, currentRoot, currentRetrieval);
-        errors.push(...current.errors);
-        if (identityHash(current.current) !== identityHash(record.current_inputs?.[id])) errors.push(`${id}: current input evidence differs from the revalidation record`);
-        const store = id === `eval-${corpus}` ? 'sqlite' : id.slice(`portable-eval-${corpus}-`.length);
-        const checked = revalidateQualityArtifact(raw, { store, queryForm: id === `eval-${corpus}` ? 'or-bag' : 'bare-and' });
-        errors.push(...checked.errors.map((error) => `${id}: ${error}`));
-        if (checked.errors.length === 0) {
-          if (identityHash(summarizedArtifact(checked.artifact, compactSource)) !== identityHash(record.artifacts?.[id])) errors.push(`${id}: summarized metrics differ from recomputed retained rankings`);
-          if (id !== `eval-${corpus}`) normalizedPortable.push(checked.artifact);
-        }
-      } catch (error) {
-        errors.push(`${id}: ${error?.message ?? String(error)}`);
-      }
+  const normalizedPortable = [];
+  for (const store of PORTABLE_QUALITY_STORES) {
+    const id = `portable-eval-nfcorpus-${store}`;
+    const path = join(sittingsDir, record.source.sitting, `${id}.json`);
+    if (!existsSync(path)) {
+      errors.push(`${id}: retained raw artifact is missing`);
+      continue;
     }
-    if (normalizedPortable.length === PORTABLE_QUALITY_STORES.length) {
-      const comparisonId = `portable-eval-${corpus}-comparison`;
-      const comparison = comparePortableQualityArtifacts(normalizedPortable);
-      if (!comparison.valid || identityHash(comparison) !== identityHash(record.artifacts?.[comparisonId])) errors.push(`${comparisonId}: summarized comparison differs from recomputed retained rankings`);
+    try {
+      const raw = readJson(path);
+      const compactSource = record.source_compact?.[id];
+      if (identityHash(raw) !== record.raw_evidence?.[id]) errors.push(`${id}: retained raw artifact changed after revalidation`);
+      if (identityHash(compactStep(id, raw)) !== identityHash(compactSource)) errors.push(`${id}: retained raw artifact no longer matches the source report`);
+      errors.push(...validateCacheProvenance(raw, id, report));
+      const current = validateCurrentInputs(raw, id, currentRoot, currentRetrieval);
+      errors.push(...current.errors);
+      if (identityHash(current.current) !== identityHash(record.current_inputs?.[id])) errors.push(`${id}: current input evidence differs from the revalidation record`);
+      const checked = revalidateQualityArtifact(raw, { store, queryForm: RETAINED_QUALITY_SCOPE.query_form });
+      errors.push(...checked.errors.map((error) => `${id}: ${error}`));
+      if (checked.errors.length === 0) {
+        if (identityHash(summarizedArtifact(checked.artifact, compactSource)) !== identityHash(record.artifacts?.[id])) errors.push(`${id}: summarized metrics differ from recomputed retained rankings`);
+        normalizedPortable.push(checked.artifact);
+      }
+    } catch (error) {
+      errors.push(`${id}: ${error?.message ?? String(error)}`);
     }
+  }
+  if (normalizedPortable.length === PORTABLE_QUALITY_STORES.length) {
+    const comparisonId = 'portable-eval-nfcorpus-comparison';
+    const comparison = comparePortableQualityArtifacts(normalizedPortable);
+    if (!comparison.valid || identityHash(comparison) !== identityHash(record.artifacts?.[comparisonId])) errors.push(`${comparisonId}: summarized comparison differs from recomputed retained rankings`);
   }
   return errors;
 }
 
 export function retainedQualitySummary(record) {
-  return { schema: record.schema, measure_version: record.measure_version ?? MEASURE_VERSION, valid: record.valid, status: record.status, errors: record.errors, source: record.source ?? null };
+  return { schema: record.schema, measure_version: record.measure_version ?? MEASURE_VERSION, scope: record.scope ?? null, valid: record.valid, status: record.status, errors: record.errors, source: record.source ?? null };
 }
