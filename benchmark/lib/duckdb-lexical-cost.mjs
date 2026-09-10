@@ -27,6 +27,23 @@ const EXPECTED_PATHS = {
   scoped_phrase: ['punctuation.md'],
 };
 
+const QUERY_CASES = [
+  { id: 'bare', terms: 'needle', options: BASE_OPTIONS, expected: EXPECTED_PATHS.bare },
+  { id: 'phrase', terms: PHRASE, options: BASE_OPTIONS, expected: EXPECTED_PATHS.phrase },
+  {
+    id: 'scoped_phrase',
+    terms: PHRASE,
+    options: { ...BASE_OPTIONS, scopeCond: 'AND content.path IN (SELECT "path" FROM _duckdb_lexical_cost_scope)', limit: 1 },
+    expected: EXPECTED_PATHS.scoped_phrase,
+  },
+];
+const WARMUP_QUERY_ORDER = QUERY_CASES.map(({ id }) => id);
+
+function measuredQueryCases(repetition) {
+  const offset = (repetition - 1) % QUERY_CASES.length;
+  return [...QUERY_CASES.slice(offset), ...QUERY_CASES.slice(0, offset)];
+}
+
 function fixtureRows(notes) {
   if (!DUCKDB_LEXICAL_COST_NOTES.includes(notes)) throw new Error(`notes must be one of ${DUCKDB_LEXICAL_COST_NOTES.join(', ')}`);
   const rows = [...AUTHORED_ROWS];
@@ -141,24 +158,34 @@ async function sample({ DuckDBInstance, createConnection, createLexicalIndex, re
     await (await conn.prepare('INSERT INTO _duckdb_lexical_cost_scope VALUES (?)')).run('punctuation.md');
 
     const lexical = createLexicalIndex(conn);
-    const primed = await lexical.query('needle', BASE_OPTIONS);
-    assertPaths(primed, EXPECTED_PATHS.bare, `notes ${notes} repetition ${repetition} priming`);
+    const warmupQueryOrder = [];
+    for (const query of QUERY_CASES) {
+      const primed = await lexical.query(query.terms, query.options);
+      assertPaths(primed, query.expected, `notes ${notes} repetition ${repetition} warmup ${query.id}`);
+      warmupQueryOrder.push(query.id);
+    }
 
     const observer = observeConnection(conn);
     try {
       const queries = [];
-      for (const query of [
-        { id: 'bare', terms: 'needle', options: BASE_OPTIONS, expected: EXPECTED_PATHS.bare },
-        { id: 'phrase', terms: PHRASE, options: BASE_OPTIONS, expected: EXPECTED_PATHS.phrase },
-        { id: 'scoped_phrase', terms: PHRASE, options: { ...BASE_OPTIONS, scopeCond: 'AND content.path IN (SELECT "path" FROM _duckdb_lexical_cost_scope)', limit: 1 }, expected: EXPECTED_PATHS.scoped_phrase },
-      ]) {
+      const measuredQueries = measuredQueryCases(repetition);
+      for (const query of measuredQueries) {
         const observed = await observer.measure(() => lexical.query(query.terms, query.options));
         assertPaths(observed.result, query.expected, `notes ${notes} repetition ${repetition} ${query.id}`);
         queries.push({ id: query.id, terms: query.terms, options: query.options, expected_paths: query.expected, actual_paths: observed.result.map(({ path }) => path), ...observed.timing });
       }
       const native = await (await conn.prepare('SELECT version() AS version')).get();
       if (typeof native?.version !== 'string' || native.version.length === 0) throw new Error('DuckDB version query returned no version');
-      result = { repetition, fixture_rows: rows.length, indexed_row_count: count, state: { database: 'fresh', index: 'warm' }, queries, native: { version_query: 'SELECT version() AS version', version: native.version } };
+      result = {
+        repetition,
+        fixture_rows: rows.length,
+        indexed_row_count: count,
+        state: { database: 'fresh', index: 'warm', query_shapes: 'warm' },
+        warmup_query_order: warmupQueryOrder,
+        measured_query_order: measuredQueries.map(({ id }) => id),
+        queries,
+        native: { version_query: 'SELECT version() AS version', version: native.version },
+      };
     } finally {
       observer.restore();
     }
@@ -188,7 +215,7 @@ export async function runDuckdbLexicalCost({ DuckDBInstance, createConnection, c
         samples.push({ notes, ...(await sample({ DuckDBInstance, createConnection, createLexicalIndex, registerFunctions, notes, repetition })) });
       } catch (error) {
         const message = errorMessages(error).join('; ');
-        samples.push({ notes, repetition, state: { database: 'fresh', index: 'warm' }, error: message });
+        samples.push({ notes, repetition, error: message });
         errors.push(`notes ${notes} repetition ${repetition}: ${message}`);
       }
     }
@@ -200,6 +227,10 @@ export async function runDuckdbLexicalCost({ DuckDBInstance, createConnection, c
     filler: 'unrelated filler document N',
     expectations: EXPECTED_PATHS,
     row_counts: Object.fromEntries(DUCKDB_LEXICAL_COST_NOTES.map((notes) => [notes, fixtureRows(notes).length])),
+    procedure: {
+      warmup_query_order: WARMUP_QUERY_ORDER,
+      measured_query_orders: Object.fromEntries(Array.from({ length: DUCKDB_LEXICAL_COST_REPETITIONS }, (_unused, index) => [index + 1, measuredQueryCases(index + 1).map(({ id }) => id)])),
+    },
   };
   return {
     schema: DUCKDB_LEXICAL_COST_SCHEMA,
