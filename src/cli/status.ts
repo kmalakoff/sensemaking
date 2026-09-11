@@ -7,6 +7,7 @@ import { isDownloadable, MODEL_FILENAMES, modelDir, modelPresent, readLanguages 
 import { featuresLine, presetsLines, stringifyJson } from '../output/output.ts';
 import { docCount, getMeta, openStore } from '../store/index.ts';
 import type { Store } from '../store/types.ts';
+import { readWatchClaim } from '../watch-claim.ts';
 import { USAGE } from './index.ts';
 import { CONFIG, FORMAT, formatOf, parse, printWarnings } from './shared.ts';
 import type { Command } from './types.ts';
@@ -80,13 +81,13 @@ const status: Command = async (ctx) => {
   const presets = await presetCoverage(store, cfg);
   const { languages: declaredLanguages, state: languagesState, source: languagesSource } = e ? languagesInfo(e) : { languages: null, state: null, source: null };
   const detectedLanguages = (await languageDistribution(store)) ?? null;
-  const heartbeat = await getMeta(store, 'watch_heartbeat');
   // Written by the store's open() on every open, so it is this cache's true version on either
   // store (sqlite 18, duckdb 2); a version mismatch already triggered a rebuild before this read.
   const cacheSchema = await getMeta(store, 'schema_version');
   // Each store owns what it reports and how it is worded (Store.engineStatus); this command
   // prints entries generically, without branching on any store's name.
   const engine = await store.engineStatus();
+  const watcher = readWatchClaim(cfg.configDir ?? cfg.rootDir ?? cfg.baseDir);
   // The env var holds the token; only its name and whether it is set are ever reported.
   const keyEnv = e?.key ? { name: e.key, set: (process.env[e.key] ?? '') !== '' } : null;
   const result = {
@@ -107,8 +108,8 @@ const status: Command = async (ctx) => {
     embed: e ? { provider: e.provider, model: e.model, dir: e.provider === 'static' ? modelDir(e.model) : null, url: e.url ? redactUrl(e.url) : null, reachable, keyEnv, downloaded: hasModel, languages: declaredLanguages, languagesState, detectedLanguages, ...(vectors ?? {}) } : null,
     presets,
     queries: Object.keys(cfg.queries ?? {}).length,
-    watcherPid: await getMeta(store, 'watch_pid'),
-    watcherHeartbeatSecondsAgo: heartbeat ? Math.round((Date.now() - Date.parse(heartbeat)) / 1000) : null,
+    watcherPid: watcher ? String(watcher.pid) : null,
+    watcherHeartbeatSecondsAgo: watcher ? Math.round((Date.now() - watcher.heartbeatMs) / 1000) : null,
     engine,
   };
 

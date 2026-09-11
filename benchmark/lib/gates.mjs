@@ -52,6 +52,7 @@ const KNOWN_SOURCE_ROOTS = [
   'src/store/',
   'src/text/',
   'src/types/',
+  'src/watch-claim.ts',
   'src/watch.ts',
   'src/workers/',
 ];
@@ -75,7 +76,7 @@ const QUALITY_EVALUATOR_PATHS = [
 ];
 
 const DIFF_MAP = [
-  { gate: 'test-engines', when: ['src/store/sqlite/', 'src/watch.ts', 'src/scan/', 'src/workers/', 'package.json'] },
+  { gate: 'test-engines', when: ['src/store/sqlite/', 'src/watch-claim.ts', 'src/watch.ts', 'src/scan/', 'src/workers/', 'package.json'] },
   { gate: 'live-suite', when: ['src/embed/'] },
   { gate: 'store-dump', when: ['src/store/', 'src/chunk/', 'src/features/'] },
   { gate: 'oracle', when: ['src/chunk/', 'src/text/', 'src/scan/frontmatter.ts', 'src/features/tags.ts', 'src/features/links.ts', 'src/features/sections.ts', 'src/features/fences.ts'] },
@@ -139,8 +140,8 @@ export function profileReasons(paths, lastTag, profile = DEFAULT_PROFILE, packag
   const unknownSource = paths.filter((path) => path.startsWith('src/') && !pathOwesRow(path, KNOWN_SOURCE_ROOTS));
   const dependencyInputs = [];
   if (paths.includes('package.json') && packageJson?.classification === 'dependency') dependencyInputs.push('package.json (dependency input)');
-  const unclassifiedPackage = paths.includes('package.json') && packageJson?.classification !== 'version-scripts-only' && packageJson?.classification !== 'dependency' ? [`package.json (${packageJson?.reason ?? 'package contents unclassified'})`] : [];
-  if (paths.includes('package-lock.json') && packageLock?.classification !== 'version-metadata-only') dependencyInputs.push(`package-lock.json (${packageLock?.reason ?? 'dependency or other lock content changed'})`);
+  const unclassifiedPackage = paths.includes('package.json') && !['version-scripts-only', 'dependency', 'dev-dependency-pin'].includes(packageJson?.classification) ? [`package.json (${packageJson?.reason ?? 'package contents unclassified'})`] : [];
+  if (paths.includes('package-lock.json') && !['version-metadata-only', 'dev-dependency-pin'].includes(packageLock?.classification)) dependencyInputs.push(`package-lock.json (${packageLock?.reason ?? 'dependency or other lock content changed'})`);
   const conservative = [...unknownSource.map((path) => `${path} (unclassified source path)`), ...dependencyInputs, ...unclassifiedPackage];
   if (conservative.length > 0) {
     for (const gate of DEEP_PROFILE_GATES) {

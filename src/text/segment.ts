@@ -8,7 +8,8 @@ import { stemmer } from 'stemmer';
 export const UNSPACED_SCRIPTS = '\\p{scx=Han}\\p{scx=Hiragana}\\p{scx=Katakana}\\p{scx=Thai}\\p{scx=Khmer}\\p{scx=Lao}\\p{scx=Myanmar}';
 // A run is script BASE characters with their combining marks attached; a bare mark after a
 // Latin letter (decomposed é) never starts one.
-const RUN = new RegExp(`((?:[${UNSPACED_SCRIPTS}]\\p{M}*)+)`, 'gu');
+const RUN_BODY = `(?:[${UNSPACED_SCRIPTS}]\\p{M}*)+`;
+const RUN = new RegExp(`(${RUN_BODY})`, 'gu');
 const HAS_RUN = new RegExp(`[${UNSPACED_SCRIPTS}]`, 'u');
 
 // Whether text holds a script that marks no word boundaries, the predicate every store's
@@ -119,30 +120,160 @@ const QUALIFIER = /(^|[\s(])(-?)(title|summary|text)\s*:\s*$/;
 // Raw title/summary/text drop punctuation as unicode61's token separator, so `数数` and `数。数`
 // falsely match there; only the barriered `_seg` columns are safe from it, hence this fallback target.
 const SIDECAR_COLUMNS = '{title_seg summary_seg text_seg}:';
+const AUTHORED_COLUMNS = '{title summary text}:';
+const QUOTED_RUN_TOKEN = new RegExp(`"(${RUN_BODY})"`, 'gu');
+
+interface PositionalSpan {
+  start: number;
+  end: number;
+  qualified: boolean;
+}
+
+const FTS_WORD = /[\p{L}\p{N}_]/u;
+
+function isFtsWord(char: string | undefined): boolean {
+  return char !== undefined && FTS_WORD.test(char);
+}
+
+function quoteEnd(text: string, start: number): number {
+  for (let i = start + 1; i < text.length; i++) {
+    if (text[i] !== '"') continue;
+    if (text[i + 1] === '"') {
+      i++;
+      continue;
+    }
+    return i + 1;
+  }
+  return text.length;
+}
+
+function nearEnd(text: string, open: number): number {
+  let depth = 1;
+  let quoted = false;
+  for (let i = open + 1; i < text.length; i++) {
+    const char = text[i];
+    if (char === '"') {
+      if (quoted && text[i + 1] === '"') {
+        i++;
+      } else {
+        quoted = !quoted;
+      }
+    } else if (!quoted && char === '(') {
+      depth++;
+    } else if (!quoted && char === ')' && --depth === 0) {
+      return i + 1;
+    }
+  }
+  return text.length;
+}
+
+// Lexical routing only: SQLite remains responsible for validating the expression. The scanner
+// recognizes NEAR groups and the one FTS string governed by ^, while quoted text shields both.
+function positionalSpans(terms: string): PositionalSpan[] {
+  const spans: PositionalSpan[] = [];
+  for (let i = 0; i < terms.length; i++) {
+    if (terms[i] === '"') {
+      i = quoteEnd(terms, i) - 1;
+      continue;
+    }
+    if (terms.startsWith('NEAR', i) && !isFtsWord(terms[i - 1])) {
+      let open = i + 4;
+      while (/\s/u.test(terms[open] ?? '')) open++;
+      if (terms[open] === '(') {
+        const end = nearEnd(terms, open);
+        if (HAS_RUN.test(terms.slice(open + 1, end))) spans.push({ start: i, end, qualified: QUALIFIER.test(terms.slice(0, i)) });
+        i = end - 1;
+        continue;
+      }
+    }
+    if (terms[i] === '^' && !isFtsWord(terms[i - 1])) {
+      let operand = i + 1;
+      while (/\s/u.test(terms[operand] ?? '')) operand++;
+      const end =
+        terms[operand] === '"'
+          ? quoteEnd(terms, operand)
+          : (() => {
+              let cursor = operand;
+              while (/[\p{L}\p{N}_]/u.test(terms[cursor] ?? '')) cursor++;
+              return cursor;
+            })();
+      if (end > operand && HAS_RUN.test(terms.slice(operand, end))) spans.push({ start: i, end, qualified: QUALIFIER.test(terms.slice(0, i)) });
+      i = Math.max(i, end - 1);
+    }
+  }
+  return spans;
+}
+
+function routePositionalSpans(terms: string): string {
+  const spans = positionalSpans(terms);
+  if (spans.length === 0) return terms;
+  let out = '';
+  let cursor = 0;
+  for (const span of spans) {
+    out += terms.slice(cursor, span.start);
+    if (!span.qualified) out += AUTHORED_COLUMNS;
+    out += terms.slice(span.start, span.end);
+    cursor = span.end;
+  }
+  return out + terms.slice(cursor);
+}
+
+function inPositionalSpan(start: number, spans: PositionalSpan[]): boolean {
+  return spans.some((span) => start >= span.start && start < span.end);
+}
 
 // A run's punctuation-free groups, each its own quoted phrase (bare token if one grapheme),
 // space-joined -- the same split points segmentField barriers, so query and index agree.
-function runQuery(run: string, columnPrefix: string): string {
+function runQuery(run: string, columnPrefix: string, quoteSingle = false): string {
   return splitOnPunctuation(run)
-    .map((g) => `${columnPrefix}${g.length > 1 ? `"${g.join(' ')}"` : g[0]}`)
+    .map((g) => `${columnPrefix}${g.length > 1 || quoteSingle ? `"${g.join(' ')}"` : g[0]}`)
     .join(' ');
+}
+
+// Retarget complete quoted run tokens without interpreting the expression around them. Positional
+// spans have already been routed to authored columns, so sidecar barriers cannot change meaning.
+function quotedRunTokens(terms: string): string {
+  const spans = positionalSpans(terms);
+  let out = '';
+  let cursor = 0;
+  for (const match of terms.matchAll(QUOTED_RUN_TOKEN)) {
+    const start = match.index;
+    const run = match[1];
+    if (inPositionalSpan(start, spans) || PUNCTUATION.test(run)) continue;
+    out += terms.slice(cursor, start);
+    const qualifier = out.match(QUALIFIER);
+    if (qualifier) {
+      out = `${out.slice(0, qualifier.index)}${qualifier[1]}${runQuery(run, `${qualifier[2]}${qualifier[3]}_seg:`, true)}`;
+    } else {
+      out += runQuery(run, SIDECAR_COLUMNS, true);
+    }
+    cursor = start + match[0].length;
+  }
+  return cursor === 0 ? terms : out + terms.slice(cursor);
 }
 
 // Query side: each unspaced run becomes phrases of its graphemes, matching segmentField. A
 // qualifier maps to its `_seg` column; unqualified maps to all three (SIDECAR_COLUMNS).
 export function segmentMatch(terms: string): string {
   if (!HAS_RUN.test(terms)) return terms;
+  terms = routePositionalSpans(terms);
+  terms = quotedRunTokens(terms);
+  const spans = positionalSpans(terms);
   let out = '';
   let quoted = false;
+  let offset = 0;
   const pieces = terms.split(RUN); // split keeps captured runs at odd indices
   for (let i = 0; i < pieces.length; i++) {
     if (i % 2 === 0) {
       for (const ch of pieces[i]) if (ch === '"') quoted = !quoted;
       out += pieces[i];
+      offset += pieces[i].length;
       continue;
     }
-    if (quoted) {
+    const protectedRun = inPositionalSpan(offset, spans);
+    if (quoted || protectedRun) {
       out += pieces[i]; // an author's phrase is matched as written
+      offset += pieces[i].length;
       continue;
     }
     const m = out.match(QUALIFIER);
@@ -151,6 +282,7 @@ export function segmentMatch(terms: string): string {
     } else {
       out += runQuery(pieces[i], SIDECAR_COLUMNS);
     }
+    offset += pieces[i].length;
   }
   return out;
 }

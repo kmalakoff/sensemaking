@@ -1,13 +1,31 @@
-import assert from 'node:assert';
 import { type ChildProcess, spawn } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import assert from 'assert';
+import { startMeasuredWatcher } from '../../benchmark/lib/measured-watcher.mjs';
 import { signalProcessTree } from '../../benchmark/lib/native-observer.mjs';
+import { readWatchClaim, WATCH_HEARTBEAT_INTERVAL_MS, WATCH_STALE_HEARTBEAT_MS, type WatchClaimRecord } from '../../src/watch-claim.ts';
 import { packageRoot, scratchDir } from '../lib/scratch.ts';
 import { forEachStore, type ParityStoreName, withTreeForStore } from '../lib/stores.ts';
 import { writeNote } from '../lib/tree.ts';
 
 const DEADLINE_MS = 30_000;
+
+async function waitForClaim(configDir: string, predicate: (claim: WatchClaimRecord) => boolean, timeoutMs = DEADLINE_MS): Promise<WatchClaimRecord> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const claim = readWatchClaim(configDir);
+    if (claim && predicate(claim)) return claim;
+    if (Date.now() >= deadline) throw new Error(`watch claim did not reach the expected state within ${timeoutMs}ms`);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+}
+
+async function killMeasuredWatcher(watcher: ReturnType<typeof startMeasuredWatcher> | undefined): Promise<void> {
+  if (!watcher) return;
+  if (watcher.child.pid !== undefined && watcher.child.exitCode === null && watcher.child.signalCode === null) signalProcessTree(watcher.child, 'SIGKILL');
+  await watcher.closed;
+}
 
 const CHILD = String.raw`
 import { channel } from 'node:diagnostics_channel';
@@ -336,5 +354,64 @@ describe('held writer and independent reader', () => {
   it('never exposes partial state or a raw native lock failure', async function () {
     this.timeout(90_000);
     await forEachStore(runOverlap);
+  });
+
+  it('keeps the production heartbeat live through a held first reconcile and expires it after a crash', async function () {
+    this.timeout(60_000);
+    const baseDir = scratchDir('watch-held-reconcile');
+    const configPath = join(baseDir, 'sense.config.json');
+    writeFileSync(configPath, JSON.stringify({ version: 5, store: 'sqlite', presets: { default: { include: ['**/*.md'] } }, queries: {} }));
+    writeNote(baseDir, 'a.md', { body: 'old-a' });
+    writeNote(baseDir, 'b.md', { body: 'old-b' });
+    await withTreeForStore('sqlite', baseDir, async () => {});
+
+    let writer: ProtocolChild | undefined;
+    let watcher: ReturnType<typeof startMeasuredWatcher> | undefined;
+    let contender: ReturnType<typeof startMeasuredWatcher> | undefined;
+    let replacement: ReturnType<typeof startMeasuredWatcher> | undefined;
+    try {
+      writer = startChild('writer', configPath);
+      await writer.waitFor('held');
+      writeNote(baseDir, 'a.md', { body: 'reconcile waits for the held writer' });
+      watcher = startMeasuredWatcher({ pkgRoot: packageRoot, configPath });
+      const firstClaim = await waitForClaim(baseDir, () => true);
+      const liveClaim = await waitForClaim(baseDir, (claim) => claim.token === firstClaim.token && claim.heartbeatMs > firstClaim.heartbeatMs && Date.now() - firstClaim.heartbeatMs >= WATCH_STALE_HEARTBEAT_MS && Date.now() - claim.heartbeatMs < 2 * WATCH_HEARTBEAT_INTERVAL_MS, WATCH_STALE_HEARTBEAT_MS + DEADLINE_MS);
+      assert.equal(
+        watcher.events.some((event) => event.type === 'started'),
+        false,
+        'the watcher must still be inside the held initial reconcile'
+      );
+      watcher.assertRunning();
+      assert.equal(writer.child.exitCode, null, 'the held writer must still be running before release');
+      assert.equal(writer.child.signalCode, null, 'the held writer must not receive a signal before release');
+      assert.equal(
+        writer.messages.some((message) => ['error', 'committed', 'done'].includes(message.type)),
+        false,
+        'the held writer must neither fail nor settle before release'
+      );
+
+      contender = startMeasuredWatcher({ pkgRoot: packageRoot, configPath });
+      const rejected = await contender.waitFor('run-watch-rejected', 0, DEADLINE_MS);
+      assert.equal(rejected.event.error.code, 'WATCH_ACTIVE');
+      await contender.close(5_000, 'WATCH_ACTIVE');
+
+      writer.send({ type: 'release' });
+      await writer.waitFor('committed');
+      await watcher.waitFor('started', 0, DEADLINE_MS);
+      await closeChild(writer);
+
+      signalProcessTree(watcher.child, 'SIGKILL');
+      const crashed = await watcher.closed;
+      assert.notDeepEqual({ code: crashed.code, signal: crashed.signal }, { code: 0, signal: null }, 'the owner must be terminated rather than shut down cleanly');
+      const stoppedClaim = readWatchClaim(baseDir);
+      assert.equal(stoppedClaim?.token, liveClaim.token);
+      await waitForClaim(baseDir, (claim) => claim.token === liveClaim.token && Date.now() - claim.heartbeatMs >= WATCH_STALE_HEARTBEAT_MS, WATCH_STALE_HEARTBEAT_MS + 5_000);
+
+      replacement = startMeasuredWatcher({ pkgRoot: packageRoot, configPath });
+      await replacement.waitFor('started', 0, DEADLINE_MS);
+      await replacement.close(5_000);
+    } finally {
+      await Promise.all([killChild(writer), killMeasuredWatcher(watcher), killMeasuredWatcher(contender), killMeasuredWatcher(replacement)]);
+    }
   });
 });

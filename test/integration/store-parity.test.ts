@@ -1,16 +1,22 @@
 import assert from 'node:assert';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { SenseError } from 'sensemaking';
+import type { SearchOptions, SenseError } from 'sensemaking';
 import { search } from 'sensemaking';
 import { mapTree, relatedNotes } from '../../src/commands/index.ts';
 import { SenseError as StoreSenseError } from '../../src/errors.ts';
 import { findPath } from '../../src/graph/traverse.ts';
+import { runCli } from '../lib/cli.ts';
 import { writeModel } from '../lib/model.ts';
 import { declaredCapabilities, forEachOfStores, forEachOtherStore, forEachStore, forEachStoreByCapability, isMissingDependency, type openTreeForStore, type ParityStoreName, withTreeForStore } from '../lib/stores.ts';
 import { CHINESE_SENTENCES, tmpTree, writeNote } from '../lib/tree.ts';
 
 type SearchResult = { path: string; snippets?: string[]; lines?: string | null };
+
+// Table and CSV output take their column order from the first row, so search key order is part of
+// the returned shape rather than an incidental object detail.
+const SEARCH_ROW_KEYS = ['path', 'title', 'summary', 'snippets', 'via', 'score', 'lines'];
+const SEMANTIC_SEARCH_ROW_KEYS = [...SEARCH_ROW_KEYS, 'similarity'];
 
 async function docCount(store: Awaited<ReturnType<typeof openTreeForStore>>['store']): Promise<number> {
   const stmt = await store.prepare('SELECT COUNT(*) AS n FROM frontmatter');
@@ -245,8 +251,11 @@ function lexicalFixtureTree(): string {
   writeNote(baseDir, 'runs.md', { body: 'runs' });
   // CHINESE_SENTENCES[0] ("...天气非常好...", weather) and [1] carry no shared vocabulary with
   // [2]/[3], so a substring query into one half never spuriously matches the other.
-  writeNote(baseDir, 'zh-weather.md', { body: CHINESE_SENTENCES.slice(0, 2).join('\n\n') });
+  writeNote(baseDir, 'zh-weather.md', { body: `weather\n\n${CHINESE_SENTENCES.slice(0, 2).join('\n\n')}` });
   writeNote(baseDir, 'zh-other.md', { body: CHINESE_SENTENCES.slice(2, 4).join('\n\n') });
+  writeNote(baseDir, 'zh-spaced.md', { body: '天 气' });
+  writeNote(baseDir, 'zh-punctuated.md', { body: '天。气' });
+  writeNote(baseDir, 'zh-reversed.md', { body: '气天' });
   // "telescope" and CHINESE_SENTENCES[4] (Beijing) appear in no other note, so neither half of a mixed query can match anything but these three.
   // mixed.md also doubles as the both-halves note for the word-plus-phrase case below; phrase.md holds "night sky" without a telescope, telescope-only.md the word without the phrase.
   writeNote(baseDir, 'mixed.md', { body: `A telescope points at the night sky.\n\n${CHINESE_SENTENCES[4]}` });
@@ -354,7 +363,13 @@ describe('store parity: every store computes the same snippet (every store)', ()
         const rows = await search(store, cfg, 'planets');
         const row = rows.find((r) => r.path === 'phrase.md');
         assert.ok(row, `${name}: the fixture must match, or this asserts nothing`);
+        assert.deepEqual(Object.keys(row), SEARCH_ROW_KEYS, `${name}: lexical search row column order`);
         assert.equal(row.path, 'phrase.md', `${name}: expected the documented fixture path`);
+        assert.equal(row.title, '', `${name}: missing title remains an empty reference field`);
+        assert.equal(row.summary, '', `${name}: missing summary remains an empty reference field`);
+        assert.equal(row.via, 'match', `${name}: lexical-only evidence label`);
+        assert.ok(typeof row.score === 'number' && Number.isFinite(row.score), `${name}: lexical score must be finite`);
+        assert.equal(row.lines, null, `${name}: a file without a containing section has no line range`);
         const snippets = row.snippets as string[];
         assert.equal(snippets.length, 1, `${name}: expected one snippet`);
         assert.equal(snippets[0].trimEnd(), expectedSnippet, `${name}: snippet must mark the documented query in the fixture`);
@@ -787,6 +802,108 @@ describe('store parity: lexical search (authored fixtures, D1)', () => {
     assert.deepEqual(new Set(sqlitePaths), new Set(['apple.md', 'banana.md', 'both.md']), 'sqlite');
     await forEachOtherStore((store) => assertCapabilityMissing(store, searchPaths(store, baseDir, 'apple OR banana'), /boolean operator/));
   });
+
+  it('documented SQLite grouping and quoted terms remain FTS5 syntax', async () => {
+    const baseDir = lexicalFixtureTree();
+    const query = '("stars and planets" OR banana)';
+    assert.deepEqual(new Set(await searchPaths('sqlite', baseDir, query)), new Set(['banana.md', 'both.md', 'phrase.md']), 'sqlite');
+    await forEachOtherStore((store) => assertCapabilityMissing(store, searchPaths(store, baseDir, query), /boolean operator/));
+  });
+
+  it('documented SQLite initial-token queries reach FTS5', async () => {
+    const baseDir = lexicalFixtureTree();
+    assert.deepEqual(await searchPaths('sqlite', baseDir, '^apple'), ['apple.md'], 'sqlite');
+    await forEachOtherStore((store) => assertCapabilityMissing(store, searchPaths(store, baseDir, '^apple'), /initial-token operator/));
+  });
+
+  it('documented SQLite initial-token queries accept a quoted phrase', async () => {
+    const baseDir = lexicalFixtureTree();
+    const query = '^"apple pie"';
+    assert.deepEqual(await searchPaths('sqlite', baseDir, query), ['apple.md'], 'sqlite');
+    await forEachOtherStore((store) => assertCapabilityMissing(store, searchPaths(store, baseDir, query), /initial-token operator/));
+  });
+
+  it('documented SQLite grouping is not silently flattened by other stores', async () => {
+    const baseDir = lexicalFixtureTree();
+    const query = '(apple)';
+    assert.deepEqual(new Set(await searchPaths('sqlite', baseDir, query)), new Set(['apple.md', 'both.md']), 'sqlite');
+    await forEachOtherStore((store) => assertCapabilityMissing(store, searchPaths(store, baseDir, query), /grouping operator/));
+  });
+
+  it('documented SQLite NEAR queries accept quoted phrases and an explicit distance', async () => {
+    const baseDir = lexicalFixtureTree();
+    const query = 'NEAR("stars and" planets, 5)';
+    assert.deepEqual(await searchPaths('sqlite', baseDir, query), ['phrase.md'], 'sqlite');
+    await forEachOtherStore((store) => assertCapabilityMissing(store, searchPaths(store, baseDir, query), /NEAR operator/));
+  });
+
+  it('SQLite positional CJK terms use authored-token semantics while outside phrases retain substring membership', async () => {
+    const baseDir = lexicalFixtureTree();
+    assert.deepEqual(await searchPaths('sqlite', baseDir, 'NEAR(weather "天气", 5)'), [], 'sqlite: quoted one-grapheme substring');
+    assert.deepEqual(await searchPaths('sqlite', baseDir, 'NEAR(weather 天气, 5)'), [], 'sqlite: bare one-grapheme substring');
+    assert.deepEqual(await searchPaths('sqlite', baseDir, 'NEAR(weather "今天天气非常好", 5)'), ['zh-weather.md'], 'sqlite: quoted full run');
+    assert.deepEqual(await searchPaths('sqlite', baseDir, 'NEAR(weather 今天天气非常好, 5)'), ['zh-weather.md'], 'sqlite: bare full run');
+    assert.deepEqual(await searchPaths('sqlite', baseDir, 'NEAR(budget only, 5) OR "天气"'), ['zh-weather.md'], 'sqlite: outside quoted substring');
+    await forEachOtherStore((store) => assertCapabilityMissing(store, searchPaths(store, baseDir, 'NEAR(weather "天气", 5)'), /NEAR operator/));
+  });
+
+  it('malformed grouping and literal punctuation still raise the shared search error', async () => {
+    const baseDir = lexicalFixtureTree();
+    for (const query of ['apple)', 'end-to-end']) {
+      await forEachStore(async (store) =>
+        assert.rejects(searchPaths(store, baseDir, query), (err: SenseError) => {
+          assert.equal(err.code, 'SEARCH_SYNTAX', `${store}: ${query}`);
+          assert.match(err.message, /double-quot/, `${store}: ${query}`);
+          return true;
+        })
+      );
+    }
+  });
+
+  it('SQLite parses all punctuation in an FTS5 expression instead of excusing unrelated commas', async () => {
+    const baseDir = lexicalFixtureTree();
+    const query = 'NEAR(apple banana, 5) OR (pear, 3)';
+    await assert.rejects(searchPaths('sqlite', baseDir, query), (err: SenseError) => {
+      assert.equal(err.code, 'SEARCH_SYNTAX');
+      return true;
+    });
+    await forEachOtherStore((store) => assertCapabilityMissing(store, searchPaths(store, baseDir, query), /boolean operator|NEAR operator/));
+  });
+
+  it('a pure quoted CJK substring has the same authored membership in every store', async () => {
+    const baseDir = lexicalFixtureTree();
+    await forEachStore(async (store) => {
+      assert.deepEqual(await searchPaths(store, baseDir, '"天气"'), ['zh-weather.md'], `${store}: quoted substring`);
+      assert.deepEqual(await searchPaths(store, baseDir, 'weather "天气"'), ['zh-weather.md'], `${store}: bare term plus quoted substring`);
+      assert.deepEqual(await searchPaths(store, baseDir, 'missing "天气"'), [], `${store}: missing bare term`);
+    });
+  });
+});
+
+describe('store parity: exported search option validation (every store)', () => {
+  const cases: Array<[SearchOptions, string, string]> = [
+    [{ k: 0 }, 'k', '0'],
+    [{ k: -1 }, 'k', '-1'],
+    [{ k: Number.NaN }, 'k', 'NaN'],
+    [{ snippetCharLimit: Infinity }, 'snippetCharLimit', 'Infinity'],
+    [{ snippetCountLimit: 1.5 }, 'snippetCountLimit', '1.5'],
+    [{ snippetCountLimit: 0 }, 'snippetCountLimit', '0'],
+  ];
+
+  it('rejects invalid caller limits before store-specific search work', async () => {
+    const baseDir = lexicalFixtureTree();
+    await forEachStore(async (store) =>
+      withTreeForStore(store, baseDir, async ({ store: opened, cfg }) => {
+        for (const [options, name, value] of cases) {
+          await assert.rejects(search(opened, cfg, 'apple', options), (err: SenseError) => {
+            assert.equal(err.code, 'SEARCH_OPTION_INVALID', store);
+            assert.equal(err.message, `search option "${name}" must be a positive finite integer, got ${value}`, store);
+            return true;
+          });
+        }
+      })
+    );
+  });
 });
 
 // D2: sqlite scans int8+scale BLOBs in a JS loop; duckdb scans native FLOAT[N] arrays via array_cosine_similarity in SQL, both handed the same vectors (embed/query.ts's toStore).
@@ -815,7 +932,7 @@ async function semanticEvidence(store: ParityStoreName, baseDir: string, embed: 
     store,
     baseDir,
     async ({ store: s, cfg }) => {
-      const rows = (await search(s, cfg, terms)) as Array<{ path: string; via: string; similarity: number }>;
+      const rows = await search(s, cfg, terms);
       const hasVector = Object.fromEntries(await Promise.all(['a.md', 'b.md'].map(async (path) => [path, await s.vectors.hasVector(path)] as const)));
       return { rows, hasVector };
     },
@@ -833,10 +950,16 @@ describe('store parity: semantic search (authored model fixture, D2)', () => {
         const result = await semanticEvidence(store, baseDir, embed, 'pomme');
         assert.equal(result.rows[0]?.path, 'a.md', JSON.stringify(result.rows));
         assert.deepEqual(new Set(result.rows.map((r) => r.path)), new Set(['a.md', 'b.md']), store);
-        assert.ok(
-          result.rows.every((r) => r.via === 'vector' && Number.isFinite(r.similarity)),
-          JSON.stringify(result.rows)
-        );
+        for (const row of result.rows) {
+          assert.deepEqual(Object.keys(row), SEMANTIC_SEARCH_ROW_KEYS, `${store}: vector-only search row column order`);
+          assert.equal(typeof row.title, 'string', `${store}: vector title`);
+          assert.equal(typeof row.summary, 'string', `${store}: vector summary`);
+          assert.deepEqual(row.snippets, [], `${store}: vector-only snippets`);
+          assert.equal(row.via, 'vector', `${store}: vector-only evidence label`);
+          assert.ok(typeof row.score === 'number' && Number.isFinite(row.score), `${store}: vector score must be finite`);
+          assert.equal(typeof row.lines, 'string', `${store}: vector line range`);
+          assert.ok(typeof row.similarity === 'number' && Number.isFinite(row.similarity), `${store}: vector similarity must be finite`);
+        }
         assert.equal(result.rows.find((r) => r.path === 'b.md')?.similarity, 0, JSON.stringify(result.rows));
         assert.deepEqual(result.hasVector, { 'a.md': true, 'b.md': true }, store);
       },
@@ -851,24 +974,24 @@ async function relatedEvidence(store: ParityStoreName, baseDir: string, embed: {
     baseDir,
     async ({ store: s, cfg }) => {
       const rows = await relatedNotes(s, cfg, target, {}, 10);
+      const top = await relatedNotes(s, cfg, target, {}, 1);
       const hasVector = Object.fromEntries(await Promise.all(['similar.md', 'unrelated.md'].map(async (path) => [path, await s.vectors.hasVector(path)] as const)));
-      return { rows, hasVector };
+      return { rows, top, hasVector };
     },
     { embed }
   );
 }
 
-function assertRelatedEvidence(result: Awaited<ReturnType<typeof relatedEvidence>>, expected: string[], label: string): void {
+function assertRelatedEvidence(result: Awaited<ReturnType<typeof relatedEvidence>>, label: string): void {
   assert.deepEqual(
-    result.rows.map((r) => r.path),
-    expected,
+    result.rows,
+    [
+      { path: 'similar.md', similarity: 1 },
+      { path: 'unrelated.md', similarity: 0 },
+    ],
     label
   );
-  assert.equal(result.rows[1]?.similarity, 0, JSON.stringify(result.rows));
-  assert.ok(
-    result.rows.every((r) => Number.isFinite(r.similarity)),
-    JSON.stringify(result.rows)
-  );
+  assert.deepEqual(result.top, [{ path: 'similar.md', similarity: 1 }], `${label}: k=1`);
   assert.deepEqual(result.hasVector, { 'similar.md': true, 'unrelated.md': true }, label);
 }
 
@@ -877,15 +1000,23 @@ describe('store parity: related (authored model fixture, D2)', () => {
   it('returns the authored candidate order, excluding linked notes and retaining a zero score', async () => {
     const baseDir = relatedFixtureTree();
     const embed = { model: writeModel(), provider: 'static' as const };
-    const expected = ['similar.md', 'unrelated.md'];
     await forEachStoreByCapability(
       'vectors',
       async (store) => {
         const result = await relatedEvidence(store, baseDir, embed, 'target.md');
-        assertRelatedEvidence(result, expected, store);
+        assertRelatedEvidence(result, store);
       },
       (store) => assertCapabilityMissing(store, relatedEvidence(store, baseDir, embed, 'target.md'), /vectors/)
     );
+  });
+
+  it('routes --k 1 through the public related command and preserves its JSON row shape', () => {
+    const baseDir = relatedFixtureTree();
+    const model = writeModel();
+    writeFileSync(join(baseDir, 'sense.config.json'), JSON.stringify({ version: 5, presets: { default: { include: ['**/*.md'] } }, embed: { model, provider: 'static' }, queries: {} }));
+    const result = runCli(['related', 'target.md', '--k', '1', '--format', 'json'], { cwd: baseDir });
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout), [{ path: 'similar.md', similarity: 1 }]);
   });
 });
 
@@ -921,8 +1052,17 @@ describe('store parity: scoped commands (authored fixtures)', () => {
     await forEachStore(async (store) =>
       withTreeForStore(store, baseDir, async ({ store: s, cfg }) => {
         // a.md matches only via the link signal (b.md, a word hit, links back to it).
-        const full = (await search(s, cfg, 'note')).map((r) => r.path as string);
-        assert.deepEqual(new Set(full), new Set(['a.md', 'b.md', 'c.md']), store);
+        const full = await search(s, cfg, 'note');
+        assert.deepEqual(new Set(full.map((r) => r.path)), new Set(['a.md', 'b.md', 'c.md']), store);
+        const linkOnly = full.find((row) => row.path === 'a.md');
+        assert.ok(linkOnly, `${store}: authored link-only result`);
+        assert.deepEqual(Object.keys(linkOnly), SEARCH_ROW_KEYS, `${store}: link-only search row column order`);
+        assert.equal(linkOnly.title, 'Alpha', store);
+        assert.equal(linkOnly.summary, '', store);
+        assert.deepEqual(linkOnly.snippets, [], store);
+        assert.equal(linkOnly.via, 'link', store);
+        assert.ok(typeof linkOnly.score === 'number' && Number.isFinite(linkOnly.score), `${store}: link score must be finite`);
+        assert.equal(linkOnly.lines, null, store);
         const scoped = (await search(s, cfg, 'note', { include: ['c.md'] })).map((r) => r.path as string);
         assert.deepEqual(scoped, ['c.md'], store);
       })
@@ -937,6 +1077,10 @@ describe('store parity: scoped commands (authored fixtures)', () => {
     await forEachStore(async (store) =>
       withTreeForStore(store, baseDir, async ({ store: s }) => {
         assert.deepEqual(await findPath(s, 'a.md', 'c.md'), ['a.md', 'b.md', 'c.md'], store);
+        assert.deepEqual(await findPath(s, 'a.md', 'c.md', { directed: true }), ['a.md', 'b.md', 'c.md'], `${store}: directed forward`);
+        assert.equal(await findPath(s, 'c.md', 'a.md', { directed: true }), null, `${store}: directed reverse`);
+        assert.equal(await findPath(s, 'a.md', 'c.md', { maxDepth: 1 }), null, `${store}: maxDepth too short`);
+        assert.deepEqual(await findPath(s, 'a.md', 'c.md', { maxDepth: 2 }), ['a.md', 'b.md', 'c.md'], `${store}: maxDepth exact`);
         assert.deepEqual(await findPath(s, 'a.md', 'c.md', { allowed: new Set(['a.md', 'b.md', 'c.md']) }), ['a.md', 'b.md', 'c.md'], store);
         assert.equal(await findPath(s, 'a.md', 'c.md', { allowed: new Set(['a.md', 'c.md']) }), null, store);
       })

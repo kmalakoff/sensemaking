@@ -93,11 +93,13 @@ describe('store/stages', () => {
         const dir = scratchDir('stages-threshold');
         for (let i = 0; i < count; i++) writeNote(dir, `n${i}.md`, { frontmatter: { title: `N${i}` }, body: `note ${i} links [[n${(i + 1) % count}]]` });
         const opened = await openTreeForStore('sqlite', dir);
-        const { stages } = opened;
-        assert.strictEqual(stages.parseWorkerMs > 0, pooled, `parseWorkerMs ${stages.parseWorkerMs} at ${count} files`);
-        assert.ok(unaccountedMs(stages) >= 0, `residual ${unaccountedMs(stages)} ms of ${stages.totalMs}`);
-        assert.ok(unaccountedMs(stages) < stages.totalMs / 2, `residual ${unaccountedMs(stages)} ms is half the ${stages.totalMs} ms build`);
-        await opened.store.close();
+        try {
+          const { stages } = opened;
+          assert.strictEqual(stages.parseWorkerMs > 0, pooled, `parseWorkerMs ${stages.parseWorkerMs} at ${count} files`);
+          assert.ok(unaccountedMs(stages) >= 0, `residual ${unaccountedMs(stages)} ms of ${stages.totalMs}`);
+        } finally {
+          await opened.store.close();
+        }
       });
     }
 

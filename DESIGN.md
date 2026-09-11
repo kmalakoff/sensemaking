@@ -201,8 +201,22 @@ earlier. It changes latency, never answers. This is what makes the feature
 optional rather than load-bearing: nothing depends on it running, and a crashed
 watcher degrades to the speed the tree had without one.
 
-**One watcher per tree, enforced by a heartbeat rather than a lock file.** A
-second `sense watch` on the same tree refuses to start while another's heartbeat
-is fresh, overridable with `--force` and inspectable with `sense status`. A
-heartbeat expires on its own, so a killed watcher does not strand a tree behind
-a lock nobody will release.
+Filesystem notifications accelerate reconciliation; a periodic pass covers
+notifications the operating system misses. `started` means the watcher resources
+are installed, not that the native subscription has signalled readiness.
+
+**One watcher per configuration cache, enforced by a heartbeat rather than a
+lock file.** Configurations in different directories may watch the same tree
+independently. A second `sense watch` for the same configuration refuses to
+start while the config-owned heartbeat is fresh, overridable with `--force` and
+inspectable through `sense status`, whose coordinator read is read-only. The
+heartbeat worker runs independently of reconciliation, and a killed watcher
+expires on its own.
+
+Acquisition and forced replacement write one owner token transactionally.
+Heartbeat renewal and shutdown release require that token, so an older watcher
+cannot renew or clear a newer owner's claim. The coordination database lives
+outside the disposable `.sense` search cache, so an index rebuild cannot erase
+live ownership. Forced replacement transfers ownership immediately; it does not
+interrupt synchronous native reconciliation already in flight, which the
+replaced process drains before exiting.

@@ -4,6 +4,7 @@ import { DuckDBInstance } from '@duckdb/node-api';
 import type { SenseError } from '../../../../src/errors.ts';
 import { createConnection } from '../../../../src/store/duckdb/connection.ts';
 import { createLexicalIndex, markContentStale } from '../../../../src/store/duckdb/lexical.ts';
+import { ORDERED_BM25_MACRO, validateNativeMacroContract } from '../../../../src/store/duckdb/ordered-bm25.ts';
 import { getMeta } from '../../../../src/store/shared.ts';
 import type { Connection } from '../../../../src/store/types.ts';
 import { tmpTree } from '../../../lib/tree.ts';
@@ -54,6 +55,67 @@ async function insertDoc(conn: Connection, path: string, title: string, summary:
 const BASE = { whereJoin: '', whereCond: '', scopeCond: '' };
 
 describe('queryLexical (duckdb)', () => {
+  it('uses the generated native BM25 formula with deterministic subscore accumulation', async () => {
+    const conn = await makeConn();
+    await insertDoc(conn, 'a.md', '', '', 'alpha beta gamma');
+    await insertDoc(conn, 'b.md', '', '', 'alpha beta gamma');
+    await insertDoc(conn, 'frequency.md', '', '', 'alpha alpha alpha');
+    const { query } = createLexicalIndex(conn);
+    const expected = ['a.md', 'b.md'];
+    for (let i = 0; i < 12; i++)
+      assert.deepEqual(
+        (await query('alpha beta gamma', { ...BASE, limit: 10 })).map((hit) => hit.path),
+        expected
+      );
+    const macro = (await (await conn.prepare(`SELECT macro_definition FROM duckdb_functions() WHERE function_name = '${ORDERED_BM25_MACRO}'`)).get()) as { macro_definition: string };
+    assert.match(macro.macro_definition, /sum\(subscore ORDER BY subscore\)/);
+    assert.doesNotMatch(macro.macro_definition, /sum\(subscore\)(?! ORDER BY)/);
+
+    const combined = ((await (await conn.prepare(`SELECT ${ORDERED_BM25_MACRO}('a.md', ?, fields := 'text', conjunctive := false) AS score`)).get('alpha beta gamma')) as { score: number }).score;
+    const nativeIndividual = [];
+    const orderedIndividual = [];
+    for (const term of ['alpha', 'beta', 'gamma']) {
+      const scores = (await (await conn.prepare(`SELECT fts_main_content.match_bm25('a.md', ?, fields := 'text', conjunctive := false) AS native_score, ${ORDERED_BM25_MACRO}('a.md', ?, fields := 'text', conjunctive := false) AS ordered_score`)).get(term, term)) as { native_score: number; ordered_score: number };
+      assert.strictEqual(scores.ordered_score, scores.native_score);
+      nativeIndividual.push(scores.native_score);
+      orderedIndividual.push(scores.ordered_score);
+    }
+    assert.deepEqual(orderedIndividual, nativeIndividual);
+    assert.strictEqual(
+      combined,
+      nativeIndividual.sort((a, b) => a - b).reduce((sum, score) => sum + score, 0)
+    );
+  });
+
+  it('rejects a changed native version or macro contract', async () => {
+    const conn = await makeConn();
+    await insertDoc(conn, 'a.md', '', '', 'alpha beta');
+    await createLexicalIndex(conn).query('alpha', { ...BASE, limit: 10 });
+    const native = (await (
+      await conn.prepare(`
+      SELECT version() AS version, function_type, parameters, parameter_types, macro_definition
+      FROM duckdb_functions() WHERE schema_name = 'fts_main_content' AND function_name = 'match_bm25'
+    `)
+    ).get()) as { version: string; function_type: string; parameters: unknown; parameter_types: unknown; macro_definition: string };
+    assert.doesNotThrow(() => validateNativeMacroContract({ version: native.version, macro: native }));
+    assert.throws(
+      () => validateNativeMacroContract({ version: 'v1.5.6', macro: native }),
+      (error: unknown) => {
+        assert.equal((error as SenseError).code, 'STORE_CAPABILITY_MISSING');
+        assert.match((error as Error).message, /DuckDB v1\.5\.6 is unsupported/);
+        return true;
+      }
+    );
+    assert.throws(
+      () => validateNativeMacroContract({ version: native.version, macro: { ...native, macro_definition: native.macro_definition.replace('sum(subscore)', 'sum(other)') } }),
+      (error: unknown) => {
+        assert.equal((error as SenseError).code, 'STORE_CAPABILITY_MISSING');
+        assert.match((error as Error).message, /definition or reviewed parameter-default contract changed/);
+        return true;
+      }
+    );
+  });
+
   it('a matching term returns the expected path (bm25 branch)', async () => {
     const conn = await makeConn();
     await insertDoc(conn, 'a.md', 'Astronomy', '', 'stars and planets');
@@ -252,12 +314,19 @@ describe('queryLexical (duckdb): fts staleness persists across connections (PLAN
     const second = await openFileConn(dbPath);
     assert.equal(await getMeta(second.conn, 'fts_stale'), '0', "the clear must have persisted to disk, not just this connection's memory");
     const rebuilds = countFtsRebuilds(second.conn);
-    const hits = await createLexicalIndex(second.conn).query('first', { ...BASE, limit: 10 });
+    const secondIndex = createLexicalIndex(second.conn);
+    const hits = await secondIndex.query('first', { ...BASE, limit: 10 });
     assert.deepEqual(
       hits.map((h) => h.path),
       ['a.md']
     );
     assert.equal(rebuilds(), 0, 'unchanged content must not pay another create_fts_index rebuild');
+    assert.deepEqual(
+      (await secondIndex.query('first', { ...BASE, limit: 10 })).map((hit) => hit.path),
+      ['a.md']
+    );
+    const macro = (await (await second.conn.prepare(`SELECT macro_definition FROM duckdb_functions() WHERE function_name = '${ORDERED_BM25_MACRO}'`)).get()) as { macro_definition: string };
+    assert.match(macro.macro_definition, /sum\(subscore ORDER BY subscore\)/);
     second.close();
   });
 
@@ -281,5 +350,21 @@ describe('queryLexical (duckdb): fts staleness persists across connections (PLAN
     assert.equal(rebuilds(), 1, 'changed content must rebuild exactly once');
     assert.equal(await getMeta(second.conn, 'fts_stale'), '0');
     second.close();
+  });
+
+  it('recreates the connection-local adapter at the rebuild boundary', async () => {
+    const conn = await makeConn();
+    await insertDoc(conn, 'a.md', 'first', '', 'first body');
+    const index = createLexicalIndex(conn);
+    await index.query('first', { ...BASE, limit: 10 });
+    await conn.exec(`CREATE OR REPLACE TEMP MACRO ${ORDERED_BM25_MACRO}(docname, query_string, fields := NULL, k := 1.2, b := 0.75, conjunctive := false) AS NULL`);
+    await insertDoc(conn, 'b.md', 'second', '', 'second body');
+    await markContentStale(conn);
+    assert.deepEqual(
+      (await index.query('second', { ...BASE, limit: 10 })).map((hit) => hit.path),
+      ['b.md']
+    );
+    const macro = (await (await conn.prepare(`SELECT macro_definition FROM duckdb_functions() WHERE function_name = '${ORDERED_BM25_MACRO}'`)).get()) as { macro_definition: string };
+    assert.match(macro.macro_definition, /sum\(subscore ORDER BY subscore\)/);
   });
 });

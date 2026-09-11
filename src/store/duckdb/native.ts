@@ -1,8 +1,16 @@
 import { loadOrInstall, type NativeDescriptor, packageNodeModules } from '../native.ts';
 
 export const DUCKDB_PACKAGE = '@duckdb/node-api';
+export const DUCKDB_VERSION = '1.5.5-r.4';
+export const DUCKDB_INSTALL_SPEC = `${DUCKDB_PACKAGE}@${DUCKDB_VERSION}`;
 
-const DUCKDB: NativeDescriptor = { store: 'duckdb', pkg: DUCKDB_PACKAGE, sizeHint: '~110MB' };
+const DUCKDB: NativeDescriptor = {
+  store: 'duckdb',
+  pkg: DUCKDB_PACKAGE,
+  sizeHint: '~110MB',
+  version: DUCKDB_VERSION,
+  installSpec: DUCKDB_INSTALL_SPEC,
+};
 
 let duckdbApiPromise: Promise<typeof import('@duckdb/node-api')> | undefined;
 

@@ -5,9 +5,32 @@ import { hasUnspacedRun } from '../text/segment.ts';
 // errors `no such column: to` -- true about the parse, misleading about the input.
 const FTS5_PUNCTUATION = /[^\p{L}\p{M}\p{N}_\s]/u;
 
+function hasBalancedGrouping(text: string): boolean {
+  let depth = 0;
+  let grouped = false;
+  for (const char of text) {
+    if (char === '(') {
+      depth++;
+      grouped = true;
+    } else if (char === ')') {
+      depth--;
+      if (depth < 0) return false;
+    }
+  }
+  return grouped && depth === 0;
+}
+
+// Detects routing intent only. SQLite parses the complete expression, while other stores name
+// the unsupported operator; neither path silently interprets its punctuation as literal text.
+function hasExplicitFts5Syntax(terms: string): boolean {
+  const text = terms.replace(/"[^"]*"/g, 'phrase');
+  return /[\p{L}\p{N}_]+\*(?=\s|$)/u.test(text) || /(?:^|[\s(])(?:AND|OR|NOT)(?=\s|\)|$)/u.test(text) || /(?:^|[\s(])NEAR\b/u.test(text) || /(?:^|[\s(])\^\S+/u.test(text) || /(?:^|[\s(])[\p{L}_]\w*\s*:/u.test(text) || hasBalancedGrouping(text);
+}
+
 // SQLite treats punctuation in an unquoted spaced-script token as MATCH syntax. Validate that
 // boundary before dispatch so DuckDB and Tantivy do not silently interpret the same input as text.
 export function bareTermSyntaxError(terms: string): Error | null {
+  if (hasExplicitFts5Syntax(terms)) return null;
   const outsideQuotes = terms.replace(/"[^"]*"/g, ' ');
   const suspects = (outsideQuotes.match(/\S+/g) ?? []).filter((token) => {
     if (!FTS5_PUNCTUATION.test(token) || hasUnspacedRun(token)) return false;

@@ -2,6 +2,23 @@
 
 All notable changes to sensemaking are documented here.
 
+## [0.24.5] - 2026-09-11
+
+### Fixed
+
+- DuckDB search now keeps lexical ordering stable for equal authored documents by ordering native
+  BM25 subscore accumulation. The adapter is validated only for DuckDB v1.5.5's FTS macro shape;
+  other native versions fail closed until reviewed.
+- External-root configurations keep lock-wait metadata beside their own caches, without
+  writing state into the shared Markdown tree.
+- Watchers claim ownership atomically per configuration, keep their heartbeat alive during
+  long reconciliations, and cannot clear a replacement watcher's claim. Shutdown failures
+  now reject cleanly instead of escaping the watcher lifecycle.
+- SQLite accepts its documented grouped, caret and NEAR search syntax. Quoted unspaced-script
+  searches retain substring matching outside positional expressions; positional expressions
+  use the original text's native token positions rather than segmented sidecar positions.
+- Programmatic search rejects invalid result and snippet limits consistently before querying.
+
 ## [0.24.4] - 2026-09-10
 
 ### Fixed

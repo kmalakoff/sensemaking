@@ -1,8 +1,9 @@
-import assert from 'node:assert';
 import { createHash } from 'node:crypto';
-import { utimesSync, writeFileSync } from 'node:fs';
+import { mkdirSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { search } from 'sensemaking';
+import assert from 'assert';
+import { safeRmSync } from 'fs-remove-compat';
+import { STATE_DIR, search } from 'sensemaking';
 import { startMeasuredWatcher } from '../../benchmark/lib/measured-watcher.mjs';
 import { nativeObserverDeadlineMs, waitForNativeIndex } from '../../benchmark/lib/native-observer.mjs';
 import { captureFileManifest, readIndexSnapshot, verifyIndexSnapshot } from '../../benchmark/lib/work-tree.mjs';
@@ -23,6 +24,12 @@ function setMtime(baseDir: string, path: string, mtime: number): void {
 
 async function searchPaths(store: Store, cfg: Parameters<typeof search>[1], query: string): Promise<string[]> {
   return (await search(store, cfg, query, { k: 10 })).map((row) => row.path as string).sort();
+}
+
+function assertOnlyKnownNodeWarnings(stderr: string): void {
+  const unexpected = stderr.replaceAll(/\(node:\d+\) ExperimentalWarning: SQLite is an experimental feature and might change at any time\r?\n\(Use `node --trace-warnings \.\.\.` to show where the warning was created\)(?:\r?\n|$)/g, '');
+  if (stderr) process.stderr.write(stderr);
+  assert.equal(unexpected, '', `the child must not report an unexpected shutdown error; captured stderr:\n${stderr}`);
 }
 
 async function verifyFreshPublicSearch(store: ParityStoreName, baseDir: string, query: string, expectedRow: { title: string; summary: string; text: string }): Promise<void> {
@@ -75,4 +82,63 @@ describe('public watcher freshness lifecycle', () => {
       }
       await verifyFreshPublicSearch(store, tree, 'freshneedle', { title: '', summary: '', text: 'freshneedle body.' });
     });
+
+  it('rejects cleanly when shutdown cannot reopen the state directory', async function () {
+    this.timeout(30_000);
+    const base = scratchDir('watch-shutdown-error');
+    const configDir = join(base, 'config');
+    const tree = join(base, 'tree');
+    const configPath = join(configDir, 'sense.config.json');
+    const stateDir = join(configDir, STATE_DIR);
+    mkdirSync(configDir);
+    mkdirSync(tree);
+    writeFileSync(configPath, JSON.stringify({ version: 5, root: '../tree', store: 'sqlite', presets: { default: { include: ['**/*.md'] } }, queries: {} }));
+    writeFileSync(join(tree, 'a.md'), 'watch shutdown error.\n');
+
+    const watcher = startMeasuredWatcher({ pkgRoot: packageRoot, configPath });
+    let closePromise: ReturnType<typeof watcher.close> | null = null;
+    try {
+      const started = await watcher.waitFor('started', 0, 5_000);
+      safeRmSync(stateDir, { recursive: true, force: true });
+      writeFileSync(stateDir, 'state directory collision');
+      closePromise = watcher.close(5_000, 'EEXIST');
+      const [rejected, closed] = await Promise.all([watcher.waitFor('run-watch-rejected', started.next, 5_000), closePromise]);
+      assert.equal(rejected.event.error.code, 'EEXIST');
+      assert.deepEqual({ code: closed.code, signal: closed.signal }, { code: 0, signal: null });
+      assertOnlyKnownNodeWarnings(closed.stderr);
+      await assert.rejects(watcher.close(5_000), { name: 'Error', message: /^runWatch rejected: EEXIST/ });
+    } finally {
+      if (closePromise) await closePromise;
+      else await watcher.close(5_000);
+    }
+  });
+
+  it('grants one atomic claim to two coordinated contenders', async function () {
+    this.timeout(30_000);
+    const tree = scratchDir('watch-coordinated-contenders');
+    const configPath = join(tree, 'sense.config.json');
+    writeFileSync(configPath, JSON.stringify({ version: 5, store: 'sqlite', presets: { default: { include: ['**/*.md'] } }, queries: {} }));
+    writeFileSync(join(tree, 'a.md'), 'coordinated claim.\n');
+    const first = startMeasuredWatcher({ pkgRoot: packageRoot, configPath, deferred: true });
+    const second = startMeasuredWatcher({ pkgRoot: packageRoot, configPath, deferred: true });
+    let firstClose: ReturnType<typeof first.close> | null = null;
+    let secondClose: ReturnType<typeof second.close> | null = null;
+    try {
+      await Promise.all([first.ready, second.ready]);
+      await Promise.all([first.start(), second.start()]);
+      const [firstOutcome, secondOutcome] = await Promise.all([first.waitForAny(['started', 'run-watch-rejected'], 0, 10_000), second.waitForAny(['started', 'run-watch-rejected'], 0, 10_000)]);
+      assert.deepEqual([firstOutcome.event.type, secondOutcome.event.type].sort(), ['run-watch-rejected', 'started'], 'the native write transaction must grant exactly one claim');
+      const winner = firstOutcome.event.type === 'started' ? first : second;
+      const loser = winner === first ? second : first;
+      const rejection = loser.events.find((event) => event.type === 'run-watch-rejected');
+      assert.equal(rejection?.error?.code, 'WATCH_ACTIVE');
+      firstClose = first.close(5_000, firstOutcome.event.type === 'run-watch-rejected' ? 'WATCH_ACTIVE' : null);
+      secondClose = second.close(5_000, secondOutcome.event.type === 'run-watch-rejected' ? 'WATCH_ACTIVE' : null);
+      await Promise.all([firstClose, secondClose]);
+    } finally {
+      firstClose ??= first.close(5_000, first.events.find((event) => event.type === 'run-watch-rejected')?.error?.code ?? null);
+      secondClose ??= second.close(5_000, second.events.find((event) => event.type === 'run-watch-rejected')?.error?.code ?? null);
+      await Promise.all([firstClose, secondClose]);
+    }
+  });
 });

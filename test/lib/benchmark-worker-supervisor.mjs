@@ -11,8 +11,23 @@ const worker = spawn(process.execPath, args, { detached: true, stdio: [mode === 
 process.stdout.write(`${JSON.stringify({ state: 'spawned', pid: worker.pid })}\n`);
 
 let stdout = '';
+let watcherStartSent = false;
 worker.on('message', (message) => {
   if (mode === 'observer' && message?.type === 'supervised') process.stdout.write(`${JSON.stringify({ state: 'ready', pid: worker.pid })}\n`);
+  if (mode !== 'watcher' || message?.type !== 'watch-child-ready' || watcherStartSent) return;
+  watcherStartSent = true;
+  const failStart = (err) => {
+    process.stderr.write(`watcher start IPC failed: ${err?.stack ?? err}\n`);
+    process.exitCode = 1;
+    if (worker.exitCode === null && worker.signalCode === null) worker.kill('SIGTERM');
+  };
+  try {
+    worker.send({ type: 'start', force: false }, (err) => {
+      if (err) failStart(err);
+    });
+  } catch (err) {
+    failStart(err);
+  }
 });
 worker.stdout.on('data', (chunk) => {
   if (mode !== 'watcher') return;

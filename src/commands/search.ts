@@ -284,6 +284,18 @@ export interface SearchOptions {
   snippetCountLimit?: number; // --snippet-count-limit; defaults to SNIPPET_COUNT_LIMIT_DEFAULT
 }
 
+function validateSearchOptions(opts: SearchOptions): void {
+  for (const [name, value] of [
+    ['k', opts.k],
+    ['snippetCharLimit', opts.snippetCharLimit],
+    ['snippetCountLimit', opts.snippetCountLimit],
+  ] as const) {
+    if (value !== undefined && (!Number.isFinite(value) || !Number.isInteger(value) || value <= 0)) {
+      throw new SenseError('SEARCH_OPTION_INVALID', `search option "${name}" must be a positive finite integer, got ${String(value)}`);
+    }
+  }
+}
+
 // Hydrates already-ranked rows with snippets and containing-section ranges without reranking.
 export async function hydrateSearchRows(store: Store, cfg: ResolvedConfig, rows: Row[], matchedPaths: Set<string>, terms: string, opts: Pick<SearchOptions, 'snippetCharLimit' | 'snippetCountLimit'> = {}): Promise<void> {
   if (matchedPaths.size === 0) return;
@@ -307,6 +319,7 @@ export async function hydrateSearchRows(store: Store, cfg: ResolvedConfig, rows:
 // The declared or defaulted signals compose via RRF; `via` names which ones produced each row.
 // `opts` arrives already resolved (config.ts:resolveSearch).
 export async function search(store: Store, cfg: ResolvedConfig, terms: string, opts: SearchOptions = {}): Promise<Row[]> {
+  validateSearchOptions(opts);
   const effective = resolveSearch(cfg, opts);
   const { k, signals } = effective;
 
