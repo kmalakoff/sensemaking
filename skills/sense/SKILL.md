@@ -1,136 +1,137 @@
 ---
 name: sense
-description: "Query a markdown tree with the sense CLI: filter notes by frontmatter, full-text search the prose, follow wikilinks/backlinks, trace how notes connect (link path, similar-but-unlinked), and read note outlines. Use when the user wants to query, filter, count, search, or report on a folder of markdown notes, when you need to find which notes discuss a topic before reading them, when you want a note's backlinks or structure, when you want to know how two notes connect, when a directory has a sense.config.json, or when asked to add a saved entry to one."
+description: "Query a markdown tree with the sense CLI: filter notes by frontmatter, search prose, follow wikilinks and backlinks, trace link paths, find similar but unlinked notes, and inspect note outlines. Use when a task needs to query, filter, count, search, or report on a markdown directory; when a directory has sense.config.json; or when adding a saved sense query."
 ---
 
 # sense
 
-SQL over a markdown tree, kept fresh by a filesystem check on every query. Every file becomes rows in `frontmatter` (one column per key, plus `path`/`_mtime`/`_ctime`/`_size`/`_rank`/`_parse_error`; `_ctime` is filesystem birthtime, which a clone or copy resets just like `_mtime`), `content` (`title`, `summary`, `text`, `path`; an FTS5 index on the default store, with machine-written `title_seg`/`summary_seg`/`text_seg` sidecars used for matching Chinese, Japanese, Thai, Khmer, Lao, and Burmese text, not for reading), `links` (`src`, `target`, `dst`, `embed`; `NULL` dst = dead link; `embed` 1 for `![[...]]` embeds, 0 for links; one row per distinct written target and kind with alias and anchor stripped, so `[[Foo]]` and `[[Foo|alias]]` are one row while `[[Foo]]` and `[[notes/Foo]]` are two rows that can share a `dst`, and a target both linked and embedded is a row of each kind; extraction matches Obsidian's own graph: comments, code, and link-syntax text yield no rows, `[[#Anchor]]` is a self-edge, a frontmatter value that is exactly `[[X]]` is a link, and a basename collision resolves to the linking note itself, else the shortest path), `tags` (`path`, `tag`: frontmatter and inline `#tags` merged and deduplicated; nested tags stored full, so `book/scifi` matches `tag = 'book' OR tag LIKE 'book/%'`), `sections` (heading outline with line ranges and token estimates), and `preset_files` (`path`, `preset`: which presets cover which files). Features add their own storage; `map` and `status` report which are on.
+Use sense to locate evidence in a markdown tree before reading files. Every command reconciles changed files first. Results contain paths, metadata, excerpts, and line ranges. Read the returned files or ranges when the task needs their prose.
 
-**Stores.** The config's `store` key picks the backing store: `sqlite` (default, zero-dependency, Node's built-in SQLite), or the experimental `duckdb` and `turso` (the first command that opens such a tree installs that engine's package on its own: `@duckdb/node-api`, a one-time native download of about 110 MB, or the much smaller `@tursodatabase/database`). The tables, `?` placeholders, quoted identifiers, and the `scope` binding are the same on all three, so ordinary frontmatter SQL ports as written. Two things do not port. First, FTS5: `content` is an FTS5 table on sqlite and a plain table on the other two, so hand-written `MATCH`, `snippet()`, `bm25()`, and sqlite's date-function forms run only on sqlite (duckdb has its own fts functions and date syntax; turso has Tantivy's `fts_match`/`fts_score`), and `search` text under duckdb and turso rejects FTS5's prefix (`foo*`), boolean (`AND`/`OR`/`NOT`), `NEAR`, initial-token (`^`), and column-filter (`title:foo`) operators with a named error (STORE_CAPABILITY_MISSING) that says how to rephrase or set `store` to `sqlite`; bare words and quoted phrases work on all three. Second, of the `has`/`basename`/`segment` functions, `has` and `basename` run on all three (turso rewrites them into portable SQL rather than registering them), while `segment` runs on sqlite and duckdb only, so a query calling `segment` under turso fails with a named error (STORE_CAPABILITY_MISSING) saying to rephrase or set `store` to sqlite. `sense watch` runs on all three; under duckdb and turso, which lock the cache file per connection, a concurrent command waits out the watcher's current cycle instead of failing.
+Setup, store selection, presets, and note design belong to the `sense-setup` skill. Translating an Obsidian Bases file belongs to `sense-bases`.
 
-## What each tool is for
+## Start with the tree
 
-Every result is a reference (path, metadata, excerpt), never file contents; prose enters context only when you Read it. Costs: `map` is fixed-size, a `search` row is tens of tokens, and a `peek` stays flat however large the note is. Which tool fits is a property of the question:
-
-- A deterministic, factual answer over known fields (counts, filters, "which notes have X") is SQL: `sense sql`, a saved `{ sql }` entry, or `search --where`. Enumerates every match; same result regardless of phrasing.
-- Locating notes about something is `search`, one text through every engine the scope has: word match (bare words AND-join, one absent word = zero lexical rows; write `a OR b OR c` for any-word), link-graph expansion, and vector similarity, fused into one ranked list. Read `via` per row: `match` rows contained your words; `vector`-only rows did not. A `vector`-only row means the search words don't appear in that note; it showed up because the model judged it semantically related. Vector rows are conceptual similarity, not typo-tolerance; false positives are expected, labeled, and bounded by `--k`, and they are the only rows a search can produce when note and query share no vocabulary at all, the paraphrase and category-for-instance cases words cannot reach. A scope searches with vectors when its preset's `signals` include `vectors` (on by default whenever the tree names an `embed` model); a preset that declares `"signals": {"words": 1, "links": 1}` searches on words and links only. A preset that asks for vectors when a local model path is missing its files is an error naming the fix, not a quieter result that would make the same search answer differently before and after.
-- `map` answers "what is this tree" (fields, hub notes, recent changes) when the tree is unfamiliar.
-- `peek <path>` prices a file before you pay for it: outline with `[L143-162, ~380t]` ranges and links both ways. Every list shows its first 20 with the true total; the `sections` and `links` tables hold the rest, so a peek costs a few hundred tokens on any note. Its link totals count distinct notes: "links out" dedupes written targets by resolved note and lists unresolved targets separately, while `COUNT(*) FROM links WHERE src = ?` counts every written target, resolved or not, so the raw count can read higher without either number being wrong.
-- `path <a> <b>` walks the link graph for a chain connecting two notes, or reports none within the depth bound: it answers how they connect, not just that both exist.
-- `related <note>` ranks notes near in meaning to one note that it does not already link to: the links it is missing. It reads the meaning-vectors, so it needs the `vectors` signal on for the scope and scans them, costing about what a vector `search` does, not what a `peek` does. The model named in the config fetches once per machine at the first vector search (progress on stderr; `sense download` prefetches where that timing matters). A `model` pointing at a local directory with missing files is an error naming it, for `search` and `related` alike, not a quieter result.
-- When you know the file and need its contents, `Read` it. sense adds nothing there. On large files peek's ranges let you read just one section; small files are often cheaper whole.
-
-Output defaults to a table, built for humans; `--format json` returns the same rows machine-parseable, and `--format csv` returns one row per line for `grep` and `awk`. csv keeps every character a value holds, embedded newlines included, but cannot express NULL versus an empty string or a value's type, which json can. The commands that emit rows (`sql`, `search`, `related`, saved queries) take all three; `map`, `peek`, `status`, and `path` render a structure rather than a row set and take table or json. That also makes a saved query usable as a CI/hook gate with zero added mechanism: `[ "$(sense <name> --format json)" = "[]" ]` is true exactly when it returned no rows.
-
-## Three signals
-
-`search` composes up to three engines; which ones run is the preset's `signals` (every signal whose prerequisites hold, by default). Each exists because it reads evidence the others cannot:
-
-| signal | reads | uniquely finds | blind to |
-|---|---|---|---|
-| `words` | the text itself (BM25) | every literal occurrence: identifiers, error strings, names, exact phrases; deterministic | anything phrased differently, e.g. a note saying "compensation floor" for the query "minimum pay" |
-| `links` | connections authors wrote | what the tree's own structure treats as related: context the matching text never restates | notes nobody linked |
-| `vectors` | per-chunk meaning-vectors | notes sharing no words with the query: paraphrase, the category for an instance, a concept restated | proving presence. A vector row cannot show the words occur anywhere; `snippets` can |
-
-Each signal in the map carries a weight (`{"words": 1, "links": 1, "vectors": 1}` is the default when the key is omitted entirely); presence turns a signal on, and the number scales its share of the fused ranking. Equal weight (1 for everything) is what every number elsewhere in this doc describes. A weight above 1 pulls the fused ranking toward that signal's own ordering: measured on nfcorpus with the default static model and on MIRACL zh with an HTTP encoder, equal-weight fusion helps English nfcorpus but ranks the encoder's MIRACL-zh results below its own cosine-only ranking (benchmark/reports/2026-08-27-embedding-model-selection.md, weight-sweep table). There is no single weight that is right for both, so a preset that leans on a strong encoder is a candidate for a higher `vectors` weight, checked against that table rather than assumed.
-
-Which signal carries a search is a property of the query, and the ends of the range are measured (BENCHMARKING.md, "Retrieval quality"): on the vocabulary-gap corpus, 31% of queries have no relevant lexical row in their top 10 and vector rows are the only recall; on a corpus whose queries quote their documents, words alone hit 99.7% and vectors add nothing. Real trees sit between. An exact identifier is words territory; "notes about X" where X could be phrased many ways is where vector rows carry; "how do these connect" is the link graph (`path`, `peek`).
-
-Attribution is already per-row: one fused search shows which engines earned each hit (`via`), so reading the labels across a few queries is the cheapest way to learn which signals this tree rewards. To isolate a signal harder, declare presets differing only in `signals` and run the same text through both; the row diff is the excluded signal's contribution. The labels also matter downstream: relayed to a human, they distinguish "contains these words" from "related by meaning", which is the difference between a citation and a lead.
-
-## Commands
-
-```
-sense search "pricing OR billing OR invoicing" --where "f.status = 'active'" --k 10
-sense search "sourcing quotes" --preset raw     # a named settings bundle from the config
-sense peek notes/pricing-model.md               # a unique basename also works
-sense path onboarding.md pricing-model.md       # link chain between two notes, or none within the bound
-sense related notes/pricing-model.md            # notes similar by meaning it does not yet link to
-sense map
-sense sql "<statement>" [params...]             # ad-hoc SQL; ? binds positional args, count-checked
-sense <name> [params...]                        # a saved query from sense.config.json
-sense --list | status | download
-```
-
-- Terms pass verbatim to FTS5 MATCH. Bare words AND-join (one absent word means zero rows), so write `OR` yourself when you want any-word matching; double-quote punctuated terms (`"customer-facing"`, `"founder's"`); invalid syntax is an error, not a rewrite. The same rules apply to search commands you write into subagent briefs.
-- When a search misses, both sides have levers. Lexical: OR-in synonyms and concrete instances (the index only knows the words in the files; a note about a specific tool rarely names its category), raise `--k` (a row costs tens of tokens), widen the scope (`--preset`, or `--include` for an ad-hoc glob). Vector: restate the concept in different words. Vectors rank the meaning of the whole query text, so a rephrase moves them even when every literal word still misses. Then pivot through the nearest hit with `related <path>` to walk its meaning-neighbourhood. Vector-only rows in a miss are leads rather than lexical evidence: use `similarity` and the `lines` range to decide what to read; their `snippets` list is empty because the query words did not match. Each widening adds candidates and dilutes ranking, so the noise trade-off runs both ways.
-- A frontmatter query enumerates its matches deterministically; search ranks by term overlap, so results shift as phrasing shifts. Trade-off: a query needs a known field, search doesn't.
-- The `via` column says what produced each row: `match` (words hit), `link` (connected to notes that hit), `vector` (near in meaning), and combinations. The `lines` column, when set, points at the section that earned the row (the best-matching chunk on vector rows, the term cluster's section on large lexical notes) and is a direct `Read` range; null means the whole note is the reference. A row's `snippets` holds the marked passages that earned the lexical match (`[]` on a row that never contained the terms); `--snippet-char-limit` (default 80, the passage's rendered length, marks and ellipses counted) and `--snippet-count-limit` (default 1, passages per note) bound them, on `search` and a saved search alike.
-- Scope is one vocabulary shared by `search`, `map`, `peek`, `path`, and `related`: bare command uses the config's `default` preset; `--preset <name>` picks another (unknown names error, listing what's declared); `--include <glob>` and `--exclude <glob>` are ad-hoc globs for one command, each overriding its own side of the preset, so one does not clear the other; `--no-exclude` drops the preset's `exclude` for one command, the only way to widen past it without editing config (it widens the query scope, not the index: a file no preset covers is never indexed). `--where` takes any SQL condition against frontmatter alias `f`, not only field equality: `"f.status = 'active' AND has(f.tags, 'x')"`, `"datetime(f.created) >= datetime(?)"`. There is no whole-index flag: a broad `default` preset, or a declared `all` preset (`include ["**/*"]`), is the whole tree. `sense status` shows every preset with its coverage. `sql` scopes differently: it runs over the whole index by default, and `--preset <name>` *binds* the scope as a temporary `scope(path)` table your statement joins, rather than filtering behind the query's back (`JOIN scope ON scope."path" = f.path`). Naming a preset without joining `scope` is a usage error, since it would return everything while reading as scoped. Without the flag, join `preset_files` directly, which is the same coverage under a preset name you write into the SQL.
-- `score` is a rank-fusion value: it ranks rows within one result set and is not comparable across queries, not a relevance magnitude. It encodes how many signals fired and at what rank, so a perfect lexical hit and a weak vector-only hit can read the same number. With vectors active, rows carry `similarity`: the cosine (-1 to 1) of the query against that file's best-matching chunk (the same chunk the `lines` range points at). It orders vector evidence within a result set; the range it spans depends on the corpus and the embedding model, and compresses on small trees, where even a nonsense query has a moderately near neighbour somewhere. Compare similarities within a result set rather than against a fixed cutoff carried between trees.
-- Vector rankings read the whole chunk, boilerplate included, so on a tree whose notes are mostly one template with a line of unique text (a directory of plugins, people, or assets), the shared scaffolding dominates every vector and `related` returns near-ties at the top of the range for any seed. Two signs, both visible in the output already: the top `similarity` values sit within a hair of each other, and the same few notes come back for unrelated seeds. Compare neighbour lists across two unlike seeds when a tree looks like this; matching lists mean the ranking is reading the template, not the content, and `search` over the distinguishing words is the answer instead.
-- Absence evidence lives in the labels: a preset whose `signals` exclude `vectors` (or a tree with no `embed` block) returns 0 rows when the words are nowhere in it. Default `search` always returns up to `k` rows (nearest-neighbour search has a nearest neighbour for any input), so a result of only `via: vector` rows is the absence signal for the words themselves. Judge whether a vector row is a useful conceptual lead from `similarity`, then read its `lines` range; it has no lexical snippet.
-- A `queries` entry names the verb it runs, mirroring the two commands: `"dead-links": { "sql": "SELECT src, target FROM links WHERE dst IS NULL AND lower(target) NOT GLOB '*.[a-z0-9]*'" }` runs as `sense dead-links`, and `"hot": { "search": "pricing OR billing", "preset": "raw", "k": 20 }` runs as `sense hot` with its settings baked in, so repeat runs need no flags. An invocation-level `--preset`, `--k`, or `--where` overrides a saved search's value; `--list` labels each entry `(sql)` or `(search)`.
-- Running an entry is how it is validated: a typo'd column, stale SQL, bad FTS5 syntax or an unknown preset errors and exits nonzero. A parameterised entry validates with any argument, since SQL is prepared before parameters bind (`sense by-tag zzz` reports `no such column` if the column is wrong, `(0 rows)` if it is right). To sweep a whole config after editing it, read the exit code: 0 ran, 2 means it needs parameters (re-run it with any argument to validate the SQL), anything else is broken.
+Run these when the tree or its configuration is unfamiliar:
 
 ```sh
-for q in $(sense --list | awk '{print $1}'); do
-  sense "$q" --format json >/dev/null 2>&1
-  case $? in 0) ;; 2) echo "needs an argument: $q" ;; *) echo "broken: $q" ;; esac
-done
+sense status     # config, store, cache, document count, preset coverage
+sense map        # fields, hubs, recent notes
+sense --list     # saved queries
 ```
 
-  Whether an empty result is good or bad is the reader's judgment: a dead-link query returning rows means broken citations to fix.
+If a command reports a missing config, run `sense init` only when the user wants the tree configured. A one-off query does not authorize changing the tree.
 
-## SQL
+## Choose the command
 
-The commands are shorthands over those tables; anything they don't express, SQL does.
+| Need | Command |
+|---|---|
+| Exact count, filter, grouping, or known-field report | `sense sql` or a saved SQL query |
+| Notes about a subject | `sense search` |
+| One note's frontmatter, outline, links, and backlinks | `sense peek` |
+| Shortest link chain between two notes | `sense path` |
+| Similar notes that a note does not link to | `sense related` |
+| Tree shape and available fields | `sense map` |
 
-```
-sense sql "SELECT name FROM pragma_table_info('frontmatter')"          # what fields exist
-sense sql 'SELECT path FROM frontmatter WHERE "plugin-id" IS NOT NULL'    # punctuated keys need double quotes: unquoted, plugin-id reads as subtraction
-sense sql "SELECT DISTINCT status FROM frontmatter"                    # what values a field takes
-sense sql "SELECT src FROM links WHERE dst = ?" notes/pricing-model.md  # backlinks
-sense sql "SELECT f.path FROM frontmatter f JOIN scope ON scope.path = f.path" --preset default   # scope SQL to a preset
-sense sql "SELECT f.path FROM frontmatter f JOIN preset_files p ON p.path = f.path AND p.preset = 'default'"  # the same, preset named in the SQL
-sense sql "SELECT path FROM frontmatter WHERE path NOT IN (SELECT dst FROM links WHERE dst IS NOT NULL) AND path NOT IN (SELECT src FROM links)"  # linked neither way (fine if intentional; linking is optional)
-sense sql "SELECT src, target FROM links WHERE dst IS NULL AND lower(target) NOT GLOB '*.[a-z0-9]*'"  # broken wikilinks, attachments excluded
-sense sql "SELECT heading, start_line, tokens FROM sections WHERE path = ?" a.md   # budget a read
-sense sql "SELECT j.value, COUNT(*) n FROM frontmatter, json_each(frontmatter.tags) j GROUP BY j.value ORDER BY n DESC"   # count per array member
-```
+Start with a bounded result. Raise `--k`, widen the preset, or broaden the words only when the first result does not answer the question.
 
-`path` covers the route between two notes, and `search`'s `via: link` rows are the ranked neighborhood around a query; a structural k-hop walk is a bounded `WITH RECURSIVE` over `links`. Bound the depth: an unbounded walk on a densely linked tree enumerates paths exponentially. Pass these through `sense sql "<sql>" <seed>` or save as `{ "sql": "..." }`.
-
-```
--- notes within 2 hops of a seed, links both ways (UNION dedups, so it terminates)
-WITH RECURSIVE hop(path, d) AS (
-  SELECT ?, 0
-  UNION
-  SELECT CASE WHEN l.src = hop.path THEN l.dst ELSE l.src END, hop.d + 1
-  FROM hop JOIN links l ON (l.src = hop.path OR l.dst = hop.path) AND l.dst IS NOT NULL
-  WHERE hop.d < 2
-)
-SELECT DISTINCT path FROM hop WHERE d > 0;
-
--- notes cited alongside a seed: they share a note that links to both (co-citation)
-SELECT DISTINCT b.dst FROM links a JOIN links b ON a.src = b.src
-WHERE a.dst = ? AND b.dst IS NOT NULL AND b.dst <> a.dst;
+```sh
+sense search "pricing" --k 10
+sense search "sourcing quotes" --preset raw
+sense peek notes/pricing-model.md
+sense path onboarding.md pricing-model.md
+sense related notes/pricing-model.md --k 10
+sense sql "SELECT path FROM frontmatter WHERE status = ? LIMIT 50" active
 ```
 
-- A saved `{ sql }` written against `scope` is preset-agnostic: `sense <name> --preset raw` re-points the same statement at another layer, so one entry serves every preset instead of one copy each.
-- `content MATCH` only works against the fts5 table by its own name, never through an alias or a view: `FROM content c ... WHERE c MATCH 'x'` fails with `no such column: c`. This is why `--preset` binds a table to join rather than shadowing the tables.
-- `content MATCH` takes FTS5 syntax: `a OR b`, `"phrase"`, `pref*`, `NEAR(a b, 5)`, `summary: term`. Stemmed; markdown stripped at index time. Double-quote any term with punctuation. Bare `customer-facing` errors (`-` reads as a column filter), bare apostrophes are syntax errors: write `"customer-facing"`, `"founder's"`. This is the default sqlite store's grammar: under `duckdb` and `turso` the operator forms (`a OR b`, `pref*`, `NEAR`, `^`, column filters) are a named error naming the rephrase, and `MATCH` itself does not run (see Stores).
-- A language written without word spaces (Chinese, Japanese, Thai, Khmer, Lao, Burmese) is indexed per grapheme and searched as an ordered grapheme phrase against the `_seg` sidecar columns: substring semantics, what `grep` gives, a query matches wherever its exact text occurs, including inside a longer run (`京都` matches `东京都政府`, correctly, because it's there at position 2), and needs no minimum length. No decision is needed for these languages. Hand-written SQL is not rewritten for you, so a raw `content MATCH '数据库'` finds nothing: write `content MATCH segment(?)` and bind the terms. `segment()` returns text with no such run unchanged, so it is safe to leave in a query whatever the tree's language.
-- Rank with `ORDER BY bm25(content, 10.0, 5.0, 1.0)` (title > summary > body); the full form `bm25(content, 10.0, 5.0, 1.0, 0, 10.0, 5.0, 1.0)` mirrors the same weights onto the `_seg` sidecars, so a title hit found through `title_seg` ranks like one found through `title` (the three-weight form still runs, FTS5 defaults unnamed columns to 1.0, but ranks a sidecar match at body weight). In hand-written SQLite SQL, `snippet(content, 2, '«', '»', '…', 10)` names the authored `text` column explicitly; `-1` can surface a machine-spaced sidecar instead. `search` does not call SQLite's `snippet()`: it computes bounded passages in shared code for every store. A raw SQL `snippet()` re-tokenizes its matched document, so guard large text with `CASE WHEN length(text) <= 16384 THEN snippet(...) END`, or select `title`/`summary`. Treat historical timing as diagnostic until a current identical-work sitting replaces it.
-- Select `content.title`/`content.summary` (always exist, empty when absent) rather than `f.title`/`f.summary` (discovered columns; error on trees that never declare them).
-- Frontmatter values keep their YAML type: strings are TEXT, whole numbers and booleans are INTEGER (`true` stores as 1, so `WHERE flag = 1` matches and `WHERE flag = 'true'` matches nothing), fractions are REAL, lists and maps are JSON text. On the `duckdb` store the discovered columns are VARIANT: homogeneous keys, which are nearly all of them, compare identically, but a numeric predicate against a key that holds numbers in some notes and text in others raises a comparison error where sqlite orders by storage class silently. `map` prints the observed type per field, and a field showing two types (`integer,text`) has drifted across notes. A list key written with no items (`tags:` above a bare `-`) is a list holding one null, stored as the JSON text `[null]`: `IS NULL` does not find it (the column holds a string), `json_each` yields one empty member per such row, and `map` counts it as covered because the key is present. `has(tags, 'x')` reads it correctly as no match. To separate written-but-empty from absent, compare against the text: `WHERE tags = '[null]'`.
-- **Dead links need the attachment filter.** `dst IS NULL` alone is not "broken link": a wikilink to anything that is not markdown (`[[Board.base]]`, `![[Pasted image.png]]`, `[[spec.pdf]]`) can never resolve, because sense indexes markdown and resolution only tries the exact path or `+.md`. Those are out of the index's universe, not broken. On a 1,400-note Obsidian vault the unfiltered query returns 143 rows where 14 are real. Exclude anything carrying a file extension, as in the recipe above, and widen the exclusion if your notes have dotted titles (`[[Node.js]]` carries one too, so a stricter list, `'*.png'`, `'*.pdf'`, `'*.base'`, and whatever else your vault attaches, is safer on a tree whose titles use dots). Scope it with `preset_files` as well: template and skill files are full of `[[Note Name]]` examples that are deliberately unresolved.
-- `has(field, value)`: array membership on JSON-array fields, substring on strings, false on NULL. This is the `includes()` convention. Substring means `has(f.status, 'active')` also matches `inactive`; exact scalar match is `f.status = ?`, deliberate substring is `LIKE`, exact array membership is `EXISTS (SELECT 1 FROM json_each(f.tags) WHERE value = ?)`. To aggregate per member instead, use `json_each(frontmatter.<field>)` (above). GROUP BY on the raw column splits `["a","b"]` and `["b","a"]` into separate buckets.
-- Compare dates through `datetime()`, which resolves ISO 8601 offsets to UTC: `WHERE datetime(created) >= datetime(?)`. Bare string comparison is only safe when every note uses the same offset.
-- Date spellings SQLite rejects (`-0800`, `-08`, a space separator) are normalized at index time, offset preserved. One it cannot fix is left as written and warned about by path: `datetime()` returns NULL there, so the row is invisible to a date comparison rather than excluded by it. List them with `WHERE d IS NOT NULL AND datetime(d) IS NULL`.
-- **SQLite's `now` is UTC, so any query about "today" needs `'localtime'`.** `date('now')` reads as tomorrow from mid-afternoon onward in the Americas, which silently flips "scheduled today" into "overdue" every evening: write `date('now','localtime')` and `datetime('now','start of day','localtime')`. This only matters where the boundary carries the meaning; a `'-90 day'` window is unaffected by a few hours of skew.
-- To bound what a query puts into context: `snippet()` excerpts just the matching text, `LIMIT` caps row counts, and selecting `path`/`title`/`summary` keeps rows small. A large result can also stay out of context entirely: `--format csv > file` writes it whole, and `grep`/`awk` over that file returns only the rows wanted. `SELECT text FROM content` returns the tree's entire prose (sense warns past 50 KB, after the rows have already printed, so the warning records the cost rather than preventing it). Aggregates (`COUNT`, `GROUP BY`) are already bounded. `SELECT * FROM frontmatter` is always safe: prose is not a frontmatter column.
+## Read the store guide before composing syntax
 
-Worked traces: [EXAMPLES.md](EXAMPLES.md).
+The config's `store` key selects the SQL dialect and text-search grammar. An omitted key means `sqlite`. Bare words and quoted phrases work in `sense search` on every store. Advanced operators and raw text-index SQL differ.
 
-## Setup and upkeep
+Read the matching guide before writing raw SQL that uses engine functions, dates, JSON, text matching, or native types. Also read it before using advanced search operators.
 
-- Missing CLI: `npm install -g sensemaking`. Missing config: `sense init` at the tree root. Discovery walks up from cwd; `--config <path>` overrides. Setting up or restructuring a tree (presets, frontmatter conventions, note design) is the `sense-setup` skill. Translating an Obsidian Bases `.base` file into equivalent queries is the `sense-bases` skill.
-- `map` and `status` report each preset's coverage (files matched, embedded count). Indexing derives from presets, so the coverage numbers are how you see what a config actually indexes and embeds. A scope with fewer signals just uses fewer (a preset without the vectors signal searches lexically); a saved search naming an unknown preset errors when run, listing the declared ones.
-- Save a query into `sense.config.json` only when it will be reused; run ad-hoc otherwise.
-- A one-line `summary:` per note is optional and pays twice: it appears in result rows and is a weighted search field. Date comparisons work for dates written as ISO 8601 (`2026-08-12`, or with time and offset); other formats do not compare. Field names in examples (`status`, `tags`, `created`) are illustrative; your tree defines its own.
-- Reserved frontmatter keys (dropped with a warning): `path`, `_mtime`, `_ctime`, `_size`, `_rank`, `_parse_error`, `content`, `links`, `sections`. The `tags` frontmatter column and the `tags` table coexist, mirroring Obsidian's own split: the column is the raw YAML list one note's frontmatter declares (Obsidian's `tags` property), the table is the merged, deduplicated frontmatter+inline set per note (what Obsidian's tag pane and Bases' `file.tags` read). "What is tagged X" is a table query; the column answers only what a note's frontmatter literally says. Inline tags inside `%%...%%` comments are indexed, and some trees run their whole maintenance-tag system in comments.
-- A note whose frontmatter does not parse is indexed with **no** frontmatter columns and `_parse_error` set to the YAML message, which carries the line. Nothing is half-recovered: a non-NULL value is a value the author wrote. So a NULL column means the key was absent *or* the note did not parse, and `_parse_error` is how you tell: `WHERE status IS NULL AND _parse_error IS NULL` is "genuinely missing status". List what needs fixing with `sense sql "SELECT path, _parse_error FROM frontmatter WHERE _parse_error IS NOT NULL"`; fixing a file clears it on the next command. `sense status` reports the count.
-- Exit codes: `0` ok, `1` error (store message verbatim), `2` usage (unknown query, wrong param count).
-- Doubted cache: delete the directory `sense status` prints on its `cache:` line. Rarely needed; every query reconciles first.
+- [SQLite query guide](references/stores/sqlite.md)
+- [DuckDB query guide](references/stores/duckdb.md)
+- [Turso query guide](references/stores/turso.md)
+
+The tables, `?` placeholders, quoted identifiers, `has()`, `basename()`, and preset `scope` binding are shared. [Portable SQL](references/sql.md) documents the schema and queries that work without depending on one engine.
+
+## Search and evidence
+
+`search` combines the signals enabled by the selected preset:
+
+| Signal | Evidence |
+|---|---|
+| `match` | The note contains the search words. `snippets` shows the matching passages. |
+| `link` | A note that matched links to this note. |
+| `vector` | The embedding model placed this note near the query. The search words may be absent. |
+
+Combinations such as `match+link` mean that more than one signal produced the row. `score` ranks rows within that result only. Do not compare it across searches. `similarity` ranks vector evidence within the current result and model. Do not carry a fixed similarity cutoff between trees.
+
+The `lines` value points at the section that earned the row. Read that range when it is present. A null range means the whole note is the reference. A vector-only row has no lexical snippet and is a lead, not proof that the note contains the query terms.
+
+Read [search evidence and troubleshooting](references/search.md) when a search will support a factual claim, when absence matters, when results look noisy, or when tuning signal weights.
+
+## Scope and output
+
+Bare commands use the `default` preset. `--preset <name>` chooses another. For `search`, `--include`, `--exclude`, and `--no-exclude` change the query scope for one invocation, but cannot reach files that no preset indexes. `sense status` shows actual coverage.
+
+`--where` filters search and graph commands against frontmatter alias `f`:
+
+```sh
+sense search "pricing" --where "f.status = 'active' AND has(f.tags, 'sales')"
+```
+
+`sense sql` is index-wide by default. With `--preset`, the command binds a temporary `scope(path)` table. The SQL must join it:
+
+```sh
+sense sql "SELECT f.path FROM frontmatter f JOIN scope ON scope.path = f.path" --preset default
+```
+
+Table output is for people. Use `--format json` when code or an agent will parse rows. Use `--format csv` when redirecting a large row set to a file. `sql`, `search`, `related`, and saved queries support all three formats. `map`, `peek`, `status`, and `path` support table and JSON.
+
+## Saved queries
+
+Save a query in `sense.config.json` only when it will be reused:
+
+```json
+{
+  "queries": {
+    "by-tag": { "sql": "SELECT path, title FROM frontmatter WHERE has(tags, ?) ORDER BY path" },
+    "hot": { "search": "pricing", "preset": "raw", "k": 20 }
+  }
+}
+```
+
+Run these as `sense by-tag urgent` and `sense hot`. Invocation flags override a saved search's `preset`, `k`, or `where` value.
+
+Running a saved entry validates it. Exit code 0 means it ran, 2 means the invocation needs different arguments, and 1 means the query or store failed. An empty result can be valid data, so interpret it from the query's purpose.
+
+## Tables
+
+| Table | Holds |
+|---|---|
+| `frontmatter` | One discovered column per frontmatter key, plus `path`, `_mtime`, `_ctime`, `_size`, `_rank`, and `_parse_error` |
+| `content` | `path`, `title`, `summary`, and authored text, plus store-owned search columns |
+| `links` | `src`, written `target`, resolved `dst`, and `embed` |
+| `tags` | Merged and deduplicated frontmatter and inline tags |
+| `sections` | Heading, level, line range, and token estimate |
+| `preset_files` | Paths covered by each preset |
+
+Features can add tables. `sense map` and `sense status` show which features are active.
+
+A non-null `_parse_error` means the file has no recovered frontmatter values. To distinguish a missing field from invalid frontmatter, include `_parse_error IS NULL` in the filter. Fixes appear on the next command because reconciliation runs first.
+
+## Reading discipline
+
+Select only the columns needed for the answer. Use `LIMIT` for row-returning exploration. Prefer `path`, `title`, `summary`, and bounded snippets over `content.text`. Aggregates such as `COUNT` and `GROUP BY` are already bounded by their result shape.
+
+When a result identifies a large note, use `peek` and then read the relevant line range. Small files are often cheaper to read whole.
+
+Worked command traces are in [EXAMPLES.md](EXAMPLES.md).
+
+## Upkeep
+
+- Install a missing CLI with `npm install -g sensemaking`.
+- `sense status` prints the cache path and watcher state.
+- Delete the cache directory printed by `sense status` only when the derived index is in doubt. The next command rebuilds it.
+- Use `sense watch` when another process should keep the index warm during frequent edits. Queries remain responsible for their own freshness check.

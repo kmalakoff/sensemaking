@@ -1,6 +1,6 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import assert from 'assert';
 import cr from 'cr';
 import { STORE_NAMES, SUPPORTED_CONFIG_VERSION } from 'sensemaking';
@@ -16,13 +16,23 @@ import { KNOWN_EMBED_KEYS } from '../../src/config/index.ts';
 import { packageRoot, scratchDir } from '../lib/scratch.ts';
 
 // Published surfaces drift silently: nothing fails when the README stops describing what
-// ships. These are the two facts cheap enough to assert -- the rest is RELEASING.md step 5.
+// ships. These are the facts cheap enough to assert; the rest is RELEASING.md step 4.
 
 // Windows checks out CRLF; normalize so `\n` means the same thing on every platform.
 // `cr` also folds a bare \r, which a hand-rolled /\r\n/ replace misses.
 const read = (...parts: string[]) => cr(readFileSync(join(...parts), 'utf8'));
 
 const readme = () => read(packageRoot, 'README.md');
+
+function relativeMarkdownTargets(path: string): string[] {
+  const markdown = readFileSync(path, 'utf8');
+  return [...markdown.matchAll(/\[[^\]]+\]\(([^)]+\.md(?:#[^)]+)?)\)/g)].map((match) => match[1].split('#')[0]).filter((target) => !/^[a-z]+:/i.test(target));
+}
+
+function isWithin(parent: string, target: string): boolean {
+  const rel = relative(parent, target);
+  return rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
+}
 
 describe('published docs', () => {
   it('README lists every command in the registry', () => {
@@ -35,6 +45,18 @@ describe('published docs', () => {
   it('README config example is on the supported config version', () => {
     const example = JSON.parse(/```json\n([\s\S]*?)```/.exec(readme())?.[1] ?? '{}') as { version?: number };
     assert.equal(example.version, SUPPORTED_CONFIG_VERSION);
+  });
+
+  it('README relative documentation links resolve to files included in the package', () => {
+    const path = join(packageRoot, 'README.md');
+    const pkg = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8')) as { files: string[] };
+    for (const target of relativeMarkdownTargets(path)) {
+      const resolved = resolve(dirname(path), target);
+      const packagePath = relative(packageRoot, resolved);
+      const included = pkg.files.some((entry) => packagePath === entry || packagePath.startsWith(`${entry}${sep}`));
+      assert.ok(existsSync(resolved), `README.md links to missing file ${target}`);
+      assert.ok(isWithin(packageRoot, resolved) && included, `README.md links to ${target}, which is not included in the package`);
+    }
   });
 });
 
@@ -61,6 +83,22 @@ describe('shipped skills are well formed', () => {
   it('package.json ships the skills directory, so a publish cannot drop it', () => {
     const pkg = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8')) as { files: string[] };
     assert.ok(pkg.files.includes('skills'), 'skills/ is not in package.json files');
+  });
+
+  it('every relative markdown link in a shipped skill resolves inside the package', () => {
+    const skillsRoot = join(packageRoot, 'skills');
+    const markdownFiles = (dir: string): string[] =>
+      readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+        const path = join(dir, entry.name);
+        return entry.isDirectory() ? markdownFiles(path) : entry.name.endsWith('.md') ? [path] : [];
+      });
+    for (const path of markdownFiles(skillsRoot)) {
+      for (const target of relativeMarkdownTargets(path)) {
+        const resolved = resolve(dirname(path), target);
+        assert.ok(existsSync(resolved), `${path} links to missing shipped file ${target}`);
+        assert.ok(isWithin(skillsRoot, resolved), `${path} links outside the shipped skills directory: ${target}`);
+      }
+    }
   });
 });
 
@@ -190,7 +228,7 @@ describe('benchmark release-gate: numbers of record', () => {
     const jsonFiles = existsSync(reportsDir) ? readdirSync(reportsDir).filter((f) => REPORT_JSON_RE.test(f)) : [];
     if (jsonFiles.length === 0) return; // no generated report has landed yet (phase 4 migration, out of scope here)
     const newest = jsonFiles.sort().at(-1) as string;
-    const { updateNumbersOfRecord, parseNumbersTable, NUMBERS_START: START, NUMBERS_END: END } = await import('../../benchmark/report.mjs');
+    const { updateNumbersOfRecord, parseNumbersTable, renderStoreBenchmarkSummary, NUMBERS_START: START, NUMBERS_END: END } = await import('../../benchmark/report.mjs');
     const report = JSON.parse(readFileSync(join(reportsDir, newest), 'utf8'));
     if (report.verdict !== 'PASS') return; // a blocked sitting's numbers are never the official ones
     const scratch = scratchDir('numbers-render');
@@ -206,6 +244,7 @@ describe('benchmark release-gate: numbers of record', () => {
       if (value === null || value === undefined) continue;
       assert.deepEqual(rendered.get(key)?.[0], live.get(key)?.[0], `BENCHMARKING.md's numbers-of-record row "${key}" does not match ${newest}`);
     }
+    assert.equal(read(packageRoot, 'skills', 'sense-setup', 'references', 'store-benchmarks.md'), renderStoreBenchmarkSummary(report), `the shipped store benchmark summary does not match ${newest}`);
   });
 
   it('fixture: a PASS sitting merges into the numbers-of-record table without deleting a metric it did not measure', async () => {
@@ -214,13 +253,17 @@ describe('benchmark release-gate: numbers of record', () => {
     fixtureSitting(sitting, '2099-06-01', [71, 71]); // identical, so this sitting is PASS
     const reportsDir = scratchDir('numbers-fixture-reports');
     const mdPath = join(scratchDir('numbers-fixture-md'), 'BENCHMARKING.md');
+    const storeSummaryPath = join(scratchDir('numbers-fixture-store-summary'), 'store-benchmarks.md');
     writeFileSync(mdPath, `# Benchmarks\n\n${'<!-- numbers -->'}\n\n| metric | value | report |\n|---|---|---|\n| pre_existing_metric | 42 ms | [old](old.md) |\n\n${'<!-- /numbers -->'}\n`);
     const report = buildReport(sitting, { reportsDir, releaseVersionOverride: '9.9.10' }); // released: only a record repoints the numbers
     assert.equal(report.verdict, 'PASS');
-    persist(report, { sittingDir: sitting, reportsDir, benchmarkingMdPath: mdPath });
+    persist(report, { sittingDir: sitting, reportsDir, benchmarkingMdPath: mdPath, storeSummaryPath });
     const after = readFileSync(mdPath, 'utf8');
     assert.match(after, /pre_existing_metric \| 42 ms/, 'a metric this sitting never measured must survive a PASS regeneration');
     assert.match(after, /hub_find_row_tokens \| 71/, 'a metric this sitting measured must be added');
+    const summary = readFileSync(storeSummaryPath, 'utf8');
+    assert.match(summary, /sense-store-benchmark release=9\.9\.10/);
+    assert.match(summary, /\| sqlite \| 100 ms \| 50 ms \| 60 ms \| 90 ms \| not measured \|/);
   });
 });
 

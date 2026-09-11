@@ -75,7 +75,7 @@ Subagents dispatched during a release are spawned with `model: sonnet`. Reviews 
 
    What blocks: failed required behavior, invalid required evidence, missing required coverage, an explicit caller bound or quality floor, an approved performance guard, or an unexplained public semantic change. Historical timing, quality, and output observations are WARN findings, including movements beyond a legacy band. A changed workload or missing prior is INFO and starts a new series. The report keeps valid numeric comparisons, invalid readings, and not-compared rows separate.
 
-   Releasing a PASS (step 6) moves the numbers-of-record table in BENCHMARKING.md to this sitting. A BLOCK, or a sitting never released, leaves it exactly as it was, so numbers that never shipped never become the official ones.
+   Releasing a PASS in step 6 moves the numbers-of-record table in BENCHMARKING.md to this sitting and rewrites `skills/sense-setup/references/store-benchmarks.md` from the same accepted report. A BLOCK, or a sitting never released, leaves both files exactly as they were.
 
 3. **On BLOCK, fix it or accept it.** Fixing it and running again is the ordinary path. An owner may record a decision against an eligible blocking finding in the owner's own words. This never makes invalid evidence comparable or turns missing required coverage into a pass:
 
@@ -96,11 +96,84 @@ Subagents dispatched during a release are spawned with `model: sonnet`. Reviews 
    | `skills/sense-setup` | making or restructuring one | agents |
    | `schema.json` | every config key | editors |
 
-The mechanical facts are tested in `test/integration/docs.test.ts`; the rest is a read. The keyword review and the npm indexer's hyphen tokenization are in `releasing-standards`. Re-check every measured claim in the docs against the run from step 2, and prefer linking BENCHMARKING.md over copying figures that drift: a number that no longer holds is worse than no number, because the next reader trusts it.
+   The mechanical facts are tested in `test/integration/docs.test.ts`; the rest is a read. The
+   keyword review and the npm indexer's hyphen tokenization are in `releasing-standards`.
+
+   **Keep the published surfaces self-contained.** `npm pack --dry-run` is the boundary: a relative
+   link from the README or either skill must resolve inside that tarball. Contributor plans,
+   benchmark reports, `BENCHMARKING.md`, `DESIGN.md`, and `INTEGRATIONS.md` do not ship. Leave them
+   out when the reader does not need them. When a public source is useful, link to its stable web
+   page instead of a package-relative path. Keep benchmark method and full evidence in
+   `BENCHMARKING.md` and its reports. Store-selection measurements for installed agents belong only
+   in the generated `skills/sense-setup/references/store-benchmarks.md`. The README explains the
+   choice without carrying release figures.
+
+   **Review the stores as evolving implementations, not fixed product tiers.** The shared commands,
+   tables, result shapes, and declared capabilities are the public contract. Preserve them with the
+   common capability suite. Implement each contract with the engine's native mechanisms, and
+   optimize the native path that owns a measured cost. Do not translate every store into SQLite's
+   FTS5 dialect or reduce all stores to the weakest implementation merely to make their internals
+   look alike. A slower result on equivalent work is an optimization finding, not a reason to call
+   the store unsuitable.
+
+   Document a difference only when it changes a user's decision or query. The useful differences
+   are installation and platform cost, file and connection behavior, supported search grammar,
+   raw SQL dialect and extensions, interoperability, and performance or scale measured on a named
+   workload. Keep three kinds of claim separate:
+
+   1. what the upstream engine and its ecosystem can do;
+   2. what the current Sense adapter exposes;
+   3. what the current Sense benchmark measured.
+
+   For example, DuckDB closely follows PostgreSQL SQL while retaining documented differences and
+   its own extensions. It supports analytical and larger-than-memory workloads, and MotherDuck can
+   add local/cloud hybrid workflows. Those are valid reasons to choose the DuckDB file even when a
+   particular Sense timing is slower. Sense itself currently creates a local cache and does not
+   connect it to MotherDuck. Likewise, the Turso Database engine is a fast-moving Rust rewrite with
+   async I/O, concurrent writes, and a separate sync SDK, while the current Sense adapter opens one
+   local file and serializes Sense commands against it. Upstream capabilities become Sense
+   capabilities only after the adapter exposes and tests them.
+
+   **Check upstream movement during every release.** Record the installed versions, compare the two
+   optional bindings with the current registry releases, and record the SQLite version in each Node
+   runtime used by the gate:
+
+   ```bash
+   npm ls @duckdb/node-api @tursodatabase/database
+   npm view @duckdb/node-api version
+   npm view @tursodatabase/database version
+   node -p "JSON.stringify({ node: process.version, sqlite: process.versions.sqlite ?? null })"
+   ```
+
+   A newer upstream version starts a review; it is not an automatic dependency update or a new
+   performance claim. Read the official release notes and current docs, then test the APIs and
+   experimental features Sense uses. For Turso this includes index methods, Tantivy behavior,
+   transactions, connection lifetime, sync, encryption, and concurrent-write support. For DuckDB
+   it includes the Node binding, database-format compatibility, FTS extension behavior, connection
+   coordination, SQL changes, and larger-than-memory behavior. When Sense's minimum Node version
+   changes, also review the official `node:sqlite` docs and release notes for module stability,
+   bundled SQLite version, FTS5, WAL, and function-registration changes. Do not predict a Node and
+   Turso convergence; change the guidance only if Node or Turso publishes an implementation change
+   and the adapter verifies its consequence.
+
+   The upstream review uses primary sources: [DuckDB SQL](https://duckdb.org/docs/current/sql/introduction),
+   [DuckDB performance](https://duckdb.org/docs/current/guides/performance/how_to_tune_workloads),
+   [MotherDuck hybrid execution](https://motherduck.com/research/motherduck-duckdb-in-the-cloud-and-in-the-client/),
+   [Turso SDK selection](https://docs.turso.tech/sdk/introduction),
+   [Turso releases](https://github.com/tursodatabase/turso/releases), and
+   [Node's SQLite API](https://nodejs.org/api/sqlite.html). Upstream marketing can identify a path
+   to investigate; implementation inspection, shared capability tests, and a representative Sense
+   measurement establish the guidance.
+
+   Finish the read from the customer's path. The README gives a short, neutral choice and gets a new
+   user to a successful command. `skills/sense-setup` owns selection trade-offs and the dated
+   benchmark summary. `skills/sense` owns store-specific SQL and search behavior after a tree exists.
+   Remove stale claims even when the code did not change: upstream releases can turn today's
+   limitation into tomorrow's optimization opportunity.
 
 5. Ask the maintainer which version this is going out as, write the CHANGELOG entry under that heading, and commit steps 1-4 per `releasing-standards`. A sitting usually separates into the code change and the benchmark tables; the grouping is proposed and agreed before anything is rewritten, and it is collapsed before the bump.
 
-6. With the version named, name the sitting's report for it, which copies it to `benchmark/reports/<date>-<version>-release-gate.{md,json}` from the same data and measures nothing:
+6. With the version named, name the sitting's report for it. This copies it to `benchmark/reports/<date>-<version>-release-gate.{md,json}`, updates BENCHMARKING.md, and generates the shipped store summary from the same data. It measures nothing:
 
    ```bash
    node benchmark/report.mjs --release <chosen>
