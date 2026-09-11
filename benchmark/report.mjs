@@ -7,8 +7,8 @@
 //        node benchmark/report.mjs --accept <row id | stage reason> --reason "<owner's words>"
 //
 // Releasing a PASS (or a BLOCK whose every blocking row carries an accepted override) repoints
-// BENCHMARKING.md's numbers-of-record table at the record; a BLOCK, or an unreleased sitting,
-// leaves it exactly as it was, so numbers that never shipped never become the official ones.
+// BENCHMARKING.md's numbers-of-record table and rewrites the shipped store-selection summary;
+// a BLOCK, or an unreleased sitting, leaves both exactly as they were.
 //
 // Every exported function takes its target paths through an options object, defaulted to the
 // real repo locations -- test/integration/docs.test.ts points them at scratch instead, so
@@ -38,8 +38,10 @@ import { identityHash } from './lib/workload-identity.mjs';
 export const REPORTS_DIR = join(ROOT, 'benchmark', 'reports');
 export const SITTINGS_DIR = join(ROOT, '.tmp', 'sittings');
 export const BENCHMARKING_MD = join(ROOT, 'BENCHMARKING.md');
+export const STORE_BENCHMARK_SUMMARY_MD = join(ROOT, 'skills', 'sense-setup', 'references', 'store-benchmarks.md');
 export const NUMBERS_START = '<!-- numbers -->';
 export const NUMBERS_END = '<!-- /numbers -->';
+const STORE_SUMMARY_VERSION_RE = /<!-- sense-store-benchmark release=(\d+\.\d+\.\d+) -->/;
 
 // A record is named for the release it gates. Until --release names one, the sitting's report
 // lives beside its data as <sitting>/release-gate.{json,md}, so two sittings can never collide.
@@ -1130,7 +1132,9 @@ export function compactReleaseRecord(report) {
 
 // Writes the sitting's own release-gate.{json,md}; once --release has named it, the record under
 // reportsDir too, and on PASS repoints the numbers of record. The one landing point for every writer.
-export function persist(report, { sittingDir, outputDir = sittingDir, reportsDir = REPORTS_DIR, benchmarkingMdPath = BENCHMARKING_MD, analysisOnly = false }) {
+export function persist(report, options) {
+  const { sittingDir, outputDir = sittingDir, reportsDir = REPORTS_DIR, benchmarkingMdPath = BENCHMARKING_MD, analysisOnly = false } = options;
+  const storeSummaryPath = options.storeSummaryPath ?? (reportsDir === REPORTS_DIR && benchmarkingMdPath === BENCHMARKING_MD ? STORE_BENCHMARK_SUMMARY_MD : null);
   mkdirSync(outputDir, { recursive: true });
   const targets = [[outputDir, SITTING_REPORT, false]];
   if (report.release_version && !analysisOnly) {
@@ -1159,7 +1163,10 @@ export function persist(report, { sittingDir, outputDir = sittingDir, reportsDir
     writeFileSync(jsonPath, `${JSON.stringify(saved, compact ? undefined : null, compact ? undefined : 2)}\n`);
     writeFileSync(mdPath, md);
   }
-  if (report.release_version && report.verdict === 'PASS' && !analysisOnly) updateNumbersOfRecord(report, benchmarkingMdPath);
+  if (report.release_version && report.verdict === 'PASS' && !analysisOnly) {
+    updateNumbersOfRecord(report, benchmarkingMdPath);
+    if (storeSummaryPath) updateStoreBenchmarkSummary(report, storeSummaryPath);
+  }
   return paths[paths.length - 1]; // the record when released, else the sitting's own
 }
 
@@ -1203,6 +1210,58 @@ export function updateNumbersOfRecord(report, benchmarkingMdPath = BENCHMARKING_
     [...rows.entries()].map(([metric, [value, reportLink]]) => [metric, value, reportLink])
   );
   writeFileSync(benchmarkingMdPath, `${md.slice(0, start)}${NUMBERS_START}\n\n${table}\n\n${md.slice(end)}`);
+}
+
+const STORE_SUMMARY_METRICS = [
+  ['cold_crawl_ms', 'Cold index'],
+  ['warm_query_ms', 'Warm count'],
+  ['find_ms', 'Lexical search'],
+  ['semantic_find_ms', 'Semantic search'],
+];
+
+function storeRecordPrefix(store) {
+  return store === DEFAULT_STORE ? 'hub' : `battery_${store}_hub`;
+}
+
+function metricCell(value) {
+  return Number.isFinite(value) ? `${new Intl.NumberFormat('en-US', { maximumFractionDigits: 1 }).format(value)} ms` : 'not measured';
+}
+
+function semanticNdcg(report, store) {
+  const row = report.assessment?.current_common_query_relevance?.find(([rowStore, corpus, variant, metric]) => rowStore === store && corpus === 'portable-eval-nfcorpus' && variant === 'semantic' && metric === 'ndcg');
+  return row?.[4] ?? 'not measured';
+}
+
+export function renderStoreBenchmarkSummary(report) {
+  const notes = report.corpus_shape?.hub?.notes;
+  const rows = OFFERED.map((store) => {
+    const prefix = storeRecordPrefix(store);
+    return [store, ...STORE_SUMMARY_METRICS.map(([key]) => metricCell(report.record?.[`${prefix}_${key}`])), semanticNdcg(report, store)];
+  });
+  const timingScope = Number.isFinite(notes) ? `the same ${new Intl.NumberFormat('en-US').format(notes)}-note tree` : 'the same tree';
+  return `<!-- sense-store-benchmark release=${report.release_version} -->
+# Current store benchmark summary
+
+The release assessment generated this file for store selection. Release \`${report.release_version}\` passed on ${report.date}, measured on ${report.machine ?? 'an unrecorded machine'} with Node ${report.node ?? 'unrecorded'}.
+
+The timing rows ran on ${timingScope}. They include CLI startup and each store's complete selected path. Ranked candidates and downstream work can differ by store, so these are current operating measurements rather than an isolated database-engine contest.
+
+${mdTable(['Store', ...STORE_SUMMARY_METRICS.map(([, label]) => label), 'Portable semantic nDCG@10'], rows)}
+
+Cold index is the first \`status\` that builds the cache. Warm count is a no-change \`COUNT(*)\` query. Lexical and semantic search are steady-state \`sense search\` commands. Lower timing is faster. Higher nDCG@10 is better; that quality column uses the same NFCorpus queries, judgments, result count, and model on every store.
+
+Choose from the intended workflow, capabilities, and SQL compatibility. These numbers describe the current Sense implementations, not a permanent ranking of the engines. Treat small timing or relevance differences as diagnostic unless a representative workload for the target tree reproduces them.
+`;
+}
+
+export function updateStoreBenchmarkSummary(report, storeSummaryPath = STORE_BENCHMARK_SUMMARY_MD) {
+  if (existsSync(storeSummaryPath)) {
+    const existingVersion = STORE_SUMMARY_VERSION_RE.exec(readFileSync(storeSummaryPath, 'utf8'))?.[1];
+    if (existingVersion && compareVersions(report.release_version, existingVersion) < 0) return false;
+  }
+  mkdirSync(dirname(storeSummaryPath), { recursive: true });
+  writeFileSync(storeSummaryPath, renderStoreBenchmarkSummary(report));
+  return true;
 }
 
 // id is a classification row id, or a stage reason exactly as the report's stage_reasons carries
@@ -1263,7 +1322,7 @@ async function main() {
   console.log(`wrote ${relative(ROOT, mdPath)}`);
   console.log(`verdict: ${report.verdict}`);
   const repointed = report.release_version && report.verdict === 'PASS';
-  console.log(repointed ? 'numbers of record: updated' : `numbers of record: left as they were (${report.release_version ? 'BLOCK' : 'not released'})`);
+  console.log(repointed ? 'numbers of record and shipped store summary: updated' : `numbers of record and shipped store summary: left as they were (${report.release_version ? 'BLOCK' : 'not released'})`);
 }
 
 // Only run the CLI when this file is the entry point; report.mjs's functions are also imported

@@ -43,7 +43,7 @@ Every file becomes rows in these tables, plus whatever an enabled feature adds o
 | table | holds | for |
 |---|---|---|
 | `frontmatter` | one column per key, plus `path`, `_mtime`, `_size`, `_rank`, `_parse_error` | filtering |
-| `content` | `title`, `summary`, `text`, `path`; on the default `sqlite` store an FTS5 index with machine-written `title_seg`/`summary_seg`/`text_seg` sidecars for matching in Chinese, Japanese, Thai, Khmer, Lao, and Burmese, on `duckdb` a plain table that matches those scripts as substrings, on `turso` a Tantivy index with `_ngram` sidecars serving the same scripts | search and ranking |
+| `content` | `title`, `summary`, `text`, `path` | text search and ranking |
 | `links` | `src`, `target` as written, `dst` resolved (`NULL` = dead link, but see the skill: a link to an attachment can never resolve) | graph |
 | `tags` | `path`, `tag`; frontmatter and inline `#tags` merged and deduplicated, nested tags stored full | tag filters |
 | `sections` | heading, `level`, `start_line`, `end_line`, `tokens` estimate | structure |
@@ -51,7 +51,7 @@ Every file becomes rows in these tables, plus whatever an enabled feature adds o
 
 Results are references (path, title, summary, snippets), never file contents. Reading happens afterward through the filesystem, scoped to the line ranges `peek` returns. This is the [just-in-time context pattern](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents): the agent holds lightweight identifiers and loads payloads only when needed.
 
-Output size is a contract, measured per release ([BENCHMARKING.md](BENCHMARKING.md)): `map` is fixed-size, a `search` row is tens of tokens, and a `peek` stays flat however large the note is. What it saves over reading grows with the file; a small note is cheaper to read whole.
+`map` has fixed-size output, a `search` row is tens of tokens, and a `peek` stays flat however large the note is. What it saves over reading grows with the file; a small note is cheaper to read whole.
 
 ```sql
 -- filter and search compose in one query
@@ -75,13 +75,13 @@ ORDER BY bm25(content, 10.0, 5.0, 1.0) LIMIT 10
 | `init` | write a starter `sense.config.json` |
 | `status` | index location, doc count, per-preset coverage, watcher heartbeat |
 | `download` | fetch the embedding model named in the config (once per machine; the first vector search fetches it otherwise) |
-| `watch` | keep the index warm in the background (optional; see [DESIGN.md](DESIGN.md#watch-coordination)) |
+| `watch` | keep the index warm in the background (optional; see [watch coordination](https://github.com/kmalakoff/sensemaking/blob/master/DESIGN.md#watch-coordination)) |
 
-`search` runs one text through every engine its scope has: FTS5 word match (BM25-ranked, bare words AND-join, operators are yours on `sqlite`; on `duckdb` and `turso` the FTS5 operators are a named error, see Config), a personalized-PageRank walk over the link graph, and vector similarity, fused into one list. `via` labels each row's evidence (`match`, `link`, `vector`, combinations); results rank by the true cosine against the best-matching canonical chunk before `similarity` is rounded to three decimals for display; a zero-direction vector has similarity `0`, exact cosine ties use bytewise path order, and equal-scoring chunks choose the earliest authored chunk. `lines` points at the section that earned the row (a direct read range). A `vector`-only row means the search words don't appear in that note; it showed up because the model judged it semantically related. `--preset` picks a named settings bundle from the config, `--where` filters on frontmatter. `--format json` on any reporting command returns structured output, and `--format csv` writes the row-returning commands one row per line, for redirecting a large result to a file instead of into context; `--version` and `--help` do what they say.
+`search` runs one text through every engine its scope has: FTS5 word match (BM25-ranked, bare words AND-join, operators are yours on `sqlite`; on `duckdb` and `turso` the FTS5 operators are a named error, see Config), a personalized-PageRank walk over the link graph, and vector similarity, fused into one list. `via` labels each row's evidence (`match`, `link`, `vector`, combinations). Within the vector signal, candidates rank by the true cosine against the best-matching canonical chunk before `similarity` is rounded to three decimals for display; a zero-direction vector has similarity `0`, exact cosine ties use bytewise path order, and equal-scoring chunks choose the earliest authored chunk. The public search list ranks the combined word, link, and vector candidates by fused reciprocal-rank score. `lines` points at the section that earned the row (a direct read range). A `vector`-only row means the search words don't appear in that note; it showed up because the model judged it semantically related. `--preset` picks a named settings bundle from the config, `--where` filters on frontmatter. `--format json` on any reporting command returns structured output, and `--format csv` writes the row-returning commands one row per line, for redirecting a large result to a file instead of into context; `--version` and `--help` do what they say.
 
 Search rows carry `snippets: string[]`. Each passage is generated around the matched words, marked with `«»`, and limited to 80 characters by default. `--snippet-count-limit` returns more non-overlapping passages from a note, in document order. Link- and vector-only rows have `snippets: []`.
 
-Lexical words are case- and accent-insensitive. SQLite and DuckDB use their native English stem tokenizers; Turso's native Tantivy index has no stem tokenizer in the supported release, so it applies the shared Porter normalization to a derived field before native indexing. In every store, `run`, `running`, and `runs` match the same authored notes, while authored bytes are never rewritten. Quoted phrases require adjacent words, with punctuation treated as a separator, and punctuation-only input returns no lexical rows.
+Lexical words are case- and accent-insensitive. SQLite and DuckDB use their native English stem tokenizers; Turso's native Tantivy index has no stem tokenizer in the supported release, so it applies the shared Porter normalization to a derived field before native indexing. In every store, `run`, `running`, and `runs` match the same authored notes, while authored bytes are never rewritten. Quoted phrases require adjacent words, with punctuation treated as a separator, and punctuation-only input returns no lexical rows. SQLite's native caret and `NEAR(...)` expressions over unspaced text use original FTS5 tokens rather than sidecar substring semantics; use an ordinary quoted search when substring findability matters, at the cost of positional filtering.
 
 ## Config
 
@@ -109,19 +109,25 @@ Lexical words are case- and accent-insensitive. SQLite and DuckDB use their nati
 | `root` | optional markdown-tree path. Relative to the config directory; omitted means that directory. Preset globs, filesystem reads, watcher events, and indexed `path` values use this root. `.sense/` state stays beside the config. Changing it rebuilds the index. |
 | `presets` | named bundles of `include`/`exclude` globs, `k` (result count), `signals` (which engines this scope searches with, `words`, `links`, `vectors`; every signal whose prerequisites hold, unless the preset lists them exhaustively), `where` (a standing SQL filter). A file is indexed if any preset includes it, embedded if a model is named and some covering preset's `signals` include `vectors`; `status` shows each preset's coverage. |
 | `embed` | the model vectors are built with. Naming one gives the tree vectors; omitting the block means none at all, whatever the presets say. `sense download` fetches it. |
-| `store` | backing store engine: `sqlite` (default, zero-dependency, Node's built-in SQLite), or the experimental `duckdb` and `turso`. The first command that opens such a tree installs that engine's package on its own (`@duckdb/node-api`, a one-time native download of ~110 MB; `@tursodatabase/database`, much smaller). The same commands and table names run on all three; what does not port is FTS5 syntax. Under `duckdb` and `turso`, `search` text and raw `MATCH` reject FTS5's prefix (`foo*`), boolean (`AND`/`OR`/`NOT`), `NEAR`, initial-token (`^`), and column-filter (`title:foo`) operators with a named error that says how to rephrase or set `store` to `sqlite`; bare words and quoted phrases work on all three. Raw `sql` is a per-store dialect: the tables are portable, but sqlite's FTS5 `MATCH`/`snippet()`/`bm25()` do not run under `duckdb` or `turso`, so saved queries written in FTS5 syntax are sqlite dialect, and of the SQL functions `has`/`basename` run on all three (`turso` rewrites them into portable SQL) while `segment` runs on `sqlite` and `duckdb` only, so a tree whose queries call `segment` stays off `turso`. `sense watch` runs on all three; on `duckdb` and `turso`, which lock the cache file per connection, a concurrent command waits out the watcher's current cycle instead of failing. Each store keeps its own cache file (`.sense/cache.db`, `.sense/cache.duckdb`, `.sense/cache.turso.db`); switching stores is a rebuild, not a migration. Speed is a separate axis. The current per-store figures are historical diagnostics, not an identical-work leaderboard; workload, readiness, and selected downstream work differ. Speed is not the only reason to choose, though: the cache is an ordinary database file, so a tree indexed under duckdb is readable by anything in DuckDB's ecosystem, and turso brings concurrent access, non-blocking I/O and encryption. Pick for what you intend to do with the file, then check the per-store figures. Per-store figures: [BENCHMARKING.md](BENCHMARKING.md). |
+| `store` | `sqlite` by default, or the experimental `duckdb` and `turso`. Each engine uses its own cache file, so changing this setting rebuilds the index. |
 | `queries` | entries runnable as `sense <name>`, each naming the verb it runs: `{ sql }` for SQL (`?` binds positional args) or `{ search }` for a ranked search with its settings baked in, so `sense hot` needs no flags. Running an entry validates it: a typo'd column errors and exits nonzero, and a parameterised entry validates with any argument, since preparing precedes binding. |
 | `version` | schema version; older configs auto-migrate on load, noted on stderr. |
 
 Bare commands use the `default` preset; `--preset` names another; flags override single fields. Editing a preset rebuilds the cache and says which preset caused it.
 
+### Store choice
+
+Choose `sqlite` for the smallest setup, full FTS5 query syntax, and concurrent Sense commands. Choose `duckdb` when the cache should participate in DuckDB analytical work over large datasets or in local/cloud workflows. Choose `turso` for its embedded Rust engine and Tantivy text index. The DuckDB and Turso adapters are experimental, install their native package on first use, and currently serialize Sense commands that open the same cache.
+
+The commands and table names are shared. Raw SQL still follows the selected engine's dialect, and advanced FTS5 operators only work on `sqlite`.
+
 Vectors need a model. Naming a Hugging Face id in `embed.model` is consent to fetch it: it downloads lazily, on the first vector search, with progress on stderr, into `~/.sense/models` (huggingface_hub's cache layout, one snapshot directory per resolved revision, shared by every tree, 124 MB, never in the package). `sense download` prefetches the same model ahead of time, so the wait happens on your schedule instead of the first query's; it is idempotent and prints the resolved revision. `embed.model` is a Hugging Face id, or a path to a directory holding `model.safetensors` and `tokenizer.json`, which nothing fetches for you. A preset that asks for vectors when a local model path is missing those files is an error naming the fix, rather than a quieter result that would make the same search answer differently before and after; a preset whose `signals` exclude `vectors` never asks, so it is unaffected. An optional top-level `"embed": { "model", "provider", "url", "key" }` block points at any Model2Vec model, local path, or OpenAI-compatible endpoint (Ollama, LM Studio, hosted). Embedding the notes themselves happens on the first vector search, with progress.
 
-Two custom SQL functions. `has(field, value)`: array membership on JSON-array fields, substring on strings, false on missing keys. `segment(terms)`: rewrites a run of Chinese, Japanese, Thai, Khmer, Lao, or Burmese text into the ordered grapheme phrase the sidecar columns need, leaving everything else unchanged, so it is safe to add to any hand-written `MATCH`. Frontmatter parsing is lenient: syntax errors are per-file warnings, and the values are still indexed, so one bad note never costs you the crawl.
+Sense adds `has(field, value)` for array membership or string containment and `basename(path)` for path queries on every store. SQLite and DuckDB also provide `segment(terms)` for hand-written matching over text without word spaces. A frontmatter syntax error records `_parse_error` and leaves that file's discovered fields empty; the file's content still enters the index.
 
 ## Providers
 
-`embed.provider` picks the wire protocol; `embed.model` names the model. [INTEGRATIONS.md](INTEGRATIONS.md) is the record of what has actually been run and verified against this codebase. Only that gets named as a recommendation.
+`embed.provider` picks the wire protocol; `embed.model` names the model. The [verified integrations](https://github.com/kmalakoff/sensemaking/blob/master/INTEGRATIONS.md) record what has actually been run against this codebase. Only those integrations are named as recommendations.
 
 **static**. A local, pure-JS Model2Vec model; no network at query time.
 
@@ -153,9 +159,7 @@ Every query starts with a freshness check against the cache in `.sense/`; only c
 
 - **Work is linear in note count.** Crawl, reconcile, and the freshness check are what every invocation pays; that check is the floor cost of a query and the first thing to watch on a large tree.
 - **Output is flat.** `map`, `peek`, and a search row cost the same on a small tree as a large one: context cost is bounded by what you ask for, not by how much there is.
-- **Bulk changes are paid by whoever queries next.** `sense watch` moves that re-parse into the background ([DESIGN.md](DESIGN.md#watch-coordination)): it changes latency, never answers, since every query reconciles for itself. To start the cache over, delete the directory `sense status` prints.
-
-Release assessments keep these claims measured. The ordinary assessment runs required common behavior and current-store work plus full portable NFCorpus on all three stores. The explicit deep profile adds portable FEVER, pinned corpora spanning a 4x range in note count, a stress tree that packs the worst measured shapes into one place, and legacy SQLite OR-bag continuity. Historical performance, quality, and output bands warn; failed required behavior, invalid or missing required evidence, explicit caller bounds or quality floors, and approved performance guards block. Current figures: [BENCHMARKING.md](BENCHMARKING.md).
+- **Bulk changes are paid by whoever queries next.** `sense watch` moves that re-parse into the background ([watch coordination](https://github.com/kmalakoff/sensemaking/blob/master/DESIGN.md#watch-coordination)): it changes latency, never answers, since every query reconciles for itself. To start the cache over, delete the directory `sense status` prints.
 
 ## For AI agents
 
@@ -163,7 +167,7 @@ Release assessments keep these claims measured. The ordinary assessment runs req
 npx skills add kmalakoff/sensemaking   # -g for global, -a claude-code to target
 ```
 
-Three skills: `sense` for querying a tree (what each command is for, FTS5 syntax, reading the `via`/`score`/`similarity` columns, worked examples), `sense-setup` for making one, where features, frontmatter conventions, and note size are decisions with consequences either way, and `sense-bases` for translating an Obsidian Bases `.base` file into sense SQL.
+Three skills: `sense` for querying a tree, including store-specific SQL and search guidance; `sense-setup` for creating one and choosing its store, presets, vectors, and note conventions; and `sense-bases` for translating an Obsidian Bases `.base` file into sense SQL.
 
 ## Prior art
 

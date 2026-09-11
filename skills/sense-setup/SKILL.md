@@ -1,53 +1,112 @@
 ---
 name: sense-setup
-description: "Set up the sense CLI on a markdown tree and make the tree-design decisions that shape it: sense init, presets (which files, which settings, whether the scope searches by meaning), the embed block that names the model, and the trade-offs of frontmatter conventions, summaries, folder layout, and note size. Use when creating or restructuring a markdown knowledge base, running sense init, editing sense.config.json, choosing the backing store (sqlite, duckdb or turso), configuring search scope or vectors, or deciding how notes should be written for an agent to query later."
+description: "Set up the sense CLI on a markdown tree and make the decisions that shape its index: run sense init, choose sqlite, duckdb, or turso, define presets and search signals, configure embeddings, and design queryable note conventions. Use when creating or restructuring a markdown knowledge base, editing sense.config.json, choosing a store or embedding model, or deciding how agents should write notes for later retrieval."
 ---
 
-# sense: setup and tree design
+# sense setup and tree design
 
-Querying an existing tree is the `sense` skill. This one covers making a tree: installing, writing presets, and the design decisions a tree owner faces. Worked configurations for common tree shapes: [EXAMPLES.md](EXAMPLES.md).
+Use this skill to create or change a sense configuration. Querying an existing tree belongs to the `sense` skill. Worked configurations for common tree shapes are in [EXAMPLES.md](EXAMPLES.md).
 
-## Setup
+## Set up the tree
 
-- `npm install -g sensemaking`, then `sense init` at the tree root writes `sense.config.json`: two presets (`default`, and `large` showing what a big tree tunes) and an `embed` block naming the model. The model fetches once per machine at the first vector search (progress on stderr); `sense download` prefetches it instead where that timing matters (CI, air-gapped setup). Config discovery walks up from cwd; `--config <path>` overrides. A top-level `root` can point the config at another markdown tree: it resolves relative to the config directory, makes all globs and stored paths tree-relative, while `.sense/` remains beside the config. Use this when one vault needs independent consumer-specific presets, queries, and caches.
-- **Backing store.** The config's `store` key: `sqlite` (default, zero-dependency, Node's built-in SQLite), or the experimental `duckdb` and `turso`, whose engine package the first command that opens such a tree installs on its own (`@duckdb/node-api`, a one-time native download of about 110 MB; `@tursodatabase/database`, much smaller). The same commands and tables run on all three. Two things do not port, and each one decides a tree. **FTS5 syntax:** under `duckdb` and `turso`, `search` text and raw `MATCH` reject FTS5's prefix, boolean, `NEAR`, initial-token and column-filter operators with a named error, and sqlite's FTS5 SQL (`MATCH`, `snippet()`, `bm25()`) does not run, so saved queries written in that syntax are sqlite dialect; a tree whose saved queries or search vocabulary depend on FTS5 operators stays on `sqlite`. **SQL functions:** `has`/`basename` run on all three (`turso` rewrites them into portable SQL rather than registering them); `segment` runs on `sqlite` and `duckdb` only, so a tree whose queries call `segment` stays off `turso`. `sense watch` runs on all three; `duckdb` and `turso` lock their cache file per connection, so a concurrent command waits out the watcher's current cycle instead of failing. Each store keeps its own cache file (`.sense/cache.db`, `.sense/cache.duckdb`, `.sense/cache.turso.db`); switching stores is a rebuild, not a migration. Speed is a separate axis and must come from a current identical-work measurement. Historical per-store rows can include different ranked candidates and are diagnostics, not an overall store leaderboard. The cache remains an ordinary database file, so a tree indexed under duckdb is readable by DuckDB's ecosystem, while turso brings concurrent access, non-blocking I/O and encryption. Pick for the capabilities you need, then review the current evidence in BENCHMARKING.md.
-- Globs resolve relative to `root` when present, otherwise the config file directory; never the cwd.
-- `sense status` and `sense map` show each preset's coverage (files matched, embedded count), so what a config actually indexes is always visible in output. A config edit that changes coverage rebuilds the cache and names the preset that caused it on stderr.
+Install the CLI and initialize it at the markdown root:
 
-## Presets
+```sh
+npm install -g sensemaking
+cd path/to/notes
+sense init
+sense status
+```
 
-A preset is a named, self-contained bundle of settings. `default` (required) is what bare commands use; every other preset is addressed by name (`sense search "..." --preset raw`, or `"preset": "raw"` in a saved search). No inheritance: what a preset states is all it does.
+`sense init` writes `sense.config.json`. Config discovery walks upward from the current directory. `--config <path>` selects another file.
 
-| field | means | default |
+By default, the config indexes its own directory. A top-level `root` can point at another markdown tree. Relative roots resolve from the config directory, and `.sense/` remains beside the config. Use this when separate consumers need their own presets, saved queries, or caches over one tree.
+
+Globs and indexed paths are relative to the selected root. Run `sense status` and `sense map` after changing the config to confirm preset coverage and the selected store. A change that affects indexed content rebuilds the relevant cache and reports the reason.
+
+## Choose the store
+
+Choose from the intended use of the cache. Start with `sqlite` when no surrounding workflow favors
+another engine, then consider interoperability, SQL, connection behavior, and representative Sense
+measurements. A current timing result does not define an engine's long-term suitability.
+
+| Store | Choose it when | Main trade-off |
 |---|---|---|
-| `include` / `exclude` | which files this preset covers (globs) | required |
-| `k` | how many results a search returns | 10 |
-| `signals` | which engines this preset's searches compose, each mapped to its RRF weight (`{"words": 1, "links": 1, "vectors": 1}`) | every signal whose prerequisites hold, each at weight 1 |
-| `where` | a standing SQL filter on frontmatter | none |
+| `sqlite` | The tree needs the smallest setup, advanced FTS5 search syntax, or concurrent Sense commands | Included with Node; raw SQL is SQLite |
+| `duckdb` | The cache belongs in DuckDB analytical work over large datasets or in a local/cloud workflow, or needs DuckDB types and SQL | Experimental Sense adapter, large native install, one open connection at a time |
+| `turso` | The tree benefits from the embedded Rust engine or Tantivy index, or is evaluating the engine as its adapter evolves | Experimental Sense adapter, restricted search grammar, one open connection at a time |
 
-**Indexing derives from presets.** A file is indexed if any preset includes it. Consequences worth designing around:
+Read the matching selection guide before recommending or configuring a non-default store:
 
-- Files no preset includes are not indexed at all.
-- Presets may overlap; they are views, not partitions.
-- Global `features` (`links`, `sections`, `rank`) still toggle tree-wide; most trees never touch them.
+- [SQLite selection guide](references/stores/sqlite.md)
+- [DuckDB selection guide](references/stores/duckdb.md)
+- [Turso selection guide](references/stores/turso.md)
 
-**Vectors take two decisions, in two places.** The top-level `"embed": { "model", "provider": "static"|"openai"|"cohere", "url", "key", "chunkTokens" }` block names the model and says whether the tree has vectors at all. `chunkTokens` is a chunk size ceiling in estimated tokens for small-context models; default 500. A preset's `signals` says which engines that scope uses: a layer searched for exact wording (ingested sources, archives, generated output) declares `"signals": {"words": 1, "links": 1}`, costs no embedding, and its searches run on words and links. That is the main scale lever, and it is the llm-wiki split: compiled pages searched by meaning, raw sources searched for the phrasing you are citing. Each named signal's number is its RRF weight, not a toggle. 1 is the default and reproduces equal-weight fusion; a preset can instead raise one signal's number, e.g. `{"words": 1, "vectors": 4}`, to shift the fused ranking toward that signal without dropping the others. Whether that helps is corpus- and model-contingent, not a fixed rule: benchmark/reports/2026-08-27-embedding-model-selection.md's weight-sweep table measures equal weight against {0.5, 1, 2, 4} and vectors-only on nfcorpus and on MIRACL zh with an HTTP encoder, and the two corpora do not agree on which weight wins. `static` is the built-in pure-JS Model2Vec loader and handles paraphrase and reworded concepts; tight domain jargon ("heart attack" for "myocardial infarction") is where an `openai`- or `cohere`-shaped encoder model tends to do better, measured in the same report's encoder-tier tables. Naming the model in the config is the consent to fetch it: the first vector search downloads it once per machine into `~/.sense/models` (or `sense download` prefetches) (huggingface_hub's cache layout, one snapshot directory per resolved revision), so several models coexist and switching between them rebuilds the index rather than mixing vector spaces. A `model` holding a path instead of a Hugging Face id points at a local directory, which `sense download` reports as nothing to fetch. The first search after that embeds the tree (progress on stderr; minutes on tens of thousands of notes, seconds on small trees). A config edit that changes coverage or features rebuilds the cache, vectors included, so settle presets before the first vector search on a large tree or that embedding run is paid twice.
+Read the [current store benchmark summary](references/store-benchmarks.md) only when performance could change the choice. The release assessment generates that shipped summary from the latest accepted all-store run.
 
-**Finding a model.** The default, `potion-retrieval-32M`, is English only. A tree whose text is mostly a language the model does not declare fails loudly at embed time (`EMBED_MODEL_MISMATCH`, naming the fix), and `sense status` shows the detected language mix beside the model's declared languages. A model whose card declares no languages leaves that check off, and a mismatched pairing then degrades silently, nearest-neighbour search always returns a neighbour regardless of fit, so check the card's languages yourself when the tree is not English. Picking a model is a lookup against the source, not a name to memorize: for a static model, filter Hugging Face's model2vec library for the target language and read the card for its declared languages, its safetensors shape, and F32 weights (an int8 republish fails the loader's dtype check by design). For an encoder reached over HTTP, Ollama's embedding-model library and LM Studio's catalog list each model's languages and context length; both serve an OpenAI-shaped endpoint, so `provider: "openai"` with `url` pointing at the local port reaches either with no other config. Cohere's hosted models are reached with `provider: "cohere"` instead. One dated measurement stands in for a name table that would go stale: `potion-retrieval-32M` was the best-measured static English retrieval model as of 2026-08, per benchmark/reports/2026-08-27-embedding-model-selection.md's static-ladder table.
+Each store uses a separate cache file. Changing `store` rebuilds the index instead of migrating the old cache. Commands and public tables are shared, while raw SQL and advanced word-search syntax follow the selected engine.
 
-**Large vaults**: everything except the vector build is measured linear to 100k notes with no tuning (BENCHMARKING.md). The knobs that matter are `k` (more, smaller results; rows carry `lines` section ranges, so agents read sections, not files) and `"signals": {"words": 1, "links": 1}` on the layers that do not earn vectors.
+## Design presets
 
-## Tree design decisions
+A preset is a named, self-contained scope. The required `default` preset serves bare commands. Other presets are selected by name.
 
-These belong to the tree's owner. sense works with any of them and reads no instruction files of its own; each choice only changes what queries can do.
+| Field | Meaning | Default |
+|---|---|---|
+| `include` and `exclude` | Files covered by the preset | `include` is required |
+| `k` | Search result count | 10 |
+| `signals` | Enabled search signals and their reciprocal-rank weights | Every available signal at weight 1 |
+| `where` | Standing frontmatter filter | None |
 
-- **Frontmatter fields.** Columns are discovered per tree: whatever keys notes declare become queryable. Consistent fields across notes make SQL filters and saved queries possible (`WHERE status = 'active'`). The store's column limit bounds distinct keys per tree: sqlite's compiled 2,000 (sqlite.org/limits.html), turso's 2,000 result-set column limit, duckdb's 10,000 sanity fence (it has no compile-time cap). The crawl stops with an error naming the count and the levers. Reserved keys (dropped with a warning): `path`, `_mtime`, `_ctime`, `_size`, `_rank`, `content`, `links`, `sections`. Values keep their YAML type: strings TEXT, whole numbers and booleans INTEGER (`true` is 1), fractions REAL, lists and maps JSON text; `map` prints the observed type per field.
-- **Presets are path-shaped; frontmatter is state-shaped.** A preset's coverage must be computable from the path alone (it decides indexing, baked into the cache). Volatile state (`status`, `project`, dates) lives in frontmatter and filters at query time (`where`, `has()`, `datetime()`). A state worth different *indexing* (retired memory, superseded sources) is a state worth moving the file: the archive-folder pattern in EXAMPLES.md.
-- **What a note omits is also a filter.** A layer that deliberately carries none of the fields the saved views filter on is excluded from all of them without any view naming the layer. Sparse fields cut both ways: less of the tree filters when you want breadth, and exactly this separation when layers differ in authority.
-- **Dates.** `datetime()` comparisons work for dates written as ISO 8601, the only format it parses. A tree that mixes date formats can store them, but can't compare them in SQL.
-- **Language.** No decision needed. A language written without word spaces (Chinese, Japanese, Thai, Khmer, Lao, Burmese) is indexed per grapheme and searched as an ordered grapheme phrase, so `sense search "全文"` finds what it should. This is substring semantics, what `grep` gives: a query matches wherever its exact text occurs, including inside a longer run, and needs no minimum length. A language written with spaces is left exactly as it was, storing nothing extra, and its stemming is unaffected. The one place this does not reach is a hand-written `content MATCH '...'`, which cannot be rewritten for its author: pass the terms through `segment()` there. `content.tokenize` is a separate lever with a different purpose, substring matching inside a Latin word (`trigram`) or keeping hyphenated terms whole (`unicode61 tokenchars '-_'`); naming one turns the grapheme-phrase scheme off, since the tree has then chosen its own scheme. Changing it rebuilds the text index only; vectors, links, and sections are kept.
-- **Summaries.** A one-line `summary:` is optional and pays twice: it shows in every result row (often answering a question with no file read) and is a weighted search field ranked above body text. The cost is writing and maintaining the line as notes change.
-- **Folder shape.** Globs find the files, paths are queryable text, links resolve by basename at any depth, but presets make folders meaningful: a folder is the natural unit that gets its own coverage and settings.
-- **Note size.** Many small notes: precise search hits, whole-file reads stay cheap, more links to maintain. Fewer large notes: `sections`, `peek`, and the `lines` column carry the cost down to line-range reads. Both work. A long section no longer becomes one oversized vector either: chunking splits at headings and caps each chunk around 500 estimated tokens (CJK counted 1:1, spaced scripts ~4:1), so an oversized note degrades to more, smaller chunks rather than one truncated one; `embed.chunkTokens` lowers that cap further for a small-context model.
-- **Recurring questions.** Save a scenario an agent will repeat under `queries`, naming the verb it runs: `{ "sql": "..." }` for filters and reports, or `{ "search": "...", "preset": "raw", "k": 5 }` for a ranked search. Either runs as `sense <name>`, and running one is how it is validated: a typo'd column or an unknown preset errors and exits nonzero. A parameterised entry validates with any argument, since SQL is prepared before parameters bind.
-- **Where decisions live.** Choices that should outlive one conversation can be recorded in the agent's own instruction or skill files, or in a note in the tree itself; a one-off search over an existing corpus needs none of that.
+A file is indexed when any preset includes it. Presets can overlap. Files outside every preset do not enter the index.
+
+Use paths for stable layers such as `raw/`, `notes/`, and `archive/`. Use frontmatter filters for changing state such as `status`, `project`, and dates. A preset controls indexing, so its coverage must be computable from paths before frontmatter queries run.
+
+Use separate presets when parts of the tree need different search signals or result counts. A single-purpose tree does not need extra preset vocabulary.
+
+## Configure vectors
+
+Vectors require two choices. The top-level `embed` block names the model and provider. Each preset's `signals` decides whether that scope uses vectors.
+
+```json
+{
+  "embed": {
+    "model": "minishlab/potion-retrieval-32M",
+    "provider": "static"
+  },
+  "presets": {
+    "default": {
+      "include": ["notes/**/*.md"],
+      "signals": { "words": 1, "links": 1, "vectors": 1 }
+    },
+    "raw": {
+      "include": ["raw/**/*.md"],
+      "signals": { "words": 1, "links": 1 }
+    }
+  }
+}
+```
+
+The first vector search downloads a named static model and embeds the covered notes. `sense download` fetches the model earlier when CI, offline work, or timing makes that useful. A config change that alters the model, vector coverage, or chunking can rebuild vectors.
+
+Read [embedding setup](references/embeddings.md) when choosing a provider or model, supporting a non-English tree, changing chunk size, or tuning signal weights.
+
+## Design queryable notes
+
+Sense accepts heterogeneous markdown. These choices decide which queries will be reliable:
+
+- Consistent frontmatter fields make exact filters and saved reports possible. Inspect actual coverage and types with `sense map`.
+- ISO 8601 dates can be compared by the selected store's date functions. Mixed date formats can still be stored, but do not make a dependable time range.
+- A one-line `summary` appears in results and receives more lexical weight than body text. Its cost is keeping it current.
+- Folders are the natural unit for preset coverage. Frontmatter is the natural unit for status and ownership.
+- Small notes give precise hits and cheap whole-file reads. Large notes still work because `peek`, `sections`, and search `lines` point at ranges, and vector chunking splits long sections.
+- Save recurring questions under `queries`. Use `{ "sql": "..." }` for deterministic filters and reports, and `{ "search": "..." }` for ranked retrieval.
+
+Field names in examples are illustrative. The tree defines its own schema. Reserved frontmatter keys are `path`, `_mtime`, `_ctime`, `_size`, `_rank`, `_parse_error`, `content`, `links`, and `sections`; sense drops them with a warning.
+
+## Validate the result
+
+Run `sense status` to confirm the store, cache, document count, embedding state, watcher state, and preset coverage. Run `sense map` to confirm the discovered fields and their observed types.
+
+Run every saved query after editing it. A parameterized SQL query can use any value because preparing the statement validates its columns and syntax before the parameter changes the result.
+
+Record choices that should outlive the setup conversation in the tree's maintained agent guidance or in an authored note. The sense config should contain executable settings and reusable queries, not prose policy.
