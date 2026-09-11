@@ -121,7 +121,7 @@ export function createConnection(db: Database): Connection {
           // can hold across many batches, and nothing else owns this statement's lifetime.
           const stmt = await db.prepare(sql);
           try {
-            for (const row of paramRows) await stmt.run(...row);
+            for (const row of paramRows) await stmt.run(row);
           } finally {
             await stmt.close();
           }

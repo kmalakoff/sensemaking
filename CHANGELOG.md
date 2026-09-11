@@ -2,6 +2,13 @@
 
 All notable changes to sensemaking are documented here.
 
+## [0.24.4] - 2026-09-10
+
+### Fixed
+
+- Turso reconciles changed and deleted notes faster by batching content deletions while
+  preserving search results, transaction behavior, and the existing index-rebuild policy.
+
 ## [0.24.1] - 2026-09-09
 
 ### Added
