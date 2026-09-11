@@ -102,6 +102,11 @@ describe('portable vector contract', () => {
             candidateNames.filter((path) => path !== 'target')
           ).map(({ path, similarity }) => ({ path: `${path}.md`, similarity }));
           assert.deepEqual(similar, expectedSimilar, name);
+          assert.deepEqual(
+            (await store.vectors.similar('target.md', { exclude: new Set(), k: 4 })).map((row) => row.path),
+            ['exact.md', '\uE000.md', '😀.md', 'z-near.md'],
+            `${name}: the similar k boundary uses authored raw-score order`
+          );
         },
         { embed: { model, provider: 'static' } }
       );

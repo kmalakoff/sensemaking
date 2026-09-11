@@ -8,32 +8,34 @@ const SIDECAR_FILENAME = 'lock-wait.json';
 const FLOOR_MS = 5_000;
 const CEILING_MS = 600_000;
 
-function sidecarPath(baseDir: string): string {
-  return join(baseDir, STATE_DIR, SIDECAR_FILENAME);
+function sidecarPath(configDir: string): string {
+  return join(configDir, STATE_DIR, SIDECAR_FILENAME);
 }
 
-function readRecordedMs(baseDir: string): number {
+function readRecordedMs(configDir: string): number | undefined {
   try {
-    const raw = JSON.parse(readFileSync(sidecarPath(baseDir), 'utf8'));
-    return typeof raw.reconcile_max_ms === 'number' ? raw.reconcile_max_ms : 0;
+    const raw = JSON.parse(readFileSync(sidecarPath(configDir), 'utf8'));
+    const value = raw.reconcile_max_ms;
+    return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
   } catch {
-    return 0;
+    return undefined;
   }
 }
 
-// Called after every reconcile's write transaction, every store alike, so a fresh duckdb/turso
-// tree starts building this the first time anything writes.
-export function recordLockWaitMs(baseDir: string, ms: number): void {
-  if (ms <= readRecordedMs(baseDir)) return;
+// Called after every reconcile's write transaction, every store alike, so a fresh cache records
+// its first write even when the measured duration is zero.
+export function recordLockWaitMs(configDir: string, ms: number): void {
+  const recordedMs = readRecordedMs(configDir);
+  if (recordedMs !== undefined && ms <= recordedMs) return;
   try {
-    writeFileSync(sidecarPath(baseDir), JSON.stringify({ reconcile_max_ms: ms }));
+    writeFileSync(sidecarPath(configDir), JSON.stringify({ reconcile_max_ms: ms }));
   } catch {
     // Best-effort: a write failure here only narrows the next waiter's budget back to the floor.
   }
 }
 
-// 3x the largest reconcile this tree has recorded, floored and capped -- a waiter outlasts a
+// 3x the largest reconcile this cache has recorded, floored and capped -- a waiter outlasts a
 // real reconcile and still fails behind a hung one.
-export function lockWaitBudgetMs(baseDir: string): number {
-  return Math.min(Math.max(FLOOR_MS, 3 * readRecordedMs(baseDir)), CEILING_MS);
+export function lockWaitBudgetMs(configDir: string): number {
+  return Math.min(Math.max(FLOOR_MS, 3 * (readRecordedMs(configDir) ?? 0)), CEILING_MS);
 }

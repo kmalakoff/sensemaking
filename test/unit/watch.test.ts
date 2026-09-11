@@ -1,12 +1,12 @@
-import { writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import assert from 'assert';
 import { safeRmSync } from 'fs-remove-compat';
 import { type ResolvedConfig, STATE_DIR } from '../../src/config/index.ts';
 import { SenseError } from '../../src/errors.ts';
-import { getMeta, openStore, setMeta } from '../../src/store/index.ts';
 import type { WatchEvent, WatchOptions } from '../../src/watch.ts';
 import { runWatch } from '../../src/watch.ts';
+import { readWatchClaim, WATCH_CLAIM_FILENAME, WATCH_HEARTBEAT_INTERVAL_MS, WatchClaimDatabase } from '../../src/watch-claim.ts';
 import { runCli } from '../lib/cli.ts';
 import { tmpTree, writeNote } from '../lib/tree.ts';
 
@@ -21,11 +21,8 @@ function cfgFor(baseDir: string): ResolvedConfig {
   return { presets: { default: { include: ['*.md'] } }, queries: {}, baseDir, configPath: null };
 }
 
-async function readMeta(cfg: ResolvedConfig, key: string): Promise<string | null> {
-  const { store } = await openStore(cfg);
-  const value = await getMeta(store, key);
-  await store.close();
-  return value;
+function readClaim(cfg: ResolvedConfig) {
+  return readWatchClaim(cfg.configDir ?? cfg.baseDir);
 }
 
 function sleep(ms: number): Promise<void> {
@@ -59,8 +56,15 @@ function startWatch(cfg: ResolvedConfig, opts: WatchOptions = {}) {
       opts.onEvent?.(event);
     },
   });
-  const ready = startedEvent.then(() => sleep(0));
-  return { done, events, ready };
+  const outcome = Promise.allSettled([done]).then(([result]) => result);
+  const ready = Promise.race([
+    startedEvent.then(() => sleep(0)),
+    outcome.then((result) => {
+      if (result.status === 'rejected') throw result.reason;
+      throw new Error('runWatch resolved before emitting started');
+    }),
+  ]);
+  return { done, events, outcome, ready };
 }
 
 describe('runWatch', () => {
@@ -68,7 +72,7 @@ describe('runWatch', () => {
     for (const dir of dirs.splice(0)) safeRmSync(dir, { recursive: true, force: true });
   });
 
-  it('clean shutdown via AbortSignal resolves the promise and clears watch_heartbeat/watch_pid', async () => {
+  it('clean shutdown via AbortSignal resolves the promise and releases the claim', async () => {
     const baseDir = tree();
     writeNote(baseDir, 'a.md');
     const cfg = cfgFor(baseDir);
@@ -77,29 +81,82 @@ describe('runWatch', () => {
     await ready;
     controller.abort();
     await done;
-    assert.equal(await readMeta(cfg, 'watch_heartbeat'), null);
-    assert.equal(await readMeta(cfg, 'watch_pid'), null);
+    assert.equal(readClaim(cfg), null);
   });
 
-  it('the heartbeat writes watch_heartbeat/watch_pid periodically', async () => {
+  it('the heartbeat advances the config-owned claim periodically', async () => {
     const baseDir = tree();
     writeNote(baseDir, 'a.md');
     const cfg = cfgFor(baseDir);
     const controller = new AbortController();
     const { done, ready } = startWatch(cfg, { signal: controller.signal, heartbeatIntervalMs: 15 });
-    await ready;
+    try {
+      await ready;
+      const first = await waitUntil(() => readClaim(cfg));
+      const firstMs = first.heartbeatMs;
+      const second = await waitUntil(async () => {
+        const value = readClaim(cfg);
+        return value && value.heartbeatMs > firstMs ? value : null;
+      });
+      assert.ok(second.heartbeatMs > firstMs, 'heartbeat timestamp should advance between reads');
+      assert.equal(second.pid, process.pid);
+    } finally {
+      controller.abort();
+      await done;
+    }
+  });
 
-    const first = await waitUntil(() => readMeta(cfg, 'watch_heartbeat'));
-    const firstMs = Date.parse(first);
-    const second = await waitUntil(async () => {
-      const value = await readMeta(cfg, 'watch_heartbeat');
-      return value && Date.parse(value) > firstMs ? value : null;
-    });
-    assert.ok(Date.parse(second) > firstMs, 'heartbeat timestamp should advance between reads');
-    assert.equal(await readMeta(cfg, 'watch_pid'), String(process.pid));
+  it('caps claim renewal at the shipped interval when reconciliation is requested less often', async () => {
+    const baseDir = tree();
+    const cfg = cfgFor(baseDir);
+    const controller = new AbortController();
+    const { done, events, ready } = startWatch(cfg, { signal: controller.signal, heartbeatIntervalMs: 60_000 });
+    try {
+      await ready;
+      const first = await waitUntil(() => readClaim(cfg));
+      const before = events.length;
+      const renewed = await waitUntil(
+        () => {
+          const value = readClaim(cfg);
+          return value && value.token === first.token && value.heartbeatMs > first.heartbeatMs ? value : null;
+        },
+        2 * WATCH_HEARTBEAT_INTERVAL_MS + 2_000
+      );
+      assert.equal(renewed.token, first.token);
+      const contender = new WatchClaimDatabase(baseDir);
+      try {
+        await assert.rejects(contender.acquire('slow-contender', process.pid, false), (err: unknown) => {
+          assert.ok(err instanceof SenseError);
+          assert.equal(err.code, 'WATCH_ACTIVE');
+          return true;
+        });
+      } finally {
+        contender.release('slow-contender');
+        contender.close();
+      }
+      assert.equal(readClaim(cfg)?.token, first.token);
+      assert.deepEqual(
+        events.slice(before).filter((event) => event.type === 'reconciled'),
+        [],
+        'the slower reconcile interval must remain independent from claim renewal'
+      );
+    } finally {
+      controller.abort();
+      await done;
+    }
+  });
 
-    controller.abort();
-    await done;
+  it('rejects invalid heartbeat intervals before creating coordinator state', async () => {
+    const baseDir = tree();
+    const cfg = cfgFor(baseDir);
+    for (const heartbeatIntervalMs of [0, -1, Number.POSITIVE_INFINITY, Number.NaN]) {
+      await assert.rejects(runWatch(cfg, { heartbeatIntervalMs }), (err: unknown) => {
+        assert.ok(err instanceof SenseError);
+        assert.equal(err.code, 'CONFIG_INVALID');
+        return true;
+      });
+    }
+    assert.equal(existsSync(join(baseDir, WATCH_CLAIM_FILENAME)), false);
   });
 
   it('aborting while the heartbeat is active shuts down cleanly', async () => {
@@ -119,8 +176,7 @@ describe('runWatch', () => {
       await sleep(10);
       controller.abort();
       await done;
-      assert.equal(await readMeta(cfg, 'watch_heartbeat'), null);
-      assert.equal(await readMeta(cfg, 'watch_pid'), null);
+      assert.equal(readClaim(cfg), null);
     } finally {
       process.off('unhandledRejection', onUnhandledRejection);
     }
@@ -188,27 +244,93 @@ describe('runWatch', () => {
       events.filter((e) => e.type === 'reconcile-error'),
       []
     );
-    assert.equal(await readMeta(cfg, 'watch_heartbeat'), null);
+    assert.equal(readClaim(cfg), null);
   });
 
-  it('WATCH_ACTIVE throws when a fresh heartbeat exists; force overrides it', async () => {
+  it('WATCH_ACTIVE throws when a fresh claim exists; force replaces its token safely', async () => {
     const baseDir = tree();
     const cfg = cfgFor(baseDir);
-    const { store } = await openStore(cfg);
-    await setMeta(store, 'watch_heartbeat', new Date().toISOString());
-    await store.close();
+    const existing = new WatchClaimDatabase(baseDir);
 
-    await assert.rejects(runWatch(cfg, {}), (err: unknown) => {
-      assert.ok(err instanceof SenseError);
-      assert.equal((err as SenseError).code, 'WATCH_ACTIVE');
-      return true;
-    });
+    try {
+      await existing.acquire('existing-owner', process.pid, false);
+      await assert.rejects(runWatch(cfg, {}), (err: unknown) => {
+        assert.ok(err instanceof SenseError);
+        assert.equal(err.code, 'WATCH_ACTIVE');
+        return true;
+      });
 
-    const controller = new AbortController();
-    const { done, ready } = startWatch(cfg, { signal: controller.signal, force: true });
-    await ready;
-    controller.abort();
-    await done;
+      const controller = new AbortController();
+      const { done, ready } = startWatch(cfg, { signal: controller.signal, force: true });
+      try {
+        await ready;
+        assert.notEqual(readClaim(cfg)?.token, 'existing-owner');
+        assert.equal(existing.renew('existing-owner'), false);
+        assert.equal(existing.release('existing-owner'), false);
+      } finally {
+        controller.abort();
+        await done;
+      }
+    } finally {
+      existing.release('existing-owner');
+      existing.close();
+    }
+  });
+
+  it('a forced replacement makes the old watcher drain and reject without clearing the new claim', async () => {
+    const baseDir = tree();
+    writeNote(baseDir, 'a.md');
+    const cfg = cfgFor(baseDir);
+    const firstController = new AbortController();
+    const secondController = new AbortController();
+    const first = startWatch(cfg, { signal: firstController.signal, heartbeatIntervalMs: 15 });
+    let second: ReturnType<typeof startWatch> | undefined;
+    let bodyFailed = false;
+    let bodyFailure: unknown;
+    let cleanupResults: [PromiseSettledResult<void>, PromiseSettledResult<void> | null] | null = null;
+    try {
+      await first.ready;
+      const firstToken = readClaim(cfg)?.token;
+      second = startWatch(cfg, { force: true, signal: secondController.signal, heartbeatIntervalMs: 15 });
+      await second.ready;
+      const secondToken = readClaim(cfg)?.token;
+      assert.ok(firstToken);
+      assert.ok(secondToken);
+      assert.notEqual(secondToken, firstToken);
+      await assert.rejects(first.done, (err: unknown) => {
+        assert.ok(err instanceof SenseError);
+        assert.equal(err.code, 'WATCH_ACTIVE');
+        return true;
+      });
+      assert.equal(readClaim(cfg)?.token, secondToken, 'old watcher cleanup must not release the new claim');
+    } catch (err) {
+      bodyFailed = true;
+      bodyFailure = err;
+    } finally {
+      firstController.abort();
+      secondController.abort();
+      cleanupResults = await Promise.all([first.outcome, second?.outcome ?? Promise.resolve(null)]);
+    }
+
+    if (!cleanupResults) throw new Error('watcher cleanup outcomes were not recorded');
+    const [firstResult, secondResult] = cleanupResults;
+    const cleanupFailures: unknown[] = [];
+    if (firstResult.status === 'rejected' && (!second || !(firstResult.reason instanceof SenseError) || firstResult.reason.code !== 'WATCH_ACTIVE')) cleanupFailures.push(firstResult.reason);
+    if (secondResult?.status === 'rejected') cleanupFailures.push(secondResult.reason);
+    if (bodyFailed) {
+      if (cleanupFailures.length > 0) throw new AggregateError([bodyFailure, ...cleanupFailures], 'forced watcher replacement and cleanup failed');
+      throw bodyFailure;
+    }
+    if (cleanupFailures.length === 1) throw cleanupFailures[0];
+    if (cleanupFailures.length > 1) throw new AggregateError(cleanupFailures, 'forced watcher replacement cleanup failed');
+  });
+
+  it('rejects a coordinator startup failure without opening the search store', async () => {
+    const baseDir = tree();
+    const cfg = cfgFor(baseDir);
+    mkdirSync(join(baseDir, WATCH_CLAIM_FILENAME));
+    await assert.rejects(runWatch(cfg), /database|directory|open/i);
+    assert.equal(existsSync(join(baseDir, STATE_DIR)), false);
   });
 
   // duckdb locks its cache file per connection; the watcher must hold nothing between events, or

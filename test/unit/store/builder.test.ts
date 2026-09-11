@@ -37,7 +37,7 @@ describe('createBuilder', () => {
     await store.close();
 
     const { db, conn } = freshConnection(dbPath);
-    const builder = createBuilder(conn, cfg, baseDir, baseDialect());
+    const builder = createBuilder(conn, cfg, { rootDir: baseDir, configDir: baseDir }, baseDialect());
 
     const future1 = new Date(Date.now() + 5000);
     for (let i = 0; i < FILE_COUNT; i++) utimesSync(join(baseDir, `n${i}.md`), future1, future1);
@@ -62,7 +62,7 @@ describe('createBuilder', () => {
     await store.close();
 
     const { db, conn } = freshConnection(dbPath);
-    const builder = createBuilder(conn, cfg, baseDir, baseDialect());
+    const builder = createBuilder(conn, cfg, { rootDir: baseDir, configDir: baseDir }, baseDialect());
     await builder.close();
     db.close();
   });

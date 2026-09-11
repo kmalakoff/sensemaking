@@ -9,6 +9,10 @@ export interface NativeDescriptor {
   store: string;
   pkg: string;
   sizeHint: string;
+  /** Optional exact package version required by this native binding. */
+  version?: string;
+  /** npm specifier used only when installation is required (imports stay bare). */
+  installSpec?: string;
 }
 
 // install-module-linked is small, but a target native package can be large (@duckdb/node-api's
@@ -63,28 +67,81 @@ function resolveEntrySpecifier(importName: string, nodeModulesPath: string): str
   return typeof require === 'undefined' ? pathToFileURL(entryPath).href : entryPath;
 }
 
+type PackageMetadata = { name?: string; version?: string };
+
+function readPackageMetadata(pkgDir: string): PackageMetadata | undefined {
+  try {
+    return JSON.parse(readFileSync(join(pkgDir, 'package.json'), 'utf8')) as PackageMetadata;
+  } catch {
+    return undefined;
+  }
+}
+
+function targetPackageMetadata(importName: string, nodeModulesPath: string): { exists: boolean; metadata?: PackageMetadata } {
+  const pkgDir = join(nodeModulesPath, ...importName.split('/'));
+  return { exists: existsSync(pkgDir), metadata: readPackageMetadata(pkgDir) };
+}
+
+function resolvedPackageMetadata(importName: string): PackageMetadata | undefined {
+  try {
+    let dir = dirname(_require.resolve(importName));
+    for (;;) {
+      const manifest = join(dir, 'package.json');
+      if (existsSync(manifest)) {
+        const pkg = readPackageMetadata(dir);
+        if (!pkg) return undefined;
+        if (pkg.name === importName) return pkg;
+      }
+      const parent = dirname(dir);
+      if (parent === dir) return undefined;
+      dir = parent;
+    }
+  } catch {
+    return undefined;
+  }
+}
+
+function versionContractError(descriptor: NativeDescriptor, installed?: string): SenseError {
+  const installSpec = descriptor.installSpec ?? descriptor.pkg;
+  const detail = installed ? `${descriptor.pkg}@${installed} is installed` : `${descriptor.pkg} has missing or unreadable version metadata`;
+  return new SenseError('STORE_DEPENDENCY_MISSING', `store "${descriptor.store}" needs ${installSpec}, but ${detail}; refusing to overwrite it -- run \`npm install ${installSpec}\` yourself and try again`);
+}
+
+function assertExpectedVersion(descriptor: NativeDescriptor, metadata: PackageMetadata | undefined): void {
+  if (!descriptor.version) return;
+  if (!metadata?.version || metadata.version !== descriptor.version) throw versionContractError(descriptor, metadata?.version);
+}
+
 // Import-then-install-then-retry, over an injectable importName so the failure path can be
 // exercised in tests without a real native binding. Thrown errors always name descriptor.pkg.
 export async function loadOrInstall<T>(descriptor: NativeDescriptor, nodeModulesPath: string, importName: string = descriptor.pkg): Promise<T> {
+  if (descriptor.version) {
+    const target = targetPackageMetadata(importName, nodeModulesPath);
+    if (target.exists) assertExpectedVersion(descriptor, target.metadata);
+  }
+  let loaded: T;
   try {
-    return (await import(importName)) as T;
+    loaded = (await import(importName)) as T;
   } catch {
-    console.error(`sense: store "${descriptor.store}" needs ${descriptor.pkg}; installing it now (one-time download, ${descriptor.sizeHint})...`);
+    const installSpec = descriptor.installSpec ?? importName;
+    const displaySpec = descriptor.installSpec ?? descriptor.pkg;
+    console.error(`sense: store "${descriptor.store}" needs ${displaySpec}; installing it now (one-time download, ${descriptor.sizeHint})...`);
     try {
-      await installOnce(importName, nodeModulesPath);
+      await installOnce(installSpec, nodeModulesPath);
     } catch (installErr) {
       throw new SenseError(
         'STORE_DEPENDENCY_MISSING',
-        `store "${descriptor.store}" needs ${descriptor.pkg}, and installing it automatically failed (${(installErr as Error).message}); this can happen offline, in a sandboxed environment, or when node_modules is read-only or owned by another user (e.g. under a global install) -- run \`npm install ${descriptor.pkg}\` yourself and try again`
+        `store "${descriptor.store}" needs ${displaySpec}, and installing it automatically failed (${(installErr as Error).message}); this can happen offline, in a sandboxed environment, or when node_modules is read-only or owned by another user (e.g. under a global install) -- run \`npm install ${displaySpec}\` yourself and try again`
       );
     }
     try {
-      return (await import(resolveEntrySpecifier(importName, nodeModulesPath))) as T;
+      const loaded = (await import(resolveEntrySpecifier(importName, nodeModulesPath))) as T;
+      assertExpectedVersion(descriptor, targetPackageMetadata(importName, nodeModulesPath).metadata);
+      return loaded;
     } catch (loadErr) {
-      throw new SenseError(
-        'STORE_DEPENDENCY_MISSING',
-        `store "${descriptor.store}" installed ${descriptor.pkg} but it could not be loaded (${(loadErr as Error).message}); it may not be available for this platform (${process.platform}-${process.arch}) -- run \`npm install ${descriptor.pkg}\` to see the underlying error`
-      );
+      throw new SenseError('STORE_DEPENDENCY_MISSING', `store "${descriptor.store}" installed ${displaySpec} but it could not be loaded (${(loadErr as Error).message}); it may not be available for this platform (${process.platform}-${process.arch}) -- run \`npm install ${displaySpec}\` to see the underlying error`);
     }
   }
+  if (descriptor.version) assertExpectedVersion(descriptor, resolvedPackageMetadata(importName));
+  return loaded;
 }

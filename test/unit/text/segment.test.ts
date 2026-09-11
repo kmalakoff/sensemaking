@@ -33,7 +33,7 @@ function paths(dir: string, args: string[]): string[] {
 
 describe('segmentMatch', () => {
   // Covers qualifier retargeting to _seg columns, unqualified runs scoped to the sidecars via
-  // FTS5's column-set filter, quoted-phrase passthrough (the author's FTS5 escape hatch), and operator preservation.
+  // FTS5's column-set filter, complete quoted run tokens, and mixed-phrase preservation.
   const SEG = '{title_seg summary_seg text_seg}:';
   const cases: Array<[string, string]> = [
     ['数据库', `${SEG}"数 据 库"`],
@@ -45,8 +45,22 @@ describe('segmentMatch', () => {
     ['(title:数据库) AND revenue', '(title_seg:"数 据 库") AND revenue'],
     ['title:revenue', 'title:revenue'],
     ['revenue OR earnings', 'revenue OR earnings'],
+    ['"数据库"', `${SEG}"数 据 库"`],
+    ['"数"', `${SEG}"数"`],
+    ['title:"数据库"', 'title_seg:"数 据 库"'],
+    ['title:"数"', 'title_seg:"数"'],
+    ['-summary: "数据库"', '-summary_seg:"数 据 库"'],
     ['"数据库 exact"', '"数据库 exact"'],
     ['"数 据"', '"数 据"'], // author's own hand-spaced quoted phrase: still byte-identical
+    ['weather "数据库"', `weather ${SEG}"数 据 库"`],
+    ['"数据库" OR budget', `${SEG}"数 据 库" OR budget`],
+    ['("数据库")', `(${SEG}"数 据 库")`],
+    ['^   "数据库"', '{title summary text}:^   "数据库"'],
+    ['title:^"数据库"', 'title:^"数据库"'],
+    ['NEAR("数据库" budget, 5)', '{title summary text}:NEAR("数据库" budget, 5)'],
+    ['NEAR(数据库 budget, 5)', '{title summary text}:NEAR(数据库 budget, 5)'],
+    ['NEAR(budget only, 5) OR "数据库"', 'NEAR(budget only, 5) OR {title_seg summary_seg text_seg}:"数 据 库"'],
+    ['"literal NEAR(foo)" "数据库"', `"literal NEAR(foo)" ${SEG}"数 据 库"`],
     ['东京 NOT 京都', `${SEG}"东 京" NOT ${SEG}"京 都"`],
     ['东京 OR budget', `${SEG}"东 京" OR budget`],
     ['budget 东京', `budget ${SEG}"东 京"`],
@@ -58,6 +72,86 @@ describe('segmentMatch', () => {
       assert.equal(segmentMatch(input), want);
     });
   }
+});
+
+describe('segmentMatch: quoted unspaced membership against FTS5', () => {
+  function buildDb() {
+    const db = new DatabaseSync(':memory:');
+    db.exec(`CREATE VIRTUAL TABLE content USING fts5(title, summary, text, path UNINDEXED, title_seg, summary_seg, text_seg, tokenize = 'porter unicode61')`);
+    const insert = db.prepare(`INSERT INTO content (rowid, title, summary, text, path, title_seg, summary_seg, text_seg) VALUES (?, ?, '', ?, ?, ?, '', ?)`);
+    const rows: Array<[string, string, string]> = [
+      ['body.md', '', 'weather 今天的天气非常好'],
+      ['budget.md', '', 'budget only'],
+      ['single-body.md', '', '数字'],
+      ['single-title.md', '数学', 'unrelated'],
+      ['title.md', '天气预报', 'unrelated'],
+      ['spaced.md', '', '天 气'],
+      ['nonadjacent.md', '', '天 cloudy 气'],
+      ['punctuated.md', '', '天。气'],
+      ['reversed.md', '', '气天'],
+    ];
+    rows.forEach(([path, title, text], i) => insert.run(i + 1, title, text, path, segmentField(title), segmentField(text)));
+    return db;
+  }
+
+  function matchingPaths(db: DatabaseSync, terms: string): string[] {
+    return (db.prepare('SELECT path FROM content WHERE content MATCH ? ORDER BY path').all(segmentMatch(terms)) as Array<{ path: string }>).map((row) => row.path);
+  }
+
+  function withDb(run: (db: DatabaseSync) => void): void {
+    const db = buildDb();
+    try {
+      run(db);
+    } finally {
+      db.close();
+    }
+  }
+
+  it('finds the authored substring without crossing spacing, punctuation, order, or adjacency', () => {
+    withDb((db) => assert.deepEqual(matchingPaths(db, '"天气"'), ['body.md', 'title.md']));
+  });
+
+  it('ANDs a bare term with the quoted substring and rejects a missing term', () => {
+    withDb((db) => {
+      assert.deepEqual(matchingPaths(db, 'weather "天气"'), ['body.md']);
+      assert.deepEqual(matchingPaths(db, 'missing "天气"'), []);
+    });
+  });
+
+  it('composes the quoted substring with native boolean and grouping syntax', () => {
+    withDb((db) => {
+      assert.deepEqual(matchingPaths(db, '"天气" OR budget'), ['body.md', 'budget.md', 'title.md']);
+      assert.deepEqual(matchingPaths(db, '("天气" OR budget)'), ['body.md', 'budget.md', 'title.md']);
+    });
+  });
+
+  it('retargets an authored field qualifier to the matching sidecar', () => {
+    withDb((db) => assert.deepEqual(matchingPaths(db, 'title:"天气"'), ['title.md']));
+  });
+
+  it('matches a quoted one-grapheme run without reprocessing its generated token', () => {
+    withDb((db) => {
+      assert.deepEqual(matchingPaths(db, '"数"'), ['single-body.md', 'single-title.md']);
+      assert.deepEqual(matchingPaths(db, 'title:"数"'), ['single-title.md']);
+    });
+  });
+
+  it('keeps a hand-spaced phrase on adjacent-token semantics', () => {
+    withDb((db) => assert.deepEqual(matchingPaths(db, '"天 气"'), ['body.md', 'punctuated.md', 'spaced.md', 'title.md']));
+  });
+
+  it('keeps positional CJK terms on authored native tokens', () => {
+    withDb((db) => {
+      assert.deepEqual(matchingPaths(db, 'NEAR(weather "天", 5)'), []);
+      assert.deepEqual(matchingPaths(db, 'NEAR(weather 天, 5)'), []);
+      assert.deepEqual(matchingPaths(db, 'NEAR(weather "今天的天气非常好", 5)'), ['body.md']);
+      assert.deepEqual(matchingPaths(db, 'NEAR(weather 今天的天气非常好, 5)'), ['body.md']);
+      assert.deepEqual(matchingPaths(db, '^"天气预报"'), ['title.md']);
+      assert.deepEqual(matchingPaths(db, '^天气预报'), ['title.md']);
+      assert.deepEqual(matchingPaths(db, 'title:^"天气预报"'), ['title.md']);
+      assert.deepEqual(matchingPaths(db, 'NEAR(budget only, 5) OR "天气"'), ['body.md', 'budget.md', 'title.md']);
+    });
+  });
 });
 
 describe('searchTokens', () => {

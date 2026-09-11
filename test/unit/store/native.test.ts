@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { chmodSync, mkdirSync } from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import assert from 'assert';
 import { SenseError } from '../../../src/errors.ts';
@@ -69,10 +69,13 @@ describe('loadOrInstall', () => {
 
   it('installs a real, tiny, already-published package and loads it, working around Node caching the first bare-specifier miss', async () => {
     const nodeModulesPath = scratchDir('native-install-success');
-    const mod = (await loadOrInstall(DESCRIPTOR, nodeModulesPath, 'is-natural-number')) as { default: (n: number) => boolean };
+    const fixture = { ...DESCRIPTOR, version: '4.0.1', installSpec: 'is-natural-number@4.0.1' };
+    const mod = (await loadOrInstall(fixture, nodeModulesPath, 'is-natural-number')) as { default: (n: number) => boolean };
     assert.equal(typeof mod.default, 'function');
     assert.equal(mod.default(4), true);
     assert.equal(mod.default(-1), false);
+    const installed = JSON.parse(readFileSync(join(nodeModulesPath, 'is-natural-number', 'package.json'), 'utf8')) as { version?: string };
+    assert.equal(installed.version, fixture.version);
   });
 
   it('loads the installed package through both built module formats with the import namespace shape', () => {
@@ -100,6 +103,36 @@ describe('loadOrInstall', () => {
       const result = spawnSync(process.execPath, ['--input-type=module', '-e', script, mode, nodeModulesPath, builtPath], { encoding: 'utf8' });
       assert.equal(result.status, 0, result.stderr);
       assert.deepEqual(JSON.parse(result.stdout.trim()), { defaultType: 'function', positive: true, negative: false });
+    }
+  });
+
+  it('loads an already-installed exact-version native package without invoking the installer', async () => {
+    const { DUCKDB_INSTALL_SPEC, DUCKDB_PACKAGE, DUCKDB_VERSION } = await import('../../../src/store/duckdb/native.ts');
+    assert.equal(DUCKDB_INSTALL_SPEC, `${DUCKDB_PACKAGE}@${DUCKDB_VERSION}`);
+    const loaded = await loadOrInstall({ store: 'duckdb', pkg: DUCKDB_PACKAGE, sizeHint: '~110MB', version: DUCKDB_VERSION, installSpec: DUCKDB_INSTALL_SPEC }, join(packageRoot, 'node_modules'));
+    assert.equal(typeof (loaded as { DuckDBInstance?: unknown }).DuckDBInstance, 'function');
+  });
+
+  it('fails closed before installation for incompatible, missing, malformed, and versionless manifests', async () => {
+    for (const [label, manifest] of [
+      ['incompatible', JSON.stringify({ name: DESCRIPTOR.pkg, version: '0.0.1' })],
+      ['missing', undefined],
+      ['malformed', '{not-json'],
+      ['versionless', JSON.stringify({ name: DESCRIPTOR.pkg })],
+    ] as const) {
+      const nodeModulesPath = scratchDir(`native-${label}-version`);
+      const packageDir = join(nodeModulesPath, ...DESCRIPTOR.pkg.split('/'));
+      mkdirSync(packageDir, { recursive: true });
+      if (manifest !== undefined) writeFileSync(join(packageDir, 'package.json'), manifest);
+      await assert.rejects(
+        () => loadOrInstall({ ...DESCRIPTOR, version: '9.9.9', installSpec: `${DESCRIPTOR.pkg}@9.9.9` }, nodeModulesPath),
+        (err: unknown) => {
+          assert.ok(err instanceof SenseError);
+          assert.equal(err.code, 'STORE_DEPENDENCY_MISSING');
+          assert.ok(err.message.includes(`npm install ${DESCRIPTOR.pkg}@9.9.9`));
+          return true;
+        }
+      );
     }
   });
 });

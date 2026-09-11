@@ -29,6 +29,11 @@ describe('release assessment profiles', () => {
   it('keeps ordinary proportional and makes deep expand only staged assessment work', () => {
     assert.deepEqual([...profileReasons(['README.md'], 'v1', 'ordinary').keys()], []);
     assert.deepEqual([...profileReasons(['src/output/output.ts'], 'v1', 'ordinary').keys()], ['baseline', 'quality-revalidation']);
+    for (const path of ['src/watch-claim.ts', 'src/watch.ts']) {
+      const watcher = profileReasons([path], 'v1', 'ordinary');
+      for (const gate of ['test-engines', 'baseline', 'quality-revalidation']) assert.equal(watcher.has(gate), true, `${path}: ${gate}`);
+      for (const gate of ['scale', 'fever']) assert.equal(watcher.has(gate), false, `${path}: ${gate}`);
+    }
     const searchError = profileReasons(['src/output/search-error.ts'], 'v1', 'ordinary');
     for (const gate of ['baseline', 'quality-baseline']) assert.equal(searchError.has(gate), true, gate);
     for (const gate of ['scale', 'fever']) assert.equal(searchError.has(gate), false, gate);
@@ -124,6 +129,67 @@ describe('release assessment profiles', () => {
 
     writeFileSync(packagePath, 'null');
     assert.equal(releaseChanges(root).packageJson?.classification, 'unclassified');
+  });
+
+  it('recognizes only an unchanged resolved registry artifact behind an exact dev pin', () => {
+    const root = scratchDir('release-dev-pin');
+    const packagePath = join(root, 'package.json');
+    const lockPath = join(root, 'package-lock.json');
+    const artifact = { version: '1.0.0', resolved: 'https://registry.npmjs.org/tool/-/tool-1.0.0.tgz', integrity: 'sha512-stable', dev: true };
+    const writeFixture = (packageValue: object, lockValue: object) => {
+      writeFileSync(packagePath, `${JSON.stringify(packageValue, null, 2)}\n`);
+      writeFileSync(lockPath, `${JSON.stringify(lockValue, null, 2)}\n`);
+    };
+    const packageValue = { name: 'fixture', version: '1.0.0', devDependencies: { tool: '^1.0.0' } };
+    const lockValue = (spec: string, entry = artifact) => ({ name: 'fixture', version: '1.0.0', lockfileVersion: 3, packages: { '': { name: 'fixture', version: '1.0.0', devDependencies: { tool: spec } }, 'node_modules/tool': entry } });
+    writeFixture(packageValue, lockValue('^1.0.0'));
+    git(root, 'init');
+    git(root, 'config', 'user.email', 'fixture@example.com');
+    git(root, 'config', 'user.name', 'Fixture');
+    git(root, 'add', '.');
+    git(root, 'commit', '-m', 'fixture');
+    git(root, 'tag', 'v1');
+
+    writeFixture({ ...packageValue, devDependencies: { tool: '1.0.0' } }, lockValue('1.0.0'));
+    const pin = releaseChanges(root);
+    assert.equal(pin.packageJson?.classification, 'dev-dependency-pin');
+    assert.equal(pin.packageLock?.classification, 'dev-dependency-pin');
+    const pinReasons = profileReasons(pin.paths, pin.lastTag, 'ordinary', pin.packageJson, pin.packageLock);
+    assert.equal(pinReasons.has('scale'), false);
+    assert.equal(pinReasons.has('fever'), false);
+    const scoringReasons = profileReasons([...pin.paths, 'src/commands/search.ts'], pin.lastTag, 'ordinary', pin.packageJson, pin.packageLock);
+    assert.equal(scoringReasons.has('quality-baseline'), true);
+
+    writeFixture({ ...packageValue, devDependencies: { tool: 'npm:other@1.0.0' } }, lockValue('npm:other@1.0.0'));
+    assert.equal(releaseChanges(root).packageJson?.classification, 'dependency');
+    writeFixture({ ...packageValue, devDependencies: { tool: 'file:../tool' } }, lockValue('file:../tool'));
+    assert.equal(releaseChanges(root).packageJson?.classification, 'dependency');
+    writeFixture({ ...packageValue, devDependencies: { tool: '1.0.0' } }, { ...lockValue('1.0.0'), packages: { ...lockValue('1.0.0').packages, '': { ...lockValue('1.0.0').packages[''], version: '9.9.9' } } });
+    assert.equal(releaseChanges(root).packageJson?.classification, 'dependency');
+    writeFixture({ ...packageValue, devDependencies: { tool: '1.0.0' } }, { ...lockValue('1.0.0'), packages: null });
+    assert.equal(releaseChanges(root).packageJson?.classification, 'dependency');
+    assert.equal(releaseChanges(root).packageLock?.classification, 'unclassified');
+    writeFixture({ ...packageValue, devDependencies: { tool: '1.0.0' } }, lockValue('1.0.0', { ...artifact, resolved: 'https://registry.npmjs.org/tool/-/tool-9.9.9.tgz' }));
+    assert.equal(releaseChanges(root).packageJson?.classification, 'dependency');
+    assert.equal(releaseChanges(root).packageLock?.classification, 'dependency-or-other');
+    writeFixture({ ...packageValue, devDependencies: { tool: '1.0.0' } }, lockValue('1.0.0', { ...artifact, integrity: 'sha512-changed' }));
+    assert.equal(releaseChanges(root).packageJson?.classification, 'dependency');
+    assert.equal(releaseChanges(root).packageLock?.classification, 'dependency-or-other');
+    writeFixture(
+      { ...packageValue, dependencies: { runtime: '1.0.0' }, devDependencies: { tool: '1.0.0' } },
+      {
+        ...lockValue('1.0.0'),
+        packages: { ...lockValue('1.0.0').packages, '': { ...lockValue('1.0.0').packages[''], dependencies: { runtime: '1.0.0' }, devDependencies: { tool: '1.0.0' } }, 'node_modules/runtime': { version: '1.0.0', resolved: 'https://registry.npmjs.org/runtime/-/runtime-1.0.0.tgz', integrity: 'sha512-runtime' } },
+      }
+    );
+    assert.equal(releaseChanges(root).packageJson?.classification, 'dependency');
+
+    writeFixture({ ...packageValue, devDependencies: { tool: 'npm:other@1.0.0' } }, lockValue('npm:other@1.0.0'));
+    git(root, 'add', '.');
+    git(root, 'commit', '-m', 'alias fixture');
+    git(root, 'tag', 'v2');
+    writeFixture({ ...packageValue, devDependencies: { tool: '1.0.0' } }, lockValue('1.0.0'));
+    assert.equal(releaseChanges(root).packageJson?.classification, 'dependency');
   });
 
   it('allows requirement expansion on resume and rejects narrowing or changed inputs', () => {

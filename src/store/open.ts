@@ -50,8 +50,8 @@ interface ConnectResult<Handle> {
 const LOCK_POLL_MS = 50;
 const lockWait = channel('sensemaking.store.lock-wait');
 
-async function connectUnlocked<Handle>(dbPath: string, cfg: ResolvedConfig, dialect: OpenDialect<Handle>): Promise<{ handle: Handle; conn: Connection }> {
-  const budgetMs = lockWaitBudgetMs(cfg.configDir ?? cfg.baseDir);
+async function connectUnlocked<Handle>(dbPath: string, cfg: ResolvedConfig, configDir: string, dialect: OpenDialect<Handle>): Promise<{ handle: Handle; conn: Connection }> {
+  const budgetMs = lockWaitBudgetMs(configDir);
   const deadline = Date.now() + budgetMs;
   for (;;) {
     try {
@@ -69,17 +69,18 @@ async function connectUnlocked<Handle>(dbPath: string, cfg: ResolvedConfig, dial
 }
 
 async function connectWithDialect<Handle>(cfg: ResolvedConfig, dialect: OpenDialect<Handle>): Promise<ConnectResult<Handle>> {
-  const stateDir = join(cfg.configDir ?? cfg.baseDir, STATE_DIR);
+  const configDir = cfg.configDir ?? cfg.baseDir;
+  const stateDir = join(configDir, STATE_DIR);
   mkdirSync(stateDir, { recursive: true });
   const dbPath = join(stateDir, dialect.filename);
 
-  const { handle, conn } = await connectUnlocked(dbPath, cfg, dialect);
+  const { handle, conn } = await connectUnlocked(dbPath, cfg, configDir, dialect);
   // A throw below must release this handle, or the leaked WAL makes the cache file undeletable on
   // Windows. `closed` keeps the catch from double-closing a handle a rebuild branch already closed.
   let closed = false;
   // Created here, not inside reconcile(): invalidate()/invalidateFeatures() below share its pool
   // with the build() call that follows them.
-  const builder = createBuilder(conn, cfg, cfg.rootDir ?? cfg.baseDir, dialect.reconcileDialect);
+  const builder = createBuilder(conn, cfg, { rootDir: cfg.rootDir ?? cfg.baseDir, configDir }, dialect.reconcileDialect);
   try {
     await conn.exec('CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)');
 

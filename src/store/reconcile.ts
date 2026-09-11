@@ -21,12 +21,18 @@ import type { Connection, ReconcileDialect } from './types.ts';
 // computed value on every touch, not just the reconciles that recompute it.
 export const CORE_FRONTMATTER_COLUMNS = new Set(['path', '_mtime', '_ctime', '_size', '_parse_error']);
 
-export async function reconcile(conn: Connection, cfg: Config, baseDir: string, dialect: ReconcileDialect, pool?: ParsePool, forcedPaths?: ReadonlySet<string>): Promise<{ parsed: number; warnings: string[]; stages: Stages }> {
+export interface ReconcilePaths {
+  rootDir: string;
+  configDir: string;
+}
+
+export async function reconcile(conn: Connection, cfg: Config, paths: ReconcilePaths, dialect: ReconcileDialect, pool?: ParsePool, forcedPaths?: ReadonlySet<string>): Promise<{ parsed: number; warnings: string[]; stages: Stages }> {
+  const { rootDir, configDir } = paths;
   const start = process.hrtime.bigint();
   const features = activeFeatures(cfg);
   const stages = stageRecorder(features.map((f) => f.name));
   const elapsed = () => Number(process.hrtime.bigint() - start) / 1e6;
-  const files = await stages.time('list', () => listFiles(cfg, baseDir));
+  const files = await stages.time('list', () => listFiles(cfg, rootDir));
   const currentSet = new Set(files.map((f) => f.relPath));
 
   const existingRows = await stages.time('existing', async () => {
@@ -169,7 +175,7 @@ export async function reconcile(conn: Connection, cfg: Config, baseDir: string, 
 
   const durationMs = Date.now() - txStart;
   // Every store, not just the ones with a PRAGMA to derive: connectUnlocked's lock-wait budget needs it too.
-  recordLockWaitMs(baseDir, durationMs);
+  recordLockWaitMs(configDir, durationMs);
   if (dialect.recordDuration) await stages.time('meta', () => dialect.recordDuration?.(conn, durationMs));
 
   return { parsed: parsedDocs.length, warnings, stages: stages.take(elapsed(), durationMs, workerParseMs) };

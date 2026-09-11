@@ -5,6 +5,7 @@ import { foldForSearch, matchesSearchPhrase, type SearchToken, searchTokens } fr
 import { getMeta, setMeta } from '../shared.ts';
 import { withTransaction } from '../transaction.ts';
 import type { Connection, LexicalHit, LexicalQueryOptions } from '../types.ts';
+import { ensureOrderedBm25, ORDERED_BM25_MACRO } from './ordered-bm25.ts';
 
 const FIELDS = ['title', 'summary', 'text'] as const;
 type Field = (typeof FIELDS)[number];
@@ -13,17 +14,18 @@ type Field = (typeof FIELDS)[number];
 const FIELD_WEIGHT: Record<Field, number> = { title: 10, summary: 5, text: 1 };
 
 // FTS5 operator syntax (sqlite.org/fts5.html sec. 3) that words/substrings below would otherwise silently
-// treat as literal terms (PRINCIPLES: no-silent-modes). Checked with quoted spans blanked; those go through contains() and are supported.
+// treat as literal terms (PRINCIPLES: no-silent-modes). Quoted contents stay ignored while their boundary remains detectable.
 const FTS5_OPERATORS: Array<{ label: string; re: RegExp }> = [
   { label: 'prefix query', re: /[\p{L}\p{N}_]+\*(?=\s|$)/u },
   { label: 'boolean operator', re: /(?:^|\s)(?:AND|OR|NOT)(?=\s|$)/ },
   { label: 'NEAR operator', re: /(?:^|\s)NEAR\b/ },
   { label: 'initial-token operator', re: /(?:^|\s)\^\S+/ },
   { label: 'column filter', re: /(?:^|\s)[\p{L}_]\w*\s*:/u },
+  { label: 'grouping operator', re: /[()]/ },
 ];
 
 function unsupportedOperator(terms: string): { label: string; token: string } | null {
-  const withoutPhrases = terms.replace(/"[^"]*"/g, ' ');
+  const withoutPhrases = terms.replace(/"[^"]*"/g, 'phrase');
   for (const { label, re } of FTS5_OPERATORS) {
     const m = withoutPhrases.match(re);
     if (m) return { label, token: m[0].trim() };
@@ -33,6 +35,7 @@ function unsupportedOperator(terms: string): { label: string; token: string } | 
 
 interface FtsIndexState {
   stale: boolean;
+  orderedMacroReady: boolean;
 }
 
 // Durable across connections/processes (meta table, shared.ts); `stale` is the in-memory cache of
@@ -47,7 +50,7 @@ async function stateFor(conn: Connection): Promise<FtsIndexState> {
   if (!state) {
     // Anything but a persisted '0' (missing key, or '1') means a rebuild is owed: a cache that
     // never built an index, or one a prior process marked stale and never got to clear.
-    state = { stale: (await getMeta(conn, FTS_STALE_META_KEY)) !== '0' };
+    state = { stale: (await getMeta(conn, FTS_STALE_META_KEY)) !== '0', orderedMacroReady: false };
     ftsState.set(conn, state);
   }
   return state;
@@ -56,7 +59,7 @@ async function stateFor(conn: Connection): Promise<FtsIndexState> {
 // Called whenever this store's reconcileContent changes `content`; must run inside that same
 // transaction (reconcile.ts) so a crash never lands the content write without the stale mark.
 export async function markContentStale(conn: Connection): Promise<void> {
-  ftsState.set(conn, { stale: true });
+  ftsState.set(conn, { stale: true, orderedMacroReady: false });
   await setMeta(conn, FTS_STALE_META_KEY, '1');
 }
 
@@ -103,6 +106,7 @@ function splitTerms(terms: string): { words: string[]; bareWords: string[]; phra
 // the full rebuild whenever `state.stale`, which meta.fts_stale keeps true across processes until cleared below.
 async function ensureFtsFresh(conn: Connection, state: FtsIndexState): Promise<void> {
   if (!state.stale) return;
+  state.orderedMacroReady = false;
   await conn.exec('INSTALL fts; LOAD fts;');
   await withTransaction(conn, async () => {
     // stopwords='none': sqlite's porter/unicode61 tokenizer never removes stopwords either (verified 1.5.5); the fts extension's
@@ -126,16 +130,16 @@ function buildScoreAndGate(words: string[], bareWords: string[], phraseWords: st
   if (words.length > 0) {
     const wordQuery = words.map(foldForSearch).join(' ');
     for (const field of FIELDS) {
-      scoreParts.push(`${FIELD_WEIGHT[field]}.0 * COALESCE(fts_main_content.match_bm25(content."path", ?, fields := '${field}', conjunctive := false), 0)`);
+      scoreParts.push(`${FIELD_WEIGHT[field]}.0 * COALESCE(${ORDERED_BM25_MACRO}(content."path", ?, fields := '${field}', conjunctive := false), 0)`);
       scoreParams.push(wordQuery);
     }
     if (bareWords.length > 0) {
-      const nativeGate = `fts_main_content.match_bm25(content."path", ?, conjunctive := true) IS NOT NULL`;
+      const nativeGate = `${ORDERED_BM25_MACRO}(content."path", ?, conjunctive := true) IS NOT NULL`;
       gateParts.push(nativeGate);
       gateParams.push(bareWords.map(foldForSearch).join(' '));
     }
     if (phraseWords.length > 0) {
-      const nativeGate = `fts_main_content.match_bm25(content."path", ?, conjunctive := true) IS NOT NULL`;
+      const nativeGate = `${ORDERED_BM25_MACRO}(content."path", ?, conjunctive := true) IS NOT NULL`;
       const fallback = phraseWords.map((_word) => `(${FIELDS.map((field) => `contains(strip_accents(lower(content.${field})), ?)`).join(' OR ')})`).join(' AND ');
       gateParts.push(`(${nativeGate} OR (${fallback}))`);
       gateParams.push(phraseWords.map(foldForSearch).join(' '));
@@ -168,6 +172,7 @@ export async function queryLexical(conn: Connection, terms: string, opts: Lexica
   if (emptyPhrase || (words.length === 0 && substrings.length === 0)) return [];
 
   if (words.length > 0) await ensureFtsFresh(conn, state);
+  if (words.length > 0) await ensureOrderedBm25(conn, state);
 
   const { scoreSql, gateSql, params } = buildScoreAndGate(words, bareWords, phraseWords, substrings);
   const selectFields = phrases.length > 0 ? ', content.title, content.summary, content.text' : '';

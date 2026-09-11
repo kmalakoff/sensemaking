@@ -18,10 +18,11 @@ const FTS5_OPERATORS: Array<{ label: string; re: RegExp }> = [
   { label: 'NEAR operator', re: /(?:^|\s)NEAR\b/ },
   { label: 'boost/initial-token operator', re: /\S*\^\S*/ },
   { label: 'column filter', re: /(?:^|\s)[\p{L}_]\w*\s*:/u },
+  { label: 'grouping operator', re: /[()]/ },
 ];
 
 function unsupportedOperator(terms: string): { label: string; token: string } | null {
-  const withoutPhrases = terms.replace(/"[^"]*"/g, ' ');
+  const withoutPhrases = terms.replace(/"[^"]*"/g, 'phrase');
   for (const { label, re } of FTS5_OPERATORS) {
     const m = withoutPhrases.match(re);
     if (m) return { label, token: m[0].trim() };

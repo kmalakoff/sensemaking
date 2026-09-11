@@ -47,7 +47,7 @@ describe('reconcile orchestration', () => {
         return BEGIN_WRITE;
       },
     });
-    const result = await reconcile(conn, cfg, baseDir, dialect);
+    const result = await reconcile(conn, cfg, { rootDir: baseDir, configDir: baseDir }, dialect);
 
     assert.deepEqual({ parsed: result.parsed, warnings: result.warnings }, { parsed: 0, warnings: [] });
     assert.equal(beginCalls, 0, 'a no-change reconcile must never open a write transaction');
@@ -68,7 +68,7 @@ describe('reconcile orchestration', () => {
       },
     });
 
-    await assert.rejects(reconcile(conn, cfg, baseDir, dialect), /too many columns for this test/);
+    await assert.rejects(reconcile(conn, cfg, { rootDir: baseDir, configDir: baseDir }, dialect), /too many columns for this test/);
 
     const columns = await getColumns(conn);
     assert.ok(!columns.has('brandNew'), 'no ALTER should have landed once the fence threw');
@@ -100,7 +100,7 @@ describe('reconcile orchestration', () => {
       },
     });
 
-    const result = await reconcile(conn, cfg, baseDir, dialect);
+    const result = await reconcile(conn, cfg, { rootDir: baseDir, configDir: baseDir }, dialect);
     assert.equal(result.parsed, 1, 'the concurrently added column must not block the file from reconciling');
 
     const row = await (await conn.prepare('SELECT "brandNew" FROM frontmatter WHERE "path" = ?')).get('b.md');
@@ -119,7 +119,7 @@ describe('reconcile orchestration', () => {
 
     writeNote(baseDir, 'b.md', { frontmatter: { title: 'B' } });
     const withoutDuration = baseDialect();
-    const first = await reconcile(conn, cfg, baseDir, withoutDuration);
+    const first = await reconcile(conn, cfg, { rootDir: baseDir, configDir: baseDir }, withoutDuration);
     assert.equal(first.parsed, 1);
 
     writeNote(baseDir, 'c.md', { frontmatter: { title: 'C' } });
@@ -129,7 +129,7 @@ describe('reconcile orchestration', () => {
         recorded = ms;
       },
     });
-    const second = await reconcile(conn, cfg, baseDir, withDuration);
+    const second = await reconcile(conn, cfg, { rootDir: baseDir, configDir: baseDir }, withDuration);
     assert.equal(second.parsed, 1);
     assert.ok(typeof recorded === 'number' && recorded >= 0, `expected a non-negative duration, got ${recorded}`);
 
@@ -158,7 +158,7 @@ describe('reconcile orchestration', () => {
       },
     });
 
-    await reconcile(conn, cfg, baseDir, dialect);
+    await reconcile(conn, cfg, { rootDir: baseDir, configDir: baseDir }, dialect);
 
     assert.equal(calls.length, 1);
     assert.deepEqual([...calls[0].touched].sort(), ['a.md', 'c.md']);
@@ -183,7 +183,7 @@ describe('reconcile orchestration', () => {
       },
     });
 
-    const result = await reconcile(conn, cfg, baseDir, dialect, undefined, new Set(['a.md']));
+    const result = await reconcile(conn, cfg, { rootDir: baseDir, configDir: baseDir }, dialect, undefined, new Set(['a.md']));
 
     assert.equal(result.parsed, 1, 'only the forced file is reparsed');
     assert.deepEqual(touchedCalls, [['a.md']]);
@@ -208,7 +208,7 @@ describe('reconcile orchestration', () => {
 
     // a.md is gone from disk, so it's absent from `files` regardless of forcedPaths; it must
     // still surface exactly once, through delta.vanished, not duplicated by the force union.
-    const result = await reconcile(conn, cfg, baseDir, dialect, undefined, new Set(['a.md']));
+    const result = await reconcile(conn, cfg, { rootDir: baseDir, configDir: baseDir }, dialect, undefined, new Set(['a.md']));
 
     assert.equal(result.parsed, 0);
     assert.equal(calls.length, 1);

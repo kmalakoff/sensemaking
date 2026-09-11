@@ -30,7 +30,7 @@ export const STORE_NAMES = ['sqlite', 'duckdb', 'turso'] as const;
 export type StoreName = (typeof STORE_NAMES)[number];
 
 // A named, self-contained file-selection scope: include/exclude are globby patterns resolved
-// relative to the config file. No inheritance between presets; they may overlap freely (views, not partitions).
+// relative to the configured tree root. No inheritance between presets; they may overlap freely (views, not partitions).
 export interface Preset {
   include: string[];
   exclude?: string[];

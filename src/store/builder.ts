@@ -9,7 +9,7 @@ import { reparseFiles } from '../scan/reparse.ts';
 import type { EmbedChangeKind } from './embed-scope.ts';
 import type { FeatureToggle } from './feature-scope.ts';
 import { NARROW_FEATURE_TABLE } from './feature-scope.ts';
-import { reconcile } from './reconcile.ts';
+import { type ReconcilePaths, reconcile } from './reconcile.ts';
 import { getColumns } from './shared.ts';
 import type { Stages } from './stages.ts';
 import { withTransaction } from './transaction.ts';
@@ -155,12 +155,12 @@ async function invalidateFeatureToggles(conn: Connection, cfg: Config, baseDir: 
 
 // The pool is created at most once, lazily, on whichever build() or invalidate() call first
 // needs it, and reused by every later call on this instance.
-export function createBuilder(conn: Connection, cfg: Config, baseDir: string, dialect: ReconcileDialect): Builder {
+export function createBuilder(conn: Connection, cfg: Config, paths: ReconcilePaths, dialect: ReconcileDialect): Builder {
   const pool = new ParsePool();
   return {
-    build: (forcedPaths) => reconcile(conn, cfg, baseDir, dialect, pool, forcedPaths),
-    invalidate: (kind) => (kind === 'model' ? nullEmbedVectors(conn, dialect) : rebuildEmbeddings(conn, cfg, baseDir, dialect, pool)),
-    invalidateFeatures: (toggles) => invalidateFeatureToggles(conn, cfg, baseDir, dialect, pool, toggles),
+    build: (forcedPaths) => reconcile(conn, cfg, paths, dialect, pool, forcedPaths),
+    invalidate: (kind) => (kind === 'model' ? nullEmbedVectors(conn, dialect) : rebuildEmbeddings(conn, cfg, paths.rootDir, dialect, pool)),
+    invalidateFeatures: (toggles) => invalidateFeatureToggles(conn, cfg, paths.rootDir, dialect, pool, toggles),
     close: () => pool.close(),
     get poolsCreated() {
       return pool.poolsCreated;

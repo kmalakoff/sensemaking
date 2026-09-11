@@ -1,10 +1,10 @@
 import { createRequire } from 'node:module';
-import { dirname, join } from 'node:path';
 // Type-only: erased at build, but keeps depcheck's usage check satisfied for the tier-2
 // `_require` below (see coding-standards' deferral tiers).
 import type * as TinypoolNS from 'tinypool';
 import type { Config } from '../config/index.ts';
 import type { Feature } from '../features/types.ts';
+import { resolveWorkerFile } from '../lib/worker-file.ts';
 import type { ParsedDoc } from '../scan/index.ts';
 import type { ParseTask, ParseTaskResult, ParseWorkerData } from '../workers/parse.ts';
 import type { FileStat } from './list.ts';
@@ -12,23 +12,6 @@ import { reviveError } from './worker-error.ts';
 
 // Tinypool is ESM-only; our floor (>=22.20) has native require(esm), so the tier-2 house deferral reaches it.
 const _require = typeof require === 'undefined' ? createRequire(import.meta.url) : require;
-
-// Worker MUST load from dist/cjs/: a worker_threads thread is a fresh realm with no inherited
-// TS loader hook, so a source path cannot work. Resolved on first pooled dispatch, not at import.
-let workerFile: string | undefined;
-function resolveWorkerFile(): string {
-  if (workerFile) return workerFile;
-  const load = createRequire(import.meta.url);
-  for (const rel of ['..', '../..', '../../..']) {
-    try {
-      if ((load(`${rel}/package.json`) as { name?: string }).name === 'sensemaking') {
-        workerFile = join(dirname(load.resolve(`${rel}/package.json`)), 'dist', 'cjs', 'workers', 'parse.js');
-        return workerFile;
-      }
-    } catch {}
-  }
-  throw new Error('cannot locate the sensemaking package root, so the parse worker cannot be found; run npm run build');
-}
 
 // parseMs is worker-side only (see workers/parse.ts); absent on the serial path.
 export type FileResult = { doc: ParsedDoc; warnings: string[]; parseMs?: number };
@@ -44,7 +27,7 @@ export class ParsePool {
   private ensure(workerData: ParseWorkerData, maxWorkers: number): TinypoolNS.Tinypool {
     if (!this.pool) {
       const { Tinypool } = _require('tinypool') as typeof TinypoolNS;
-      this.pool = new Tinypool({ filename: resolveWorkerFile(), minThreads: maxWorkers, maxThreads: maxWorkers, workerData });
+      this.pool = new Tinypool({ filename: resolveWorkerFile('parse'), minThreads: maxWorkers, maxThreads: maxWorkers, workerData });
       this.poolsCreated++;
     }
     return this.pool;
