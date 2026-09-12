@@ -16,7 +16,10 @@ const DIST = join(ROOT, 'dist', 'esm');
 const TMP_ROOT = join(ROOT, '.tmp', 'turso-update-cost');
 const CHANGED = 250;
 const REPEATS = 3;
-const INPUTS = nativeUpdateInputs(CHANGED);
+const INPUTS = {
+  ...nativeUpdateInputs(CHANGED),
+  measured_lexical_state: 'updated-marker and baseline postcondition queries after the measured direct content transaction on the same native connection',
+};
 const QUERY_OPTIONS = INPUTS.queries.baseline.options;
 const STRATEGIES = ['incremental', 'rebuild'];
 const HARNESS_FILES = [
@@ -116,7 +119,9 @@ async function prepareTree(open) {
       utimesSync(path, INITIAL_MTIME / 1000, INITIAL_MTIME / 1000);
     }
     baseline = await open(cfg);
-    const prepared = { tree, cfg, dbPath: baseline.dbPath, capabilities: [...baseline.store.capabilities] };
+    const initialBaselinePaths = (await baseline.store.lexical.query(INPUTS.queries.baseline.text, QUERY_OPTIONS)).map(({ path }) => path).sort();
+    samePaths(initialBaselinePaths, nativeUpdatePaths(NOTES), 'initial baseline');
+    const prepared = { tree, cfg, dbPath: baseline.dbPath, capabilities: [...baseline.store.capabilities], initialBaselinePaths };
     await baseline.store.close();
     return prepared;
   } catch (error) {
@@ -161,7 +166,16 @@ async function runOne({ open, listFiles, parseFile, tursoApi, CONNECT_OPTS, crea
     samePaths(baseline, nativeUpdatePaths(NOTES), `${strategy} baseline`);
     const timings = { ...components, total_ms: totalMs };
     assertTimings(timings);
-    result = { repetition, position, strategy, notes: NOTES, changed: CHANGED, timings_ms: timings, outputs: { updated_paths: updated, baseline_paths: baseline }, native_observation: nativeObservation };
+    result = {
+      repetition,
+      position,
+      strategy,
+      notes: NOTES,
+      changed: CHANGED,
+      timings_ms: timings,
+      outputs: { initial_baseline_paths: prepared.initialBaselinePaths, updated_paths: updated, baseline_paths: baseline },
+      native_observation: nativeObservation,
+    };
   } catch (error) {
     operationError = error;
   }

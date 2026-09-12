@@ -31,8 +31,8 @@ function ngramSidecar(text: string): string {
 // no error); the real fence is a SELECT projecting more than this many result columns, which fails to prepare.
 const MAX_FRONTMATTER_COLUMNS = 2000;
 
-// Changed files above which rebuilding the FTS index beats maintaining it per row. Measured
-// 2026-08-30; the derivation and its bounds are pinned in this file's spec.
+// Retained policy boundary from 2026-08-30 corpus-scale measurements; the optimum after later
+// update-path changes remains pending matched corpus-scale crossover evidence.
 export const FTS_REBUILD_THRESHOLD = 250;
 
 export type TursoFtsStrategy = 'incremental' | 'rebuild';
@@ -60,11 +60,10 @@ export async function reconcileTursoContentWithStrategy(conn: Connection, touche
 
   // content is a plain table keyed by its own path (no rowid subquery, unlike sqlite's FTS5
   // content), so vanished and reparsed docs delete in one pass.
-  if (touched.length > 0)
-    await conn.runBatch(
-      'DELETE FROM content WHERE "path" = ?',
-      touched.map((p) => [p])
-    );
+  if (touched.length > 0) {
+    const placeholders = touched.map(() => '?').join(', ');
+    await conn.runBatch(`DELETE FROM content WHERE "path" IN (${placeholders})`, [touched]);
+  }
   if (docs.length > 0) await conn.runBatch(INSERT_CONTENT_SQL, docs.map(contentRow));
   if (bulk) for (const ddl of CONTENT_FTS_DDL) await conn.exec(ddl);
 }

@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import assert from 'assert';
 import { NATIVE_UPDATE_MTIME_MS as INITIAL_MTIME, NATIVE_UPDATE_NOTES as NOTES, nativeUpdateInputs, nativeUpdatePaths, nativeUpdatePath as pathFor, nativeUpdateText as textFor, NATIVE_UPDATE_NEXT_MTIME_MS as UPDATED_MTIME } from '../../benchmark/lib/native-update-contract.mjs';
@@ -43,7 +43,12 @@ async function prepareUpdate(changed = CHANGED): Promise<PreparedUpdate> {
   }
   const baseline = await openConfig(cfg);
   const dbPath = baseline.dbPath;
-  await baseline.store.close();
+  try {
+    const initialBaselinePaths = (await baseline.store.lexical.query(INPUTS.queries.baseline.text, QUERY_OPTIONS)).map(({ path }) => path).sort();
+    assert.deepEqual(initialBaselinePaths, nativeUpdatePaths(NOTES), 'the prepared index must return every authored baseline path before close');
+  } finally {
+    await baseline.store.close();
+  }
 
   const touched = Array.from({ length: changed }, (_, index) => pathFor(index));
   for (let index = 0; index < changed; index++) {
@@ -179,6 +184,51 @@ describe('turso update cost strategies', () => {
         await reopened.store.close();
       }
     });
+
+  it('public incremental reconciliation parameterizes quoted paths for mixed and deletion-only updates', async () => {
+    const baseDir = scratchDir('turso-content-delete');
+    const cfg = config(baseDir);
+    const deletedPath = "delete-'one.md";
+    const updatedPath = "update-'two.md";
+    writeFileSync(join(baseDir, deletedPath), '# Deleted\n\nbaseline marker\n');
+    writeFileSync(join(baseDir, updatedPath), '# Original\n\nbaseline marker\n');
+    utimesSync(join(baseDir, deletedPath), INITIAL_MTIME / 1000, INITIAL_MTIME / 1000);
+    utimesSync(join(baseDir, updatedPath), INITIAL_MTIME / 1000, INITIAL_MTIME / 1000);
+
+    const initial = await openConfig(cfg);
+    try {
+      assert.deepEqual((await initial.store.lexical.query('baseline', QUERY_OPTIONS)).map(({ path }) => path).sort(), [deletedPath, updatedPath]);
+    } finally {
+      await initial.store.close();
+    }
+
+    unlinkSync(join(baseDir, deletedPath));
+    writeFileSync(join(baseDir, updatedPath), '# Updated\n\nbaseline updated marker\n');
+    utimesSync(join(baseDir, updatedPath), UPDATED_MTIME / 1000, UPDATED_MTIME / 1000);
+    const mixed = await openConfig(cfg);
+    try {
+      assert.deepEqual(
+        (await mixed.store.lexical.query('updated', QUERY_OPTIONS)).map(({ path }) => path),
+        [updatedPath]
+      );
+      assert.deepEqual(
+        (await mixed.store.lexical.query('baseline', QUERY_OPTIONS)).map(({ path }) => path),
+        [updatedPath]
+      );
+      assert.deepEqual(await (await mixed.store.prepare('SELECT "path", text FROM content ORDER BY "path"')).all(), [{ path: updatedPath, text: 'Updated baseline updated marker' }]);
+    } finally {
+      await mixed.store.close();
+    }
+
+    unlinkSync(join(baseDir, updatedPath));
+    const deletionOnly = await openConfig(cfg);
+    try {
+      assert.deepEqual(await deletionOnly.store.lexical.query('baseline', QUERY_OPTIONS), []);
+      assert.deepEqual(await (await deletionOnly.store.prepare('SELECT "path", text FROM content')).all(), []);
+    } finally {
+      await deletionOnly.store.close();
+    }
+  });
 
   for (const strategy of ['incremental', 'rebuild'] as const)
     it(`${strategy}: a failed real transaction leaves the old FTS snapshot queryable`, async () => {
