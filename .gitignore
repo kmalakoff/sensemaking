@@ -9,9 +9,6 @@ npm-debug.log*
 # sensemaking state dir
 .sense/
 
-# local planning docs
-plans/
-
 # secrets for live provider tests
 .env.test
 .agents/
