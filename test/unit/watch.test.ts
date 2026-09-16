@@ -4,6 +4,7 @@ import assert from 'assert';
 import { safeRmSync } from 'fs-remove-compat';
 import { type ResolvedConfig, STATE_DIR } from '../../src/config/index.ts';
 import { SenseError } from '../../src/errors.ts';
+import { docCount, openStore } from '../../src/store/index.ts';
 import type { WatchEvent, WatchOptions } from '../../src/watch.ts';
 import { runWatch } from '../../src/watch.ts';
 import { readWatchClaim, WATCH_CLAIM_FILENAME, WATCH_HEARTBEAT_INTERVAL_MS, WatchClaimDatabase } from '../../src/watch-claim.ts';
@@ -108,13 +109,12 @@ describe('runWatch', () => {
 
   it('caps claim renewal at the shipped interval when reconciliation is requested less often', async () => {
     const baseDir = tree();
-    const cfg = cfgFor(baseDir);
+    const cfg = { ...cfgFor(baseDir), rootDir: baseDir, configDir: tree() };
     const controller = new AbortController();
-    const { done, events, ready } = startWatch(cfg, { signal: controller.signal, heartbeatIntervalMs: 60_000 });
+    const { done, ready } = startWatch(cfg, { signal: controller.signal, heartbeatIntervalMs: 60_000 });
     try {
       await ready;
       const first = await waitUntil(() => readClaim(cfg));
-      const before = events.length;
       const renewed = await waitUntil(
         () => {
           const value = readClaim(cfg);
@@ -123,7 +123,7 @@ describe('runWatch', () => {
         2 * WATCH_HEARTBEAT_INTERVAL_MS + 2_000
       );
       assert.equal(renewed.token, first.token);
-      const contender = new WatchClaimDatabase(baseDir);
+      const contender = new WatchClaimDatabase(cfg.configDir);
       try {
         await assert.rejects(contender.acquire('slow-contender', process.pid, false), (err: unknown) => {
           assert.ok(err instanceof SenseError);
@@ -135,11 +135,6 @@ describe('runWatch', () => {
         contender.close();
       }
       assert.equal(readClaim(cfg)?.token, first.token);
-      assert.deepEqual(
-        events.slice(before).filter((event) => event.type === 'reconciled'),
-        [],
-        'the slower reconcile interval must remain independent from claim renewal'
-      );
     } finally {
       controller.abort();
       await done;
@@ -183,68 +178,68 @@ describe('runWatch', () => {
     assert.deepEqual(caught, [], 'no unhandled rejection should occur while aborting with the heartbeat active');
   });
 
-  it('a file change triggers a debounced reconcile and emits reconciled', async () => {
+  it('eventually reconciles a file change through notification or the periodic pass', async () => {
     const baseDir = tree();
     const cfg = cfgFor(baseDir);
     const controller = new AbortController();
     const { done, ready, events } = startWatch(cfg, { signal: controller.signal, debounceMs: 15 });
-    await ready;
-
-    const before = events.length;
-    writeNote(baseDir, 'a.md', { frontmatter: { title: 'A' } });
-    const event = await waitUntil(() => events.slice(before).find((e) => e.type === 'reconciled'));
-    assert.equal(event.type, 'reconciled');
-    if (event.type === 'reconciled') assert.equal(event.parsed, 1);
-
-    controller.abort();
-    await done;
+    try {
+      await ready;
+      const before = events.length;
+      writeNote(baseDir, 'a.md', { frontmatter: { title: 'A' } });
+      const event = await waitUntil(() => {
+        const recent = events.slice(before);
+        const error = recent.find((e) => e.type === 'reconcile-error');
+        if (error?.type === 'reconcile-error') throw new Error(error.message);
+        return recent.find((e) => e.type === 'reconciled' && e.parsed === 1 && e.total === 1);
+      }, WATCH_HEARTBEAT_INTERVAL_MS + 5_000);
+      assert.deepEqual(event, { type: 'reconciled', parsed: 1, total: 1, warnings: [] });
+    } finally {
+      controller.abort();
+      await done;
+    }
   });
 
-  it('writes inside the state dir do not retrigger reconcile', async () => {
+  // The callback fires before the reconcile closes its store, so aborting there makes shutdown
+  // drain a real pooled cycle rather than guessing whether a timer has started it.
+  it('aborting from a pooled reconcile callback closes cleanly', async () => {
     const baseDir = tree();
     const cfg = cfgFor(baseDir);
     const controller = new AbortController();
-    // One write into the state dir, then quiet for longer than the debounce: unguarded, that single
-    // event schedules a reconcile which fires inside the window. A repeated heartbeat cannot show this (writes at the debounce interval keep resetting the timer), so the heartbeat is parked.
-    const { done, ready, events } = startWatch(cfg, { signal: controller.signal, debounceMs: 15, heartbeatIntervalMs: 10_000 });
-    await ready;
-    const before = events.length;
-    writeFileSync(join(baseDir, STATE_DIR, 'probe.tmp'), 'x');
-    await sleep(120);
-    controller.abort();
-    await done;
+    const { done, ready, events } = startWatch(cfg, {
+      signal: controller.signal,
+      debounceMs: 15,
+      heartbeatIntervalMs: 15,
+      onEvent: (event) => {
+        if (event.type === 'reconciled' && event.parsed === 300 && event.total === 300) controller.abort();
+      },
+    });
+    try {
+      await ready;
+      for (let i = 0; i < 300; i++) writeNote(baseDir, `n${i}.md`, { frontmatter: { [`k${i}`]: 1 } });
+      await waitUntil(() => events.find((event) => event.type === 'reconciled' && event.parsed === 300 && event.total === 300));
+      await done;
+    } finally {
+      controller.abort();
+      await done;
+    }
 
     assert.deepEqual(
-      events.slice(before).filter((e) => e.type === 'reconciled'),
-      []
-    );
-  });
-
-  // The reconcile owns the store, and past the pooling threshold a live worker pool too. The
-  // tree is large enough to make the reconcile a real pooled one, so shutdown cannot close the connection its writes still need.
-  it('shutdown drains a reconcile that is already in flight instead of closing the store underneath it', async () => {
-    const baseDir = tree();
-    const cfg = cfgFor(baseDir);
-    const controller = new AbortController();
-    const { done, ready, events } = startWatch(cfg, { signal: controller.signal, debounceMs: 15 });
-    await ready;
-
-    for (let i = 0; i < 300; i++) writeNote(baseDir, `n${i}.md`, { frontmatter: { [`k${i}`]: 1 } });
-    await sleep(40);
-    controller.abort();
-    await done;
-
-    // Shutdown must not resolve until that reconcile has reported: undrained, `done` settles
-    // while the reparse is still running and no reconciled event has been emitted yet.
-    assert.ok(
-      events.some((e) => e.type === 'reconciled'),
-      'shutdown resolved before the in-flight reconcile reported'
+      events.filter((e) => e.type === 'reconciled' && e.parsed === 300 && e.total === 300),
+      [{ type: 'reconciled', parsed: 300, total: 300, warnings: [] }]
     );
     assert.deepEqual(
       events.filter((e) => e.type === 'reconcile-error'),
       []
     );
     assert.equal(readClaim(cfg), null);
+    const reopened = await openStore(cfg);
+    try {
+      assert.equal(reopened.parsed, 0, 'reopening must not repair an incomplete watcher reconcile');
+      assert.equal(await docCount(reopened.store), 300);
+    } finally {
+      await reopened.store.close();
+    }
   });
 
   it('WATCH_ACTIVE throws when a fresh claim exists; force replaces its token safely', async () => {

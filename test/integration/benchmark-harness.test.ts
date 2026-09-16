@@ -36,6 +36,7 @@ import {
 } from '../../benchmark/lib/work-tree.mjs';
 import { identityHash } from '../../benchmark/lib/workload-identity.mjs';
 import { acceptanceFingerprint, acceptedIds, buildReport, classificationEvidence, doneOnResume, renderMarkdown } from '../../benchmark/report.mjs';
+import { WATCH_HEARTBEAT_INTERVAL_MS } from '../../src/watch-claim.ts';
 import { packageRoot, scratchDir } from '../lib/scratch.ts';
 import { forEachStore, openTreeForStore } from '../lib/stores.ts';
 import { openConfig, writeNote } from '../lib/tree.ts';
@@ -512,7 +513,7 @@ describe('native watcher readiness observer', () => {
       }
 
       const deadlineMs = await nativeObserverDeadlineMs(packageRoot, tree);
-      const watcherDeadlineMs = 5_000 + deadlineMs;
+      const watcherDeadlineMs = WATCH_HEARTBEAT_INTERVAL_MS + deadlineMs;
       writeNote(tree, 'a.md', { frontmatter: { title: 'Before watcher', summary: 'Readiness', private: 'excluded' }, body: 'First mutation.' });
       const beforeManifest = captureFileManifest(tree);
       const beforeRow = { title: 'Before watcher', summary: 'Readiness', text: 'First mutation.' };
@@ -522,11 +523,26 @@ describe('native watcher readiness observer', () => {
       const watcher = startMeasuredWatcher({ pkgRoot: packageRoot, configPath });
       try {
         const started = await watcher.waitFor('started', 0, watcherDeadlineMs);
+        const initial = await watcher.waitFor('reconciled', started.next, watcherDeadlineMs);
+        assert.deepEqual({ parsed: initial.event.parsed, total: initial.event.total }, { parsed: 1, total: 1 });
+        const mutationDeadline = Date.now() + watcherDeadlineMs;
         writeNote(tree, 'a.md', { frontmatter: { title: 'After watcher', summary: 'Readiness', private: 'excluded' }, body: 'Watcher mutation.' });
         const expectedManifest = captureFileManifest(tree);
         const expectedRow = { title: 'After watcher', summary: 'Readiness', text: 'Watcher mutation.' };
-        await watcher.waitFor('reconciled', started.next, watcherDeadlineMs);
-        const observed = await waitForNativeIndex({ pkgRoot: packageRoot, store, configPath, manifest: expectedManifest, expectedContent: [['a.md', rowHash(expectedRow)]], authoredContent: [['a.md', expectedRow]] }, deadlineMs);
+        let next = initial.next;
+        for (;;) {
+          const remainingMs = mutationDeadline - Date.now();
+          if (remainingMs <= 0) throw new Error(`${store} watcher produced no authored reconciliation within ${watcherDeadlineMs}ms`);
+          const reconciled = await watcher.waitFor('reconciled', next, remainingMs);
+          next = reconciled.next;
+          assert.equal(reconciled.event.total, 1);
+          if (reconciled.event.parsed === 0) continue;
+          assert.equal(reconciled.event.parsed, 1);
+          break;
+        }
+        const remainingMs = mutationDeadline - Date.now();
+        if (remainingMs <= 0) throw new Error(`${store} native observer has no remaining lifecycle budget after authored reconciliation`);
+        const observed = await waitForNativeIndex({ pkgRoot: packageRoot, store, configPath, manifest: expectedManifest, expectedContent: [['a.md', rowHash(expectedRow)]], authoredContent: [['a.md', expectedRow]] }, remainingMs);
         assert.equal(observed.state, 'ready');
         assert.equal(observed.paths, 1);
         watcher.assertRunning();

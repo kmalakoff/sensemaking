@@ -1,8 +1,8 @@
 import { watch as fsWatch } from 'node:fs';
 import type { ResolvedConfig } from './config/index.ts';
-import { STATE_DIR } from './config/index.ts';
 import { SenseError } from './errors.ts';
 import { guardedTick } from './lib/guarded-tick.ts';
+import { shouldReconcileWatchNotification } from './lib/watch-notification.ts';
 import { docCount, openStore } from './store/index.ts';
 import { startWatchClaim, WATCH_HEARTBEAT_INTERVAL_MS } from './watch-claim.ts';
 
@@ -106,7 +106,7 @@ export async function runWatch(cfg: ResolvedConfig, opts: WatchOptions = {}): Pr
     // Ignore our own state files, or cache and claim writes would retrigger reconciliation forever.
     // An unresolvable filename reconciles because parsing nothing costs less than missing a real edit.
     const watcher = fsWatch(rootDir, { recursive: true }, (_event, filename) => {
-      if (typeof filename === 'string' && filename.startsWith(STATE_DIR)) return;
+      if (!shouldReconcileWatchNotification(filename)) return;
       scheduleReconcile();
     });
     const reconcileTimer = setInterval(

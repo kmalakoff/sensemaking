@@ -2,6 +2,13 @@
 
 All notable changes to sensemaking are documented here.
 
+## [0.24.6] - 2026-09-15
+
+### Fixed
+
+- DuckDB accepts and installs the validated `@duckdb/node-api@1.5.5-r.5` binding while
+  retaining the deterministic BM25 contract checks.
+
 ## [0.24.5] - 2026-09-11
 
 ### Fixed

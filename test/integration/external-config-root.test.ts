@@ -268,10 +268,10 @@ describe('external configuration root', () => {
 
     const firstController = new AbortController();
     const secondController = new AbortController();
-    const firstEvents: Array<{ type: string; parsed?: number }> = [];
-    const secondEvents: Array<{ type: string; parsed?: number }> = [];
-    const firstDone = runWatch(loadConfig(firstConfigPath), { signal: firstController.signal, debounceMs: 10, heartbeatIntervalMs: 60_000, onEvent: (event) => firstEvents.push(event) });
-    const secondDone = runWatch(loadConfig(secondConfigPath), { signal: secondController.signal, debounceMs: 10, heartbeatIntervalMs: 60_000, onEvent: (event) => secondEvents.push(event) });
+    const firstEvents: Array<{ type: string; parsed?: number; total?: number; message?: string }> = [];
+    const secondEvents: Array<{ type: string; parsed?: number; total?: number; message?: string }> = [];
+    const firstDone = runWatch(loadConfig(firstConfigPath), { signal: firstController.signal, debounceMs: 10, onEvent: (event) => firstEvents.push(event) });
+    const secondDone = runWatch(loadConfig(secondConfigPath), { signal: secondController.signal, debounceMs: 10, onEvent: (event) => secondEvents.push(event) });
     const outcomes = Promise.allSettled([firstDone, secondDone]);
     const firstEarlyExit = firstDone.then(
       () => {
@@ -302,7 +302,18 @@ describe('external configuration root', () => {
       const secondBefore = secondEvents.length;
       writeNote(treeDir, 'alpha/Two.md', { body: 'alpha two' });
       writeNote(treeDir, 'beta/Two.md', { body: 'beta two' });
-      await Promise.race([waitFor(() => firstEvents.slice(firstBefore).some((event) => event.type === 'reconciled' && event.parsed === 1) && secondEvents.slice(secondBefore).some((event) => event.type === 'reconciled' && event.parsed === 1)), firstEarlyExit, secondEarlyExit]);
+      await Promise.race([
+        waitFor(() => {
+          const firstError = firstEvents.find((event) => event.type === 'reconcile-error');
+          const secondError = secondEvents.find((event) => event.type === 'reconcile-error');
+          if (firstError || secondError) throw new Error('watcher reported reconcile-error');
+          return firstEvents.slice(firstBefore).some((event) => event.type === 'reconciled' && event.parsed === 1 && event.total === 2) && secondEvents.slice(secondBefore).some((event) => event.type === 'reconciled' && event.parsed === 1 && event.total === 2);
+        }, WATCH_HEARTBEAT_INTERVAL_MS + 5_000).catch((err) => {
+          throw new Error(`independent watcher reconciliation failed; firstEvents=${JSON.stringify(firstEvents)}; secondEvents=${JSON.stringify(secondEvents)}`, { cause: err });
+        }),
+        firstEarlyExit,
+        secondEarlyExit,
+      ]);
     } catch (err) {
       bodyFailed = true;
       bodyFailure = err;

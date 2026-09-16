@@ -279,7 +279,10 @@ export async function waitForNativeIndex(payload, deadlineMs) {
   const attempts = [];
   for (;;) {
     const remaining = deadline - Date.now();
-    if (remaining <= 0) throw new Error(`native observer readiness timed out after ${deadlineMs}ms`);
+    if (remaining <= 0) {
+      const summary = { count: attempts.length, locked: attempts.filter((item) => item.state === 'locked').length, stale: attempts.filter((item) => item.state === 'stale').length, recent: attempts.slice(-8) };
+      throw new Error(`native observer readiness timed out after ${deadlineMs}ms; attempts=${JSON.stringify(summary)}`);
+    }
     // The tree's lock-wait budget decides whether another attempt may begin. A begun native
     // process retains that full bound so the deadline's final fragment cannot become a startup race.
     const result = await runNativeObserverAttempt(payload, nativeObserverAttemptBudgetMs(deadlineMs, remaining));
