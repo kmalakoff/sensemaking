@@ -365,7 +365,7 @@ describe('benchmark release-gate: owner override needs a reason', () => {
     const compare = JSON.parse(readFileSync(comparePath, 'utf8')) as { versions: string[]; results: Record<string, Record<string, unknown>> };
     compare.results.local.map_ms = 100;
     writeFileSync(comparePath, JSON.stringify(compare));
-    writeFileSync(join(sitting, 'compare-reversed.json'), JSON.stringify({ ...compare, reversed: true }));
+    writeFileSync(join(sitting, 'compare-reversed.json'), JSON.stringify({ ...compare, versions: [...compare.versions].reverse(), reversed: true }));
     const sittingState = JSON.parse(readFileSync(join(sitting, 'sitting.json'), 'utf8')) as { steps: Record<string, unknown> };
     sittingState.steps['compare-reversed'] = { id: 'compare-reversed', status: 'ok' };
     writeFileSync(join(sitting, 'sitting.json'), JSON.stringify(sittingState));

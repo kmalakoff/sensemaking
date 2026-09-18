@@ -2,7 +2,6 @@ import type { DuckDBConnection, DuckDBType, DuckDBValue } from '@duckdb/node-api
 import { withTransaction } from '../transaction.ts';
 import type { Connection, VectorCandidate, VectorSimilar, VectorWriteRow } from '../types.ts';
 import { asCosine, sampleEvenly } from '../vectors.ts';
-import { rewriteUpdate } from './batch.ts';
 import { duckdbApi } from './native.ts';
 
 // This store keeps vectors as native FLOAT[dims] arrays (dims fixed at DDL time by open.ts's ensureSchema, from embed/types.ts's STORE_DIMS) and
@@ -14,6 +13,12 @@ import { duckdbApi } from './native.ts';
 // A bind position whose type is left to auto-inference (safe for plain strings/numbers; only
 // the vector ARRAY positions below need an explicit type -- see writeVectorBatch's comment).
 const untyped = undefined as unknown as DuckDBType;
+const VECTOR_WRITE_STAGE = '_sense_vector_write_stage';
+
+// Created once per native connection outside write transactions; its lifetime follows that connection.
+export async function createVectorWriteStage(duckdb: DuckDBConnection, dims: number): Promise<void> {
+  await duckdb.run(`CREATE TEMP TABLE ${VECTOR_WRITE_STAGE} ("path" TEXT, chunk INTEGER, vector FLOAT[${dims}])`);
+}
 
 // The DDL-fixed array width can exceed a vector's actual length (a hypothetical model sliced under the column's width);
 // zero-padding leaves cosine scores unchanged since the added dimensions contribute nothing to either vector's dot product or norm.
@@ -37,28 +42,28 @@ function dequantize(row: VectorWriteRow, dims: number): number[] {
   );
 }
 
-// One runBatch-equivalent call per provider batch: a single multi-row UPDATE (batch.ts's rewriteUpdate), bound directly against the
-// native connection because the vector column needs an explicit ARRAY(DOUBLE, dims) bind type -- auto inference misreads an all-integer first component as INTEGER and silently truncates the rest (verified live: an untyped bind of [0, 0.35, 0.1, -0.2] stores [0,0,0,0]).
+// The native appender needs an explicit FLOAT array type: inference from an integer first component
+// silently truncates fractional components. The fixed UPDATE keeps each provider batch keyed by path and chunk.
 export async function writeVectorBatch(duckdb: DuckDBConnection, conn: Connection, dims: number, rows: VectorWriteRow[]): Promise<void> {
   if (rows.length === 0) return;
-  const { arrayValue, ARRAY, DOUBLE } = await duckdbApi();
-  const rewritten = rewriteUpdate('UPDATE embeddings SET vector = ? WHERE "path" = ? AND chunk = ?', rows.length);
-  if (!rewritten) throw new Error('duckdb: writeVectorBatch SQL shape not recognized by rewriteUpdate');
+  const { ARRAY, FLOAT } = await duckdbApi();
+  const vectorType = ARRAY(FLOAT, dims);
 
   await withTransaction(conn, async () => {
-    const stmt = await duckdb.prepare(rewritten.sql);
+    await duckdb.run(`DELETE FROM ${VECTOR_WRITE_STAGE}`);
+    const appender = await duckdb.createAppender(VECTOR_WRITE_STAGE);
     try {
-      const values: DuckDBValue[] = [];
-      const types: DuckDBType[] = [];
       for (const row of rows) {
-        values.push(arrayValue(dequantize(row, dims)), row.path, row.chunk);
-        types.push(ARRAY(DOUBLE, dims), untyped, untyped);
+        appender.appendVarchar(row.path);
+        appender.appendInteger(row.chunk);
+        appender.appendArray(dequantize(row, dims), vectorType);
+        appender.endRow();
       }
-      stmt.bind(values, types);
-      await stmt.run();
+      appender.flushSync();
     } finally {
-      stmt.destroySync();
+      appender.closeSync();
     }
+    await duckdb.run(`UPDATE embeddings SET vector = staged.vector FROM ${VECTOR_WRITE_STAGE} AS staged WHERE embeddings."path" = staged."path" AND embeddings.chunk = staged.chunk`);
   });
 }
 

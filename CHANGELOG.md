@@ -2,6 +2,13 @@
 
 All notable changes to sensemaking are documented here.
 
+## [0.24.7] - 2026-09-17
+
+### Changed
+
+- DuckDB writes embedding batches faster using its native appender, while preserving
+  existing vectors, search results, and cache compatibility.
+
 ## [0.24.6] - 2026-09-15
 
 ### Fixed

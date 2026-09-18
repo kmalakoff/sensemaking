@@ -136,7 +136,7 @@ export function classifyCompare(compareJson, reversedJson, { requireIdentity = f
   const validVersions = Array.isArray(versions) && versions.length === 2 && versions.every((version) => typeof version === 'string' && version.length > 0) && versions[0] !== versions[1];
   const reversedVersions = reversedJson?.versions;
   const validReversedVersions =
-    !reversedJson || (Array.isArray(reversedVersions) && reversedVersions.length === 2 && reversedVersions.every((version) => typeof version === 'string' && version.length > 0) && reversedVersions[0] !== reversedVersions[1] && reversedVersions[0] === versions?.[0] && reversedVersions[1] === versions?.[1]);
+    !reversedJson || (Array.isArray(reversedVersions) && reversedVersions.length === 2 && reversedVersions.every((version) => typeof version === 'string' && version.length > 0) && reversedVersions[0] !== reversedVersions[1] && reversedVersions[0] === versions?.[1] && reversedVersions[1] === versions?.[0]);
   if (
     !validVersions ||
     !validReversedVersions ||

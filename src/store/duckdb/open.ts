@@ -13,6 +13,7 @@ import { DUCKDB_PACKAGE, duckdbApi } from './native.ts';
 import { duckdbDialect } from './reconcile.ts';
 import { registerFunctions } from './sql-functions.ts';
 import { createStore } from './store.ts';
+import { createVectorWriteStage } from './vectors.ts';
 
 export const DB_FILENAME = 'cache.duckdb';
 // Independent of sqlite's SCHEMA_VERSION -- the two stores' cache shapes evolve separately (VARIANT frontmatter columns vs untyped).
@@ -30,7 +31,7 @@ interface DuckdbHandle {
 
 // `content` is a plain table (not FTS-virtual): the fts index is built over it lazily, only when a lexical query runs (lexical.ts), and read directly for contains() verification either way.
 // No tokenizer resolution: this store always uses the fts extension's default (porter) stemmer.
-async function ensureSchema(_handle: DuckdbHandle, conn: Connection, cfg: Config): Promise<void> {
+async function ensureSchema(handle: DuckdbHandle, conn: Connection, cfg: Config): Promise<void> {
   await conn.exec(`CREATE TABLE IF NOT EXISTS frontmatter ("path" TEXT PRIMARY KEY, "_mtime" DOUBLE, "_ctime" DOUBLE, "_size" INTEGER, "_parse_error" TEXT)`);
   await conn.exec(`CREATE TABLE IF NOT EXISTS content ("path" TEXT PRIMARY KEY, title TEXT, summary TEXT, text TEXT)`);
   await conn.exec(`CREATE TABLE IF NOT EXISTS preset_files ("path" TEXT, preset TEXT, PRIMARY KEY ("path", preset))`);
@@ -40,6 +41,7 @@ async function ensureSchema(_handle: DuckdbHandle, conn: Connection, cfg: Config
     // so the feature's shared reconcile-time INSERT/DELETE (features/embed.ts) names a column that exists on both stores.
     if (feature.name === 'embed') {
       await conn.exec(`CREATE TABLE IF NOT EXISTS embeddings ("path" TEXT, chunk INTEGER, start_line INTEGER, end_line INTEGER, scale REAL, vector FLOAT[${STORE_DIMS}], PRIMARY KEY ("path", chunk))`);
+      await createVectorWriteStage(handle.duckdb, STORE_DIMS);
       continue;
     }
     await feature.schema(conn);

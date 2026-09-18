@@ -1,5 +1,8 @@
 import assert from 'node:assert';
 import { join } from 'node:path';
+import { search } from 'sensemaking';
+import { STORE_DIMS } from '../../../../src/embed/types.ts';
+import { writeModel } from '../../../lib/model.ts';
 import { openConfig, tmpTree, writeNote } from '../../../lib/tree.ts';
 
 function duckdbTree(baseDir: string, presets?: Record<string, unknown>) {
@@ -40,6 +43,54 @@ describe('openDuckdb', () => {
       assert.equal(result.parsed, i === 0 ? 100 : 1);
       await result.store.close();
       writeNote(baseDir, 'd/note-0000.md', { frontmatter: { title: 'Note 0' }, body: `body edit ${i}` });
+    }
+  });
+
+  it('recreates vector staging after reopen and preserves earlier vectors', async () => {
+    const baseDir = tmpTree();
+    const embed = {
+      model: writeModel([
+        ['apple', 'pomme'],
+        ['stone', 'rock'],
+      ]),
+      provider: 'static' as const,
+    };
+    const open = () => openConfig({ store: 'duckdb', presets: { default: { include: ['**/*.md'] } }, embed, queries: {}, baseDir, configPath: null });
+    const appleVector = new Array<number>(STORE_DIMS).fill(0);
+    appleVector[0] = 1;
+    const stoneVector = new Array<number>(STORE_DIMS).fill(0);
+    stoneVector[1] = 1;
+
+    writeNote(baseDir, 'a.md', { body: 'apple' });
+    const first = await open();
+    try {
+      const firstHits = await search(first.store, first.cfg, 'pomme');
+      assert.deepEqual(
+        firstHits.map(({ path, via, similarity }) => ({ path, via, similarity })),
+        [{ path: 'a.md', via: 'vector', similarity: 1 }]
+      );
+      assert.deepEqual(await (await first.store.prepare('SELECT vector FROM embeddings WHERE "path" = ? AND chunk = 0')).get('a.md'), { vector: appleVector });
+    } finally {
+      await first.store.close();
+    }
+
+    writeNote(baseDir, 'b.md', { body: 'stone' });
+    const reopened = await open();
+    try {
+      const reopenedHits = await search(reopened.store, reopened.cfg, 'rock');
+      assert.deepEqual(
+        reopenedHits.map(({ path, via, similarity }) => ({ path, via, similarity })),
+        [
+          { path: 'b.md', via: 'vector', similarity: 1 },
+          { path: 'a.md', via: 'vector', similarity: 0 },
+        ]
+      );
+      assert.deepEqual(await (await reopened.store.prepare('SELECT "path", chunk, vector FROM embeddings ORDER BY "path", chunk')).all(), [
+        { path: 'a.md', chunk: 0, vector: appleVector },
+        { path: 'b.md', chunk: 0, vector: stoneVector },
+      ]);
+    } finally {
+      await reopened.store.close();
     }
   });
 

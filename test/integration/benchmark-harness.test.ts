@@ -736,10 +736,29 @@ describe('release comparison workload identity', () => {
 
   it('rejects mismatched reversed identities before they can change a verdict', () => {
     const forward = { versions: ['prior', 'local'], results: { prior: run('same'), local: { ...run('same'), map_ms: 20 } } };
-    const reversed = { versions: ['prior', 'local'], results: { prior: run('same'), local: run('different') } };
+    const reversed = { versions: ['local', 'prior'], results: { prior: run('same'), local: run('different') } };
     const row = classifyCompare(forward, reversed, { requireIdentity: true }).find((item) => item.key === 'map_ms');
     assert.equal(row?.verdict, 'failed');
     assert.match(row?.reason ?? '', /reversed workload identity/);
+  });
+
+  it('accepts only the exact reversed producer order', () => {
+    const forward = { versions: ['prior', 'local'], results: { prior: run('same'), local: { ...run('same'), map_ms: 20 } } };
+    const results = { prior: run('same'), local: { ...run('same'), map_ms: 20 } };
+    const valid = classifyCompare(forward, { versions: ['local', 'prior'], results }, { requireIdentity: true });
+    assert.ok(valid.some((item) => item.key === 'map_ms'));
+    assert.ok(!valid.some((item) => item.id === 'compare/validity'));
+
+    for (const versions of [
+      ['prior', 'local'],
+      ['local', 'other'],
+    ]) {
+      const invalid = classifyCompare(forward, { versions, results }, { requireIdentity: true });
+      assert.equal(invalid[0].id, 'compare/validity');
+      assert.ok('invalid' in invalid[0]);
+      assert.equal(invalid[0].invalid, true);
+      assert.match(invalid[0].reason ?? '', /compare artifact is incomplete/);
+    }
   });
 
   it('only requests a reversed run for a moved row with matching workload identities', () => {
@@ -850,11 +869,11 @@ describe('classifyCompare / classifyCrossGroup: a failed command blocks instead 
     const prior = classifyCompare(compareJson, null).find((c) => c.key === 'map_ms');
     assert.ok(prior && 'invalid' in prior);
     assert.equal(prior.invalid, true);
-    const reversed = { versions: ['0.1.0', 'local'], results: { '0.1.0': { map_ms: 80 }, local: { map_ms: 81, errors: { map_ms: 'reverse failed' } } } };
+    const reversed = { versions: ['local', '0.1.0'], results: { '0.1.0': { map_ms: 80 }, local: { map_ms: 81, errors: { map_ms: 'reverse failed' } } } };
     const reverseLocal = classifyCompare({ versions: ['0.1.0', 'local'], results: { '0.1.0': { map_ms: 80 }, local: { map_ms: 81 } } }, reversed).find((c) => c.key === 'map_ms');
     assert.ok(reverseLocal);
     assert.match(reverseLocal.reason ?? '', /reverse failed/);
-    const reverseBaseline = { versions: ['0.1.0', 'local'], results: { '0.1.0': { map_ms: 80, errors: { map_ms: 'reverse baseline failed' } }, local: { map_ms: 81 } } };
+    const reverseBaseline = { versions: ['local', '0.1.0'], results: { '0.1.0': { map_ms: 80, errors: { map_ms: 'reverse baseline failed' } }, local: { map_ms: 81 } } };
     const reverseBaselineOut = classifyCompare({ versions: ['0.1.0', 'local'], results: { '0.1.0': { map_ms: 80 }, local: { map_ms: 81 } } }, reverseBaseline);
     const reversePrior = reverseBaselineOut.find((c) => c.key === 'map_ms');
     assert.ok(reversePrior && 'invalid' in reversePrior);
@@ -875,7 +894,8 @@ describe('classifyCompare / classifyCrossGroup: a failed command blocks instead 
     const out = classifyCompare(empty, null);
     assert.ok('invalid' in out[0]);
     assert.equal(aggregateVerdict(out, []).verdict, 'BLOCK');
-    const reversedOut = classifyCompare({ versions: ['0.1.0', 'local'], results: { '0.1.0': { map_ms: 80 }, local: { map_ms: 81 } } }, empty);
+    const reversedEmpty = { ...empty, versions: ['local', '0.1.0'] };
+    const reversedOut = classifyCompare({ versions: ['0.1.0', 'local'], results: { '0.1.0': { map_ms: 80 }, local: { map_ms: 81 } } }, reversedEmpty);
     assert.ok('invalid' in reversedOut[0]);
     assert.equal(aggregateVerdict(reversedOut, []).verdict, 'BLOCK');
   });
@@ -1270,7 +1290,7 @@ describe('buildReport: present current artifacts must carry the current harness 
       { name: 'inner-missing', files: { 'compare.json': missingInner }, text: /compare: inner result local has no measure_version stamp/ },
       { name: 'present-null', files: { 'stress.json': null }, text: /stress: current artifact JSON is not an object/ },
       { name: 'malformed-shape', files: { 'compare.json': { measure_version: MEASURE_VERSION } }, text: /compare: compare artifact is incomplete/ },
-      { name: 'reverse-stale', files: { 'compare.json': compareArtifact(), 'compare-reversed.json': compareArtifact('fixture-old') }, text: /compare-reversed: current artifact measure_version fixture-old does not match current/ },
+      { name: 'reverse-stale', files: { 'compare.json': compareArtifact(), 'compare-reversed.json': { ...compareArtifact('fixture-old'), versions: ['local', '0.1.0'] } }, text: /compare-reversed: current artifact measure_version fixture-old does not match current/ },
       { name: 'quality-stale', files: { 'eval-nfcorpus.json': { variants: {}, measure_version: 'fixture-old' } }, text: /eval-nfcorpus: current artifact measure_version fixture-old does not match current/ },
     ];
     for (const testCase of cases) {

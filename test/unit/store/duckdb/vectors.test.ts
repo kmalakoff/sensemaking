@@ -2,7 +2,8 @@ import { DuckDBInstance } from '@duckdb/node-api';
 import assert from 'assert';
 import { toStore } from '../../../../src/embed/query.ts';
 import { createConnection } from '../../../../src/store/duckdb/connection.ts';
-import { scanCandidates, scanSimilar, writeVectorBatch } from '../../../../src/store/duckdb/vectors.ts';
+import { createVectorWriteStage, scanCandidates, scanSimilar, writeVectorBatch } from '../../../../src/store/duckdb/vectors.ts';
+import { withTransaction } from '../../../../src/store/transaction.ts';
 import type { Connection } from '../../../../src/store/types.ts';
 import { assertSeparatedScores, quantizeVector, separatedVectorFixture, VECTOR_DIMS } from '../../../lib/vectors.ts';
 
@@ -15,6 +16,7 @@ async function makeDb(dims = DIMS) {
     duckdb = await instance.connect();
     const conn = createConnection(duckdb);
     await conn.exec(`CREATE TABLE embeddings ("path" TEXT, chunk INTEGER, start_line INTEGER, end_line INTEGER, scale REAL, vector FLOAT[${dims}], PRIMARY KEY ("path", chunk))`);
+    await createVectorWriteStage(duckdb, dims);
     return { instance, duckdb, conn };
   } catch (err) {
     try {
@@ -237,7 +239,7 @@ describe('writeVectorBatch (duckdb)', () => {
       await insertPending(conn, 'b.md', 0);
 
       await writeVectorBatch(duckdb, conn, DIMS, [
-        { path: 'a.md', chunk: 0, scale: 0.5, vector: Buffer.from(Int8Array.from([42, 0, 0, 0, 0, 0, 0, 0]).buffer) },
+        { path: 'a.md', chunk: 0, scale: 0.1, vector: Buffer.from(Int8Array.from([0, 3, 1, -2, 0, 0, 0, 0]).buffer) },
         { path: 'b.md', chunk: 0, scale: 0.25, vector: Buffer.from(Int8Array.from([-7, 0, 0, 0, 0, 0, 0, 0]).buffer) },
       ]);
 
@@ -245,7 +247,55 @@ describe('writeVectorBatch (duckdb)', () => {
       assert.deepEqual(await pendingStmt.all(), [{ path: 'a.md', chunk: 1 }]);
 
       const row = (await (await conn.prepare('SELECT vector FROM embeddings WHERE "path" = ? AND chunk = ?')).get('a.md', 0)) as { vector: number[] };
-      assert.equal(row.vector[0], 21, 'dequantized: int8 42 * scale 0.5');
+      assert.deepEqual(row.vector, Array.from(Float32Array.from([0, 0.3, 0.1, -0.2, 0, 0, 0, 0])));
+    });
+  });
+
+  it('clears staged rows between calls', async () => {
+    await withDb(async (duckdb, conn) => {
+      await insertPending(conn, 'a.md', 0);
+      await insertPending(conn, 'b.md', 0);
+      await writeVectorBatch(duckdb, conn, DIMS, [{ path: 'a.md', chunk: 0, scale: 0.5, vector: Buffer.from(Int8Array.from([2, 0, 0, 0, 0, 0, 0, 0]).buffer) }]);
+      await conn.exec(`UPDATE embeddings SET vector = NULL WHERE "path" = 'a.md'`);
+
+      await writeVectorBatch(duckdb, conn, DIMS, [{ path: 'b.md', chunk: 0, scale: 0.25, vector: Buffer.from(Int8Array.from([4, 0, 0, 0, 0, 0, 0, 0]).buffer) }]);
+
+      const rows = (await (await conn.prepare('SELECT "path", vector FROM embeddings ORDER BY "path"')).all()) as Array<{
+        path: string;
+        vector: number[] | null;
+      }>;
+      assert.deepEqual(rows, [
+        { path: 'a.md', vector: null },
+        { path: 'b.md', vector: Array.from(Float32Array.from([1, 0, 0, 0, 0, 0, 0, 0])) },
+      ]);
+    });
+  });
+
+  it('joins an outer transaction rollback and remains reusable', async () => {
+    await withDb(async (duckdb, conn) => {
+      await insertPending(conn, 'a.md', 0);
+      const row = {
+        path: 'a.md',
+        chunk: 0,
+        scale: 0.5,
+        vector: Buffer.from(Int8Array.from([2, 0, 0, 0, 0, 0, 0, 0]).buffer),
+      };
+
+      await assert.rejects(
+        withTransaction(conn, async () => {
+          await writeVectorBatch(duckdb, conn, DIMS, [row]);
+          throw new Error('rollback vector write');
+        }),
+        /rollback vector write/
+      );
+      assert.deepEqual(await (await conn.prepare('SELECT vector FROM embeddings WHERE "path" = ?')).get('a.md'), {
+        vector: null,
+      });
+
+      await writeVectorBatch(duckdb, conn, DIMS, [row]);
+      assert.deepEqual(await (await conn.prepare('SELECT vector FROM embeddings WHERE "path" = ?')).get('a.md'), {
+        vector: Array.from(Float32Array.from([1, 0, 0, 0, 0, 0, 0, 0])),
+      });
     });
   });
 
