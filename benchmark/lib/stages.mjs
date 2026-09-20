@@ -15,6 +15,7 @@
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { STORE_NAMES } from 'sensemaking';
+import { LIVE_SUITE_ARGV, LIVE_SUITE_ENV } from './gates.mjs';
 
 export const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 export const MINUTES = 60_000;
@@ -71,7 +72,7 @@ export function buildStages() {
         { id: 'npm-test', argv: ['npm', 'test'], timeout: 10 * MINUTES, quiet: false, owedBy: 'always' },
         { id: 'test-engines', argv: ['npm', 'run', 'test:engines'], timeout: 15 * MINUTES, quiet: false, owedBy: 'test-engines' },
         // RELEASING.md step 1: the live suite needs .env.test's real endpoint credentials.
-        { id: 'live-suite', argv: ['npm', 'test'], timeout: 15 * MINUTES, quiet: false, owedBy: 'live-suite', env: { SENSE_TEST_ENV: 'local-release' } },
+        { id: 'live-suite', argv: LIVE_SUITE_ARGV, timeout: 15 * MINUTES, quiet: false, owedBy: 'live-suite', env: LIVE_SUITE_ENV },
         // Captures the last release straight from its cached npm install, so no checkout and no
         // second build. The pipeline runs it; nobody drives the capture pair by hand.
         { id: 'store-dump', argv: ['node', 'benchmark/store-dump-ab.mjs'], timeout: 30 * MINUTES, quiet: false, owedBy: 'store-dump', out: true },

@@ -3,12 +3,14 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { loadavg } from 'node:os';
 import { join } from 'node:path';
-import { open, STORE_NAMES } from 'sensemaking';
+import { STORE_NAMES } from 'sensemaking';
 import { NATIVE_CAPABILITY_READINESS_POLICY, nativeCapabilityEnvironment, runNativeCapability } from '../../benchmark/lib/native-capability.mjs';
 import { compareNativeCapabilityArtifacts } from '../../benchmark/lib/native-capability-compare.mjs';
 import { quietMachineCheck } from '../../benchmark/lib/quiet-machine.mjs';
 import { identityHash } from '../../benchmark/lib/workload-identity.mjs';
 import { STORE_DIMS } from '../../src/embed/types.ts';
+import { openStoreFor } from '../../src/store/index.ts';
+import type { BuildRequirement } from '../../src/store/open.ts';
 import { packageRoot, scratchDir } from '../lib/scratch.ts';
 
 const policy = { ...NATIVE_CAPABILITY_READINESS_POLICY, fingerprint: identityHash(NATIVE_CAPABILITY_READINESS_POLICY) };
@@ -24,6 +26,8 @@ type ComparisonArtifact = NativeArtifact & {
   };
   timing: { valid: boolean; entry: LoadObservation; exit: LoadObservation; error?: string };
 };
+
+const openDiagnosticStore = (cfg: Parameters<typeof openStoreFor>[0]) => openStoreFor(cfg, { build: true, requirements: new Set<BuildRequirement>(['core', 'lexical']) });
 
 function comparisonFixture(artifacts: NativeArtifact[]): ComparisonArtifact[] {
   // Comparator policy fixture only: real-store output is retained, but these zero-load values do
@@ -81,7 +85,7 @@ describe('native capability comparison preflight', () => {
     for (const store of STORE_NAMES) {
       realArtifacts.push(
         await runNativeCapability({
-          open,
+          open: openDiagnosticStore,
           store,
           storeNames: STORE_NAMES,
           root: scratchDir(`native-compare-${store}`),
@@ -140,7 +144,7 @@ describe('native capability comparison preflight', () => {
     for (const store of STORE_NAMES) {
       artifacts.push(
         await runNativeCapability({
-          open,
+          open: openDiagnosticStore,
           store,
           storeNames: STORE_NAMES,
           root: scratchDir(`native-compare-narrow-${store}`),
@@ -166,7 +170,7 @@ describe('native capability comparison preflight', () => {
     for (const store of STORE_NAMES) {
       artifacts.push(
         await runNativeCapability({
-          open,
+          open: openDiagnosticStore,
           store,
           storeNames: STORE_NAMES,
           root: scratchDir(`native-compare-structured-${store}`),

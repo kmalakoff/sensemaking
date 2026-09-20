@@ -8,7 +8,8 @@ const OWNERS: Record<GateName, boolean> = {
   'hf-network': env === 'ci' || env === 'local-release',
   ollama: env === 'local-release',
   lmstudio: env === 'local-release',
-  cohere: env === 'local-release',
+  // Hosted quota is owner-controlled; setting its key enables strict API assertions.
+  cohere: false,
 };
 
 export function gate(ctx: Mocha.Context, name: GateName, available: boolean, fix: string): void {

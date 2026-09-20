@@ -3,6 +3,7 @@
 import { identityHash } from './workload-identity.mjs';
 
 export const DUCKDB_LEXICAL_COST_SCHEMA = 'duckdb-lexical-cost-v1';
+export const DUCKDB_LEXICAL_COST_METHOD_VERSION = 'duckdb-lexical-cost-method-v2-readiness-boundary-counted';
 export const DUCKDB_LEXICAL_COST_NOTES = [6, 500];
 export const DUCKDB_LEXICAL_COST_REPETITIONS = 3;
 
@@ -93,9 +94,9 @@ function observeConnection(conn) {
       const totalMs = performance.now() - started;
       const prepare = spans.filter(({ phase }) => phase === 'prepare');
       const execute = spans.filter(({ phase }) => phase === 'execute_read_convert');
-      if (prepare.length !== 1 || execute.length !== 1) throw new Error(`expected one prepare and one execute/read/convert boundary, got ${prepare.length} and ${execute.length}`);
-      const prepareMs = prepare[0].ms;
-      const executeReadConvertMs = execute[0].ms;
+      if (prepare.length === 0 || execute.length === 0 || prepare.length !== execute.length) throw new Error(`expected nonempty balanced prepare and execute/read/convert boundaries, got ${prepare.length} and ${execute.length}`);
+      const prepareMs = prepare.reduce((total, span) => total + span.ms, 0);
+      const executeReadConvertMs = execute.reduce((total, span) => total + span.ms, 0);
       const outsideConnectionMs = totalMs - prepareMs - executeReadConvertMs;
       for (const [value, label] of [
         [totalMs, 'total_ms'],
@@ -108,10 +109,13 @@ function observeConnection(conn) {
         result,
         timing: {
           total_ms: totalMs,
+          prepare_count: prepare.length,
           prepare_ms: prepareMs,
+          execute_read_convert_count: execute.length,
           execute_read_convert_ms: executeReadConvertMs,
           outside_connection_ms: outsideConnectionMs,
-          limitation: 'execute_read_convert_ms is the @duckdb/node-api run/read/JavaScript-conversion boundary, not pure native execution; outside_connection_ms includes query construction and, for phrases, JavaScript phrase verification.',
+          limitation:
+            'timings include the durable FTS readiness catalog query and lexical query; prepare_ms and execute_read_convert_ms sum every observed @duckdb/node-api prepare and run/read/JavaScript-conversion boundary, not pure native execution; outside_connection_ms includes query construction and, for phrases, JavaScript phrase verification.',
         },
       };
     },
@@ -137,7 +141,7 @@ async function closeNative(instance, duckdb) {
   if (disconnectError) throw disconnectError;
 }
 
-async function sample({ DuckDBInstance, createConnection, createLexicalIndex, registerFunctions, notes, repetition }) {
+async function sample({ DuckDBInstance, createConnection, createLexicalIndex, prepareLexical, registerFunctions, notes, repetition }) {
   const rows = fixtureRows(notes);
   const instance = await DuckDBInstance.create(':memory:');
   let duckdb;
@@ -154,6 +158,7 @@ async function sample({ DuckDBInstance, createConnection, createLexicalIndex, re
     for (const row of rows) await insert.run(row.path, row.title, row.summary, row.text);
     const count = Number((await (await conn.prepare('SELECT COUNT(*) AS n FROM content')).get())?.n);
     if (count !== notes) throw new Error(`expected ${notes} authored content rows, got ${count}`);
+    await prepareLexical(conn);
     await conn.exec('CREATE TEMP TABLE _duckdb_lexical_cost_scope ("path" TEXT PRIMARY KEY)');
     await (await conn.prepare('INSERT INTO _duckdb_lexical_cost_scope VALUES (?)')).run('punctuation.md');
 
@@ -206,13 +211,13 @@ async function sample({ DuckDBInstance, createConnection, createLexicalIndex, re
   return result;
 }
 
-export async function runDuckdbLexicalCost({ DuckDBInstance, createConnection, createLexicalIndex, registerFunctions }) {
+export async function runDuckdbLexicalCost({ DuckDBInstance, createConnection, createLexicalIndex, prepareLexical, registerFunctions }) {
   const samples = [];
   const errors = [];
   for (const notes of DUCKDB_LEXICAL_COST_NOTES) {
     for (let repetition = 1; repetition <= DUCKDB_LEXICAL_COST_REPETITIONS; repetition++) {
       try {
-        samples.push({ notes, ...(await sample({ DuckDBInstance, createConnection, createLexicalIndex, registerFunctions, notes, repetition })) });
+        samples.push({ notes, ...(await sample({ DuckDBInstance, createConnection, createLexicalIndex, prepareLexical, registerFunctions, notes, repetition })) });
       } catch (error) {
         const message = errorMessages(error).join('; ');
         samples.push({ notes, repetition, error: message });
@@ -237,7 +242,8 @@ export async function runDuckdbLexicalCost({ DuckDBInstance, createConnection, c
     status: errors.length === 0 ? 'success' : 'invalid-measurement',
     valid: errors.length === 0,
     errors,
-    method: 'actual createLexicalIndex/queryLexical with temporary observation of real Connection.prepare and Statement.all methods',
+    method_version: DUCKDB_LEXICAL_COST_METHOD_VERSION,
+    method: 'actual prepareFts followed by createLexicalIndex/queryLexical with temporary observation of every real Connection.prepare and Statement.all method boundary, including FTS readiness verification',
     timing_evidence: 'timer-only diagnostic; callers need separate machine-readiness evidence before treating samples as clean performance evidence',
     fixture: { ...fixture, fingerprint: identityHash(fixture) },
     samples,

@@ -13,6 +13,7 @@ import { applyDeterministicMutation, captureFileManifest, captureMutationFiles, 
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const CLI = join(ROOT, 'bin', 'cli.js');
+const CRAWL_ARGS = ['sql', 'SELECT COUNT(*) AS n FROM frontmatter', '--format', 'json'];
 const WORK_ROOT = join(ROOT, '.tmp', 'sweep-work');
 
 const DIMENSION_NAMES = ['fields', 'headings', 'links', 'filesize', 'notes', 'bulk', 'probes', 'presets'];
@@ -202,7 +203,7 @@ async function columnLimitProbe(dimension) {
     const work = workingCopy(src);
     let result;
     try {
-      const r = runCli(work, ['status']);
+      const r = runCli(work, CRAWL_ARGS);
       result = { status: r.status, stdout: (r.stdout ?? '').trim().slice(0, 500), stderr: (r.stderr ?? '').trim().slice(0, 500) };
     } finally {
       safeRmSync(work, { recursive: true, force: true });
@@ -228,7 +229,7 @@ async function adversarialProbe() {
   let result;
   try {
     const t0 = process.hrtime.bigint();
-    const r = spawnSync(process.execPath, [CLI, 'status'], { cwd: work, encoding: 'utf8', maxBuffer: 64e6, timeout: 15_000 });
+    const r = spawnSync(process.execPath, [CLI, ...CRAWL_ARGS], { cwd: work, encoding: 'utf8', maxBuffer: 64e6, timeout: 15_000 });
     const ms = Math.round(Number(process.hrtime.bigint() - t0) / 1e6);
     const timedOut = r.signal !== null || (r.error && r.error.code === 'ETIMEDOUT');
     result = timedOut ? { ms, status: 'TIMEOUT', signal: r.signal } : { ms, status: r.status, stderr: (r.stderr ?? '').trim().slice(0, 500) };
@@ -288,7 +289,7 @@ async function presetsProbe() {
   const work = workingCopy(src);
   try {
     const t = process.hrtime.bigint();
-    const cold = requireCommand(runCli(work, ['status']), 'preset cold crawl');
+    const cold = requireCommand(runCli(work, CRAWL_ARGS), 'preset cold crawl');
     const cold_crawl_ms = Math.round(Number(process.hrtime.bigint() - t) / 1e6);
 
     requireCommand(runCli(work, ['search', 'the', '--k', '10']), 'preset semantic warm-up');
@@ -299,7 +300,7 @@ async function presetsProbe() {
     const pass = coverage.raw?.embedded === 0 && coverage.raw?.files > 0 && coverage.default?.embedded === coverage.default?.files && coverage.default?.files > 0;
     if (!pass) throw new Error(`preset embedding derivation failed: ${JSON.stringify(coverage)}`);
     record('presets', { notes: spec.notes }, { cold_crawl_ms, coverage, pass });
-    console.log(`  cold crawl: ${cold_crawl_ms} ms (status exit ${cold.status})`);
+    console.log(`  cold crawl: ${cold_crawl_ms} ms (core query exit ${cold.status})`);
     console.log(`  embedding derivation: ${pass ? 'PASS' : 'FAIL'} -- default files=${coverage.default?.files} embedded=${coverage.default?.embedded}; raw files=${coverage.raw?.files} embedded=${coverage.raw?.embedded} (must be 0)`);
 
     const defaultR = timed(work, ['search', 'the', '--k', '10']);

@@ -14,6 +14,7 @@ import { identityHash } from '../lib/workload-identity.mjs';
 
 const ROOT = join(fileURLToPath(new URL('../..', import.meta.url)));
 const DIST_INDEX = join(ROOT, 'dist', 'esm', 'index.js');
+const DIST_STORE_INDEX = join(ROOT, 'dist', 'esm', 'store', 'index.js');
 const DIST_DIMS = join(ROOT, 'dist', 'esm', 'embed', 'types.js');
 const TMP_ROOT = join(ROOT, '.tmp', 'native-capability');
 
@@ -90,9 +91,10 @@ mkdirSync(TMP_ROOT, { recursive: true });
 let artifact;
 try {
   assertBuilt();
-  const [{ open, STORE_NAMES }, { STORE_DIMS }] = await Promise.all([import(pathToFileURL(DIST_INDEX).href), import(pathToFileURL(DIST_DIMS).href)]);
+  const [{ STORE_NAMES }, { openStoreFor }, { STORE_DIMS }] = await Promise.all([import(pathToFileURL(DIST_INDEX).href), import(pathToFileURL(DIST_STORE_INDEX).href), import(pathToFileURL(DIST_DIMS).href)]);
   if (!STORE_NAMES.includes(store)) throw new Error(`--store must be one of ${STORE_NAMES.join(', ')}`);
-  const result = await runNativeCapability({ open, store, storeNames: STORE_NAMES, root: TMP_ROOT, packageRoot: ROOT, harnessRoot: ROOT, storeDims: STORE_DIMS, notes, repetitions: DEFAULT_NATIVE_REPETITIONS, caseId, environmentBefore: environment });
+  const openDiagnosticStore = (cfg) => openStoreFor(cfg, { build: true, requirements: new Set(['core', 'lexical']) });
+  const result = await runNativeCapability({ open: openDiagnosticStore, store, storeNames: STORE_NAMES, root: TMP_ROOT, packageRoot: ROOT, harnessRoot: ROOT, storeDims: STORE_DIMS, notes, repetitions: DEFAULT_NATIVE_REPETITIONS, caseId, environmentBefore: environment });
   if (identityHash(result.implementation_stability.before.environment) !== identityHash(environment)) {
     result.errors.push('readiness entry environment did not match native measurement start');
     result.valid = false;

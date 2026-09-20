@@ -66,11 +66,16 @@ describe('portable quality query form', () => {
           ...result,
           execution: { ...executionEvidence({ argv: ['quality', '--query-form', 'bare-and'], config: { store: name, embed: { model: 'fixture-model', provider: 'static', url: 'https://secret.example' } } }), invocation_kind: 'requested invocation projection' },
           model_observation: { provider: 'static', model: 'fixture-model', revision: 'unknown', resolved_identity: 'unverified' },
-          errors: 0,
-          error_details: [],
+          errors: result.errorDetails.length,
+          error_details: result.errorDetails,
         });
+        assert.equal(evidence.incomplete, false);
+        assert.equal(evidence.errors, 0);
+        assert.deepEqual(evidence.error_details, []);
         assert.deepEqual(evidence.per_query.latin.paths, ['both.md']);
         assert.deepEqual(evidence.per_query.thai.paths, ['thai-both.md']);
+        assert.ok(Object.hasOwn(evidence.per_query, 'empty'), `${name}: empty query evidence was not recorded`);
+        assert.deepEqual(evidence.per_query.empty.paths, [], `${name}: recorded empty query paths must stay empty`);
         assert.equal(evidence.execution.config.embed.model, 'fixture-model');
         assert.match(evidence.execution.config.embed.url.redacted_sha256, /^[0-9a-f]{64}$/);
         assert.equal(evidence.execution.invocation_kind, 'requested invocation projection');

@@ -53,13 +53,13 @@ try {
   if (!entry.passed) throw new Error(`quiet-machine preflight refused on ${entry.environment.machine.platform}: load ${entry.load.load1}`);
   assertBuilt();
   before = fixedWorkProvenance({ packageRoot: ROOT, harnessFiles: HARNESS_FILES, store: 'duckdb', nativeObservation: { status: 'deferred until native open' } });
-  const [{ DuckDBInstance }, { createConnection }, { createLexicalIndex }, { registerFunctions }] = await Promise.all([
+  const [{ DuckDBInstance }, { createConnection }, { createLexicalIndex, prepareFts }, { registerFunctions }] = await Promise.all([
     import('@duckdb/node-api'),
     import(pathToFileURL(join(ROOT, 'dist', 'esm', 'store', 'duckdb', 'connection.js')).href),
     import(pathToFileURL(join(ROOT, 'dist', 'esm', 'store', 'duckdb', 'lexical.js')).href),
     import(pathToFileURL(join(ROOT, 'dist', 'esm', 'store', 'duckdb', 'sql-functions.js')).href),
   ]);
-  const result = await runDuckdbLexicalCost({ DuckDBInstance, createConnection, createLexicalIndex, registerFunctions });
+  const result = await runDuckdbLexicalCost({ DuckDBInstance, createConnection, createLexicalIndex, prepareLexical: prepareFts, registerFunctions });
   const errors = [...result.errors];
   const exit = readinessObservation();
   if (!exit.passed) errors.push(`quiet-machine readiness lost: load ${exit.load.load1}`);
@@ -84,6 +84,7 @@ try {
 } catch (error) {
   artifact = {
     schema: 'duckdb-lexical-cost-v1',
+    method_version: 'duckdb-lexical-cost-method-v2-readiness-boundary-counted',
     status: entry.passed ? 'invalid-measurement' : 'refused-preflight',
     valid: false,
     errors: errorMessages(error),

@@ -14,12 +14,26 @@ Subagents dispatched during a release are spawned with `model: sonnet`. Reviews 
    npm run benchmark -- --dry-run        # selected stages, reasons, and historical-cost estimate; no measurement
    ```
 
+   When the ordinary estimate reports an unknown live-suite cost, measure that focused stage once
+   before the gate:
+
+   ```bash
+   node benchmark/tools/live-suite-cost.ts
+   ```
+
+   The tool records a provenance-bound cost under `.tmp/live-suite-cost/`. The artifact contributes
+   an estimate only; the ordinary gate still runs the owed live suite and never treats the bootstrap
+   as completed or reusable coverage. A failed, stale, or mismatched artifact leaves the cost
+   unknown and ordinary refuses before execution.
+
    `ordinary` is the default assessment. It runs the selected common correctness and matched-input
    current-store work plus full portable NFCorpus on every offered store. `deep` explicitly adds
    portable FEVER on every store, the large scale/stress workloads, and the legacy SQLite OR-bag
    continuity rows. The dry run exposes the profile, selected requirements, reasons, and a
    historical execution estimate before work begins. The ordinary 10–20 minute target is an
    estimate, not a measured promise for this machine or diff.
+
+   The gate already enforces per-stage process-tree timeouts. Use those for hang protection; do not add a whole-run kill timer derived from the historical estimate or target duration, which can interrupt healthy later stages. When elapsed time exceeds the estimate, inspect stage progress. Any additional overall deadline must come from an explicit execution budget, and expiry means an incomplete assessment, not a performance regression.
 
    **Changed capabilities expand the common gate before it runs.** Common work owed by the diff
    cannot be skipped by a profile or flag. When an ordinary run owes a baseline assessment but no
@@ -53,7 +67,7 @@ Subagents dispatched during a release are spawned with `model: sonnet`. Reviews 
 
    The gate runs every owed gate itself, the Obsidian parity check and the `store-dump` A/B included: the parity step opens the vault named by `SENSE_TEST_OBSIDIAN_VAULT`, and the A/B captures the last release from the npm install `compare-versions` already caches, so nothing is checked out or built twice. A step whose prerequisite is genuinely absent on the machine is reported owed-and-unmet rather than skipped quietly.
 
-   `test/integration/live.test.ts` is the part CI cannot run: it talks to real endpoints, one gate variable per [INTEGRATIONS.md](INTEGRATIONS.md) row, read from `.env.test` (gitignored). The gate runs it when the diff owes it, and in that mode a gate this machine owes and lacks fails outright, naming the fix, rather than skipping silently.
+   `test/integration/live.test.ts` is the part CI cannot run: it talks to real endpoints, one gate variable per [INTEGRATIONS.md](INTEGRATIONS.md) row, read from `.env.test` (gitignored). The gate runs it when the diff owes it. Ollama and LM Studio are required in local-release mode and fail when unavailable. Cohere is optional because its hosted quota is limited: leave `SENSE_TEST_COHERE_KEY` commented out between deliberate checks. When the key is set, API failures, authentication errors and quota errors fail the tests; they never become skips.
 
    ```
    SENSE_TEST_COHERE_KEY=...                          # cohere row

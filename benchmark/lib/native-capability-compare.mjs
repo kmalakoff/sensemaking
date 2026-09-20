@@ -2,7 +2,7 @@
 // not classify performance, change a gate, or equate fixed-path SQL reads with search hydration.
 
 import { MEASURE_VERSION } from './measure.mjs';
-import { MAX_NATIVE_NOTES, MAX_NATIVE_REPETITIONS, NATIVE_CAPABILITY_HARNESS_FILES, NATIVE_CAPABILITY_READINESS_POLICY, NATIVE_CAPABILITY_ROWS, NATIVE_CAPABILITY_SCHEMA, NATIVE_CAPABILITY_VECTOR_DIMS, nativeCapabilityContract } from './native-capability.mjs';
+import { MAX_NATIVE_NOTES, MAX_NATIVE_REPETITIONS, NATIVE_CAPABILITY_HARNESS_FILES, NATIVE_CAPABILITY_METHOD_VERSION, NATIVE_CAPABILITY_READINESS_POLICY, NATIVE_CAPABILITY_ROWS, NATIVE_CAPABILITY_SCHEMA, NATIVE_CAPABILITY_VECTOR_DIMS, nativeCapabilityContract } from './native-capability.mjs';
 import { quietMachineCheck } from './quiet-machine.mjs';
 import { identityHash } from './workload-identity.mjs';
 
@@ -154,6 +154,7 @@ function validateArtifact(artifact) {
   assert(artifact && typeof artifact === 'object', 'artifact is not an object');
   assert(artifact.schema === NATIVE_CAPABILITY_SCHEMA, `unsupported schema ${artifact.schema ?? 'missing'}`);
   assert(artifact.measure_version === MEASURE_VERSION, `${artifact.store ?? 'unknown'} measure_version ${artifact.measure_version ?? 'missing'} does not match current ${MEASURE_VERSION}`);
+  assert(artifact.method_version === NATIVE_CAPABILITY_METHOD_VERSION, `${artifact.store ?? 'unknown'} method_version ${artifact.method_version ?? 'missing'} does not match current ${NATIVE_CAPABILITY_METHOD_VERSION}`);
   assert(STORES.includes(artifact.store), `unknown store ${artifact.store ?? 'missing'}`);
   assert(artifact.status === 'success', `${artifact.store} artifact status is not successful`);
   assert(artifact.valid === true && Array.isArray(artifact.errors) && artifact.errors.length === 0, `${artifact.store} correctness is invalid`);

@@ -20,7 +20,7 @@ import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { releaseChanges } from './lib/changes.mjs';
 import { runStageSteps, stepOutputEvidence } from './lib/gate-runner.mjs';
-import { assertCompatibleSelection, DEFAULT_PROFILE, ordinaryCostRefusal, PROFILES, profileReasons, remainingCost, resolveRetainedQualityRequirement, retainedQualityForSitting, reversedCompareAction, stepStatus } from './lib/gates.mjs';
+import { assertCompatibleSelection, DEFAULT_PROFILE, ordinaryCostRefusal, PROFILES, profileReasons, readLiveSuiteCost, remainingCost, resolveRetainedQualityRequirement, retainedQualityForSitting, reversedCompareAction, stepStatus } from './lib/gates.mjs';
 import { describeLoad, topProcesses } from './lib/quiet-machine.mjs';
 import { assertBuilt } from './lib/require-build.mjs';
 import { treeFingerprint } from './lib/tree-fingerprint.mjs';
@@ -53,10 +53,14 @@ const ESTIMATE_REPORT = '2026-09-09-0.24.0-release-gate.json';
 
 function estimateEvidence() {
   const report = JSON.parse(readFileSync(join(ROOT, 'benchmark', 'reports', ESTIMATE_REPORT), 'utf8'));
-  return {
+  const historical = {
     steps: Object.fromEntries(Object.entries(report.steps_status ?? {}).map(([id, step]) => [id, Number.isFinite(step?.elapsed_ms) ? step.elapsed_ms : null])),
     source: `${ESTIMATE_REPORT}, release ${report.release_version ?? 'unknown'} on ${report.machine ?? 'unknown machine'}; execution only, excludes setup and quiet waits`,
   };
+  const live = readLiveSuiteCost(ROOT, packageVersion());
+  if (live) historical.steps['live-suite'] = live.elapsed_ms;
+  historical.sources = live ? { 'live-suite': live.source } : {};
+  return historical;
 }
 
 const estimates = estimateEvidence();
@@ -111,6 +115,7 @@ function printSelection(changes, selectionResult) {
   console.log(`remaining work: ${estimate.remaining_steps.length > 0 ? estimate.remaining_steps.map((step) => step.id).join(', ') : 'none'}`);
   console.log(`reused work: ${estimate.reused_steps.length > 0 ? estimate.reused_steps.join(', ') : 'none'}`);
   console.log(`estimate basis: ${estimate.source}`);
+  for (const [id, source] of Object.entries(estimate.sources ?? {})) console.log(`estimate source ${id}: ${source}`);
 }
 
 // Versions read from the built package, never typed. Absent (no build yet) reads as null rather
@@ -164,7 +169,7 @@ const { reasons, owed, retainedQuality } = selectionResult;
 
 assertCompatibleSelection(priorSitting, { lastTag, paths, reasons, profile, retainedQuality });
 const reusable = (step) => resuming && doneOnResume(step.id, priorSitting?.steps?.[step.id], accepted);
-const estimate = { source: estimates.source, ...remainingCost(selectionResult.selected, estimates.steps, reusable) };
+const estimate = { source: estimates.source, sources: estimates.sources, ...remainingCost(selectionResult.selected, estimates.steps, reusable) };
 printSelection(changes, { ...selectionResult, estimate });
 if (dryRun) process.exit(0);
 const refusal = ordinaryCostRefusal(profile, estimate);

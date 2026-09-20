@@ -157,9 +157,19 @@ const coldSamples = [];
 let coldFailed = false;
 for (let i = 0; i < COLD_REPS; i++) {
   safeRmSync(join(tree, '.sense'), { recursive: true, force: true });
-  const r = fail(timed(['status'], 1, 'cold_crawl_ms'), 'cold_crawl_ms'); // first open = full crawl
-  if (r) coldSamples.push(r.ms);
-  else coldFailed = true;
+  // Status is observational. A core SQL query builds on both old and current packages,
+  // without preparing document vectors, and gives an independently checkable result.
+  const r = fail(timed(COUNT_ARGS, 1, 'cold_crawl_ms'), 'cold_crawl_ms');
+  if (r) {
+    try {
+      const rows = JSON.parse(r.repetitions[0].stdout);
+      if (!Array.isArray(rows) || rows.length !== 1 || rows[0].n !== mdFiles.length) throw new Error(`cold crawl expected ${mdFiles.length} indexed notes, got ${JSON.stringify(rows)}`);
+      coldSamples.push(r.ms);
+    } catch (error) {
+      addError('cold_crawl_ms', { message: `repetition ${i + 1}: ${error.message}` });
+      coldFailed = true;
+    }
+  } else coldFailed = true;
 }
 const coldMs = coldFailed ? null : medianOf(coldSamples);
 const warm = fail(timed(COUNT_ARGS.slice(0, 2), 5, 'warm_query_ms'), 'warm_query_ms');
@@ -474,6 +484,27 @@ const baselineBulk = async (repTree, runNumber) => {
   bulkCanonicalFingerprint = verifyRepeatFingerprint(bulkCanonicalFingerprint, observed.fingerprint, 'bulk canonical index');
   return { buildMs, deadlineMs, observed };
 };
+// Prepare configured capabilities before watcher startup so bulk_watch_ms measures the warm
+// watcher mtime update; cold/core rows retain their deliberate no-vector baseline.
+const prepareWatcher = (repTree, runNumber) => {
+  const args = VERBS.has('build') ? ['build'] : vectorArgs('the');
+  const started = process.hrtime.bigint();
+  const result = runAt(repTree, args);
+  const preparation = {
+    argv: args,
+    elapsed_ms: Number(process.hrtime.bigint() - started) / 1e6,
+    status: result.status ?? null,
+    signal: result.signal ?? null,
+    stderr: result.stderr ?? '',
+    error: result.error?.message ?? null,
+  };
+  if (result.status !== 0 || result.signal || result.error) {
+    const failure = new Error(`watch preparation failed: ${result.error?.message ?? `exit ${result.status ?? 'null'}${result.signal ? ` (${result.signal})` : ''}: ${(result.stderr ?? '').split('\n').find(Boolean) ?? 'no stderr'}`}`);
+    failure.repetitions = [{ run: runNumber, ...preparation }];
+    throw failure;
+  }
+  return preparation;
+};
 const mutateBulk = (repTree) => {
   const selected = new Set(BULK_PATHS);
   const files = canonicalManifest.filter(({ rel }) => selected.has(rel));
@@ -508,6 +539,7 @@ if (VERBS.has('watch')) {
     try {
       await freshBulkTree(`bulk-watch repetition ${i + 1}`, async (repTree, copyMs) => {
         const baseline = await baselineBulk(repTree, i + 1);
+        const watcherPreparation = prepareWatcher(repTree, i + 1);
         const watcher = startMeasuredWatcher({ pkgRoot, configPath: join(repTree, 'sense.config.json') });
         const watcherDeadlineMs = 5_000 + baseline.deadlineMs;
         const watcherStarted = process.hrtime.bigint();
@@ -534,6 +566,7 @@ if (VERBS.has('watch')) {
           bulkState.watch.preparation.push({
             copy_ms: copyMs,
             baseline_build_ms: baseline.buildMs,
+            watcher_preparation: watcherPreparation,
             observer_deadline_ms: baseline.deadlineMs,
             watcher_event_deadline_ms: watcherDeadlineMs,
             baseline_observer: compactObserver(baseline.observed),
@@ -601,7 +634,7 @@ const lexicalArgv = lexicalArgs('the');
 const wordsArgv = wordsArgs('the');
 const vectorArgv = vectorArgs('the');
 const workloadRows = {
-  cold_crawl_ms: rowIdentity('cold_crawl_ms', { kind: 'cold-open' }, { argv: ['status'] }),
+  cold_crawl_ms: rowIdentity('cold_crawl_ms', { kind: 'cold-core-count', sql: COUNT_ARGS[1] }, { argv: COUNT_ARGS }),
   version_canary_ms: { ...logicalWorkloadIdentity({ corpus: null, operation: { row: 'version_canary_ms', kind: 'cli-canary' }, requested: {} }), execution: { argv: ['--version'], config_fingerprint: null, resolved_equivalence: 'not-applicable' } },
   cold_embed_ms: rowIdentity('cold_embed_ms', { kind: 'cold-vector-search', query: 'the', k: 10 }, { argv: vectorArgv, requestedInputs: requested('default') }),
   warm_query_ms: rowIdentity('warm_query_ms', { kind: 'sql', sql: COUNT_ARGS[1] }, { argv: COUNT_ARGS.slice(0, 2) }),
@@ -617,7 +650,7 @@ const workloadRows = {
   related_ms: rowIdentity('related_ms', { kind: 'related', path: largest.rel }, { argv: ['related', largest.rel] }),
   related_tokens: rowIdentity('related_tokens', { kind: 'related-output', path: largest.rel }, { argv: ['related', largest.rel] }),
   bulk_change_ms: rowIdentity('bulk_change_ms', { kind: 'bulk-mtime-update', paths: BULK_PATHS, mutation_mtime_ms: mutationMtimeMs }, { argv: COUNT_ARGS, observesMtime: true }),
-  bulk_watch_ms: rowIdentity('bulk_watch_ms', { kind: 'bulk-mtime-update-with-watcher', paths: BULK_PATHS, mutation_mtime_ms: mutationMtimeMs }, { argv: COUNT_ARGS, observesMtime: true }),
+  bulk_watch_ms: rowIdentity('bulk_watch_ms', { kind: 'bulk-mtime-update-with-watcher', paths: BULK_PATHS, mutation_mtime_ms: mutationMtimeMs, watcher_start: 'configured-capabilities-prepared', preparation_argv: VERBS.has('build') ? ['build'] : vectorArgs('the') }, { argv: COUNT_ARGS, observesMtime: true }),
   'inproc.cold_build_ms': rowIdentity('inproc.cold_build_ms', { kind: 'in-process-cold-open' }, { observesMtime: true, config: inprocConfigEvidence }),
   'inproc.open_nochange_ms': rowIdentity('inproc.open_nochange_ms', { kind: 'in-process-nochange-open' }, { observesMtime: true, config: inprocConfigEvidence }),
   'inproc.update_1_file_ms': rowIdentity('inproc.update_1_file_ms', { kind: 'in-process-mtime-update', paths: mdFiles.slice(0, 1).map(({ rel }) => rel), mutation_mtime_ms: mutationMtimeMs }, { observesMtime: true, config: inprocConfigEvidence }),
@@ -629,7 +662,7 @@ workloadRows['inproc.unaccounted_ms'] = rowIdentity('inproc.unaccounted_ms', { k
 const timedRows = ['version_canary_ms', 'cold_crawl_ms', 'warm_query_ms', 'find_ms', 'words_ms', 'cold_embed_ms', 'semantic_find_ms', 'map_ms', 'peek_ms', 'path_ms', 'related_ms'];
 const timedPhase = {
   version_canary_ms: { label: 'startup-canary', source_cache: 'not-applicable', index_state: 'not-opened', readiness: 'not-applicable', semantic_correctness: 'not-applicable', prior: [] },
-  cold_crawl_ms: { label: 'cold-open-and-crawl', source_cache: 'pre-read-before-wall-sequence', index_state: 'absent-before-attempt', readiness: 'unverified', semantic_correctness: 'table-output-unverified', prior: [] },
+  cold_crawl_ms: { label: 'cold-core-build-and-count', source_cache: 'pre-read-before-wall-sequence', index_state: 'absent-before-attempt', readiness: coldFailed ? 'failed' : 'count-verified', semantic_correctness: 'authored-manifest-count', prior: [] },
   warm_query_ms: { label: 'count-after-crawl-attempts', source_cache: 'pre-read-before-wall-sequence', index_state: 'existing-after-crawl-attempts', readiness: 'unverified-after-count', semantic_correctness: 'table-output-unverified', prior: ['cold_crawl_ms'] },
   find_ms: { label: 'lexical-after-readiness-preflight', source_cache: 'pre-read-before-wall-sequence', index_state: 'existing-after-crawl-attempts', readiness: lexicalReadiness.status, semantic_correctness: 'table-output-unverified', prior: ['warm_query_ms'] },
   words_ms: { label: 'words-after-readiness-preflight', source_cache: 'pre-read-before-wall-sequence', index_state: 'existing-after-crawl-attempts', readiness: lexicalReadiness.status, semantic_correctness: 'table-output-unverified', prior: ['find_ms'] },
@@ -683,8 +716,8 @@ for (const key of timedRows) {
     workload_fingerprint: row.fingerprint,
     argv: row.execution.argv,
     config_fingerprint: row.execution.config_fingerprint,
-    observed_format: key === 'version_canary_ms' ? 'text' : 'table',
-    semantic_structure: key === 'version_canary_ms' ? 'plain-version-text' : 'unavailable-for-table',
+    observed_format: key === 'version_canary_ms' ? 'text' : key === 'cold_crawl_ms' ? 'json' : 'table',
+    semantic_structure: key === 'version_canary_ms' ? 'plain-version-text' : key === 'cold_crawl_ms' ? 'count-only' : 'unavailable-for-table',
     process_scope: 'fresh CLI process per attempt',
     phase: phase ? { label: phase.label, state: { source_cache: phase.source_cache, index: phase.index_state }, readiness: phase.readiness, semantic_correctness: phase.semantic_correctness, prior_rows: priorRowEvidence(phase.prior), intervening_rows: interveningRowEvidence(phase.intervening ?? []) } : null,
     repetitions: repetitions.map((attempt, index) => ({ ...attempt, phase: repetitionPhase(key, index) })),

@@ -20,9 +20,62 @@
 // which are broader than any single diff-map row. They live here anyway because release.mjs needs
 // one function answering "what does this diff owe", not two.
 
+import { createHash } from 'node:crypto';
+import { existsSync, readFileSync } from 'node:fs';
+import { arch, cpus, platform } from 'node:os';
+import { join } from 'node:path';
 import { QUALITY_RETRIEVAL_PATHS } from './quality-retrieval-identity.mjs';
 import { shouldRunReversedCompare } from './verdict.mjs';
-import { identityHash } from './workload-identity.mjs';
+import { directoryIdentity, identityHash, pathSetIdentity } from './workload-identity.mjs';
+
+export const LIVE_SUITE_ARGV = ['node', 'node_modules/ts-dev-stack/bin/cli.js', 'test:node', 'test/integration/live.test.ts', '--no-timeouts'];
+export const LIVE_SUITE_ENV = { SENSE_TEST_ENV: 'local-release' };
+export const LIVE_SUITE_COST_ARTIFACT = '.tmp/live-suite-cost/latest.json';
+
+export function liveSuiteRuntime() {
+  return { node: process.version, platform: platform(), arch: arch() };
+}
+
+export function liveSuiteMachine() {
+  return { cpu_model: cpus()[0]?.model ?? null };
+}
+
+export function liveSuiteProvenance(root) {
+  return {
+    harness: {
+      live: pathSetIdentity(root, ['test/integration/live.test.ts']),
+      helpers: directoryIdentity(join(root, 'test', 'lib')),
+    },
+    tooling: pathSetIdentity(root, ['benchmark/lib/gates.mjs', 'benchmark/lib/stages.mjs', 'benchmark/tools/live-suite-cost.ts']),
+    package: pathSetIdentity(root, ['package.json', 'package-lock.json']),
+    source: directoryIdentity(join(root, 'src')),
+    dist_esm: directoryIdentity(join(root, 'dist', 'esm')),
+    dist_cjs: directoryIdentity(join(root, 'dist', 'cjs')),
+  };
+}
+
+export function readLiveSuiteCost(root, packageVersion) {
+  const artifactPath = join(root, LIVE_SUITE_COST_ARTIFACT);
+  try {
+    if (!existsSync(artifactPath)) return null;
+    const artifact = JSON.parse(readFileSync(artifactPath, 'utf8'));
+    if (artifact.schema !== 'live-suite-cost-v1' || artifact.status !== 'ok' || artifact.timed_out !== false || artifact.exit_code !== 0 || artifact.signal !== null) return null;
+    if (JSON.stringify(artifact.argv) !== JSON.stringify(LIVE_SUITE_ARGV) || JSON.stringify(artifact.env) !== JSON.stringify(LIVE_SUITE_ENV)) return null;
+    if (artifact.package_version !== packageVersion || !Number.isFinite(artifact.elapsed_ms) || artifact.elapsed_ms < 0 || artifact.elapsed_ms > 120_000 || !Number.isInteger(artifact.passing_count) || artifact.passing_count <= 0) return null;
+    if (JSON.stringify(artifact.runtime) !== JSON.stringify(liveSuiteRuntime()) || JSON.stringify(artifact.machine) !== JSON.stringify(liveSuiteMachine())) return null;
+    if (JSON.stringify(artifact.provenance) !== JSON.stringify(liveSuiteProvenance(root))) return null;
+    if (JSON.stringify(artifact.provenance_after) !== JSON.stringify(artifact.provenance)) return null;
+    if (artifact.provenance.source.status !== 'recorded' || artifact.provenance.dist_esm.status !== 'recorded' || artifact.provenance.dist_cjs.status !== 'recorded') return null;
+    if (!artifact.log?.path || !/^[^/\\]+$/.test(artifact.log.path)) return null;
+    const logPath = join(root, '.tmp', 'live-suite-cost', artifact.log.path);
+    if (!existsSync(logPath)) return null;
+    const logBytes = readFileSync(logPath);
+    if (artifact.log.bytes !== logBytes.length || artifact.log.sha256 !== createHash('sha256').update(logBytes).digest('hex')) return null;
+    return { elapsed_ms: artifact.elapsed_ms, source: `${LIVE_SUITE_COST_ARTIFACT} (${artifact.log.path})` };
+  } catch {
+    return null;
+  }
+}
 
 export const DEFAULT_PROFILE = 'ordinary';
 export const PROFILES = [DEFAULT_PROFILE, 'deep'];
@@ -31,6 +84,7 @@ const DEEP_PROFILE_GATES = ['baseline', 'scale', 'quality-baseline', 'fever'];
 const DEEP_ONLY_GATES = ['scale', 'fever'];
 const KNOWN_SOURCE_ROOTS = [
   'src/chunk/',
+  'src/cli.ts',
   'src/cli/',
   'src/commands/index.ts',
   'src/commands/map.ts',

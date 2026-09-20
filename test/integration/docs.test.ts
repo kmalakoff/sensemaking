@@ -707,28 +707,20 @@ describe('benchmark release-gate: generated report re-render is idempotent', () 
     assert.equal(readFileSync(reportMdPath, 'utf8'), mdAfterFirst, 'release-gate md must be byte-identical on re-render');
   });
 
-  it('every generated release-gate md tracked in the tree is byte-identical to its regeneration', async () => {
+  it('every compatible generated release-gate md tracked in the tree renders from its saved JSON', async () => {
     const reportsDir = join(packageRoot, 'benchmark', 'reports');
     const jsonFiles = existsSync(reportsDir) ? readdirSync(reportsDir).filter((f) => REPORT_JSON_RE.test(f)) : [];
     if (jsonFiles.length === 0) return; // no generated report has landed yet
-    const { buildReport, persist } = await import('../../benchmark/report.mjs');
+    const { renderMarkdown } = await import('../../benchmark/report.mjs');
     for (const file of jsonFiles) {
-      const report = JSON.parse(readFileSync(join(reportsDir, file), 'utf8')) as { generated?: boolean; date: string; package_version?: string; release_version?: string | null; sitting?: string; measure_version?: string };
+      const report = JSON.parse(readFileSync(join(reportsDir, file), 'utf8')) as { generated?: boolean; measure_version?: string };
       if (!report.generated) continue;
       if ((report.measure_version ?? 'm2') !== MEASURE_VERSION) continue; // classified by an older harness; its priors are refused now
-      const sittingDate = report.date;
-      const sittingsDir = join(packageRoot, '.tmp', 'sittings');
-      // The report names its own sitting; older ones predate that and fall back to date + baseline.
-      const candidates = existsSync(sittingsDir) ? readdirSync(sittingsDir).filter((d) => (report.sitting ? d === report.sitting : d.startsWith(`${sittingDate}-${report.package_version}`))) : [];
-      if (candidates.length === 0) continue; // the sitting that produced this report was cleaned from .tmp
-      const scratch = scratchDir('regen-check-reports');
-      const rebuilt = buildReport(join(sittingsDir, candidates[0]), { reportsDir: join(packageRoot, 'benchmark', 'reports'), releaseVersionOverride: report.release_version ?? undefined });
-      const scratchMd = join(scratchDir('regen-check-md'), 'BENCHMARKING.md');
-      writeFileSync(scratchMd, readFileSync(join(packageRoot, 'BENCHMARKING.md'), 'utf8'));
-      persist(rebuilt, { sittingDir: scratch, reportsDir: scratch, benchmarkingMdPath: scratchMd }); // never back into the real sitting
-      const trackedMd = readFileSync(join(reportsDir, file.replace(/\.json$/, '.md')), 'utf8');
-      const regeneratedMd = readFileSync(join(scratch, file.replace(/\.json$/, '.md')), 'utf8');
-      assert.equal(regeneratedMd, trackedMd, `${file.replace(/\.json$/, '.md')} is not byte-identical to its regeneration`);
+      const mdFile = file.replace(/\.json$/, '.md');
+      const trackedMd = read(packageRoot, 'benchmark', 'reports', mdFile);
+      const wrapper = /^---\n[\s\S]*?\n---\n\n/.exec(trackedMd);
+      assert.ok(wrapper, `${mdFile} has no release frontmatter wrapper`);
+      assert.equal(`${wrapper[0]}${renderMarkdown(report)}`, trackedMd, `${mdFile} does not render from its saved JSON`);
     }
   });
 });

@@ -3,11 +3,13 @@ import { spawnSync } from 'node:child_process';
 import { appendFileSync, cpSync, mkdirSync } from 'node:fs';
 import { cpus } from 'node:os';
 import { dirname, join } from 'node:path';
-import { open, STORE_NAMES } from 'sensemaking';
+import { STORE_NAMES } from 'sensemaking';
 import { NATIVE_CAPABILITY_HARNESS_FILES, runNativeCapability } from '../../benchmark/lib/native-capability.mjs';
 import { quietMachineCheck } from '../../benchmark/lib/quiet-machine.mjs';
 import { identityHash } from '../../benchmark/lib/workload-identity.mjs';
 import { STORE_DIMS } from '../../src/embed/types.ts';
+import { openStoreFor } from '../../src/store/index.ts';
+import type { BuildRequirement } from '../../src/store/open.ts';
 import { packageRoot, scratchDir } from '../lib/scratch.ts';
 
 type NativeArtifact = Awaited<ReturnType<typeof runNativeCapability>>;
@@ -20,6 +22,7 @@ const FIXTURE_MTIME_MS = Date.parse('2100-01-01T00:00:00.000Z');
 const LARGE_CONTENT_BODY = `other delta ${'x'.repeat(ONE_MIB - 1 - Buffer.byteLength('other delta '))}`;
 const DENSE_A = 'needle needle needle needle needle needle needle needle alpha';
 const DENSE_B = 'needle needle needle needle needle needle needle needle beta';
+const openDiagnosticStore = (cfg: Parameters<typeof openStoreFor>[0]) => openStoreFor(cfg, { build: true, requirements: new Set<BuildRequirement>(['core', 'lexical']) });
 
 describe('native capability diagnostic', () => {
   it('runs cold, warm, content, and vector checks against every real store', async function () {
@@ -27,7 +30,7 @@ describe('native capability diagnostic', () => {
     const artifacts: Array<{ row_workload_ids: Record<string, string> }> = [];
     await forEachStore(async (store) => {
       const artifact = await runNativeCapability({
-        open,
+        open: openDiagnosticStore,
         store,
         storeNames: STORE_NAMES,
         root: scratchDir(`native-capability-${store}`),
@@ -103,7 +106,7 @@ describe('native capability diagnostic', () => {
       const artifacts: NativeArtifact[] = [];
       for (const store of STORE_NAMES) {
         const artifact = await runNativeCapability({
-          open,
+          open: openDiagnosticStore,
           store,
           storeNames: STORE_NAMES,
           root: scratchDir(`native-capability-${caseId}-${store}`),
@@ -214,8 +217,8 @@ describe('native capability diagnostic', () => {
       cpSync(join(packageRoot, relative), target);
     }
     let changed = false;
-    const openAndChangeCopiedHarness: typeof open = async (cfg) => {
-      const opened = await open(cfg);
+    const openAndChangeCopiedHarness: typeof openDiagnosticStore = async (cfg) => {
+      const opened = await openDiagnosticStore(cfg);
       if (!changed) {
         appendFileSync(join(sandbox, 'benchmark/lib/native-capability.mjs'), '\n// copied fixture drift\n');
         changed = true;

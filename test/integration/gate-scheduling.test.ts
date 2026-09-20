@@ -1,13 +1,49 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { createHash } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import assert from 'assert';
 import { missingPrerequisites } from '../../benchmark/lib/gate-dependencies.mjs';
 import { runStageSteps, stepOutputEvidence } from '../../benchmark/lib/gate-runner.mjs';
-import { ORDINARY_COST_LIMIT_MS, ordinaryCostRefusal, remainingCost } from '../../benchmark/lib/gates.mjs';
+import { LIVE_SUITE_ARGV, LIVE_SUITE_COST_ARTIFACT, LIVE_SUITE_ENV, liveSuiteMachine, liveSuiteProvenance, liveSuiteRuntime, ORDINARY_COST_LIMIT_MS, ordinaryCostRefusal, readLiveSuiteCost, remainingCost } from '../../benchmark/lib/gates.mjs';
 import { buildStages } from '../../benchmark/lib/stages.mjs';
 import { buildReport, doneOnResume, failedStageReasons, renderMarkdown } from '../../benchmark/report.mjs';
 import { scratchDir } from '../lib/scratch.ts';
+
+function liveCostFixture() {
+  const root = scratchDir('live-suite-cost');
+  for (const path of ['src/embed/index.ts', 'dist/esm/embed/index.js', 'dist/cjs/embed/index.js', 'test/lib/gate.ts', 'test/integration/live.test.ts', 'benchmark/lib/gates.mjs', 'benchmark/lib/stages.mjs', 'benchmark/tools/live-suite-cost.ts']) {
+    const destination = join(root, path);
+    mkdirSync(dirname(destination), { recursive: true });
+    writeFileSync(destination, `fixture:${path}\n`);
+  }
+  writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'fixture', version: '1.0.0' }));
+  writeFileSync(join(root, 'package-lock.json'), '{}\n');
+  const logPath = join(root, '.tmp', 'live-suite-cost', 'fixture.log');
+  mkdirSync(join(logPath, '..'), { recursive: true });
+  writeFileSync(logPath, '1 passing\n');
+  const log = readFileSync(logPath);
+  const artifact = {
+    schema: 'live-suite-cost-v1',
+    status: 'ok',
+    argv: LIVE_SUITE_ARGV,
+    env: LIVE_SUITE_ENV,
+    package_version: JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).version,
+    runtime: liveSuiteRuntime(),
+    machine: liveSuiteMachine(),
+    provenance: liveSuiteProvenance(root),
+    provenance_after: liveSuiteProvenance(root),
+    recorded_at: '2099-01-01T00:00:00.000Z',
+    elapsed_ms: 1234,
+    timed_out: false,
+    exit_code: 0,
+    signal: null,
+    passing_count: 1,
+    log: { path: 'fixture.log', bytes: log.length, sha256: createHash('sha256').update(log).digest('hex') },
+  };
+  writeFileSync(join(root, LIVE_SUITE_COST_ARTIFACT), `${JSON.stringify(artifact)}\n`);
+  return { root, artifact, logPath };
+}
 
 describe('release gate independent failure collection', () => {
   it('refuses costly or unknown ordinary work and subtracts only applicable resume work', () => {
@@ -31,6 +67,48 @@ describe('release gate independent failure collection', () => {
     const unknown = remainingCost([{ id: 'unknown-collection' }], {});
     assert.match(ordinaryCostRefusal('ordinary', unknown) ?? '', /cost is unknown for unknown-collection/);
     assert.equal(ordinaryCostRefusal('deep', unknown), null);
+  });
+
+  it('uses a valid live-suite measurement for cost only, never as completed work', () => {
+    const fixture = liveCostFixture();
+    const measured = readLiveSuiteCost(fixture.root, JSON.parse(readFileSync(join(fixture.root, 'package.json'), 'utf8')).version);
+    assert.deepEqual(measured, { elapsed_ms: 1234, source: '.tmp/live-suite-cost/latest.json (fixture.log)' });
+    const remaining = remainingCost([{ id: 'live-suite' }], { 'live-suite': measured?.elapsed_ms }, () => false);
+    assert.deepEqual(remaining.reused_steps, []);
+    assert.deepEqual(remaining.remaining_steps, [{ id: 'live-suite', estimated_ms: 1234 }]);
+  });
+
+  it('rejects failed, zero-test, mismatched, and corrupted live-suite measurements', () => {
+    const cases: Array<(artifact: ReturnType<typeof liveCostFixture>['artifact']) => void> = [
+      (artifact) => {
+        artifact.status = 'failed';
+      },
+      (artifact) => {
+        artifact.passing_count = 0;
+      },
+      (artifact) => {
+        artifact.argv = ['npm', 'test'];
+      },
+      (artifact) => {
+        artifact.runtime.node = 'v0.0.0';
+      },
+      (artifact) => {
+        artifact.provenance.source.status = 'absent';
+      },
+    ];
+    for (const mutate of cases) {
+      const fixture = liveCostFixture();
+      mutate(fixture.artifact);
+      writeFileSync(join(fixture.root, LIVE_SUITE_COST_ARTIFACT), JSON.stringify(fixture.artifact));
+      assert.equal(readLiveSuiteCost(fixture.root, JSON.parse(readFileSync(join(fixture.root, 'package.json'), 'utf8')).version), null);
+    }
+    const corrupted = liveCostFixture();
+    writeFileSync(corrupted.logPath, 'corrupted\n');
+    assert.equal(readLiveSuiteCost(corrupted.root, JSON.parse(readFileSync(join(corrupted.root, 'package.json'), 'utf8')).version), null);
+
+    const changedSource = liveCostFixture();
+    writeFileSync(join(changedSource.root, 'src/embed/index.ts'), 'changed after measurement\n');
+    assert.equal(readLiveSuiteCost(changedSource.root, JSON.parse(readFileSync(join(changedSource.root, 'package.json'), 'utf8')).version), null);
   });
 
   it('records missing or malformed child output as failure without abandoning independent work', async () => {

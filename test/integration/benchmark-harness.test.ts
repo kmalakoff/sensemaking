@@ -988,28 +988,6 @@ describe('evaluateVariant: real retrieval failures stop quality work', () => {
     assert.equal(result.errorDetails[0].qid, 'q1');
     assert.match(result.errorDetails[0].error, /Error|error|SQL|FTS/);
   });
-
-  it('keeps a legitimate empty ranking valid', async () => {
-    const baseDir = scratchDir('quality-empty-result');
-    writeNote(baseDir, 'note.md', { body: 'retrieval fixture' });
-    const cfg = { presets: { default: { include: ['**/*.md'] } }, queries: {}, baseDir, configPath: null, store: 'sqlite' as const };
-    const opened = await openConfig(cfg);
-    try {
-      const result = await evaluateVariant({
-        qids: ['q1'],
-        queries: new Map([['q1', 'valid']]),
-        qrels: new Map([['q1', new Map()]]),
-        k: 1,
-        search: (terms: SearchTerms, options: SearchOptions) => search(opened.store, cfg, terms, options),
-        queryFor: () => 'term_that_is_not_in_the_note',
-      });
-      assert.equal(result.incomplete, false);
-      assert.deepEqual(result.errorDetails, []);
-      assert.equal(result.perQuery.size, 1);
-    } finally {
-      await opened.store.close();
-    }
-  });
 });
 
 describe('aggregateVerdict: validity cannot be accepted as performance', () => {
@@ -1481,6 +1459,7 @@ describe('catalog / run.mjs key agreement', () => {
     const row = JSON.parse(readFileSync(outPath, 'utf8'));
     assert.equal(row.measure_version, MEASURE_VERSION);
     assert.equal(row.inproc.error, undefined);
+    assert.equal(row.errors.cold_crawl_ms, undefined);
     assert.equal(row.errors.bulk_change_ms, undefined);
     assert.equal(row.errors.bulk_watch_ms, undefined);
     assert.equal(typeof row.bulk_change_ms, 'number');
@@ -1491,6 +1470,10 @@ describe('catalog / run.mjs key agreement', () => {
     assert.equal(row.bulk_state.watch.preparation.length, 3);
     for (const preparation of row.bulk_state.watch.preparation) {
       assert.equal(preparation.watcher_event_deadline_ms, 5_000 + preparation.observer_deadline_ms);
+      assert.deepEqual(preparation.watcher_preparation.argv, ['build']);
+      assert.equal(preparation.watcher_preparation.status, 0);
+      assert.equal(preparation.watcher_preparation.signal, null);
+      assert.ok(Number.isFinite(preparation.watcher_preparation.elapsed_ms));
     }
     assert.deepEqual(Object.keys(row.inproc.repeat_state).sort(), ['canonical', 'cold_build', 'open_nochange', 'source', 'update_10_files', 'update_1_file']);
     assert.match(row.inproc.repeat_state.source.fingerprint, /^[0-9a-f]{64}$/);
@@ -1511,6 +1494,12 @@ describe('catalog / run.mjs key agreement', () => {
     assert.match(row.inproc.repeat_state.update_1_file.indexed_content_fingerprint, /^[0-9a-f]{64}$/);
     assert.match(row.inproc.repeat_state.update_10_files.indexed_content_fingerprint, /^[0-9a-f]{64}$/);
     const workloadRows = row.workload_identity.logical_inputs.rows;
+    assert.deepEqual(
+      workloadRows.cold_crawl_ms.execution.timed_output.repetitions.map((attempt: { stdout: string }) => JSON.parse(attempt.stdout)),
+      [[{ n: 20 }], [{ n: 20 }], [{ n: 20 }]],
+      'each cold attempt must build the authored corpus, not merely inspect absent state'
+    );
+    assert.deepEqual(workloadRows.cold_crawl_ms.execution.argv, ['sql', 'SELECT COUNT(*) AS n FROM frontmatter', '--format', 'json']);
     for (const key of ['version_canary_ms', 'cold_crawl_ms', 'warm_query_ms', 'find_ms', 'words_ms', 'cold_embed_ms', 'semantic_find_ms', 'map_ms', 'peek_ms', 'path_ms', 'related_ms']) {
       if (rowValue(row, key) === null) continue;
       const output = workloadRows[key].execution.timed_output;

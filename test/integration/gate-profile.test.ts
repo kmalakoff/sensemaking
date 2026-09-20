@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import assert from 'assert';
 import { releaseChanges } from '../../benchmark/lib/changes.mjs';
 import { assertCompatibleSelection, profileReasons } from '../../benchmark/lib/gates.mjs';
+import { buildStages } from '../../benchmark/lib/stages.mjs';
 import { packageRoot, scratchDir } from '../lib/scratch.ts';
 
 function git(root: string, ...argv: string[]) {
@@ -26,9 +27,18 @@ function realGateFixture(prefix: string) {
 }
 
 describe('release assessment profiles', () => {
+  it('runs the owed live suite directly with the strict local-release environment', () => {
+    const live = buildStages()[1].steps.find((step) => step.id === 'live-suite');
+    assert.ok(live && 'env' in live);
+    assert.deepEqual(live?.argv, ['node', 'node_modules/ts-dev-stack/bin/cli.js', 'test:node', 'test/integration/live.test.ts', '--no-timeouts']);
+    assert.deepEqual(live.env, { SENSE_TEST_ENV: 'local-release' });
+    assert.equal(live?.owedBy, 'live-suite');
+  });
+
   it('keeps ordinary proportional and makes deep expand only staged assessment work', () => {
     assert.deepEqual([...profileReasons(['README.md'], 'v1', 'ordinary').keys()], []);
     assert.deepEqual([...profileReasons(['src/output/output.ts'], 'v1', 'ordinary').keys()], ['baseline', 'quality-revalidation']);
+    assert.deepEqual([...profileReasons(['src/cli.ts'], 'v1', 'ordinary').keys()], ['baseline', 'quality-revalidation']);
     for (const path of ['src/watch-claim.ts', 'src/watch.ts']) {
       const watcher = profileReasons([path], 'v1', 'ordinary');
       for (const gate of ['test-engines', 'baseline', 'quality-revalidation']) assert.equal(watcher.has(gate), true, `${path}: ${gate}`);

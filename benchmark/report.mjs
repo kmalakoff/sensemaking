@@ -1248,7 +1248,7 @@ The timing rows ran on ${timingScope}. They include CLI startup and each store's
 
 ${mdTable(['Store', ...STORE_SUMMARY_METRICS.map(([, label]) => label), 'Portable semantic nDCG@10'], rows)}
 
-Cold index is the first \`status\` that builds the cache. Warm count is a no-change \`COUNT(*)\` query. Lexical and semantic search are steady-state \`sense search\` commands. Lower timing is faster. Higher nDCG@10 is better; that quality column uses the same NFCorpus queries, judgments, result count, and model on every store.
+Cold index measures core index creation and a count query, excluding document embeddings. Warm count is a no-change \`COUNT(*)\` query. Lexical and semantic search are steady-state \`sense search\` commands. Lower timing is faster. Higher nDCG@10 is better; that quality column uses the same NFCorpus queries, judgments, result count, and model on every store.
 
 Choose from the intended workflow, capabilities, and SQL compatibility. These numbers describe the current Sense implementations, not a permanent ranking of the engines. Treat small timing or relevance differences as diagnostic unless a representative workload for the target tree reproduces them.
 `;

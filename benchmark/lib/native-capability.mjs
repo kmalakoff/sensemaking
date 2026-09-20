@@ -16,6 +16,7 @@ export const MAX_NATIVE_NOTES = 50_000;
 export const MAX_NATIVE_REPETITIONS = 100;
 export const NATIVE_CAPABILITY_VECTOR_DIMS = 256;
 export const NATIVE_CAPABILITY_SCHEMA = 'native-capability-v3';
+export const NATIVE_CAPABILITY_METHOD_VERSION = 'native-capability-method-v2-core-lexical-open-vector-pending';
 export const NATIVE_CAPABILITY_CASES = ['baseline', 'large-content', 'dense-terms', 'broad-matches', 'top-one', 'narrow-vectors', 'structured-content'];
 export const NATIVE_CAPABILITY_READINESS_POLICY = { method: 'os.loadavg[0] <= logical_cores / 2', max_load_per_logical_core: 0.5, unsupported_platforms: ['win32'] };
 export const NATIVE_CAPABILITY_ROWS = ['open', 'cold_lexical', 'warm_lexical', 'content_read', 'vector_write', 'vector_candidates', 'vector_similar'];
@@ -239,7 +240,7 @@ export function nativeCapabilityContract({ caseId = 'baseline', notes = DEFAULT_
       similar_k: scenario.axes.similar_k,
     },
   };
-  const requested = { case_id: caseId, notes, repetitions, vector_dims: wireDims, vector_wire_dims: wireDims, native_schema_dims: NATIVE_CAPABILITY_VECTOR_DIMS };
+  const requested = { case_id: caseId, method_version: NATIVE_CAPABILITY_METHOD_VERSION, notes, repetitions, vector_dims: wireDims, vector_wire_dims: wireDims, native_schema_dims: NATIVE_CAPABILITY_VECTOR_DIMS };
   const inputs = { case_id: caseId, axes: scenario.axes, corpus, operation, requested };
   return {
     scenario,
@@ -494,6 +495,7 @@ export async function runNativeCapability({
     status: errors.length === 0 ? 'success' : 'invalid-measurement',
     store,
     case_id: caseId,
+    method_version: NATIVE_CAPABILITY_METHOD_VERSION,
     notes,
     repetitions,
     valid: errors.length === 0,

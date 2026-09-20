@@ -3,10 +3,10 @@ import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { DuckDBInstance } from '@duckdb/node-api';
-import { runDuckdbLexicalCost } from '../../benchmark/lib/duckdb-lexical-cost.mjs';
+import { DUCKDB_LEXICAL_COST_METHOD_VERSION, runDuckdbLexicalCost } from '../../benchmark/lib/duckdb-lexical-cost.mjs';
 import { identityHash } from '../../benchmark/lib/workload-identity.mjs';
 import { createConnection } from '../../src/store/duckdb/connection.ts';
-import { createLexicalIndex } from '../../src/store/duckdb/lexical.ts';
+import { createLexicalIndex, prepareFts } from '../../src/store/duckdb/lexical.ts';
 import { registerFunctions } from '../../src/store/duckdb/sql-functions.ts';
 
 describe('duckdb lexical cost diagnostic', () => {
@@ -37,9 +37,10 @@ describe('duckdb lexical cost diagnostic', () => {
 
   it('records bounded real-method samples with independently authored lexical expectations', async function () {
     this.timeout(60_000);
-    const artifact = await runDuckdbLexicalCost({ DuckDBInstance, createConnection, createLexicalIndex, registerFunctions });
+    const artifact = await runDuckdbLexicalCost({ DuckDBInstance, createConnection, createLexicalIndex, prepareLexical: prepareFts, registerFunctions });
     assert.equal(artifact.valid, true, artifact.errors.join('\n'));
     assert.equal(artifact.status, 'success');
+    assert.equal(artifact.method_version, DUCKDB_LEXICAL_COST_METHOD_VERSION);
     assert.equal(artifact.timing_evidence, 'timer-only diagnostic; callers need separate machine-readiness evidence before treating samples as clean performance evidence');
     assert.deepEqual(artifact.fixture.expectations, {
       bare: ['adjacent.md', 'field-boundary.md', 'folded.md', 'punctuation.md', 'reversed.md'],
@@ -77,6 +78,8 @@ describe('duckdb lexical cost diagnostic', () => {
       assert.equal(typeof sample.native.version, 'string');
       for (const query of sample.queries) {
         assert.deepEqual([...query.actual_paths].sort(), [...query.expected_paths].sort(), query.id);
+        assert.equal(query.prepare_count, 2);
+        assert.equal(query.execute_read_convert_count, 2);
         for (const timing of [query.total_ms, query.prepare_ms, query.execute_read_convert_ms, query.outside_connection_ms]) {
           assert.equal(Number.isFinite(timing), true);
           assert.ok(timing >= 0);
