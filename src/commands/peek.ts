@@ -3,6 +3,7 @@ import { estimateTokens } from '../chunk/index.ts';
 import type { FeatureName, ResolvedConfig, SearchOverrides } from '../config/index.ts';
 import { featureEnabled } from '../config/index.ts';
 import { SenseError } from '../errors.ts';
+import { serialQuery } from '../lib/serial-query.ts';
 import type { Row } from '../output/output.ts';
 import type { Store } from '../store/types.ts';
 import { INTERNAL_COLUMNS, scopedPaths } from './scope.ts';
@@ -45,7 +46,11 @@ const PEEK_LIST_LIMIT = 20;
 
 // peek: everything about one note except its prose -- frontmatter, outline with line
 // ranges + token estimates (so the follow-up Read is a range, not the file), links both ways.
-export async function peek(store: Store, cfg: ResolvedConfig, pathArg: string, overrides: SearchOverrides = {}): Promise<Peek> {
+export function peek(store: Store, cfg: ResolvedConfig, pathArg: string, overrides: SearchOverrides = {}): Promise<Peek> {
+  return serialQuery(store, () => peekIndexed(store, cfg, pathArg, overrides));
+}
+
+async function peekIndexed(store: Store, cfg: ResolvedConfig, pathArg: string, overrides: SearchOverrides): Promise<Peek> {
   return store.transaction(async () => {
     const pathsStmt = await store.prepare('SELECT "path" FROM frontmatter');
     const paths = ((await pathsStmt.all()) as Array<{ path: string }>).map((r) => r.path);

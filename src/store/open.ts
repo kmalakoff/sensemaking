@@ -1,9 +1,10 @@
 import { channel } from 'node:diagnostics_channel';
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ResolvedConfig } from '../config/index.ts';
-import { featureSignature, STATE_DIR } from '../config/index.ts';
+import { anyPresetEmbeds, featureSignature, STATE_DIR } from '../config/index.ts';
 import { rekeyChunkText } from '../embed/handoff.ts';
+import { embedPending } from '../embed/query.ts';
 import { SenseError } from '../errors.ts';
 import { FEATURES } from '../features/index.ts';
 import { createBuilder } from './builder.ts';
@@ -17,12 +18,19 @@ import { forcedPresetPaths, isPresetOnlyChange } from './preset-scope.ts';
 import { getMeta, setMeta } from './shared.ts';
 import { changedSignatureKeys, embedIdentityAdopted, signatureDiff } from './signature.ts';
 import type { Stages } from './stages.ts';
+import { stageRecorder } from './stages.ts';
+import { withTransaction } from './transaction.ts';
 import type { Connection, OpenDialect, Store } from './types.ts';
 
-// One open algorithm shared by every store, parameterised by a per-engine OpenDialect (types.ts).
-// Ordering is universal, not a dialect concern: connect, meta table, schema-version and
-// feature-signature comparison (rebuild, adopt, or partial rebuild), any extra rebuild trigger,
-// ensureSchema, the derived busy_timeout PRAGMA, reconcile, then the store itself.
+export type BuildRequirement = 'core' | 'lexical' | 'vectors';
+
+export interface OpenOptions {
+  build?: boolean;
+}
+
+export interface InternalOpenOptions extends OpenOptions {
+  requirements?: ReadonlySet<BuildRequirement>;
+}
 
 export interface OpenResult {
   store: Store;
@@ -30,8 +38,6 @@ export interface OpenResult {
   dbPath: string;
   parsed: number;
   warnings: string[];
-  // Per-stage wall time for this open's build pass (stages.ts), not for any narrow embed or
-  // feature invalidation that ran beside it -- on a cold build there is none, so it is the whole cost.
   stages: Stages;
 }
 
@@ -43,22 +49,43 @@ interface ConnectResult<Handle> {
   parsed: number;
   warnings: string[];
   stages: Stages;
+  observational: boolean;
 }
 
-// duckdb/turso hold the cache file for their connection's whole life, so a second command waits.
-// Bounded by this tree's recorded reconcile time (lock-wait.ts), not a fixed guess.
+const CORE_READY_META_KEY = 'core_ready';
 const LOCK_POLL_MS = 50;
 const lockWait = channel('sensemaking.store.lock-wait');
 
-async function connectUnlocked<Handle>(dbPath: string, cfg: ResolvedConfig, configDir: string, dialect: OpenDialect<Handle>): Promise<{ handle: Handle; conn: Connection }> {
+function notReady(reason: string): SenseError {
+  return new SenseError('INDEX_NOT_READY', `${reason}; run "sense build" or call build(config) before opening with { build: false }`);
+}
+
+function normaliseConfig(cfg: ResolvedConfig): ResolvedConfig {
+  // `baseDir` was the original public open() input. Keep direct API callers working while
+  // making the two ownership paths explicit for every internal operation.
+  if (!cfg.rootDir) {
+    if (!cfg.baseDir) throw new SenseError('CONFIG_INVALID', 'open requires rootDir (or legacy baseDir)');
+    cfg.rootDir = cfg.baseDir;
+  }
+  if (!cfg.configDir) cfg.configDir = cfg.rootDir;
+  return cfg;
+}
+
+function cachePath<Handle>(cfg: ResolvedConfig, dialect: OpenDialect<Handle>): string {
+  return join(cfg.configDir ?? cfg.baseDir, STATE_DIR, dialect.filename);
+}
+
+async function connectUnlocked<Handle>(dbPath: string, cfg: ResolvedConfig, configDir: string, dialect: OpenDialect<Handle>, options: { existingOnly: boolean; observational: boolean }): Promise<{ handle: Handle; conn: Connection }> {
   const budgetMs = lockWaitBudgetMs(configDir);
   const deadline = Date.now() + budgetMs;
   for (;;) {
     try {
-      return await dialect.connect(dbPath, cfg);
+      return await dialect.connect(dbPath, cfg, options);
     } catch (err) {
+      if (options.existingOnly && !existsSync(dbPath)) {
+        throw notReady(`the derived index does not exist at ${dbPath}`);
+      }
       if (!dialect.isLocked?.(err as Error)) throw err;
-      // Observe a real rejected native connection, never merely the start of an async open.
       if (lockWait.hasSubscribers) lockWait.publish({ store: cfg.store, dbPath });
       if (Date.now() >= deadline) {
         throw new SenseError('STORE_BUSY', `another sense process is using this tree's ${cfg.store} cache (${dbPath}) and did not release it within ${Math.round(budgetMs / 1000)}s; wait for that command to finish, or set "store" to "sqlite" in sense.config.json, which serves concurrent commands`);
@@ -68,116 +95,146 @@ async function connectUnlocked<Handle>(dbPath: string, cfg: ResolvedConfig, conf
   }
 }
 
-async function connectWithDialect<Handle>(cfg: ResolvedConfig, dialect: OpenDialect<Handle>): Promise<ConnectResult<Handle>> {
+async function assertCoreSchema(conn: Connection): Promise<void> {
+  for (const table of ['frontmatter', 'content', 'preset_files', 'indexed_sources']) {
+    await (await conn.prepare(`SELECT 1 FROM ${table} LIMIT 0`)).all();
+  }
+}
+
+async function connectExisting<Handle>(cfg: ResolvedConfig, dialect: OpenDialect<Handle>, requirements: ReadonlySet<BuildRequirement>): Promise<ConnectResult<Handle>> {
+  const configDir = cfg.configDir ?? cfg.baseDir;
+  const dbPath = cachePath(cfg, dialect);
+  if (!existsSync(dbPath)) throw notReady(`the derived index does not exist at ${dbPath}`);
+
+  const { handle, conn } = await connectUnlocked(dbPath, cfg, configDir, dialect, { existingOnly: true, observational: true });
+  try {
+    let version: string | null;
+    let features: string | null;
+    let ready: string | null;
+    try {
+      version = await getMeta(conn, 'schema_version');
+      features = await getMeta(conn, 'features');
+      ready = await getMeta(conn, CORE_READY_META_KEY);
+      await assertCoreSchema(conn);
+    } catch {
+      if (!existsSync(dbPath)) throw notReady(`the derived index was deleted while opening ${dbPath}`);
+      throw notReady(`the derived index at ${dbPath} has no compatible schema`);
+    }
+
+    if (version !== dialect.schemaVersion) {
+      throw notReady(`the derived index at ${dbPath} uses schema ${version ?? 'unknown'}, but this sense version requires ${dialect.schemaVersion}`);
+    }
+    const wantFeatures = featureSignature(cfg, FEATURES);
+    if (features !== wantFeatures) {
+      throw notReady(`the derived index at ${dbPath} was built for different configuration features`);
+    }
+    if (ready !== '1') {
+      throw notReady(`the derived index at ${dbPath} has an incomplete core build`);
+    }
+    if (requirements.has('lexical')) {
+      await dialect.assertLexicalReady?.(conn);
+    }
+    if (!existsSync(dbPath)) throw notReady(`the derived index was deleted while opening ${dbPath}`);
+
+    return {
+      handle,
+      conn,
+      cfg,
+      dbPath,
+      parsed: 0,
+      warnings: [],
+      stages: stageRecorder().take(0, 0),
+      observational: true,
+    };
+  } catch (err) {
+    await dialect.close(handle, { observational: true });
+    throw err;
+  }
+}
+
+async function connectForBuild<Handle>(cfg: ResolvedConfig, dialect: OpenDialect<Handle>, requirements: ReadonlySet<BuildRequirement>): Promise<ConnectResult<Handle>> {
   const configDir = cfg.configDir ?? cfg.baseDir;
   const stateDir = join(configDir, STATE_DIR);
   mkdirSync(stateDir, { recursive: true });
   const dbPath = join(stateDir, dialect.filename);
 
-  const { handle, conn } = await connectUnlocked(dbPath, cfg, configDir, dialect);
-  // A throw below must release this handle, or the leaked WAL makes the cache file undeletable on
-  // Windows. `closed` keeps the catch from double-closing a handle a rebuild branch already closed.
+  const { handle, conn } = await connectUnlocked(dbPath, cfg, configDir, dialect, { existingOnly: false, observational: false });
   let closed = false;
-  // Created here, not inside reconcile(): invalidate()/invalidateFeatures() below share its pool
-  // with the build() call that follows them.
   const builder = createBuilder(conn, cfg, { rootDir: cfg.rootDir ?? cfg.baseDir, configDir }, dialect.reconcileDialect);
   try {
     await conn.exec('CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)');
 
-    // Schema-version or feature-set mismatch: reconcile only reparses changed files, so an
-    // old cache can't be patched incrementally -- rebuild instead (cheap: nothing expensive lives here).
     const version = await getMeta(conn, 'schema_version');
     const features = await getMeta(conn, 'features');
+    const ready = await getMeta(conn, CORE_READY_META_KEY);
     const wantFeatures = featureSignature(cfg, FEATURES);
-    // Set only by the preset-membership branch below; reconcile treats these paths as touched
-    // despite an unchanged stamp, for this one build() call.
+    // `ready=0` may belong to another SQLite builder, so recovery stays in place and lets the
+    // engine serialize it. It never unlinks the cache.
+    await setMeta(conn, CORE_READY_META_KEY, '0');
+    const recoverIncomplete = ready === '0' && (version === null || version === dialect.schemaVersion);
     let forcedPaths: Set<string> | undefined;
-    // Set only by the embed-narrow branch below; applied via builder.invalidate() after ensureSchema.
     let embedInvalidate: EmbedChangeKind | undefined;
-    // Set only by the feature-toggle branch below; applied via builder.invalidateFeatures() after ensureSchema.
     let featureToggles: FeatureToggle[] | undefined;
-    if ((version !== null && version !== dialect.schemaVersion) || (features !== null && features !== wantFeatures)) {
-      // Indexing derives from presets, so a config edit rebuilding the cache must say so and
-      // name what changed -- silent rebuilds make derived indexing look like a hang or a bug.
-      if (version !== null && version !== dialect.schemaVersion) {
-        console.error('sense: cache format changed (new sensemaking version); rebuilding the index');
-        // Close before clearCache deletes the files out from under the still-open handle.
-        closed = true;
-        await dialect.close(handle);
-        clearCache(cfg);
-        return connectWithDialect(cfg, dialect);
-      }
+    if (version !== null && version !== dialect.schemaVersion) {
+      console.error('sense: cache format changed (new sensemaking version); rebuilding the index');
+      closed = true;
+      await dialect.close(handle);
+      clearCache(cfg);
+      return connectForBuild(cfg, dialect, requirements);
+    }
+    if (recoverIncomplete) {
+      console.error('sense: recovering an incomplete index generation in place');
+    } else if (features !== null && features !== wantFeatures) {
       const changedKeys = changedSignatureKeys(features ?? '', wantFeatures);
-      // Null (rather than the empty set) when changedKeys isn't preset-only, or a changed
-      // preset's stored segment can't be parsed back into old include/exclude/vectors -- either
-      // way the branch below is skipped and the full rebuild stays the fallback.
       const presetForced = isPresetOnlyChange(changedKeys) ? forcedPresetPaths(cfg, cfg.rootDir ?? cfg.baseDir, features ?? '', changedKeys) : null;
-      // Null unless exactly one segment changed and it decomposes into a recognised embed-only
-      // case (embed-scope.ts): anything else, including embed toggled on/off, stays null.
       const embedKind = changedKeys.size === 1 && changedKeys.has('embed') ? classifyEmbedChange(features ?? '', wantFeatures) : null;
-      // Null (rather than the empty set) when changedKeys isn't feature-toggle-only, or a changed
-      // feature's stored segment can't be parsed back into old/new on-off -- either way the branch
-      // below is skipped and the full rebuild stays the fallback.
       const toggles = isFeatureOnlyChange(changedKeys) ? classifyFeatureToggles(features ?? '', wantFeatures, changedKeys) : null;
       if (changedKeys.size === 1 && changedKeys.has('embed') && embedIdentityAdopted(features ?? '', wantFeatures)) {
-        // First sight of a resolved weight identity: the model itself hasn't changed, so
-        // adopt it into meta with no rebuild and no re-embed.
         console.error("sense: recorded the embedding model's resolved identity; vectors are unaffected");
-        await setMeta(conn, 'features', wantFeatures);
       } else if (embedKind !== null) {
-        // Chunk boundaries are file-derived, not model-derived (embed.ts's chunksOf), so neither
-        // case needs any file reparsed for any feature but embed itself.
         embedInvalidate = embedKind;
         console.error(embedKind === 'model' ? 'sense: config change (embed settings) invalidates only the stale vectors' : 'sense: config change (embed settings) rebuilds only the embeddings it affects');
-        await setMeta(conn, 'features', wantFeatures);
       } else if (presetForced !== null) {
-        // Membership only: which files a preset covers moved, not a file's own content, a
-        // global feature, or the embed model. reconcile() already knows how to
-        // add, update, and remove a file correctly (every cross-feature cascade included); it
-        // just needs telling which unchanged files to treat as touched (forcedPaths, above).
         forcedPaths = presetForced;
         const changed = signatureDiff(features ?? '', wantFeatures);
         console.error(`sense: config change (${changed}) reparses only the files it affects`);
-        await setMeta(conn, 'features', wantFeatures);
       } else if (toggles !== null) {
-        // A feature turned off or on: reconcile.ts's activeFeatures skips a disabled feature's
-        // hooks entirely, so its rows rot while off -- invalidateFeatures drops them and, for a
-        // feature turning back on, fully re-derives across every indexed file rather than
-        // trusting rows written before or during that window.
         featureToggles = toggles;
         const changed = signatureDiff(features ?? '', wantFeatures);
         console.error(`sense: config change (${changed}) reparses only the feature it affects`);
-        await setMeta(conn, 'features', wantFeatures);
       } else {
         const changed = signatureDiff(features ?? '', wantFeatures);
         console.error(`sense: config change (${changed}) rebuilds the index`);
         closed = true;
         await dialect.close(handle);
         clearCache(cfg);
-        return connectWithDialect(cfg, dialect);
+        return connectForBuild(cfg, dialect, requirements);
       }
     }
 
     await dialect.ensureSchema(handle, conn, cfg);
 
-    // 3x the largest reconcile this cache has recorded, floored at 30s and capped at 10min.
-    // Installed before build() -- that call is the one that races a watcher's transaction.
     if (dialect.setDerivedBusyTimeout) {
       const recordedMaxMs = Number((await getMeta(conn, 'reconcile_max_ms')) ?? '0');
       await dialect.setDerivedBusyTimeout(handle, conn, Math.min(Math.max(30000, 3 * recordedMaxMs), 600_000));
     }
 
-    // Runs before build(): forcedPaths, embedInvalidate and featureToggles never target the same
-    // call (each comes from its own mutually exclusive branch above: a preset-only, embed-only, or
-    // feature-toggle-only changed-key set).
     const embedParsed = embedInvalidate ? (await builder.invalidate(embedInvalidate)).parsed : 0;
     const featureParsed = featureToggles ? (await builder.invalidateFeatures(featureToggles)).parsed : 0;
+    const { parsed, warnings, stages } = recoverIncomplete ? await builder.recover() : await builder.build(forcedPaths);
+    await withTransaction(conn, async () => {
+      await setMeta(conn, 'features', wantFeatures);
+      await setMeta(conn, CORE_READY_META_KEY, '1');
+    });
 
-    const { parsed, warnings, stages } = await builder.build(forcedPaths);
-    // Every open reconciles once and is done with it -- a watcher opens fresh per event instead of holding this connection (src/watch.ts).
+    // Lexical preparation is a separate capability stage. A failure leaves core usable and the
+    // dialect's own lexical marker stale, so unrelated map/peek/path/sql commands stay available.
+    if (requirements.has('lexical')) {
+      await dialect.prepareLexical?.(conn);
+    }
+
     await builder.close();
-
-    return { handle, conn, cfg, dbPath, parsed: parsed + embedParsed + featureParsed, warnings, stages };
+    return { handle, conn, cfg, dbPath, parsed: parsed + embedParsed + featureParsed, warnings, stages, observational: false };
   } catch (err) {
     await builder.close();
     if (!closed) await dialect.close(handle);
@@ -185,21 +242,49 @@ async function connectWithDialect<Handle>(cfg: ResolvedConfig, dialect: OpenDial
   }
 }
 
-// A store's open(): connects (see connectWithDialect above), then wraps the resulting connection
-// in the Store interface. The builder's pool closes right after the initial build.
-export async function openWithDialect<Handle>(cfg: ResolvedConfig, dialect: OpenDialect<Handle>): Promise<OpenResult> {
-  // `baseDir` was the original public open() input. Keep direct API callers working while
-  // making the two ownership paths explicit for every internal operation.
-  if (!cfg.rootDir) {
-    if (!cfg.baseDir) throw new SenseError('CONFIG_INVALID', 'open requires rootDir (or legacy baseDir)');
-    cfg.rootDir = cfg.baseDir;
+// A static provider can resolve its identity while embedding. Publish it only after vectors
+// succeed and only when the durable signature still matches the prepared generation.
+export async function prepareDocumentEmbeddings(store: Store, cfg: ResolvedConfig, allowed?: ReadonlySet<string>): Promise<void> {
+  const preparedSignature = await getMeta(store, 'features');
+  await embedPending(store, cfg, allowed);
+  const actualSignature = featureSignature(cfg, FEATURES);
+  if (preparedSignature === actualSignature) return;
+
+  const changedKeys = changedSignatureKeys(preparedSignature ?? '', actualSignature);
+  if (preparedSignature === null || changedKeys.size !== 1 || !changedKeys.has('embed') || !embedIdentityAdopted(preparedSignature, actualSignature)) {
+    throw notReady('the index configuration changed while vectors were being prepared');
   }
-  if (!cfg.configDir) cfg.configDir = cfg.rootDir;
-  const { handle, conn, cfg: resolvedCfg, dbPath, parsed, warnings, stages } = await connectWithDialect(cfg, dialect);
-  const store = dialect.createStore(handle, conn, resolvedCfg);
-  // reconcile ran before this object existed, so its chunk text is keyed by the connection.
-  rekeyChunkText(conn, store);
-  return { store, cfg: resolvedCfg, dbPath, parsed, warnings, stages };
+
+  const update = await store.prepare('UPDATE meta SET value = ? WHERE key = ? AND value = ?');
+  const result = await update.run(actualSignature, 'features', preparedSignature);
+  if (Number(result.changes) !== 1) throw notReady('another build changed the index configuration while vectors were being prepared');
+}
+
+export async function openWithDialect<Handle>(input: ResolvedConfig, dialect: OpenDialect<Handle>, options: InternalOpenOptions = {}): Promise<OpenResult> {
+  const cfg = normaliseConfig(input);
+  const buildEnabled = options.build !== false;
+  const defaultRequirements = new Set<BuildRequirement>(buildEnabled ? ['core', 'lexical'] : ['core']);
+  if (buildEnabled && anyPresetEmbeds(cfg)) defaultRequirements.add('vectors');
+  const requirements = options.requirements ?? defaultRequirements;
+  const connected = buildEnabled ? await connectForBuild(cfg, dialect, requirements) : await connectExisting(cfg, dialect, requirements);
+  let store: Store | undefined;
+  try {
+    store = dialect.createStore(connected.handle, connected.conn, connected.cfg, { observational: connected.observational });
+    rekeyChunkText(connected.conn, store);
+    if (requirements.has('vectors') && buildEnabled) await prepareDocumentEmbeddings(store, connected.cfg);
+    return {
+      store,
+      cfg: connected.cfg,
+      dbPath: connected.dbPath,
+      parsed: connected.parsed,
+      warnings: connected.warnings,
+      stages: connected.stages,
+    };
+  } catch (err) {
+    if (store) await store.close();
+    else await dialect.close(connected.handle, { observational: connected.observational });
+    throw err;
+  }
 }
 
 export async function docCount(store: Store): Promise<number> {

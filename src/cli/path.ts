@@ -3,8 +3,9 @@ import { scopedPaths } from '../commands/scope.ts';
 import { findPath } from '../graph/traverse.ts';
 import type { Row } from '../output/output.ts';
 import { printRows } from '../output/output.ts';
+import type { BuildRequirement } from '../store/open.ts';
 import { USAGE } from './index.ts';
-import { CONFIG, FORMAT, formatOf, parse, SCOPE, scopeOf, withDb } from './shared.ts';
+import { CONFIG, FORMAT, formatOf, NO_BUILD, parse, SCOPE, scopeOf, withDb } from './shared.ts';
 import type { Command } from './types.ts';
 
 // --max-depth must be a positive integer, mirroring shared.ts's parseK.
@@ -17,12 +18,12 @@ function parseMaxDepth(depth: string | undefined, usageError: (message: string) 
 
 const pathCmd: Command = (ctx) => {
   const usage = `usage: ${ctx.name} ${USAGE.path}`;
-  const { values, positionals } = parse(ctx.argv, usage, { ...SCOPE, ...FORMAT, ...CONFIG, 'max-depth': { type: 'string' } });
+  const { values, positionals } = parse(ctx.argv, usage, { ...SCOPE, ...NO_BUILD, ...FORMAT, ...CONFIG, 'max-depth': { type: 'string' } });
   const [a, b] = positionals;
   if (!a || !b) ctx.usageError(usage);
   const maxDepth = parseMaxDepth(values['max-depth'] as string | undefined, ctx.usageError);
   const format = formatOf(values);
-  return withDb(ctx, values.config as string | undefined, async (store, cfg) => {
+  return withDb(ctx, values.config as string | undefined, { noBuild: values['no-build'] === true, requirements: new Set<BuildRequirement>(['core']) }, async (store, cfg) => {
     const paths = ((await (await store.prepare('SELECT "path" FROM frontmatter')).all()) as Array<{ path: string }>).map((r) => r.path);
     const from = resolveNote(paths, a);
     const to = resolveNote(paths, b);

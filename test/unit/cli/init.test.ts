@@ -7,13 +7,14 @@ import { runCli } from '../../lib/cli.ts';
 import { scratchDir } from '../../lib/scratch.ts';
 
 describe('init', () => {
-  it('writes the exact v5 starter, model named explicitly, and it round-trips loadConfig cleanly', () => {
+  it('writes the exact v6 starter, model named explicitly, and it round-trips loadConfig cleanly', () => {
     const dir = scratchDir('init');
     const configPath = initConfig(dir);
     assert.equal(configPath, join(dir, CONFIG_FILENAME));
 
     const cfg = JSON.parse(readFileSync(configPath, 'utf8'));
     assert.equal(cfg.version, SUPPORTED_CONFIG_VERSION);
+    assert.equal(cfg.build, true);
     assert.deepEqual(cfg.presets, {
       default: { include: ['**/*.md'], k: 10 },
       large: { include: ['**/*.md'], k: 20 },

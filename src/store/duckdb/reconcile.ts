@@ -32,8 +32,8 @@ async function reconcileContent(conn: Connection, touched: string[], docs: Parse
   // The delete above cleared every touched path, and duckdb holds the cache file for its whole
   // connection, so no second writer can have landed one of these rows: nothing can conflict.
   await appendRows(conn, 'content', CONTENT_COLUMNS, INSERT_CONTENT_SQL, docs.map(contentRow));
-  // content changed: the fts index is rebuilt lazily, on the next lexical query that needs it,
-  // not here. Awaited so the persisted mark (lexical.ts) commits with this same transaction.
+  // Build prepares the FTS index after reconcile. This persisted mark commits with the content
+  // change, so an interrupted build cannot expose stale lexical results.
   await markContentStale(conn);
 }
 

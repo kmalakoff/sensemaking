@@ -1,15 +1,21 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import assert from 'assert';
 import { writeFileAtomic } from '../../../src/lib/atomic-write.ts';
 import { scratchDir } from '../../lib/scratch.ts';
 
 describe('writeFileAtomic', () => {
-  it('writes the file and leaves no .part sibling', () => {
-    const target = join(scratchDir('atomic-write'), 'file.json');
+  it('writes the file and preserves an unrelated staging sibling', () => {
+    const dir = scratchDir('atomic-write');
+    const target = join(dir, 'file.json');
+    writeFileSync(`${target}.part`, 'another writer');
     writeFileAtomic(target, 'hello');
     assert.equal(readFileSync(target, 'utf8'), 'hello');
-    assert.ok(!existsSync(`${target}.part`));
+    assert.equal(readFileSync(`${target}.part`, 'utf8'), 'another writer');
+    assert.deepEqual(
+      readdirSync(dir).filter((name) => name.endsWith('.part')),
+      ['file.json.part']
+    );
   });
 
   it('overwrites an existing file', () => {
@@ -25,10 +31,18 @@ describe('writeFileAtomic', () => {
     assert.deepEqual(readFileSync(target), Buffer.from([1, 2, 3]));
   });
 
-  it('cleans up the .part file when the rename fails', () => {
-    const target = join(scratchDir('atomic-write'), 'target');
+  it('leaves another writer staging file intact and cleans up its own staging file when rename fails', () => {
+    const dir = scratchDir('atomic-write');
+    const target = join(dir, 'target');
+    const otherWriter = `${target}.other.part`;
+    writeFileSync(otherWriter, 'other writer');
     mkdirSync(target); // a file can't be renamed onto an existing directory
     assert.throws(() => writeFileAtomic(target, 'data'));
-    assert.ok(!existsSync(`${target}.part`), 'a failed rename should not leave the temp file behind');
+    assert.equal(readFileSync(otherWriter, 'utf8'), 'other writer');
+    assert.deepEqual(
+      readdirSync(dir).filter((name) => name.endsWith('.part')),
+      ['target.other.part']
+    );
+    assert.ok(existsSync(target));
   });
 });

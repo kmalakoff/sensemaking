@@ -6,7 +6,8 @@ import { shouldReconcileWatchNotification } from './lib/watch-notification.ts';
 import { docCount, openStore } from './store/index.ts';
 import { startWatchClaim, WATCH_HEARTBEAT_INTERVAL_MS } from './watch-claim.ts';
 
-// Watch is a cache pre-warmer, not a correctness mechanism: open() always reconciles anyway, so any fs event just triggers a debounced full reconcile.
+// Watch prepares the index for snapshot queries; filesystem events request debounced builds
+// and periodic reconciliation recovers missed notifications.
 const DEBOUNCE_MS = 200;
 
 export type WatchEvent = { type: 'started'; rootDir: string; dbPath: string } | { type: 'reconciled'; parsed: number; total: number; warnings: string[] } | { type: 'reconcile-error'; message: string };
@@ -42,7 +43,25 @@ export async function runWatch(cfg: ResolvedConfig, opts: WatchOptions = {}): Pr
     claimCloseStarted = true;
     return claim.close();
   };
+  let watcher: ReturnType<typeof fsWatch> | undefined;
+  let startup = true;
+  let startupNotification = false;
+  let scheduleReconcile: (() => void) | undefined;
+  let stopping = false;
   try {
+    // Subscribe before the first build. Native watchers have no ready barrier, so startup also
+    // performs an unconditional catch-up pass after the initial build.
+    watcher = fsWatch(rootDir, { recursive: true }, (_event, filename) => {
+      if (!shouldReconcileWatchNotification(filename)) return;
+      if (startup) startupNotification = true;
+      else scheduleReconcile?.();
+    });
+    watcher.on('error', (err) => {
+      claimFailure ??= err;
+      requestShutdown?.(err);
+    });
+
+    const startupEvents: Array<{ parsed: number; total: number; warnings: string[] }> = [];
     const { store: initialStore, dbPath, warnings: initialWarnings, parsed: initialParsed } = await openStore(cfg);
     let initialTotal = 0;
     try {
@@ -53,7 +72,21 @@ export async function runWatch(cfg: ResolvedConfig, opts: WatchOptions = {}): Pr
     }
     if (claimFailure) throw claimFailure;
 
-    let stopping = false;
+    startupEvents.push({ parsed: initialParsed, total: initialTotal, warnings: initialWarnings });
+    // Always reopen once after subscribing, then drain notifications observed while startup was
+    // in progress. Each pass closes before the next one starts, so no stores overlap.
+    do {
+      startupNotification = false;
+      const { store, parsed, warnings } = await openStore(cfg);
+      try {
+        if (parsed > 0 || warnings.length > 0) startupEvents.push({ parsed, total: await docCount(store), warnings });
+      } finally {
+        await store.close();
+      }
+      if (claimFailure) throw claimFailure;
+    } while (startupNotification && !opts.signal?.aborted);
+    startup = false;
+
     // At most one open+reconcile+close cycle runs at a time; a trigger that arrives mid-cycle is
     // coalesced into a single rerun instead of opening a second, overlapping connection.
     let running: Promise<void> | null = null;
@@ -95,20 +128,15 @@ export async function runWatch(cfg: ResolvedConfig, opts: WatchOptions = {}): Pr
     };
 
     let debounceTimer: NodeJS.Timeout | null = null;
-    const scheduleReconcile = () => {
+    // Ignore our own state files, or cache and claim writes would retrigger reconciliation forever.
+    // An unresolvable filename reconciles because parsing nothing costs less than missing a real edit.
+    scheduleReconcile = () => {
       if (debounceTimer) clearTimeout(debounceTimer);
       debounceTimer = setTimeout(() => {
         debounceTimer = null;
         requestCycle(true);
       }, debounceMs);
     };
-
-    // Ignore our own state files, or cache and claim writes would retrigger reconciliation forever.
-    // An unresolvable filename reconciles because parsing nothing costs less than missing a real edit.
-    const watcher = fsWatch(rootDir, { recursive: true }, (_event, filename) => {
-      if (!shouldReconcileWatchNotification(filename)) return;
-      scheduleReconcile();
-    });
     const reconcileTimer = setInterval(
       guardedTick(
         async () => requestCycle(false),
@@ -129,7 +157,7 @@ export async function runWatch(cfg: ResolvedConfig, opts: WatchOptions = {}): Pr
           opts.signal?.removeEventListener('abort', stopNormally);
           clearInterval(reconcileTimer);
           if (debounceTimer) clearTimeout(debounceTimer);
-          watcher.close();
+          watcher?.close();
           await running;
           let finalError: unknown;
           try {
@@ -163,8 +191,11 @@ export async function runWatch(cfg: ResolvedConfig, opts: WatchOptions = {}): Pr
         opts.signal?.addEventListener('abort', stopNormally, { once: true });
         try {
           onEvent({ type: 'started', rootDir, dbPath });
-          if (!stopping && (initialWarnings.length > 0 || initialParsed > 0)) {
-            onEvent({ type: 'reconciled', parsed: initialParsed, total: initialTotal, warnings: initialWarnings });
+          if (!stopping) {
+            for (const event of startupEvents) {
+              if (stopping) break;
+              if (event.warnings.length > 0 || event.parsed > 0) onEvent({ type: 'reconciled', ...event });
+            }
           }
         } catch (err) {
           shutdown(err instanceof Error ? err : new Error(String(err)));
@@ -172,6 +203,7 @@ export async function runWatch(cfg: ResolvedConfig, opts: WatchOptions = {}): Pr
       }
     });
   } catch (err) {
+    watcher?.close();
     if (claimCloseStarted) throw err;
     try {
       await closeClaim();

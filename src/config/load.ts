@@ -128,6 +128,8 @@ const MIGRATIONS: Record<number, (cfg: Record<string, unknown>) => Record<string
     }
     return result;
   },
+  // v5 -> v6: query-triggered builds are on by default. Preserve an explicit opt-out.
+  5: (cfg) => ({ ...cfg, version: 6, build: cfg.build === undefined ? true : cfg.build }),
 };
 
 export function migrateConfig(cfg: Config): { cfg: Config; from: number } {
@@ -157,6 +159,7 @@ function starterConfig(overrides?: InitOverrides): Config {
   return {
     $schema: 'https://unpkg.com/sensemaking/schema.json',
     version: SUPPORTED_CONFIG_VERSION,
+    build: true,
     presets: {
       default: { include: ['**/*.md'], k: 10 },
       large: { include: ['**/*.md'], k: 20 },
@@ -192,7 +195,13 @@ export function findConfigPath(startDir: string): string | null {
   }
 }
 
-export function loadConfig(explicitPath?: string): ResolvedConfig {
+/** Controls whether loading an older config may persist its in-memory migration. */
+export interface LoadConfigOptions {
+  /** Write a successful migration back to the config file. Defaults to true. */
+  writeMigration?: boolean;
+}
+
+export function loadConfig(explicitPath?: string, options: LoadConfigOptions = {}): ResolvedConfig {
   let configPath: string;
   if (explicitPath) {
     configPath = resolve(process.cwd(), explicitPath);
@@ -230,7 +239,24 @@ export function loadConfig(explicitPath?: string): ResolvedConfig {
     const result = migrateConfig(parsed as unknown as Config);
     cfg = validateConfig(result.cfg, configPath);
     migratedFrom = result.from;
-    writeFileAtomic(configPath, `${JSON.stringify(cfg, null, 2)}\n`);
+    if (options.writeMigration !== false) {
+      const migrated = `${JSON.stringify(cfg, null, 2)}\n`;
+      try {
+        writeFileAtomic(configPath, migrated);
+      } catch (err) {
+        // Only a rename-contention error might already be published by a racing writer.
+        // Any other failure, including a failed initial write, rethrows immediately.
+        const errno = err as NodeJS.ErrnoException;
+        if (!(err instanceof Error) || errno.syscall !== 'rename' || !['EPERM', 'EACCES', 'EBUSY'].includes(errno.code ?? '')) throw err;
+        let existing: string;
+        try {
+          existing = readFileSync(configPath, 'utf8');
+        } catch {
+          throw err;
+        }
+        if (existing !== migrated) throw err;
+      }
+    }
   } else {
     cfg = validateConfig(parsed, configPath);
   }

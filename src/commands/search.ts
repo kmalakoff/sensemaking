@@ -1,10 +1,10 @@
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { stemmer } from 'stemmer';
 import type { ResolvedConfig } from '../config/index.ts';
 import { embedConfig, featureEnabled, resolveSearch } from '../config/index.ts';
+import { ensureDocumentEmbeddings } from '../embed/query.ts';
 import { localModelMissing, MODEL_FILENAMES } from '../embed/store.ts';
 import { SenseError } from '../errors.ts';
+import { serialQuery } from '../lib/serial-query.ts';
 import type { Row } from '../output/output.ts';
 import { bareTermSyntaxError, searchError } from '../output/search-error.ts';
 import type { LexicalHit, Store } from '../store/types.ts';
@@ -302,14 +302,12 @@ export async function hydrateSearchRows(store: Store, cfg: ResolvedConfig, rows:
   const bareTerms = extractBareTerms(terms);
   const charLimit = opts.snippetCharLimit ?? SNIPPET_CHAR_LIMIT_DEFAULT;
   const countLimit = opts.snippetCountLimit ?? SNIPPET_COUNT_LIMIT_DEFAULT;
+  const sourceStmt = await store.prepare('SELECT text FROM indexed_sources WHERE "path" = ?');
   for (const row of rows) {
     if (!matchedPaths.has(row.path as string)) continue;
-    let text: string;
-    try {
-      text = readFileSync(join(cfg.rootDir ?? cfg.baseDir, row.path as string), 'utf8');
-    } catch {
-      continue; // vanished since the match; leave snippets/lines empty rather than throw
-    }
+    const source = (await sourceStmt.get(row.path)) as { text: string } | undefined;
+    if (!source) throw new SenseError('INDEX_NOT_READY', `indexed source text is missing for ${String(row.path)}; run \`sense build --force\` (or library build(config, { force: true })) before querying`);
+    const text = source.text;
     const { snippets, offset } = computeSnippets(text, bareTerms, charLimit, countLimit);
     row.snippets = snippets;
     if (row.lines == null) row.lines = featureEnabled(cfg, 'sections') ? await lineRangeFor(store, row.path as string, lineNumberAt(text, offset)) : null;
@@ -318,7 +316,11 @@ export async function hydrateSearchRows(store: Store, cfg: ResolvedConfig, rows:
 
 // The declared or defaulted signals compose via RRF; `via` names which ones produced each row.
 // `opts` arrives already resolved (config.ts:resolveSearch).
-export async function search(store: Store, cfg: ResolvedConfig, terms: string, opts: SearchOptions = {}): Promise<Row[]> {
+export function search(store: Store, cfg: ResolvedConfig, terms: string, opts: SearchOptions = {}): Promise<Row[]> {
+  return serialQuery(store, () => searchIndexed(store, cfg, terms, opts));
+}
+
+async function searchIndexed(store: Store, cfg: ResolvedConfig, terms: string, opts: SearchOptions): Promise<Row[]> {
   validateSearchOptions(opts);
   const effective = resolveSearch(cfg, opts);
   const { k, signals } = effective;
@@ -344,6 +346,7 @@ export async function search(store: Store, cfg: ResolvedConfig, terms: string, o
     if (localModelMissing(e)) {
       throw new SenseError('EMBED_MODEL_MISSING', `preset "${effective.presetName}" searches with vectors, but the local model path "${e.model}" is missing ${MODEL_FILENAMES}; point embed.model at a directory containing them, or drop "vectors" from that preset's signals to search without them`);
     }
+    await ensureDocumentEmbeddings(store, cfg, allowedPaths);
   }
   const semanticEnabled = wantsVectors && (await scopeHasEmbeddings(store, cfg, allowedPaths));
 

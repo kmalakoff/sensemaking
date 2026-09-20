@@ -1,5 +1,13 @@
 import assert from 'node:assert';
-import { search } from 'sensemaking';
+import { unlinkSync } from 'node:fs';
+import { join } from 'node:path';
+import { type ResolvedConfig, search } from 'sensemaking';
+import { featureSignature } from '../../src/config/index.ts';
+import { takeChunkText } from '../../src/embed/handoff.ts';
+import { embedPending } from '../../src/embed/query.ts';
+import { FEATURES } from '../../src/features/index.ts';
+import { getMeta, openStoreFor, setMeta } from '../../src/store/index.ts';
+import { type BuildRequirement, prepareDocumentEmbeddings } from '../../src/store/open.ts';
 import type { Store } from '../../src/store/types.ts';
 import { writeModel } from '../lib/model.ts';
 import { forEachStore, type ParityStoreName, withTreeForStore } from '../lib/stores.ts';
@@ -23,6 +31,13 @@ function sortedPending(rows: Array<{ path: string; chunk: number }>) {
 
 function embedConfig(model: string, chunkTokens?: number) {
   return { model, provider: 'static' as const, ...(chunkTokens === undefined ? {} : { chunkTokens }) };
+}
+
+function withoutEmbedIdentity(signature: string): string {
+  return signature
+    .split('|')
+    .map((part) => (part.startsWith('embed:') ? part.replace(/@.*$/, '') : part))
+    .join('|');
 }
 
 function modelTree(): string {
@@ -88,7 +103,137 @@ function normalizeSections(rows: SectionRow[]) {
 }
 
 describe('embedding invalidation across stores', () => {
-  it('model-only changes clear vector values while preserving content, sections, and chunk rows', async () => {
+  it('publishes a newly materialized model identity only after local vectors succeed', async () => {
+    const baseDir = modelTree();
+    const cfg = {
+      store: 'sqlite',
+      presets: { default: { include: ['**/*.md'], signals: { vectors: 1 } } },
+      embed: embedConfig(writeModel()),
+      queries: {},
+      baseDir,
+      configPath: null,
+    } as ResolvedConfig;
+    const opened = await openStoreFor(cfg, { build: true, requirements: new Set<BuildRequirement>(['core']) });
+    const actual = featureSignature(cfg, FEATURES);
+    const unresolved = withoutEmbedIdentity(actual);
+    assert.notEqual(unresolved, actual, 'fixture model must have a local identity to withhold');
+    try {
+      await setMeta(opened.store, 'features', unresolved);
+      await prepareDocumentEmbeddings(opened.store, cfg, new Set(['a.md']));
+      assert.equal(await getMeta(opened.store, 'features'), actual);
+      assert.equal(await opened.store.vectors.hasVector('a.md'), true);
+      assert.equal(await opened.store.vectors.hasVector('b.md'), false, 'scoped preparation must leave unrelated chunks pending');
+    } finally {
+      await opened.store.close();
+    }
+
+    const observed = await openStoreFor(cfg, { build: false, requirements: new Set<BuildRequirement>(['core', 'vectors']) });
+    await observed.store.close();
+  });
+
+  it('does not publish model identity when another signature key also changed', async () => {
+    const baseDir = modelTree();
+    const cfg = {
+      store: 'sqlite',
+      presets: { default: { include: ['**/*.md'], signals: { vectors: 1 } } },
+      embed: embedConfig(writeModel()),
+      queries: {},
+      baseDir,
+      configPath: null,
+    } as ResolvedConfig;
+    const opened = await openStoreFor(cfg, { build: true, requirements: new Set<BuildRequirement>(['core']) });
+    const incompatible = withoutEmbedIdentity(featureSignature(cfg, FEATURES)).replace('feature:tags:on', 'feature:tags:off');
+    try {
+      await setMeta(opened.store, 'features', incompatible);
+      await assert.rejects(() => prepareDocumentEmbeddings(opened.store, cfg, new Set(['a.md'])), /configuration changed while vectors were being prepared/);
+      assert.equal(await opened.store.vectors.hasVector('a.md'), true, 'the guard must run after real vector preparation');
+      assert.equal(await getMeta(opened.store, 'features'), incompatible, 'an unrelated signature change must not be adopted');
+    } finally {
+      await opened.store.close();
+    }
+  });
+
+  it('keeps prepared lexical search usable after vector preparation fails', async () => {
+    await forEachStore(async (store) => {
+      const baseDir = modelTree();
+      const cfg = {
+        store,
+        presets: {
+          default: { include: ['**/*.md'], signals: { words: 1, vectors: 1 } },
+          lexical: { include: ['**/*.md'], signals: { words: 1 } },
+        },
+        embed: embedConfig('/nonexistent/sense-v1-model'),
+        queries: {},
+        baseDir,
+        configPath: null,
+      } as ResolvedConfig;
+
+      await assert.rejects(() => openStoreFor(cfg, { build: true, requirements: new Set<BuildRequirement>(['core', 'lexical', 'vectors']) }), /embed model .* is not available/);
+      const opened = await openStoreFor(cfg, { build: false, requirements: new Set<BuildRequirement>(['core', 'lexical']) });
+      try {
+        const result = (await search(opened.store, cfg, 'apple', { preset: 'lexical' })) as Array<{ path: string }>;
+        assert.equal(result[0]?.path, 'a.md', `${store}: vector failure blocked lexical readiness`);
+      } finally {
+        await opened.store.close();
+      }
+    });
+  });
+
+  it('no-build semantic readiness ignores pending chunks outside the requested scope', async () => {
+    await forEachStore(async (store) => {
+      const baseDir = modelTree();
+      const cfg = {
+        store,
+        presets: {
+          default: { include: ['a.md'], signals: { vectors: 1 } },
+          other: { include: ['b.md'], signals: { vectors: 1 } },
+        },
+        embed: embedConfig(writeModel([['apple'], ['stone']])),
+        queries: {},
+        baseDir,
+        configPath: null,
+      } as ResolvedConfig;
+      const built = await openStoreFor(cfg, { build: true, requirements: new Set<BuildRequirement>(['core']) });
+      await embedPending(built.store, cfg, new Set(['a.md']));
+      await built.store.close();
+
+      const opened = await openStoreFor(cfg, { build: false, requirements: new Set<BuildRequirement>(['core', 'vectors']) });
+      try {
+        const result = (await search(opened.store, cfg, 'apple', { preset: 'default' })) as Array<{ path: string }>;
+        assert.equal(result[0]?.path, 'a.md', `${store}: complete requested scope did not answer`);
+        assert.ok(
+          (await opened.store.vectors.pending()).some((row) => row.path === 'b.md'),
+          `${store}: fixture lost its unrelated pending row`
+        );
+      } finally {
+        await opened.store.close();
+      }
+    });
+  });
+
+  it('prepares delayed chunks from the stored indexed source after the live file vanishes', async () => {
+    await forEachStore(async (store) => {
+      const baseDir = modelTree();
+      const cfg = { store, presets: { default: { include: ['**/*.md'] } }, embed: embedConfig(writeModel()), queries: {}, baseDir, configPath: null } as ResolvedConfig;
+      const opened = await openStoreFor(cfg, { build: true, requirements: new Set<BuildRequirement>(['core']) });
+      try {
+        assert.ok((await opened.store.vectors.pending()).some((row) => row.path === 'a.md'));
+        assert.ok(takeChunkText(opened.store), `${store}: fixture must discard the same-process handoff`);
+        unlinkSync(join(baseDir, 'a.md'));
+        await embedPending(opened.store, cfg, new Set(['a.md']));
+        assert.equal(
+          (await opened.store.vectors.pending()).some((row) => row.path === 'a.md'),
+          false,
+          `${store}: delayed embedding consulted the vanished live path`
+        );
+        assert.equal(await opened.store.vectors.hasVector('a.md'), true, `${store}: stored source did not produce a vector`);
+      } finally {
+        await opened.store.close();
+      }
+    });
+  });
+
+  it('model-only changes re-prepare vectors while preserving content, sections, and chunk rows', async () => {
     await forEachStore(async (store: ParityStoreName) => {
       const baseDir = modelTree();
       const modelA = writeModel([['apple', 'pomme'], ['stone']]);
@@ -150,18 +295,18 @@ describe('embedding invalidation across stores', () => {
 
       assert.deepEqual(
         after.chunks,
-        expectedChunks.map((row) => ({ ...row, vector: false })),
-        `${store}: model change preserves chunks and clears vectors`
+        expectedChunks.map((row) => ({ ...row, vector: true })),
+        `${store}: model change preserves chunks and prepares replacement vectors`
       );
       assert.deepEqual(after.content, expectedContent, `${store}: model change preserves content`);
       assert.deepEqual(after.sections, expectedSections, `${store}: model change preserves sections`);
-      assert.deepEqual(after.pending, sortedPending(expectedChunks.map(({ path, chunk }) => ({ path, chunk }))), `${store}: model change pending rows`);
-      assert.equal(after.hasA, false, `${store}: a.md must be pending after model change`);
-      assert.equal(after.hasB, false, `${store}: b.md must be pending after model change`);
+      assert.deepEqual(after.pending, [], `${store}: public open must finish model-change preparation`);
+      assert.equal(after.hasA, true, `${store}: a.md replacement vector`);
+      assert.equal(after.hasB, true, `${store}: b.md replacement vector`);
     });
   });
 
-  it('chunk-token changes rebuild exact authored boundaries and leave every new row pending', async () => {
+  it('chunk-token changes rebuild exact authored boundaries and prepare every new row', async () => {
     await forEachStore(async (store: ParityStoreName) => {
       const baseDir = chunkTree();
       const model = writeModel([['apple', 'pomme'], ['stone']]);
@@ -217,11 +362,11 @@ describe('embedding invalidation across stores', () => {
 
       assert.deepEqual(
         after.chunks,
-        smallChunks.map((row) => ({ ...row, vector: false })),
+        smallChunks.map((row) => ({ ...row, vector: true })),
         `${store}: chunk-token change authored chunks`
       );
       assert.deepEqual(after.sections, expectedSections, `${store}: chunk-token change preserves sections`);
-      assert.deepEqual(after.pending, sortedPending(smallChunks.map(({ path, chunk }) => ({ path, chunk }))), `${store}: chunk-token change pending rows`);
+      assert.deepEqual(after.pending, [], `${store}: chunk-token change prepared rows`);
     });
   });
 
@@ -258,14 +403,7 @@ describe('embedding invalidation across stores', () => {
         { embed: embedConfig(modelB) }
       );
 
-      assert.deepEqual(
-        after.pendingBefore,
-        sortedPending([
-          { path: 'a.md', chunk: 0 },
-          { path: 'b.md', chunk: 0 },
-        ]),
-        `${store}: changed model must invalidate every vector row`
-      );
+      assert.deepEqual(after.pendingBefore, [], `${store}: public open must complete changed-model preparation`);
       assert.deepEqual(after.pendingAfter, [], `${store}: search must re-embed all pending rows`);
       assert.equal(after.rows[0]?.path, 'a.md', `${store}: pomme semantic answer`);
       assert.equal(after.rows[0]?.via, 'vector', `${store}: pomme answer provenance`);

@@ -1,16 +1,16 @@
 import { createHash } from 'node:crypto';
-import { mkdirSync, utimesSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import assert from 'assert';
 import { safeRmSync } from 'fs-remove-compat';
-import { STATE_DIR, search } from 'sensemaking';
+import { loadConfig, open, STATE_DIR, SUPPORTED_CONFIG_VERSION, search } from 'sensemaking';
 import { startMeasuredWatcher } from '../../benchmark/lib/measured-watcher.mjs';
 import { nativeObserverDeadlineMs, waitForNativeIndex } from '../../benchmark/lib/native-observer.mjs';
 import { captureFileManifest, readIndexSnapshot, verifyIndexSnapshot } from '../../benchmark/lib/work-tree.mjs';
 import { packageRoot, scratchDir } from '../lib/scratch.ts';
-import { openTreeForStore, type ParityStoreName, STORE_NAMES, withTreeForStore } from '../lib/stores.ts';
+import { openTreeForStore, type ParityStoreName, STORE_NAMES } from '../lib/stores.ts';
 
-type Store = Awaited<ReturnType<typeof openTreeForStore>>['store'];
+type Store = Awaited<ReturnType<typeof open>>['store'];
 
 function rowHash(row: { title: string; summary: string; text: string }): string {
   return createHash('sha256')
@@ -33,12 +33,16 @@ function assertOnlyKnownNodeWarnings(stderr: string): void {
 }
 
 async function verifyFreshPublicSearch(store: ParityStoreName, baseDir: string, query: string, expectedRow: { title: string; summary: string; text: string }): Promise<void> {
-  await withTreeForStore(store, baseDir, async ({ store: opened, cfg }) => {
-    assert.deepEqual(await searchPaths(opened, cfg, query), ['a.md'], `${store}: fresh watcher search`);
-    assert.deepEqual(await searchPaths(opened, cfg, 'legacyneedle'), [], `${store}: stale watcher search`);
-    const row = (await (await opened.prepare('SELECT "path", text FROM content WHERE "path" = ?')).get('a.md')) as { path: string; text: string };
+  const cfg = loadConfig(join(baseDir, 'sense.config.json'), { writeMigration: false });
+  const opened = await open(cfg, { build: false });
+  try {
+    assert.deepEqual(await searchPaths(opened.store, cfg, query), ['a.md'], `${store}: fresh watcher search`);
+    assert.deepEqual(await searchPaths(opened.store, cfg, 'legacyneedle'), [], `${store}: stale watcher search`);
+    const row = (await (await opened.store.prepare('SELECT "path", text FROM content WHERE "path" = ?')).get('a.md')) as { path: string; text: string };
     assert.deepEqual(row, { path: 'a.md', text: expectedRow.text }, `${store}: fresh watcher content`);
-  });
+  } finally {
+    await opened.store.close();
+  }
 }
 
 describe('public watcher freshness lifecycle', () => {
@@ -131,10 +135,15 @@ describe('public watcher freshness lifecycle', () => {
       const winner = firstOutcome.event.type === 'started' ? first : second;
       const loser = winner === first ? second : first;
       const rejection = loser.events.find((event) => event.type === 'run-watch-rejected');
-      assert.equal(rejection?.error?.code, 'WATCH_ACTIVE');
+      assert.equal(rejection?.error?.code, 'WATCH_ACTIVE', JSON.stringify(rejection));
       firstClose = first.close(5_000, firstOutcome.event.type === 'run-watch-rejected' ? 'WATCH_ACTIVE' : null);
       secondClose = second.close(5_000, secondOutcome.event.type === 'run-watch-rejected' ? 'WATCH_ACTIVE' : null);
       await Promise.all([firstClose, secondClose]);
+      // Read raw disk bytes, not loadConfig: loadConfig migrates in memory regardless of
+      // whether either contender's write actually landed, so it can't prove the disk moved.
+      const finalRaw = JSON.parse(readFileSync(configPath, 'utf8'));
+      assert.equal(finalRaw.version, SUPPORTED_CONFIG_VERSION, 'both contenders must leave the on-disk config migrated to the current version');
+      assert.equal(finalRaw.build, true, 'the v5 -> v6 step must have published build:true regardless of which contender lost the race');
     } finally {
       firstClose ??= first.close(5_000, first.events.find((event) => event.type === 'run-watch-rejected')?.error?.code ?? null);
       secondClose ??= second.close(5_000, second.events.find((event) => event.type === 'run-watch-rejected')?.error?.code ?? null);

@@ -2,6 +2,38 @@
 
 All notable changes to sensemaking are documented here.
 
+## [0.25.0] - 2026-09-19
+
+### Added
+
+- `sense build` and library `build(config)` prepare the index explicitly. Their `force`
+  option recreates only the configuration's derived index, preserving notes and configuration.
+- Config `build: false`, query `--no-build`, and library `open(config, { build: false })`
+  support querying an existing index after a manual build or alongside watch. Missing or
+  incompatible capabilities produce an actionable error instead of silently rebuilding.
+
+### Changed
+
+- Library `open(config)` now prepares all configured capabilities, including document vectors.
+  This can download a model or call an embedding provider during open. CLI queries prepare
+  only what their requested operation needs; explicit build and watch prepare everything configured.
+- Configurations migrate to version 6 with query-time building enabled by default.
+  No-build queries and status inspect older configurations without rewriting them.
+- Search snippets and delayed document embedding use stored source text from the indexed
+  generation, rather than newer live files. Existing disposable indexes rebuild on the next
+  build-enabled open. `sense status` reports readiness without building an index.
+
+### Fixed
+
+- Overlapping high-level queries on one store handle serialize instead of colliding over
+  temporary query tables. Raw SQL, explicit transactions and handle closure remain caller-owned.
+- Watch subscribes before its initial build and completes a catch-up pass before reporting ready,
+  covering edits made during startup. Periodic reconciliation still recovers missed native events.
+- Simultaneous configuration migrations use separate staging files and no longer race over
+  one temporary filename.
+- Reused parser workers honor changed configuration and feature selection, and queued parsing
+  waits for earlier work to finish even when a task fails.
+
 ## [0.24.7] - 2026-09-17
 
 ### Changed

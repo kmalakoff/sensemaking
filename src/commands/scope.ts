@@ -16,7 +16,7 @@ export function inScope(path: string, include: string[], exclude?: string[]): bo
 
 export async function scopeHasEmbeddings(store: Store, cfg: ResolvedConfig, scopedPaths: Set<string>): Promise<boolean> {
   if (!anyPresetEmbeds(cfg)) return false; // the embeddings table doesn't exist at all in this case
-  const stmt = await store.prepare('SELECT DISTINCT "path" FROM embeddings');
+  const stmt = await store.prepare('SELECT DISTINCT "path" FROM embeddings WHERE vector IS NOT NULL');
   const rows = (await stmt.all()) as Array<{ path: string }>;
   return rows.some((r) => scopedPaths.has(r.path));
 }

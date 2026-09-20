@@ -2,8 +2,8 @@ import assert from 'node:assert';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { SearchOptions, SenseError } from 'sensemaking';
-import { search } from 'sensemaking';
-import { mapTree, relatedNotes } from '../../src/commands/index.ts';
+import { mapTree, peek, search } from 'sensemaking';
+import { relatedNotes } from '../../src/commands/index.ts';
 import { SenseError as StoreSenseError } from '../../src/errors.ts';
 import { findPath } from '../../src/graph/traverse.ts';
 import { runCli } from '../lib/cli.ts';
@@ -52,6 +52,69 @@ function fixtureTree(): string {
 }
 
 describe('store parity: portable surface (sqlite reference)', () => {
+  it('isolates overlapping high-level queries on one handle and continues after rejection', async () => {
+    const baseDir = tmpTree();
+    writeNote(baseDir, 'a.md', { body: 'apple [[b]]' });
+    writeNote(baseDir, 'b.md', { body: 'bird [[c]]' });
+    writeNote(baseDir, 'c.md', { body: 'cobalt' });
+    await forEachStore(async (name) =>
+      withTreeForStore(
+        name,
+        baseDir,
+        async ({ store, cfg }) => {
+          const queries: Promise<void>[] = [];
+          for (let i = 0; i < 50; i++) {
+            const path = i % 2 === 0 ? 'a.md' : 'b.md';
+            queries.push(
+              search(store, cfg, i % 2 === 0 ? 'apple' : 'bird', { include: [path] }).then((rows) => {
+                assert.deepEqual(
+                  rows.map((row) => row.path),
+                  [path],
+                  `${name}: overlapping search ${i}`
+                );
+              })
+            );
+          }
+          queries.push(assert.rejects(search(store, cfg, '(', { include: ['a.md'] })));
+          for (const path of ['a.md', 'b.md']) {
+            queries.push(
+              mapTree(store, cfg, { include: [path] }).then((result) => {
+                assert.equal(result.docs.count, 1, name);
+              })
+            );
+            queries.push(
+              peek(store, cfg, path).then((result) => {
+                assert.equal(result.path, path, name);
+              })
+            );
+          }
+          queries.push(
+            findPath(store, 'a.md', 'c.md').then((result) => {
+              assert.deepEqual(result, ['a.md', 'b.md', 'c.md'], name);
+            })
+          );
+          queries.push(
+            findPath(store, 'a.md', 'c.md', { allowed: new Set(['a.md', 'c.md']) }).then((result) => {
+              assert.equal(result, null, name);
+            })
+          );
+          queries.push(
+            search(store, cfg, 'cobalt').then((rows) => {
+              assert.deepEqual(
+                rows.map((row) => row.path),
+                ['c.md'],
+                name
+              );
+            })
+          );
+          const results = await Promise.allSettled(queries);
+          for (const result of results) if (result.status === 'rejected') throw result.reason;
+        },
+        { presets: { default: { include: ['**/*.md'], signals: { words: 1 } } } }
+      )
+    );
+  });
+
   it('docCount matches the authored tree', async () => {
     const baseDir = fixtureTree();
     await forEachStore(async (store) => withTreeForStore(store, baseDir, async ({ store: s }) => assert.equal(await docCount(s), 3, store)));

@@ -1,5 +1,6 @@
 import type { FeatureName, ResolvedConfig, SearchOverrides } from '../config/index.ts';
 import { featureEnabled, featureStates } from '../config/index.ts';
+import { serialQuery } from '../lib/serial-query.ts';
 import type { Row } from '../output/output.ts';
 import type { FieldStat, Store } from '../store/types.ts';
 import { INTERNAL_COLUMNS, scopedPaths, setupMapScope } from './scope.ts';
@@ -35,7 +36,11 @@ function chunk<T>(items: T[], size: number): T[][] {
 
 // What is this scope: fixed-size output regardless of tree size. Coverage and features stay
 // global -- they describe the tree, not the current question.
-export async function mapTree(store: Store, cfg: ResolvedConfig, overrides: SearchOverrides = {}): Promise<TreeMap> {
+export function mapTree(store: Store, cfg: ResolvedConfig, overrides: SearchOverrides = {}): Promise<TreeMap> {
+  return serialQuery(store, () => mapIndexed(store, cfg, overrides));
+}
+
+async function mapIndexed(store: Store, cfg: ResolvedConfig, overrides: SearchOverrides): Promise<TreeMap> {
   return store.transaction(async () => {
     await setupMapScope(store, await scopedPaths(store, cfg, overrides));
     const scopeWhere = 'WHERE "path" IN (SELECT "path" FROM _map_scope)';

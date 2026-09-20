@@ -1,6 +1,7 @@
 import assert from 'assert';
 import type { ResolvedConfig } from '../../../src/config/index.ts';
 import { DB_FILENAME, docCount, getMeta, openStore, setMeta } from '../../../src/store/index.ts';
+import { writeModel } from '../../lib/model.ts';
 import { tmpTree, writeNote } from '../../lib/tree.ts';
 
 function cfgFor(baseDir: string): ResolvedConfig {
@@ -36,7 +37,7 @@ describe('openStore: store selection and capability gating', () => {
     const result = await openStore({
       ...cfgFor(baseDir),
       store: 'duckdb',
-      embed: { model: 'minishlab/potion-retrieval-32M' },
+      embed: { model: writeModel(), provider: 'static' },
     });
     assert.equal(result.store.name, 'duckdb');
     await result.store.close();
@@ -51,7 +52,7 @@ describe('openStore: store selection and capability gating', () => {
       baseDir,
       configPath: null,
       store: 'duckdb',
-      embed: { model: 'minishlab/potion-retrieval-32M' },
+      embed: { model: 'unused/model' },
     });
     assert.equal(result.store.name, 'duckdb');
     await result.store.close();

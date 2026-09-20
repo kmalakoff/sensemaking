@@ -1,16 +1,28 @@
 import assert from 'node:assert';
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Row } from 'sensemaking';
-import { mapTree, peek, search } from 'sensemaking';
+import { build, loadConfig, mapTree, open, peek, type ResolvedConfig, SUPPORTED_CONFIG_VERSION, search } from 'sensemaking';
 import { resolveNote, scopedPaths } from '../../src/commands/index.ts';
 import { renderPeek } from '../../src/output/output.ts';
+import { openStoreFor } from '../../src/store/index.ts';
+import { WATCH_CLAIM_FILENAME } from '../../src/watch-claim.ts';
 import { runCli } from '../lib/cli.ts';
 import { packageRoot } from '../lib/scratch.ts';
 import { openConfig, openTree, tmpTree, writeNote } from '../lib/tree.ts';
 
 const write = (baseDir: string, relPath: string, body: string, frontmatter: Record<string, unknown> = {}) => writeNote(baseDir, relPath, { body, frontmatter });
+
+function configuredTree(): { configDir: string; rootDir: string; configPath: string } {
+  const configDir = tmpTree();
+  const rootDir = join(configDir, 'vault');
+  mkdirSync(rootDir);
+  const configPath = join(configDir, 'sense.config.json');
+  writeFileSync(configPath, JSON.stringify({ version: SUPPORTED_CONFIG_VERSION, root: 'vault', presets: { default: { include: ['**/*.md'] } }, queries: {} }, null, 2));
+  writeNote(rootDir, 'a.md', { frontmatter: { title: 'Old title' }, body: 'old indexed body' });
+  return { configDir, rootDir, configPath };
+}
 
 function makeTree(): string {
   const baseDir = tmpTree();
@@ -22,6 +34,23 @@ function makeTree(): string {
 }
 
 describe('search', () => {
+  it('hydrates snippets from the indexed generation instead of newer live bytes', async () => {
+    const baseDir = tmpTree();
+    write(baseDir, 'note.md', 'The old indexed price is 100 credits.', { title: 'Price' });
+    const cfg: ResolvedConfig = { presets: { default: { include: ['**/*.md'] } }, queries: {}, baseDir, rootDir: baseDir, configDir: baseDir, configPath: null };
+    await build(cfg);
+    write(baseDir, 'note.md', 'The newer live price is 900 credits.', { title: 'Price' });
+
+    const opened = await open(cfg, { build: false });
+    try {
+      const rows = (await search(opened.store, cfg, 'price')) as Array<{ snippets: string[] }>;
+      assert.match(rows[0].snippets.join(' '), /old indexed/);
+      assert.doesNotMatch(rows[0].snippets.join(' '), /newer live/);
+    } finally {
+      await opened.store.close();
+    }
+  });
+
   it('BM25 matches carry via=match with a snippet', async () => {
     const { store: db, cfg } = await openTree(makeTree());
     const rows = (await search(db, cfg, 'price')) as Array<{ path: string; via: string; snippets: string[] }>;
@@ -1142,5 +1171,167 @@ describe('--no-exclude', () => {
       rows.map((r) => r.path),
       ['archive/old.md']
     );
+  });
+});
+
+describe('sense build and query --no-build', () => {
+  it('does not prepare pending document vectors when the config disables query builds', async () => {
+    const { configDir, configPath } = configuredTree();
+    const config = { ...JSON.parse(readFileSync(configPath, 'utf8')), build: false, embed: { model: 'minishlab/potion-retrieval-32M', provider: 'static' } };
+    writeFileSync(configPath, JSON.stringify(config));
+    const cfg = loadConfig(configPath);
+    const initial = await openStoreFor(cfg, { build: true, requirements: new Set(['core', 'lexical']) });
+    let pending: Awaited<ReturnType<typeof initial.store.vectors.pending>>;
+    try {
+      pending = await initial.store.vectors.pending();
+      assert.ok(pending.length > 0);
+    } finally {
+      await initial.store.close();
+    }
+    const result = runCli(['search', 'indexed', '--format', 'json'], { cwd: configDir });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /still need vectors/);
+    const observed = await open(cfg, { build: false });
+    try {
+      assert.deepEqual(await observed.store.vectors.pending(), pending);
+    } finally {
+      await observed.store.close();
+    }
+  });
+
+  it('honors config build false for direct and saved queries while explicit build migrates and refreshes', () => {
+    const { configDir, configPath, rootDir } = configuredTree();
+    const config = { ...JSON.parse(readFileSync(configPath, 'utf8')), version: 5, build: false, queries: { titles: { sql: 'SELECT title FROM frontmatter' }, old: { search: 'indexed' } } };
+    const legacy = JSON.stringify(config);
+    writeFileSync(configPath, legacy);
+    const absent = runCli(['map', '--format', 'json'], { cwd: configDir });
+    assert.equal(absent.status, 1);
+    assert.match(absent.stderr, /run "sense build"/);
+    assert.equal(readFileSync(configPath, 'utf8'), legacy);
+    assert.equal(existsSync(join(configDir, '.sense')), false);
+
+    const built = runCli(['build'], { cwd: configDir });
+    assert.equal(built.status, 0, built.stderr);
+    const migrated = JSON.parse(readFileSync(configPath, 'utf8'));
+    assert.equal(migrated.version, SUPPORTED_CONFIG_VERSION);
+    assert.equal(migrated.build, false);
+    writeNote(rootDir, 'a.md', { frontmatter: { title: 'New title' }, body: 'new live body' });
+    for (const args of [['sql', 'SELECT title FROM frontmatter'], ['titles']]) {
+      const result = runCli([...args, '--format', 'json'], { cwd: configDir });
+      assert.equal(result.status, 0, result.stderr);
+      assert.deepEqual(JSON.parse(result.stdout), [{ title: 'Old title' }]);
+    }
+    for (const args of [['search', 'indexed'], ['old']]) {
+      const result = runCli([...args, '--format', 'json'], { cwd: configDir });
+      assert.equal(result.status, 0, result.stderr);
+      const rows = JSON.parse(result.stdout);
+      assert.deepEqual(
+        rows.map((row: Row) => row.path),
+        ['a.md']
+      );
+      assert.match(rows[0].snippets.join(' '), /«indexed» body/);
+      assert.doesNotMatch(rows[0].snippets.join(' '), /new live/);
+    }
+    const refreshed = runCli(['build'], { cwd: configDir });
+    assert.equal(refreshed.status, 0, refreshed.stderr);
+    const result = runCli(['titles', '--format', 'json'], { cwd: configDir });
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout), [{ title: 'New title' }]);
+  });
+
+  it('migrates a legacy query to build true and lets --no-build override that default', () => {
+    const { configDir, configPath, rootDir } = configuredTree();
+    const config = { ...JSON.parse(readFileSync(configPath, 'utf8')), version: 5 };
+    writeFileSync(configPath, JSON.stringify(config));
+    const first = runCli(['sql', 'SELECT title FROM frontmatter', '--format', 'json'], { cwd: configDir });
+    assert.equal(first.status, 0, first.stderr);
+    assert.deepEqual(JSON.parse(first.stdout), [{ title: 'Old title' }]);
+    assert.equal(JSON.parse(readFileSync(configPath, 'utf8')).build, true);
+    writeNote(rootDir, 'a.md', { frontmatter: { title: 'Changed title' }, body: 'changed' });
+    const stale = runCli(['sql', 'SELECT title FROM frontmatter', '--no-build', '--format', 'json'], { cwd: configDir });
+    assert.equal(stale.status, 0, stale.stderr);
+    assert.deepEqual(JSON.parse(stale.stdout), [{ title: 'Old title' }]);
+  });
+
+  it('reports a missing index without creating derived state', () => {
+    const { configDir } = configuredTree();
+    const result = runCli(['map', '--no-build'], { cwd: configDir });
+
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /run "sense build"/);
+    assert.equal(existsSync(join(configDir, '.sense')), false);
+  });
+
+  it('does not write a pending config migration on no-build or status paths', () => {
+    const { configDir, configPath } = configuredTree();
+    const legacy = JSON.stringify({ version: 4, root: 'vault', presets: { default: { include: ['**/*.md'], semantic: false } }, queries: {} }, null, 2);
+    writeFileSync(configPath, legacy);
+
+    const query = runCli(['map', '--no-build'], { cwd: configDir });
+    assert.equal(query.status, 1);
+    assert.match(query.stderr, /using the migrated form in memory only/);
+    assert.equal(readFileSync(configPath, 'utf8'), legacy);
+
+    const status = runCli(['status', '--format', 'json'], { cwd: configDir });
+    assert.equal(status.status, 0, status.stderr);
+    assert.equal(readFileSync(configPath, 'utf8'), legacy);
+  });
+
+  it('reads the completed generation until a default query builds an edit', () => {
+    const { configDir, rootDir } = configuredTree();
+    const built = runCli(['build'], { cwd: configDir });
+    assert.equal(built.status, 0, built.stderr);
+
+    const searchResult = runCli(['search', 'indexed', '--no-build', '--format', 'json'], { cwd: configDir });
+    assert.equal(searchResult.status, 0, searchResult.stderr);
+    assert.equal(JSON.parse(searchResult.stdout)[0]?.path, 'a.md');
+
+    writeNote(rootDir, 'a.md', { frontmatter: { title: 'New title' }, body: 'new live body' });
+    const stale = runCli(['sql', 'SELECT title FROM frontmatter', '--no-build', '--format', 'json'], { cwd: configDir });
+    assert.equal(stale.status, 0, stale.stderr);
+    assert.deepEqual(JSON.parse(stale.stdout), [{ title: 'Old title' }]);
+
+    const fresh = runCli(['sql', 'SELECT title FROM frontmatter', '--format', 'json'], { cwd: configDir });
+    assert.equal(fresh.status, 0, fresh.stderr);
+    assert.deepEqual(JSON.parse(fresh.stdout), [{ title: 'New title' }]);
+  });
+
+  it('does not prepare configured vectors for core-only commands', () => {
+    const { configDir, configPath } = configuredTree();
+    const cfg = JSON.parse(readFileSync(configPath, 'utf8')) as Record<string, unknown>;
+    cfg.embed = { model: '/nonexistent/sense-v1-model', provider: 'static' };
+    cfg.presets = { default: { include: ['**/*.md'] }, lexical: { include: ['**/*.md'], signals: { words: 1 } } };
+    writeFileSync(configPath, JSON.stringify(cfg, null, 2));
+
+    const map = runCli(['map', '--format', 'json'], { cwd: configDir });
+    assert.equal(map.status, 0, map.stderr);
+    const sql = runCli(['sql', 'SELECT title FROM frontmatter', '--format', 'json'], { cwd: configDir });
+    assert.equal(sql.status, 0, sql.stderr);
+    assert.deepEqual(JSON.parse(sql.stdout), [{ title: 'Old title' }]);
+    const lexical = runCli(['search', 'indexed', '--preset', 'lexical', '--format', 'json'], { cwd: configDir });
+    assert.equal(lexical.status, 0, lexical.stderr);
+    assert.equal(JSON.parse(lexical.stdout)[0]?.path, 'a.md');
+  });
+
+  it('--force recreates only config-owned derived state', () => {
+    const { configDir, rootDir, configPath } = configuredTree();
+    const built = runCli(['build'], { cwd: configDir });
+    assert.equal(built.status, 0, built.stderr);
+
+    const derivedSentinel = join(configDir, '.sense', 'derived-only.txt');
+    const watcherClaim = join(configDir, WATCH_CLAIM_FILENAME);
+    writeFileSync(derivedSentinel, 'remove');
+    writeFileSync(watcherClaim, 'keep');
+    const configBefore = readFileSync(configPath, 'utf8');
+    const noteBefore = readFileSync(join(rootDir, 'a.md'), 'utf8');
+
+    const result = runCli(['build', '--force'], { cwd: configDir });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(existsSync(derivedSentinel), false);
+    assert.equal(readFileSync(configPath, 'utf8'), configBefore);
+    assert.equal(readFileSync(join(rootDir, 'a.md'), 'utf8'), noteBefore);
+    assert.equal(readFileSync(watcherClaim, 'utf8'), 'keep');
+    assert.equal(existsSync(join(configDir, '.sense')), true);
+    assert.equal(existsSync(join(rootDir, '.sense')), false);
   });
 });

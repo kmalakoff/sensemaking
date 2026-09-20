@@ -200,6 +200,45 @@ describe('runWatch', () => {
     }
   });
 
+  it('catches an authored note written after subscription during the initial build', async () => {
+    const baseDir = tree();
+    for (let i = 0; i < 200; i++) writeNote(baseDir, `initial-${i}.md`);
+    const cfg = { ...cfgFor(baseDir), build: false };
+    const controller = new AbortController();
+    let authored = false;
+    const originalWrite = process.stderr.write;
+    process.stderr.write = (chunk: string | Uint8Array, encodingOrCallback?: BufferEncoding | ((error?: Error | null) => void), callback?: (error?: Error | null) => void) => {
+      const encoding = typeof encodingOrCallback === 'string' ? encodingOrCallback : undefined;
+      const cb = typeof encodingOrCallback === 'function' ? encodingOrCallback : callback;
+      const result = originalWrite.call(process.stderr, chunk, encoding, cb);
+      if (!authored && typeof chunk === 'string' && /^\r?reparsing files: 1\/200(?:,|\n|$)/.test(chunk)) {
+        authored = true;
+        writeNote(baseDir, 'authored-during-startup.md', { body: 'written after the watcher subscribed' });
+      }
+      return result;
+    };
+    const { done, ready, events } = startWatch(cfg, { signal: controller.signal, heartbeatIntervalMs: 60_000 });
+    try {
+      await ready;
+      assert.equal(authored, true);
+      const opened = await openStore(cfg, { build: false });
+      try {
+        const row = (await (await opened.store.prepare('SELECT "path", text FROM content WHERE "path" = ?')).get('authored-during-startup.md')) as { path: string; text: string };
+        assert.deepEqual(row, { path: 'authored-during-startup.md', text: 'written after the watcher subscribed' });
+      } finally {
+        await opened.store.close();
+      }
+      assert.deepEqual(
+        events.find((event) => event.type === 'reconciled' && event.total === 201),
+        { type: 'reconciled', parsed: 1, total: 201, warnings: [] }
+      );
+    } finally {
+      process.stderr.write = originalWrite;
+      controller.abort();
+      await done;
+    }
+  });
+
   // The callback fires before the reconcile closes its store, so aborting there makes shutdown
   // drain a real pooled cycle rather than guessing whether a timer has started it.
   it('aborting from a pooled reconcile callback closes cleanly', async () => {

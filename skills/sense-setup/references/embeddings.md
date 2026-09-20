@@ -20,7 +20,7 @@ For a static model, inspect current Model2Vec models and their cards rather than
 
 ## Download and rebuild behavior
 
-Naming a remote static model in the config authorizes its download. `sense download` performs that fetch before the first query. The first vector-participating search then embeds the indexed notes.
+Naming a remote static model in the config authorizes its download. `sense download` performs that fetch before a query. A default vector query embeds its eligible scope; `sense build` and `sense watch` prepare all configured vector capabilities, while `--no-build` requires the requested scope to be ready.
 
 Changing the model changes the vector space and rebuilds embeddings. Changing preset coverage can also add, remove, or rebuild vector rows. Settle the broad scope before embedding a large tree.
 

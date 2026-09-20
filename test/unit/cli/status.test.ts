@@ -15,11 +15,25 @@ function makeTree(store?: 'duckdb'): string {
 }
 
 describe('status subcommand across stores', () => {
-  it('sqlite reports the derived busy_timeout', () => {
+  it('reports an absent index without creating it', () => {
     const dir = makeTree();
     const result = runCli(['status', '--format', 'json', '--config', join(dir, 'sense.config.json')]);
     assert.equal(result.status, 0, result.stderr);
-    const out = JSON.parse(result.stdout) as { engine: Record<string, string> };
+    const out = JSON.parse(result.stdout) as { indexReady: boolean; indexError: string; lexicalReady: boolean; lexicalError: string };
+    assert.equal(out.indexReady, false);
+    assert.match(out.indexError, /run "sense build"/);
+    assert.equal(out.lexicalReady, false);
+    assert.match(out.lexicalError, /run "sense build"/);
+    assert.equal(existsSync(join(dir, '.sense')), false);
+  });
+
+  it('sqlite reports the derived busy_timeout', () => {
+    const dir = makeTree();
+    assert.equal(runCli(['build', '--config', join(dir, 'sense.config.json')]).status, 0);
+    const result = runCli(['status', '--format', 'json', '--config', join(dir, 'sense.config.json')]);
+    assert.equal(result.status, 0, result.stderr);
+    const out = JSON.parse(result.stdout) as { engine: Record<string, string>; lexicalReady: boolean };
+    assert.equal(out.lexicalReady, true);
     const m = out.engine.busy_timeout.match(/^(\d+)ms/);
     assert.ok(m, `engine.busy_timeout ${out.engine.busy_timeout} not of the form "<n>ms ..."`);
     assert.ok(Number(m[1]) >= 30000, `busy_timeout ${m[1]}ms under the 30s floor`);
@@ -28,14 +42,31 @@ describe('status subcommand across stores', () => {
 
   it('duckdb opens and reports an empty engine record', () => {
     const dir = makeTree('duckdb');
+    assert.equal(runCli(['build', '--config', join(dir, 'sense.config.json')]).status, 0);
     const result = runCli(['status', '--format', 'json', '--config', join(dir, 'sense.config.json')]);
     assert.equal(result.status, 0, result.stderr);
-    const out = JSON.parse(result.stdout) as { engine: Record<string, string> };
+    const out = JSON.parse(result.stdout) as { engine: Record<string, string>; lexicalReady: boolean };
+    assert.equal(out.lexicalReady, true);
     assert.deepEqual(out.engine, {});
+  });
+
+  it('reports a core-ready DuckDB cache whose lexical index is not prepared', () => {
+    const dir = makeTree('duckdb');
+    const config = join(dir, 'sense.config.json');
+    const mapped = runCli(['map', '--config', config, '--format', 'json']);
+    assert.equal(mapped.status, 0, mapped.stderr);
+
+    const result = runCli(['status', '--format', 'json', '--config', config]);
+    assert.equal(result.status, 0, result.stderr);
+    const out = JSON.parse(result.stdout) as { indexReady: boolean; lexicalReady: boolean; lexicalError: string };
+    assert.equal(out.indexReady, true);
+    assert.equal(out.lexicalReady, false);
+    assert.match(out.lexicalError, /lexical index is missing or stale/);
   });
 
   it('duckdb text output drops the sqlite line', () => {
     const dir = makeTree('duckdb');
+    assert.equal(runCli(['build', '--config', join(dir, 'sense.config.json')]).status, 0);
     const result = runCli(['status', '--config', join(dir, 'sense.config.json')]);
     assert.equal(result.status, 0, result.stderr);
     assert.doesNotMatch(result.stdout, /busy_timeout/);
@@ -43,6 +74,7 @@ describe('status subcommand across stores', () => {
 
   it('reports the config-owned watcher claim', async () => {
     const dir = makeTree();
+    assert.equal(runCli(['build', '--config', join(dir, 'sense.config.json')]).status, 0);
     const claim = new WatchClaimDatabase(dir);
     try {
       await claim.acquire('status-owner', 4242, false);

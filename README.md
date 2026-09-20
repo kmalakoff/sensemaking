@@ -2,20 +2,20 @@
 
 Search and query a directory of Markdown notes from the command line. `sense` indexes frontmatter, prose and links in a local database. It can also combine word matches with links and semantic similarity.
 
-Results contain file paths, snippets and line ranges. A person or agent can inspect the relevant passages without loading every note. No server or build step is required.
+Results contain file paths, snippets and line ranges. A person or agent can inspect the relevant passages without loading every note. No server or daemon is required; the default CLI query performs the incremental preparation it needs.
 
 ## Problem
 
 Markdown notes accumulate: research, decisions, meeting notes, agent output. Past a few dozen, finding the ones relevant to what you're doing means grepping or reading whole folders into context. The structure that makes notes navigable (frontmatter, wikilinks, headings) is exactly what a query needs, but nothing exposes it as a query surface.
 
-`sense` indexes all of it into a local database (SQLite by default, or the experimental DuckDB store, see Config) and reconciles against file timestamps on every query, so results are never stale and nothing has to be running.
+`sense` indexes all of it into a local database (SQLite by default, or the experimental DuckDB store, see Config). By default, CLI queries reconcile the capabilities they need before reading; `--no-build` instead reads the last completed indexed generation without scanning live files. Nothing has to be running.
 
 ## Quick start
 
 ```bash
 npm install -g sensemaking
 cd your-notes && sense init
-sense download          # the embedding model, once per machine; the first vector search fetches it otherwise
+sense download          # optional prefetch; build or the first default vector search fetches it otherwise
 ```
 
 Requires Node.js 22.20 or newer. The default store uses Node's built-in SQLite.
@@ -65,6 +65,7 @@ ORDER BY bm25(content, 10.0, 5.0, 1.0) LIMIT 10
 
 | command | does |
 |---|---|
+| `build [--force]` | incrementally update the derived index and prepare every configured search capability; `--force` recreates only `.sense/` |
 | `map` | doc count, frontmatter field coverage, top hubs by link rank, recent changes; hub/recent limits use bytewise path order on ties |
 | `search "<text>" [--preset name] [--include glob] [--exclude glob] [--no-exclude] [--where "<sql>"] [--k n] [--snippet-char-limit n] [--snippet-count-limit n]` | words + links + vectors, one fused ranked list; `via` labels each row's evidence. `--k` bounds notes returned, `--snippet-char-limit` (default 80) each passage, `--snippet-count-limit` (default 1) passages per note |
 | `peek <path> [--preset name] [--where "<sql>"]` | frontmatter + heading outline (`[L143-162, ~380t]`) + links both ways (first 20 per list, each with its total) |
@@ -74,8 +75,14 @@ ORDER BY bm25(content, 10.0, 5.0, 1.0) LIMIT 10
 | `<name> [params...]` | run a query saved in the config; `--list` names them |
 | `init` | write a starter `sense.config.json` |
 | `status` | index location, doc count, per-preset coverage, watcher heartbeat |
-| `download` | fetch the embedding model named in the config (once per machine; the first vector search fetches it otherwise) |
+| `download` | prefetch the embedding model named in the config; build, watch, or a default CLI vector query fetches it when needed otherwise |
 | `watch` | keep the index warm in the background (optional; see [watch coordination](https://github.com/kmalakoff/sensemaking/blob/master/DESIGN.md#watch-coordination)) |
+
+Query commands use the config's `"build": true` default to update the index first and prepare only what that operation needs. Core map, peek, path and SQL work do not prepare vectors. Set `"build": false` for a manual-build or watch workflow, or add `--no-build` for one query. These read the last completed generation without scanning source files or repairing missing readiness; they fail with a `sense build` instruction when the requested capability is not ready. This disables Sense index maintenance, not database access or arbitrary SQL.
+
+The completed generation stores the exact decoded source used for indexed snippets. A no-build query reads those stored sources and checks readiness for the capabilities it requests; it does not hydrate from newer live files. A default query incrementally scans the configured tree for the capabilities it needs; vector preparation is limited to its eligible scope. `sense build` prepares every configured capability, and `sense watch` keeps them prepared as changes arrive.
+
+Explicit `sense build` and `sense watch` prepare the index regardless of the config's `build` default. Watch builds before reporting ready, then processes edits; a no-build query can read the previous generation while an edit is being processed. Library callers choose preparation separately at `open`: `open(config)` prepares every configured capability, and `open(config, { build: false })` opens existing compatible state. The config's `build` setting controls CLI queries only. `build(config, { force: true })` recreates only the derived index. Public `search`, `mapTree`, and `peek` calls on one retained `Store` serialize with one another. Await those calls before running raw SQL, starting a transaction, or closing the handle.
 
 `search` runs one text through every engine its scope has: FTS5 word match (BM25-ranked, bare words AND-join, operators are yours on `sqlite`; on `duckdb` and `turso` the FTS5 operators are a named error, see Config), a personalized-PageRank walk over the link graph, and vector similarity, fused into one list. `via` labels each row's evidence (`match`, `link`, `vector`, combinations). Within the vector signal, candidates rank by the true cosine against the best-matching canonical chunk before `similarity` is rounded to three decimals for display; a zero-direction vector has similarity `0`, exact cosine ties use bytewise path order, and equal-scoring chunks choose the earliest authored chunk. The public search list ranks the combined word, link, and vector candidates by fused reciprocal-rank score. `lines` points at the section that earned the row (a direct read range). A `vector`-only row means the search words don't appear in that note; it showed up because the model judged it semantically related. `--preset` picks a named settings bundle from the config, `--where` filters on frontmatter. `--format json` on any reporting command returns structured output, and `--format csv` writes the row-returning commands one row per line, for redirecting a large result to a file instead of into context; `--version` and `--help` do what they say.
 
@@ -90,7 +97,8 @@ Lexical words are case- and accent-insensitive. SQLite and DuckDB use their nati
 ```json
 {
   "$schema": "https://unpkg.com/sensemaking/schema.json",
-  "version": 5,
+  "version": 6,
+  "build": true,
   "presets": {
     "default": { "include": ["**/*.md"], "k": 10 },
     "raw":     { "include": ["raw/**/*.md"], "k": 5 }
@@ -106,6 +114,7 @@ Lexical words are case- and accent-insensitive. SQLite and DuckDB use their nati
 
 | key | holds |
 |---|---|
+| `build` | CLI query-time build default, `true`. Set `false` to query the existing index maintained by explicit `build` or `watch`; `--no-build` overrides `true` for one query. |
 | `root` | optional markdown-tree path. Relative to the config directory; omitted means that directory. Preset globs, filesystem reads, watcher events, and indexed `path` values use this root. `.sense/` state stays beside the config. Changing it rebuilds the index. |
 | `presets` | named bundles of `include`/`exclude` globs, `k` (result count), `signals` (which engines this scope searches with, `words`, `links`, `vectors`; every signal whose prerequisites hold, unless the preset lists them exhaustively), `where` (a standing SQL filter). A file is indexed if any preset includes it, embedded if a model is named and some covering preset's `signals` include `vectors`; `status` shows each preset's coverage. |
 | `embed` | the model vectors are built with. Naming one gives the tree vectors; omitting the block means none at all, whatever the presets say. `sense download` fetches it. |
@@ -119,9 +128,9 @@ Bare commands use the `default` preset; `--preset` names another; flags override
 
 Choose `sqlite` for the smallest setup, full FTS5 query syntax, and concurrent Sense commands. Choose `duckdb` when the cache should participate in DuckDB analytical work over large datasets or in local/cloud workflows. Choose `turso` for its embedded Rust engine and Tantivy text index. The DuckDB and Turso adapters are experimental, install their native package on first use, and currently serialize Sense commands that open the same cache.
 
-The commands and table names are shared. Raw SQL still follows the selected engine's dialect, and advanced FTS5 operators only work on `sqlite`.
+The commands and table names are shared. Raw SQL still follows the selected engine's dialect, and advanced FTS5 operators only work on `sqlite`. DuckDB and Turso hold their cache file for the life of a native handle, so Sense commands opening the same cache wait for the current command or watcher cycle to close; this is an adapter limitation, not a reader/writer coexistence guarantee.
 
-Vectors need a model. Naming a Hugging Face id in `embed.model` is consent to fetch it: it downloads lazily, on the first vector search, with progress on stderr, into `~/.sense/models` (huggingface_hub's cache layout, one snapshot directory per resolved revision, shared by every tree, 124 MB, never in the package). `sense download` prefetches the same model ahead of time, so the wait happens on your schedule instead of the first query's; it is idempotent and prints the resolved revision. `embed.model` is a Hugging Face id, or a path to a directory holding `model.safetensors` and `tokenizer.json`, which nothing fetches for you. A preset that asks for vectors when a local model path is missing those files is an error naming the fix, rather than a quieter result that would make the same search answer differently before and after; a preset whose `signals` exclude `vectors` never asks, so it is unaffected. An optional top-level `"embed": { "model", "provider", "url", "key" }` block points at any Model2Vec model, local path, or OpenAI-compatible endpoint (Ollama, LM Studio, hosted). Embedding the notes themselves happens on the first vector search, with progress.
+Vectors need a model. Naming a Hugging Face id in `embed.model` is consent to fetch it when `sense build`, `sense watch`, or a default CLI vector query first prepares vectors, with progress on stderr, into `~/.sense/models` (huggingface_hub's cache layout, one snapshot directory per resolved revision, shared by every tree, 124 MB, never in the package). `sense download` prefetches the same model ahead of time; it is idempotent and prints the resolved revision. `embed.model` is a Hugging Face id, or a path to a directory holding `model.safetensors` and `tokenizer.json`, which nothing fetches for you. A preset that asks for vectors when a local model path is missing those files is an error naming the fix, rather than a quieter result that would make the same search answer differently before and after; a preset whose `signals` exclude `vectors` never asks, so it is unaffected. An optional top-level `"embed": { "model", "provider", "url", "key" }` block points at any Model2Vec model, local path, or OpenAI-compatible endpoint (Ollama, LM Studio, hosted). Explicit builds and watch prepare all configured vectors. A default CLI vector query prepares only its eligible scope; `--no-build` requires that scope to be ready and never prepares it. Unrelated pending documents do not block either path.
 
 Sense adds `has(field, value)` for array membership or string containment and `basename(path)` for path queries on every store. SQLite and DuckDB also provide `segment(terms)` for hand-written matching over text without word spaces. A frontmatter syntax error records `_parse_error` and leaves that file's discovered fields empty; the file's content still enters the index.
 
@@ -155,11 +164,11 @@ Ollama serves this shape at `http://localhost:11434/v1`. LM Studio serves the sa
 
 ## Scale
 
-Every query starts with a freshness check against the cache in `.sense/`; only changed files are re-parsed. What to expect as a tree grows:
+Default CLI queries start with an incremental build of the capabilities they need; only changed files are re-parsed. `--no-build` skips that scan and reads the last completed generation. What to expect as a tree grows:
 
-- **Work is linear in note count.** Crawl, reconcile, and the freshness check are what every invocation pays; that check is the floor cost of a query and the first thing to watch on a large tree.
+- **Build work is linear in note count.** Crawl and reconcile are the floor cost of a default query and the first thing to watch on a large tree; `--no-build` avoids them when snapshot semantics are appropriate.
 - **Output is flat.** `map`, `peek`, and a search row cost the same on a small tree as a large one: context cost is bounded by what you ask for, not by how much there is.
-- **Bulk changes are paid by whoever queries next.** `sense watch` moves that re-parse into the background ([watch coordination](https://github.com/kmalakoff/sensemaking/blob/master/DESIGN.md#watch-coordination)): it changes latency, never answers, since every query reconciles for itself. To start the cache over, delete the directory `sense status` prints.
+- **Bulk changes are paid by the next builder.** That is normally the next default query. `sense watch` moves the re-parse into the background ([watch coordination](https://github.com/kmalakoff/sensemaking/blob/master/DESIGN.md#watch-coordination)); `--no-build` continues to read the last completed generation. Run `sense build --force` to recreate the derived index.
 
 ## For AI agents
 
@@ -178,7 +187,7 @@ Three skills: `sense` for querying a tree, including store-specific SQL and sear
 ## Alternatives
 
 - **Obsidian Bases/Dataview:** same filters, but only inside the running app; agents can't query it headless.
-- **Index-on-build tools (MarkdownDB):** query a snapshot; `sense` reconciles on every query.
+- **Index-on-build tools (MarkdownDB):** query a snapshot; `sense` defaults to an incremental build before querying and also offers explicit snapshot reads with `--no-build`.
 - **Note CLIs (zk):** fixed schema; `sense` filters on arbitrary frontmatter.
 - **Graph/LSP tools (IWE):** structural queries over a markdown graph via LSP/CLI/MCP, retrieval by structure rather than similarity; no SQL, no vector search.
 - **Markdown vector stores (markdown-vdb):** hybrid BM25 + vector search over markdown files, no frontmatter filtering; `sense` treats vectors as one signal alongside SQL, not the whole store.

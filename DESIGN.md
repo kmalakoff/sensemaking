@@ -195,15 +195,9 @@ not daemonize itself, because daemonizing and supervising a process is the
 caller's job: every platform has its own way to do it, and a config copied here
 would go stale. Two decisions follow.
 
-**A stopped watcher never causes a wrong answer.** Every query runs its own
-freshness check and reconciles for itself, so the watcher only moves parsing
-earlier. It changes latency, never answers. This is what makes the feature
-optional rather than load-bearing: nothing depends on it running, and a crashed
-watcher degrades to the speed the tree had without one.
+**A stopped watcher never invalidates a completed generation.** With config `"build": true`, CLI queries scan the configured tree incrementally for the capabilities they need, with vector preparation limited to the eligible scope. Config `"build": false` or `--no-build` reads the last completed generation and reports missing readiness instead of scanning live files. Explicit build and watch prepare every configured capability regardless of the query default. A stopped watcher leaves snapshot queries usable but no longer refreshes their data.
 
-Filesystem notifications accelerate reconciliation; a periodic pass covers
-notifications the operating system misses. `started` means the watcher resources
-are installed, not that the native subscription has signalled readiness.
+Watch subscribes before the initial build, performs a catch-up pass and drains notifications received during startup before emitting `started`. Builds are serialized. Filesystem notifications accelerate later reconciliation; a periodic pass covers notifications the operating system misses. Native subscriptions expose no readiness signal, and a no-build query during a later edit may still read the previous indexed state. `started` reports completed startup preparation, not an atomic snapshot of a continuously changing filesystem.
 
 **One watcher per configuration cache, enforced by a heartbeat rather than a
 lock file.** Configurations in different directories may watch the same tree
@@ -220,3 +214,9 @@ outside the disposable `.sense` search cache, so an index rebuild cannot erase
 live ownership. Forced replacement transfers ownership immediately; it does not
 interrupt synchronous native reconciliation already in flight, which the
 replaced process drains before exiting.
+
+Library handles use the same preparation boundary. Public `search`, `mapTree`,
+and `peek` calls serialize on one retained `Store`; raw SQL, explicit
+transactions, and close remain caller-owned. DuckDB and Turso retain native
+exclusive cache access for a handle, so Sense commands against one cache wait
+for that handle to close rather than promising native reader/writer coexistence.

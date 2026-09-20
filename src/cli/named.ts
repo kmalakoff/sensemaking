@@ -1,17 +1,21 @@
+import { scopedPaths } from '../commands/scope.ts';
 import { search } from '../commands/search.ts';
+import { resolveSearch } from '../config/index.ts';
 import { printRows } from '../output/output.ts';
-import { CONFIG, FORMAT, parse, parseK, parseSnippetCharLimit, parseSnippetCountLimit, rowFormatOf, runSql, SEARCH_FLAGS, withDb } from './shared.ts';
+import { type BuildRequirement, prepareDocumentEmbeddings } from '../store/open.ts';
+import { CONFIG, FORMAT, NO_BUILD, parse, parseK, parseSnippetCharLimit, parseSnippetCountLimit, rowFormatOf, runSql, SEARCH_FLAGS, withResolvedDb } from './shared.ts';
 import type { Ctx } from './types.ts';
 
 // Fallback when the first positional is not a command: a saved query, { sql } or { search }.
 // SEARCH_FLAGS override a saved search's fields the same way they override a preset's.
 export default async function named(ctx: Ctx, queryName: string): Promise<void> {
-  const usage = `usage: ${ctx.name} ${queryName} [params...] [--format table|json|csv] [--config path] [--where "<sql>"] [--k n] [--snippet-char-limit n] [--snippet-count-limit n] [--preset name] [--include glob ...] [--exclude glob ...] [--no-exclude]`;
-  const { values, positionals: params } = parse(ctx.argv, usage, { ...SEARCH_FLAGS, ...FORMAT, ...CONFIG });
+  const usage = `usage: ${ctx.name} ${queryName} [params...] [--format table|json|csv] [--config path] [--where "<sql>"] [--k n] [--snippet-char-limit n] [--snippet-count-limit n] [--preset name] [--include glob ...] [--exclude glob ...] [--no-exclude] [--no-build]`;
+  const { values, positionals: params } = parse(ctx.argv, usage, { ...SEARCH_FLAGS, ...NO_BUILD, ...FORMAT, ...CONFIG });
   const format = rowFormatOf(values);
   const configPath = values.config as string | undefined;
+  const noBuild = values['no-build'] === true;
 
-  const cfg = ctx.resolveConfig(configPath);
+  const cfg = ctx.resolveConfig(configPath, { writeMigration: !noBuild, query: true });
   const entry = cfg.queries[queryName];
   if (entry === undefined) {
     console.error(`unknown command or saved entry: "${queryName}"`);
@@ -22,7 +26,7 @@ export default async function named(ctx: Ctx, queryName: string): Promise<void> 
   if ('sql' in entry) {
     // A saved statement written against `scope` is preset-agnostic, so the same entry can be
     // re-pointed at another layer from the command line instead of being copied per preset.
-    await runSql(cfg, entry.sql, params, format, `query "${queryName}"`, values.preset as string | undefined);
+    await runSql(cfg, entry.sql, params, format, `query "${queryName}"`, noBuild, values.preset as string | undefined);
     return;
   }
 
@@ -38,5 +42,23 @@ export default async function named(ctx: Ctx, queryName: string): Promise<void> 
   const include = (values.include as string[] | undefined) ?? entry.include;
   const exclude = (values.exclude as string[] | undefined) ?? entry.exclude;
   const noExclude = values['no-exclude'] === true;
-  await withDb(ctx, configPath, async (store, resolvedCfg) => printRows(await search(store, resolvedCfg, entry.search, { k, snippetCharLimit, snippetCountLimit, where, preset, include, exclude, noExclude }), format));
+  const overrides = { k, snippetCharLimit, snippetCountLimit, where, preset, include, exclude, noExclude };
+  await withResolvedDb(
+    cfg,
+    {
+      noBuild,
+      requirements: (resolvedCfg) => {
+        const signals = resolveSearch(resolvedCfg, overrides).signals;
+        const requirements = new Set<BuildRequirement>(['core']);
+        if (signals.words !== undefined) requirements.add('lexical');
+        return requirements;
+      },
+    },
+    async (store, resolvedCfg, build) => {
+      if (build && resolveSearch(resolvedCfg, overrides).signals.vectors !== undefined) {
+        await prepareDocumentEmbeddings(store, resolvedCfg, await scopedPaths(store, resolvedCfg, overrides));
+      }
+      printRows(await search(store, resolvedCfg, entry.search, overrides), format);
+    }
+  );
 }

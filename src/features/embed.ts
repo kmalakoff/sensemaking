@@ -8,7 +8,7 @@ import { appendRows } from '../store/shared.ts';
 import type { Feature } from './types.ts';
 
 // int8 vectors with a per-vector scale, NULL vector = not yet embedded: reconcile writes dirty
-// rows and embedding tops up on the next search, so staleness costs recall.
+// rows and build (or an authorised scoped CLI query) prepares them before semantic retrieval.
 
 export type { Chunk };
 

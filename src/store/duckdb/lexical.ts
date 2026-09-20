@@ -56,6 +56,18 @@ async function stateFor(conn: Connection): Promise<FtsIndexState> {
   return state;
 }
 
+async function hasFtsArtifact(conn: Connection): Promise<boolean> {
+  const stmt = await conn.prepare(`
+    SELECT 1 AS ready
+    FROM duckdb_functions()
+    WHERE schema_name = 'fts_main_content'
+      AND function_name = 'match_bm25'
+      AND function_type = 'macro'
+    LIMIT 1
+  `);
+  return (await stmt.get()) !== undefined;
+}
+
 // Called whenever this store's reconcileContent changes `content`; must run inside that same
 // transaction (reconcile.ts) so a crash never lands the content write without the stale mark.
 export async function markContentStale(conn: Connection): Promise<void> {
@@ -104,10 +116,11 @@ function splitTerms(terms: string): { words: string[]; bareWords: string[]; phra
 
 // No incremental update (verified 1.5.5: PRAGMA create_fts_index is rebuild-only), so this pays
 // the full rebuild whenever `state.stale`, which meta.fts_stale keeps true across processes until cleared below.
-async function ensureFtsFresh(conn: Connection, state: FtsIndexState): Promise<void> {
-  if (!state.stale) return;
-  state.orderedMacroReady = false;
+async function rebuildFts(conn: Connection, state: FtsIndexState): Promise<void> {
   await conn.exec('INSTALL fts; LOAD fts;');
+  if (!state.stale && (await hasFtsArtifact(conn))) return;
+  state.stale = true;
+  state.orderedMacroReady = false;
   await withTransaction(conn, async () => {
     // stopwords='none': sqlite's porter/unicode61 tokenizer never removes stopwords either (verified 1.5.5); the fts extension's
     // default 571-word list would otherwise drop common words (e.g. "and") from the index but not match_bm25's conjunctive gate, breaking multi-word matches.
@@ -117,6 +130,24 @@ async function ensureFtsFresh(conn: Connection, state: FtsIndexState): Promise<v
     await setMeta(conn, FTS_STALE_META_KEY, '0');
   });
   state.stale = false;
+}
+
+export async function prepareFts(conn: Connection): Promise<void> {
+  await rebuildFts(conn, await stateFor(conn));
+}
+
+export async function assertFtsReady(conn: Connection): Promise<void> {
+  const state = await stateFor(conn);
+  if (state.stale) throw new SenseError('INDEX_NOT_READY', 'the DuckDB lexical index is missing or stale; run `sense build` (or library build(config)) before lexical querying with build disabled');
+  try {
+    await conn.exec('LOAD fts;');
+    if (!(await hasFtsArtifact(conn))) {
+      throw new SenseError('INDEX_NOT_READY', 'the DuckDB lexical index artifact is missing; run `sense build` (or library build(config)) before lexical querying with build disabled');
+    }
+  } catch (err) {
+    if (err instanceof SenseError) throw err;
+    throw new SenseError('INDEX_NOT_READY', `the DuckDB lexical extension is not prepared (${(err as Error).message}); run \`sense build\` (or library build(config))`);
+  }
 }
 
 // Field-weighted fragments (title 10 / summary 5 / text 1), with params emitted in the exact left-to-right order the assembled SQL needs for positional `?` binding.
@@ -171,7 +202,7 @@ export async function queryLexical(conn: Connection, terms: string, opts: Lexica
   const { words, bareWords, phraseWords, substrings, phrases, emptyPhrase } = splitTerms(terms);
   if (emptyPhrase || (words.length === 0 && substrings.length === 0)) return [];
 
-  if (words.length > 0) await ensureFtsFresh(conn, state);
+  if (words.length > 0) await assertFtsReady(conn);
   if (words.length > 0) await ensureOrderedBm25(conn, state);
 
   const { scoreSql, gateSql, params } = buildScoreAndGate(words, bareWords, phraseWords, substrings);

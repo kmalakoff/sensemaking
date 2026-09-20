@@ -5,7 +5,7 @@ description: "Query a markdown tree with the sense CLI: filter notes by frontmat
 
 # sense
 
-Use sense to locate evidence in a markdown tree before reading files. Every command reconciles changed files first. Results contain paths, metadata, excerpts, and line ranges. Read the returned files or ranges when the task needs their prose.
+Use sense to locate evidence in a markdown tree before reading files. With the config default `"build": true`, CLI queries incrementally scan the configured tree for the capabilities they need; vector preparation is limited to the eligible scope. Config `"build": false` or a one-query `--no-build` reads the last completed indexed generation, checks requested readiness and does not scan live files. Explicit build and watch prepare it regardless of that default. Results contain paths, metadata, excerpts, and line ranges. Read the returned files or ranges when the task needs their prose.
 
 Setup, store selection, presets, and note design belong to the `sense-setup` skill. Translating an Obsidian Bases file belongs to `sense-bases`.
 
@@ -133,5 +133,5 @@ Worked command traces are in [EXAMPLES.md](EXAMPLES.md).
 
 - Install a missing CLI with `npm install -g sensemaking`.
 - `sense status` prints the cache path and watcher state.
-- Delete the cache directory printed by `sense status` only when the derived index is in doubt. The next command rebuilds it.
-- Use `sense watch` when another process should keep the index warm during frequent edits. Queries remain responsible for their own freshness check.
+- Use `sense build --force` to recreate a derived index whose state is in doubt; source files, configuration, and the watcher ownership claim remain in place.
+- Use `sense watch` when another process should keep all configured capabilities prepared during frequent edits. A default query scans the configured tree for its needed capabilities and limits vector preparation to eligible paths; `--no-build` reads the completed generation only.

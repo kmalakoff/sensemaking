@@ -73,9 +73,9 @@ export interface OpenDialect<Handle> {
   reconcileDialect: ReconcileDialect;
   // Opens the physical connection and applies pragmas due before any SQL runs (sqlite: busy_timeout
   // + WAL; turso: connect-time timeout; duckdb: none).
-  connect(dbPath: string, cfg: ResolvedConfig): Promise<{ handle: Handle; conn: Connection }>;
+  connect(dbPath: string, cfg: ResolvedConfig, options: { existingOnly: boolean; observational: boolean }): Promise<{ handle: Handle; conn: Connection }>;
   // Releases the handle, for both the rebuild-and-reopen branch and error cleanup on this attempt.
-  close(handle: Handle): Promise<void>;
+  close(handle: Handle, options?: { observational?: boolean }): Promise<void>;
   // True when connect() failed because another process holds the cache file, which the orchestration
   // retries. Each engine words it differently, so the match is the dialect's own (`native-not-emulated`).
   // Absent for sqlite, whose file lock is shared and whose concurrent-open failure is a different defect.
@@ -90,7 +90,11 @@ export interface OpenDialect<Handle> {
   // Installs the derived busy_timeout PRAGMA right before reconcile (sqlite/turso); absent for
   // duckdb, which has no such PRAGMA.
   setDerivedBusyTimeout?(handle: Handle, conn: Connection, ms: number): Promise<void>;
-  createStore(handle: Handle, conn: Connection, cfg: ResolvedConfig): Store;
+  // Persistent lexical preparation belongs to build, while no-build calls only the readiness
+  // check. SQLite and Turso maintain lexical state during reconcile and omit both hooks.
+  prepareLexical?(conn: Connection): Promise<void>;
+  assertLexicalReady?(conn: Connection): Promise<void>;
+  createStore(handle: Handle, conn: Connection, cfg: ResolvedConfig, options: { observational: boolean }): Store;
 }
 
 export interface FieldStat {

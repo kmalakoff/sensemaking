@@ -1,7 +1,10 @@
 import assert from 'node:assert';
 import { rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import type { ResolvedConfig } from 'sensemaking';
 import { pagerank } from '../../../../src/graph/graph.ts';
+import { openStoreFor } from '../../../../src/store/index.ts';
+import type { BuildRequirement } from '../../../../src/store/open.ts';
 import { openConfig, tmpTree, writeNote } from '../../../lib/tree.ts';
 
 function duckdbTree(baseDir: string) {
@@ -206,7 +209,7 @@ describe('reconcile (duckdb)', () => {
   it('a cold build appends embedding rows with scale and vector left NULL for the embed pass', async () => {
     const baseDir = tmpTree();
     writeNote(baseDir, 'a.md', { body: '# One\n\nSome prose.\n\n# Two\n\nMore prose.' });
-    const { store } = await openConfig({ store: 'duckdb', presets: { default: { include: ['**/*.md'] } }, queries: {}, baseDir, configPath: null, embed: { model: 'minishlab/potion-retrieval-32M', provider: 'static' } } as Parameters<typeof openConfig>[0]);
+    const { store } = await openStoreFor({ store: 'duckdb', presets: { default: { include: ['**/*.md'] } }, queries: {}, baseDir, configPath: null, embed: { model: 'minishlab/potion-retrieval-32M', provider: 'static' } } as ResolvedConfig, { build: true, requirements: new Set<BuildRequirement>(['core']) });
     const rows = (await (await store.prepare('SELECT "path", chunk, start_line, end_line, scale, vector FROM embeddings WHERE "path" = ? ORDER BY chunk')).all('a.md')) as Array<Record<string, unknown>>;
     assert.ok(rows.length > 0, 'expected at least one chunk row');
     for (const [i, row] of rows.entries()) {

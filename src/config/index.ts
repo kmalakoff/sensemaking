@@ -1,5 +1,5 @@
 export { anyPresetEmbeds, embedConfig, embedEnabled, enabledFeatures, featureEnabled, featureSignature, featureStates, presetHasSignal, presetNames, presetSignals, storeName } from './access.ts';
-export type { InitOverrides } from './load.ts';
+export type { InitOverrides, LoadConfigOptions } from './load.ts';
 export { findConfigPath, initConfig, loadConfig, migrateConfig } from './load.ts';
 export { resolvePreset, resolveSearch } from './resolve.ts';
 export type { SignalName, SignalWeights } from './signals.ts';

@@ -4,7 +4,7 @@ export const CONFIG_FILENAME = 'sense.config.json';
 export const STATE_DIR = '.sense';
 
 // Highest sense.config.json `version` this build understands. Older versions auto-migrate on load.
-export const SUPPORTED_CONFIG_VERSION = 5;
+export const SUPPORTED_CONFIG_VERSION = 6;
 
 // Each feature owns its tables, parse-time extraction, and reconcile step; commands degrade when one is off.
 // links/sections/tags/rank are opt-out toggles in `features`; embed is on exactly when an `embed` block names a model.
@@ -63,6 +63,8 @@ export interface Config {
   // Markdown tree to index. Relative paths resolve from the configuration file's directory;
   // omitted keeps the historic colocated-config behavior.
   root?: string;
+  // CLI query-time incremental build default. Defaults to true; explicit build/watch ignore it.
+  build?: boolean;
   // File selection, index-time, and per-preset search defaults. A file is indexed iff any
   // preset's include/exclude covers it (union). `default` is used when a command names no preset.
   presets: Record<string, Preset>;

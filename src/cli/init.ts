@@ -22,9 +22,9 @@ const init: Command = (ctx) => {
   // Naming a model is consent to fetch it, so writing one into the config says so loudly,
   // with the download consequence and the prefetch command, right where it was just written.
   if (provider === 'static') {
-    console.log(`embed model: ${model} (static); nothing downloads until the first vector search -- ${ctx.name} download fetches it now instead`);
+    console.log(`embed model: ${model} (static); ${ctx.name} build, watch, or a vector search downloads it when needed -- ${ctx.name} download fetches it now instead`);
   } else {
-    console.log(`embed model: ${model} (${provider}${url ? ` at ${url}` : ''}); reached over the network at search time, nothing to download`);
+    console.log(`embed model: ${model} (${provider}${url ? ` at ${url}` : ''}); build, watch, and vector queries use the network, nothing to download`);
   }
   console.log('a non-English tree should pick a model for its languages: see the sense-setup skill or INTEGRATIONS.md');
   // The decisions a new tree faces -- features, frontmatter conventions, note size -- are not

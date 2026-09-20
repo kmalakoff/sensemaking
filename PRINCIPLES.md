@@ -156,6 +156,16 @@ enters the file.
 An operation that is not a config key, fetching a model, building an index,
 is a command, not an init flag.
 
+Index preparation and querying are separate operations. With config `"build": true`, a CLI query
+incrementally scans the configured tree for the capabilities it needs, limiting
+vector preparation to eligible paths;
+`build` prepares all configured capabilities, `watch` keeps them prepared, and
+config `"build": false` or `--no-build` reads only an existing completed generation and fails when its
+requested readiness is absent. Indexed snippets come from the decoded source
+stored for that generation, not from newer live files. On a retained library
+handle, public `search`, `mapTree`, and `peek` calls serialize
+with one another; raw SQL, transactions, and close remain caller-owned.
+
 A key that does not clear that bar is a constant or a code decision.
 Machine-level assets (the model cache) have one fixed location and are not
 tree configuration.

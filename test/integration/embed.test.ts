@@ -3,15 +3,18 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { createServer, type Server } from 'http';
-import type { Config } from 'sensemaking';
+import type { Config, ResolvedConfig } from 'sensemaking';
 import { peek, presetCoverage, type SenseError, search } from 'sensemaking';
 import { relatedNotes } from '../../src/commands/index.ts';
 import { languageDistribution } from '../../src/embed/distribution.ts';
-import { similarNotes } from '../../src/embed/query.ts';
+import { takeChunkText } from '../../src/embed/handoff.ts';
+import { embedPending, similarNotes } from '../../src/embed/query.ts';
 import { downloadModel, hasModelFiles, isDownloadable, modelDir } from '../../src/embed/store.ts';
 import type { Chunk } from '../../src/features/embed.ts';
 import { embed } from '../../src/features/embed.ts';
 import { parseFile } from '../../src/scan/index.ts';
+import { openStoreFor } from '../../src/store/index.ts';
+import type { BuildRequirement } from '../../src/store/open.ts';
 import { runCli } from '../lib/cli.ts';
 import { seedModelCache, testModelsRoot, writeModel } from '../lib/model.ts';
 import { listen } from '../lib/server.ts';
@@ -55,10 +58,8 @@ describe('missing model', () => {
     }
   });
 
-  it('search fails rather than silently dropping to two signals: the same query must not answer differently before and after a download', async () => {
-    const { store: db, cfg } = await openSemantic(fruitTree(), { model: '/nonexistent/model-xyz', provider: 'static' });
-    await assert.rejects(() => search(db, cfg, 'apple'), /searches with vectors, but the local model path .* is missing/);
-    await db.close();
+  it('public open fails rather than silently leaving a configured capability unprepared', async () => {
+    await assert.rejects(() => openSemantic(fruitTree(), { model: '/nonexistent/model-xyz', provider: 'static' }), /embed model .* is not available/);
   });
 
   it('a preset that does not ask for vectors is unaffected by a missing model', async () => {
@@ -382,10 +383,9 @@ describe('vector coverage', () => {
       configPath: null,
     };
     const { store: db, cfg } = await openConfig(cfgObj);
-    // Vectors are lazy: rows exist with vector NULL until the first search that uses them.
-    // Coverage saying "1 embedded" here contradicted status's own "0 embedded, 1 pending" line.
+    // Public open prepares every configured capability before returning the handle.
     const before = await presetCoverage(db, cfg);
-    assert.deepEqual(before, [{ name: 'default', files: 1, embedded: 0, signals: { words: 1, links: 1, vectors: 1 } }]);
+    assert.deepEqual(before, [{ name: 'default', files: 1, embedded: 1, signals: { words: 1, links: 1, vectors: 1 } }]);
     await db.close();
   });
 });
@@ -463,24 +463,21 @@ describe('related command', () => {
     await db.close();
   });
 
-  it('computes the lazy vectors itself, so a fresh index answers without a prior semantic search', async () => {
+  it('answers on a freshly opened, fully prepared public handle', async () => {
     const { store: db, cfg } = await openSemantic(relatedTree(), { model: writeModel(), provider: 'static' });
     const result = await relatedNotes(db, cfg, 'target.md', {}, 5);
     await db.close();
     assert.ok(result.map((r) => r.path).includes('similar.md'), JSON.stringify(result));
   });
 
-  it('says the model is missing rather than answering []: an empty table reads as "nothing is related"', async () => {
-    const { store: db, cfg } = await openSemantic(relatedTree(), { model: '/nonexistent/model-xyz', provider: 'static' });
-    await assert.rejects(() => relatedNotes(db, cfg, 'target.md', {}, 5), /local model path .* is missing/);
-    await db.close();
+  it('fails public open when the configured model cannot be prepared', async () => {
+    await assert.rejects(() => openSemantic(relatedTree(), { model: '/nonexistent/model-xyz', provider: 'static' }), /embed model .* is not available/);
   });
 });
 
 describe('similarNotes (unit)', () => {
   it('ranks by cosine, honoring exclude and self-exclusion', async () => {
     const { store: db, cfg } = await openSemantic(relatedTree(), { model: writeModel(), provider: 'static' });
-    await search(db, cfg, 'apple'); // warm the lazy vectors, see peek related tests above
     const result = await similarNotes(db, cfg, 'target.md', { exclude: new Set(['linked.md', 'backlinker.md']), k: 5 });
     await db.close();
     assert.deepEqual(
@@ -502,18 +499,28 @@ describe('similarNotes (unit)', () => {
   });
 
   it('returns [] when the target note has no stored vectors, even though the embeddings table exists', async () => {
-    // default covers everything but opts target.md out of vectors; preset "b" embeds only
-    // unrelated.md, so the embeddings table exists but carries no row at all for target.md.
+    // default indexes every note lexically; preset "b" is the only vector-enabled scope and
+    // embeds unrelated.md, so the embeddings table exists without a target.md vector.
     const { store: db, cfg } = await openConfig({
-      presets: { default: { include: ['**/*.md'] }, b: { include: ['unrelated.md'] } },
+      presets: {
+        default: { include: ['**/*.md'], signals: { words: 1, links: 1 } },
+        b: { include: ['unrelated.md'], signals: { words: 1, links: 1, vectors: 1 } },
+      },
       embed: { model: writeModel(), provider: 'static' },
       queries: {},
       baseDir: relatedTree(),
       configPath: null,
     });
-    const result = await similarNotes(db, cfg, 'target.md', { exclude: new Set(), k: 5 });
-    await db.close();
-    assert.deepEqual(result, []);
+    try {
+      const storedVectors = (await (await db.prepare('SELECT DISTINCT "path" FROM embeddings WHERE vector IS NOT NULL ORDER BY "path"')).all()) as Array<{ path: string }>;
+      assert.deepEqual(storedVectors, [{ path: 'unrelated.md' }]);
+      const targetRows = Number(((await (await db.prepare('SELECT COUNT(*) AS n FROM embeddings WHERE "path" = ?')).get('target.md')) as { n: number }).n);
+      assert.equal(targetRows, 0);
+      const result = await similarNotes(db, cfg, 'target.md', { exclude: new Set(), k: 5 });
+      assert.deepEqual(result, []);
+    } finally {
+      await db.close();
+    }
   });
 });
 
@@ -612,9 +619,8 @@ describe('multilingual semantic mechanism', () => {
 // a local fixture has no card, and config languages hit the same path without touching the cache.
 describe('language fit check', () => {
   it('a majority-Chinese tree under a model declaring only English throws EMBED_MODEL_MISMATCH naming the model, its languages, the majority, and the fix', async () => {
-    const { store: db, cfg } = await openSemantic(chineseTree(), { model: writeModel(), provider: 'static', languages: ['en'] });
     await assert.rejects(
-      () => search(db, cfg, 'anything'),
+      () => openSemantic(chineseTree(), { model: writeModel(), provider: 'static', languages: ['en'] }),
       (err: SenseError) => {
         assert.equal(err.code, 'EMBED_MODEL_MISMATCH');
         assert.match(err.message, /declares languages \[en\]/);
@@ -624,7 +630,6 @@ describe('language fit check', () => {
         return true;
       }
     );
-    await db.close();
   });
 
   it('the same tree passes when the model also declares zh', async () => {
@@ -706,9 +711,8 @@ describe('chunk text from reconcile to embedding', () => {
     return rows.map((r) => ({ chunk: r.chunk, scale: r.scale, vector: Buffer.from(r.vector as Uint8Array).toString('base64') }));
   }
 
-  it('embeds in the same process as the reconcile that produced the chunks', async () => {
-    const { store, cfg } = await openSemantic(fruitTree(), { model: writeModel(), provider: 'static' });
-    await search(store, cfg, 'apple');
+  it('public open embeds in the same process as the reconcile that produced the chunks', async () => {
+    const { store } = await openSemantic(fruitTree(), { model: writeModel(), provider: 'static' });
     const rows = await vectors(store);
     assert.ok(rows.length > 0, 'the fixture must produce chunks, or this asserts nothing');
     assert.ok(
@@ -718,26 +722,25 @@ describe('chunk text from reconcile to embedding', () => {
     await store.close();
   });
 
-  it('embeds rows a previous command left pending, and gets identical vectors', async () => {
+  it('gets identical vectors from persisted source and the same-process handoff', async () => {
     const model = writeModel();
     const baseDir = fruitTree();
+    const cfg = { presets: { default: { include: ['**/*.md'] } }, embed: { model, provider: 'static' as const }, queries: {}, baseDir, configPath: null } as ResolvedConfig;
 
-    // Reconcile, then close without embedding: the in-memory text dies with this store, exactly
-    // as it does when `sense map` indexes and `sense search` embeds later.
-    const first = await openSemantic(baseDir, { model, provider: 'static' });
-    await first.store.close();
-
-    const reopened = await openSemantic(baseDir, { model, provider: 'static' });
-    await search(reopened.store, reopened.cfg, 'apple');
-    const reparsed = await vectors(reopened.store);
+    const reopened = await openStoreFor(cfg, { build: true, requirements: new Set<BuildRequirement>(['core']) });
+    assert.ok(takeChunkText(reopened.store), 'the fixture must discard the reconcile handoff');
+    await embedPending(reopened.store, cfg);
+    const persisted = await vectors(reopened.store);
     await reopened.store.close();
 
-    const fresh = await openSemantic(fruitTree(), { model, provider: 'static' });
-    await search(fresh.store, fresh.cfg, 'apple');
+    const freshBaseDir = fruitTree();
+    const freshCfg = { ...cfg, baseDir: freshBaseDir, rootDir: freshBaseDir, configDir: freshBaseDir };
+    const fresh = await openStoreFor(freshCfg, { build: true, requirements: new Set<BuildRequirement>(['core']) });
+    await embedPending(fresh.store, freshCfg);
     const handedOver = await vectors(fresh.store);
     await fresh.store.close();
 
-    assert.ok(reparsed.length > 0, 'the pending set must be non-empty, or this asserts nothing');
-    assert.deepEqual(reparsed, handedOver);
+    assert.ok(persisted.length > 0, 'the pending set must be non-empty, or this asserts nothing');
+    assert.deepEqual(persisted, handedOver);
   });
 });

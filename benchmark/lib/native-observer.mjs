@@ -50,7 +50,7 @@ export async function observeNativeIndex({ pkgRoot, store, configPath, manifest,
   try {
     const connectStarted = process.hrtime.bigint();
     try {
-      connected = await dialect.connect(resolve(cfg.baseDir, '.sense', dialect.filename), cfg);
+      connected = await dialect.connect(resolve(cfg.configDir ?? cfg.baseDir, '.sense', dialect.filename), cfg, { existingOnly: true, observational: true });
     } catch (err) {
       timings.connect_ms = elapsedMs(connectStarted);
       if (dialect.isLocked?.(err)) result = { state: 'locked', timings };
@@ -76,7 +76,7 @@ export async function observeNativeIndex({ pkgRoot, store, configPath, manifest,
   if (connected) {
     const closeStarted = process.hrtime.bigint();
     try {
-      await dialect.close(connected.handle);
+      await dialect.close(connected.handle, { observational: true });
       timings.close_ms = elapsedMs(closeStarted);
     } catch (err) {
       closeError = err;
@@ -138,7 +138,18 @@ export function signalProcessTree(child, signal = 'SIGKILL') {
   if (!child?.pid) throw new Error('cannot signal a child process before it has a pid');
   if (platform() === 'win32') {
     const killed = spawnSync('taskkill', ['/pid', String(child.pid), '/t', '/f'], { encoding: 'utf8' });
-    if (killed.status !== 0 && child.exitCode === null && child.signalCode === null) throw new Error(`taskkill failed: ${killed.stderr || killed.stdout || `exit ${killed.status}`}`);
+    // A spawn-level failure (taskkill itself never ran) is never a liveness question.
+    if (killed.error) throw killed.error;
+    if (killed.status !== 0) {
+      // exitCode/signalCode race spawnSync's own event-loop block, so ask the OS directly.
+      let stillRunning = true;
+      try {
+        process.kill(child.pid, 0);
+      } catch (err) {
+        if (err?.code === 'ESRCH') stillRunning = false;
+      }
+      if (stillRunning) throw new Error(`taskkill failed: ${killed.stderr || killed.stdout || `exit ${killed.status}`}`);
+    }
     return;
   }
   try {

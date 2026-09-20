@@ -1,4 +1,4 @@
-import type { Config } from '../config/index.ts';
+import { type Config, featureEnabled } from '../config/index.ts';
 import { embed } from '../features/embed.ts';
 import { FEATURES } from '../features/index.ts';
 import { rank } from '../features/rank.ts';
@@ -20,6 +20,8 @@ import type { Connection, ReconcileDialect } from './types.ts';
 export interface Builder {
   // forcedPaths (open.ts's preset-only narrow rebuild) applies to this call alone, not future ones.
   build(forcedPaths?: ReadonlySet<string>): Promise<{ parsed: number; warnings: string[]; stages: Stages }>;
+  // Repairs an incomplete generation in place, including state owned by disabled features.
+  recover(): Promise<{ parsed: number; warnings: string[]; stages: Stages }>;
   // Narrow embed invalidation (open.ts, embed-scope.ts's classifyEmbedChange): 'model' nulls every
   // vector/scale in place; 'chunk' rebuilds every embedding row. Neither touches another table.
   invalidate(kind: EmbedChangeKind): Promise<{ parsed: number }>;
@@ -153,12 +155,30 @@ async function invalidateFeatureToggles(conn: Connection, cfg: Config, baseDir: 
   return { parsed };
 }
 
+async function recoverIncomplete(conn: Connection, cfg: Config, paths: ReconcilePaths, dialect: ReconcileDialect, pool: ParsePool): Promise<{ parsed: number; warnings: string[]; stages: Stages }> {
+  const disabled = FEATURES.filter((feature) => !featureEnabled(cfg, feature.name));
+  for (const feature of disabled) {
+    if (feature.name !== 'embed') await feature.schema(conn);
+  }
+
+  const toggles: FeatureToggle[] = disabled.filter((feature) => feature.name !== 'embed').map((feature) => ({ name: feature.name, turnedOn: false }));
+  await invalidateFeatureToggles(conn, cfg, paths.rootDir, dialect, pool, toggles);
+  if (disabled.some((feature) => feature.name === 'embed')) {
+    const embeddingsTable = await conn.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'embeddings'");
+    if ((await embeddingsTable.all()).length > 0) await withTransaction(conn, () => conn.exec('DELETE FROM embeddings'), dialect.beginMode());
+  }
+
+  const forcedPaths = new Set(listFiles(cfg, paths.rootDir).map((file) => file.relPath));
+  return reconcile(conn, cfg, paths, dialect, pool, forcedPaths);
+}
+
 // The pool is created at most once, lazily, on whichever build() or invalidate() call first
 // needs it, and reused by every later call on this instance.
 export function createBuilder(conn: Connection, cfg: Config, paths: ReconcilePaths, dialect: ReconcileDialect): Builder {
   const pool = new ParsePool();
   return {
     build: (forcedPaths) => reconcile(conn, cfg, paths, dialect, pool, forcedPaths),
+    recover: () => recoverIncomplete(conn, cfg, paths, dialect, pool),
     invalidate: (kind) => (kind === 'model' ? nullEmbedVectors(conn, dialect) : rebuildEmbeddings(conn, cfg, paths.rootDir, dialect, pool)),
     invalidateFeatures: (toggles) => invalidateFeatureToggles(conn, cfg, paths.rootDir, dialect, pool, toggles),
     close: () => pool.close(),

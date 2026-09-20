@@ -4,11 +4,12 @@ import { featureSignature } from '../../config/index.ts';
 import { STORE_DIMS } from '../../embed/types.ts';
 import { SenseError } from '../../errors.ts';
 import { activeFeatures, FEATURES } from '../../features/index.ts';
-import type { OpenResult } from '../open.ts';
+import type { InternalOpenOptions, OpenResult } from '../open.ts';
 import { openWithDialect } from '../open.ts';
 import { getMeta, setMeta } from '../shared.ts';
 import type { Connection, OpenDialect } from '../types.ts';
 import { createConnection } from './connection.ts';
+import { assertFtsReady, prepareFts } from './lexical.ts';
 import { DUCKDB_PACKAGE, duckdbApi } from './native.ts';
 import { duckdbDialect } from './reconcile.ts';
 import { registerFunctions } from './sql-functions.ts';
@@ -18,7 +19,7 @@ import { createVectorWriteStage } from './vectors.ts';
 export const DB_FILENAME = 'cache.duckdb';
 // Independent of sqlite's SCHEMA_VERSION -- the two stores' cache shapes evolve separately (VARIANT frontmatter columns vs untyped).
 // The store name already joins the feature signature, so switching a config's `store` key rebuilds rather than reusing the other engine's cache.
-export const SCHEMA_VERSION = '4';
+export const SCHEMA_VERSION = '5';
 
 export type { OpenResult };
 
@@ -29,11 +30,13 @@ interface DuckdbHandle {
   duckdb: DuckDBConnection;
 }
 
-// `content` is a plain table (not FTS-virtual): the fts index is built over it lazily, only when a lexical query runs (lexical.ts), and read directly for contains() verification either way.
+// `content` is a plain table (not FTS-virtual): build prepares the persistent FTS index over it,
+// while contains() verification reads the table directly.
 // No tokenizer resolution: this store always uses the fts extension's default (porter) stemmer.
 async function ensureSchema(handle: DuckdbHandle, conn: Connection, cfg: Config): Promise<void> {
   await conn.exec(`CREATE TABLE IF NOT EXISTS frontmatter ("path" TEXT PRIMARY KEY, "_mtime" DOUBLE, "_ctime" DOUBLE, "_size" INTEGER, "_parse_error" TEXT)`);
   await conn.exec(`CREATE TABLE IF NOT EXISTS content ("path" TEXT PRIMARY KEY, title TEXT, summary TEXT, text TEXT)`);
+  await conn.exec(`CREATE TABLE IF NOT EXISTS indexed_sources ("path" TEXT PRIMARY KEY, text TEXT NOT NULL)`);
   await conn.exec(`CREATE TABLE IF NOT EXISTS preset_files ("path" TEXT, preset TEXT, PRIMARY KEY ("path", preset))`);
   await conn.exec('CREATE INDEX IF NOT EXISTS preset_files_preset ON preset_files(preset)');
   for (const feature of activeFeatures(cfg)) {
@@ -56,7 +59,7 @@ async function close(handle: DuckdbHandle): Promise<void> {
   handle.instance.closeSync();
 }
 
-async function connect(dbPath: string, _cfg: ResolvedConfig): Promise<{ handle: DuckdbHandle; conn: Connection }> {
+async function connect(dbPath: string, _cfg: ResolvedConfig, options: { existingOnly: boolean; observational: boolean }): Promise<{ handle: DuckdbHandle; conn: Connection }> {
   // Dynamic, not a top-level import: sqlite trees must never attempt to resolve this optional peer dependency, so nothing imports
   // it as a value until a duckdb tree opens (types-only imports are erased). Installed on first use if missing, shared with sql-functions.ts and vectors.ts via native.ts's duckdbApi.
   let DuckDBInstance: typeof import('@duckdb/node-api').DuckDBInstance;
@@ -72,7 +75,7 @@ async function connect(dbPath: string, _cfg: ResolvedConfig): Promise<{ handle: 
   try {
     // On-disk files default to an older storage format for cross-version compatibility, which rejects VARIANT columns ("VARIANT
     // columns are not supported in storage versions prior to v1.5.0"); this store's dynamic frontmatter columns need VARIANT (reconcile.ts), so the floor is pinned explicitly.
-    instance = await DuckDBInstance.create(dbPath, { storage_compatibility_version: 'v1.5.0' });
+    instance = await DuckDBInstance.create(dbPath, options.observational ? { access_mode: 'READ_ONLY' } : { storage_compatibility_version: 'v1.5.0' });
     duckdb = await instance.connect();
   } catch (err) {
     // create() may have succeeded before connect() failed: close it, or its WAL stays open.
@@ -102,9 +105,11 @@ export const duckdbOpenDialect: OpenDialect<DuckdbHandle> = {
   // "Cannot open file ... being used by another process". Both are the same condition.
   isLocked: (err) => /Could not set lock on file|being used by another process/.test(err.message),
   ensureSchema,
+  prepareLexical: prepareFts,
+  assertLexicalReady: assertFtsReady,
   createStore: (handle, conn) => createStore(handle.instance, handle.duckdb, conn),
 };
 
-export async function openDuckdb(cfg: ResolvedConfig): Promise<OpenResult> {
-  return openWithDialect(cfg, duckdbOpenDialect);
+export async function openDuckdb(cfg: ResolvedConfig, options?: InternalOpenOptions): Promise<OpenResult> {
+  return openWithDialect(cfg, duckdbOpenDialect, options);
 }

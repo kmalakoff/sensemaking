@@ -22,15 +22,16 @@ export interface ParsedDoc {
   // NULL when the frontmatter parsed, the first YAML message otherwise. In the row rather than
   // a side table so `SELECT *` and any `IS NULL` investigation trip over it without being asked.
   parseError: string | null;
+  // Exact decoded source bytes read for this parse generation. Stored outside the FTS table so
+  // snippets and delayed embedding never consult a newer filesystem generation.
+  source: string;
   // title/summary are duplicated from frontmatter so bm25() can weight them above the body text.
   search: { title: string; summary: string; text: string };
   // Per-feature extraction results, keyed by feature name; features store them at reconcile.
   extracted: Record<string, unknown>;
 }
 
-export function parseFile(file: FileStat, extractors: Feature[] = [], cfg?: Config): { doc: ParsedDoc; warnings: string[] } {
-  // Preserve the authored bytes: feature extractors and section offsets use the raw document.
-  const raw = readFileSync(file.absPath, 'utf8');
+export function parseSource(file: FileStat, raw: string, extractors: Feature[] = [], cfg?: Config): { doc: ParsedDoc; warnings: string[] } {
   const warnings: string[] = [];
 
   const { fm, body: content } = splitFrontmatter(raw);
@@ -66,9 +67,16 @@ export function parseFile(file: FileStat, extractors: Feature[] = [], cfg?: Conf
       presets: file.presets,
       data: mapped,
       parseError,
+      source: raw,
       search,
       extracted: Object.fromEntries(extractors.filter((f) => f.extract).map((f) => [f.name, f.extract?.(raw, content, search, data, cfg, blocks)])),
     },
     warnings,
   };
+}
+
+export function parseFile(file: FileStat, extractors: Feature[] = [], cfg?: Config): { doc: ParsedDoc; warnings: string[] } {
+  // Preserve the authored bytes: feature extractors, indexed snippets, and section offsets use
+  // the same decoded string from this one read.
+  return parseSource(file, readFileSync(file.absPath, 'utf8'), extractors, cfg);
 }

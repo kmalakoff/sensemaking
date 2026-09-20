@@ -86,7 +86,7 @@ Vectors require two choices. The top-level `embed` block names the model and pro
 }
 ```
 
-The first vector search downloads a named static model and embeds the covered notes. `sense download` fetches the model earlier when CI, offline work, or timing makes that useful. A config change that alters the model, vector coverage, or chunking can rebuild vectors.
+The config's `"build": true` default lets CLI queries prepare their needed capabilities. Set `"build": false` for manual-build or watch workflows. The first build-enabled vector search downloads a named static model and embeds its eligible scope. `sense build` and `sense watch` prepare all configured capabilities regardless of this setting; `sense download` fetches the model earlier when CI, offline work, or timing makes that useful. A config change that alters the model, vector coverage, or chunking can rebuild vectors. Config `"build": false` or `--no-build` requires the requested vector scope to be ready and does not read newer live files.
 
 Read [embedding setup](references/embeddings.md) when choosing a provider or model, supporting a non-English tree, changing chunk size, or tuning signal weights.
 

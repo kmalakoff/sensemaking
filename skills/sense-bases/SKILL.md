@@ -144,5 +144,4 @@ via `GROUP_CONCAT`, all from one bound path.
 - `columnSize`, card/table/list/map chrome: pixel layout over the same rows.
 - Obsidian choosing `this` from the active pane: there is no pane; the path parameter is the
   resolution.
-- Live re-evaluation as files change: every sense query reconciles against the filesystem
-  first, so the freshness is already there; nothing re-renders on its own.
+- Live re-evaluation as files change: default CLI queries incrementally prepare the needed capabilities; `--no-build` reads the last completed generation and requires its requested readiness without scanning live files. Nothing re-renders on its own.

@@ -4,21 +4,23 @@ import type { Command } from './types.ts';
 // usage() and the command's own parse() error/--help output so there is one copy, not two.
 export const USAGE = {
   init: 'init [--model id-or-path] [--provider static|openai|cohere] [--url url]',
+  build: 'build [--force] [--config path]',
   watch: 'watch [--force] [--config path]',
   status: 'status [--format table|json] [--config path]',
   download: 'download [--config path]',
-  sql: 'sql "<statement>" [params...] [--preset name] [--format table|json|csv] [--config path]',
-  search: 'search "<terms>" [--preset name] [--include glob ...] [--exclude glob ...] [--no-exclude] [--where "<sql>"] [--k n] [--snippet-char-limit n] [--snippet-count-limit n] [--format table|json|csv] [--config path]',
-  map: 'map [--format table|json] [--config path]',
-  peek: 'peek <path> [--preset name] [--include glob ...] [--exclude glob ...] [--no-exclude] [--where "<sql>"] [--format table|json] [--config path]',
-  path: 'path <a> <b> [--preset name] [--include glob ...] [--exclude glob ...] [--no-exclude] [--where "<sql>"] [--max-depth n] [--format table|json] [--config path]',
-  related: 'related <note> [--preset name] [--include glob ...] [--exclude glob ...] [--no-exclude] [--where "<sql>"] [--k n] [--format table|json|csv] [--config path]',
+  sql: 'sql "<statement>" [params...] [--preset name] [--no-build] [--format table|json|csv] [--config path]',
+  search: 'search "<terms>" [--preset name] [--include glob ...] [--exclude glob ...] [--no-exclude] [--where "<sql>"] [--k n] [--snippet-char-limit n] [--snippet-count-limit n] [--no-build] [--format table|json|csv] [--config path]',
+  map: 'map [--no-build] [--format table|json] [--config path]',
+  peek: 'peek <path> [--preset name] [--include glob ...] [--exclude glob ...] [--no-exclude] [--where "<sql>"] [--no-build] [--format table|json] [--config path]',
+  path: 'path <a> <b> [--preset name] [--include glob ...] [--exclude glob ...] [--no-exclude] [--where "<sql>"] [--max-depth n] [--no-build] [--format table|json] [--config path]',
+  related: 'related <note> [--preset name] [--include glob ...] [--exclude glob ...] [--no-exclude] [--where "<sql>"] [--k n] [--no-build] [--format table|json|csv] [--config path]',
 } as const;
 
 // Lazy registry: a command's imports load only when it runs, so a heavy dependency in one
 // command never taxes the others (or --version/--help). These names are reserved from saved queries.
 export const COMMANDS: Record<string, () => Promise<{ default: Command }>> = {
   init: () => import('./init.ts'),
+  build: () => import('./build.ts'),
   watch: () => import('./watch.ts'),
   status: () => import('./status.ts'),
   download: () => import('./download.ts'),

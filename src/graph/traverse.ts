@@ -1,5 +1,7 @@
 // Frontier-by-frontier BFS through a temp visited table, one indexed anti-join per ring: a
 // local question touches a neighborhood, never the whole edge list.
+
+import { serialQuery } from '../lib/serial-query.ts';
 import type { Store } from '../store/types.ts';
 
 type Direction = 'forward' | 'reverse' | 'both';
@@ -65,7 +67,11 @@ async function reconstructPath(store: Store, to: string): Promise<string[]> {
 
 // One BFS from `from`, tracking a predecessor per node. Undirected by default, matching
 // personalizedRank; null when `to` is unreached within `maxDepth`.
-export async function findPath(store: Store, from: string, to: string, opts: FindPathOptions = {}): Promise<string[] | null> {
+export function findPath(store: Store, from: string, to: string, opts: FindPathOptions = {}): Promise<string[] | null> {
+  return serialQuery(store, () => findIndexedPath(store, from, to, opts));
+}
+
+async function findIndexedPath(store: Store, from: string, to: string, opts: FindPathOptions): Promise<string[] | null> {
   if (from === to) return [from];
 
   const direction: Direction = opts.directed ? 'forward' : 'both';

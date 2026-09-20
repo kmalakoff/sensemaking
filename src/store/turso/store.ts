@@ -19,7 +19,7 @@ const BLOAT_FACTOR = 1.5;
 
 // Shares one Connection instance (conn) with the builder's own reconcile call so transaction depth
 // (see transaction.ts) is tracked against the same object everywhere.
-export function createStore(db: Database, conn: Connection): Store {
+export function createStore(db: Database, conn: Connection, options: { observational?: boolean } = {}): Store {
   return {
     name: 'turso',
     capabilities: CAPABILITIES,
@@ -73,6 +73,10 @@ export function createStore(db: Database, conn: Connection): Store {
       },
     },
     async close() {
+      if (options.observational) {
+        await db.close();
+        return;
+      }
       // Checkpoint before measuring: the last reconcile's pages sit in the WAL, not the file yet.
       await checkpointWal(db);
       let reclaimPath: string | null = null;

@@ -1,6 +1,9 @@
 import assert from 'node:assert';
-import { statSync, unlinkSync, utimesSync } from 'node:fs';
+import { existsSync, readFileSync, statSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
+import { build, open, type ResolvedConfig, STATE_DIR, search } from 'sensemaking';
+import { writeModel } from '../lib/model.ts';
 import { forEachStore, type openTreeForStore, type ParityStoreName, withTreeForStore } from '../lib/stores.ts';
 import { tmpTree, writeNote } from '../lib/tree.ts';
 
@@ -12,6 +15,14 @@ interface LifecycleSnapshot {
   links: Array<{ src: string; target: string; dst: string | null; embed: number }>;
   tags: Array<{ path: string; tag: string }>;
   sections: Array<{ path: string; heading: string; level: number }>;
+}
+
+interface PersistentSnapshot {
+  meta: Array<{ key: string; value: string }>;
+  columns: string[];
+  frontmatter: Array<{ path: string; parseError: string | null }>;
+  content: Array<{ path: string; text: string }>;
+  indexedSources: Array<{ path: string; text: string }>;
 }
 
 async function rows<T>(store: Store, sql: string): Promise<T[]> {
@@ -31,6 +42,21 @@ async function snapshot(store: Store): Promise<LifecycleSnapshot> {
     tags,
     sections: sections.map((row) => ({ ...row, level: Number(row.level) })),
   };
+}
+
+async function persistentSnapshot(cfg: ResolvedConfig): Promise<PersistentSnapshot> {
+  const opened = await open(cfg, { build: false });
+  try {
+    return {
+      meta: await rows(opened.store, 'SELECT key, value FROM meta ORDER BY key'),
+      columns: await opened.store.docs.columns(),
+      frontmatter: await rows(opened.store, 'SELECT "path", "_parse_error" AS parseError FROM frontmatter ORDER BY "path"'),
+      content: await rows(opened.store, 'SELECT "path", text FROM content ORDER BY "path"'),
+      indexedSources: await rows(opened.store, 'SELECT "path", text FROM indexed_sources ORDER BY "path"'),
+    };
+  } finally {
+    await opened.store.close();
+  }
 }
 
 async function presetMembership(store: Store): Promise<Array<{ path: string; preset: string }>> {
@@ -65,6 +91,270 @@ function initialTree(): { baseDir: string; aMtime: number; bMtime: number } {
 }
 
 describe('store lifecycle: cold, no-op, edit, add, delete', () => {
+  it('serves lexical searches through existing-only observational handles', async () => {
+    await forEachStore(async (store) => {
+      const rootDir = tmpTree();
+      const configDir = tmpTree();
+      writeNote(rootDir, 'a.md', { body: 'readonly lexical candidate' });
+      const cfg: ResolvedConfig = {
+        version: 5,
+        store,
+        presets: { default: { include: ['**/*.md'], signals: { words: 1 } } },
+        queries: {},
+        rootDir,
+        configDir,
+        baseDir: rootDir,
+        configPath: join(configDir, 'sense.config.json'),
+      };
+      await build(cfg);
+      const before = await persistentSnapshot(cfg);
+
+      const observational = await open(cfg, { build: false });
+      try {
+        const found = await search(observational.store, cfg, 'candidate');
+        assert.deepEqual(
+          found.map((row) => row.path),
+          ['a.md'],
+          `${store}: observational lexical search failed`
+        );
+      } finally {
+        await observational.store.close();
+      }
+      assert.deepEqual(await persistentSnapshot(cfg), before, `${store}: observational search changed persistent index state`);
+    });
+  });
+
+  it('reports a missing DuckDB FTS artifact as not ready and rebuilds it', async () => {
+    const rootDir = tmpTree();
+    const configDir = tmpTree();
+    writeNote(rootDir, 'a.md', { body: 'durable lexical artifact' });
+    const cfg: ResolvedConfig = {
+      version: 5,
+      store: 'duckdb',
+      presets: { default: { include: ['**/*.md'], signals: { words: 1 } } },
+      queries: {},
+      rootDir,
+      configDir,
+      baseDir: rootDir,
+      configPath: join(configDir, 'sense.config.json'),
+    };
+    const writable = await open(cfg);
+    try {
+      await writable.store.exec('DROP SCHEMA fts_main_content CASCADE');
+    } finally {
+      await writable.store.close();
+    }
+
+    const missing = await open(cfg, { build: false });
+    try {
+      await assert.rejects(
+        () => search(missing.store, cfg, 'artifact'),
+        (err: unknown) => {
+          assert.equal((err as { code?: string }).code, 'INDEX_NOT_READY');
+          assert.match((err as Error).message, /artifact is missing/);
+          return true;
+        }
+      );
+    } finally {
+      await missing.store.close();
+    }
+
+    await build(cfg);
+    const recovered = await open(cfg, { build: false });
+    try {
+      assert.deepEqual(
+        (await search(recovered.store, cfg, 'artifact')).map((row) => row.path),
+        ['a.md']
+      );
+    } finally {
+      await recovered.store.close();
+    }
+  });
+
+  it('fully recovers a partially committed feature invalidation after config reverts', async () => {
+    const rootDir = tmpTree();
+    const configDir = tmpTree();
+    const configPath = join(configDir, 'sense.config.json');
+    writeNote(rootDir, 'a.md', { frontmatter: { tags: ['durable-tag'] }, body: '# Durable heading\n\nunchanged source' });
+    const sourceMtime = statSync(join(rootDir, 'a.md')).mtimeMs;
+    const cfg: ResolvedConfig = { version: 5, store: 'sqlite', presets: { default: { include: ['**/*.md'] } }, queries: {}, rootDir, configDir, baseDir: rootDir, configPath };
+
+    const initial = await open(cfg);
+    try {
+      await initial.store.exec(`CREATE TRIGGER fail_tag_invalidation BEFORE DELETE ON tags BEGIN SELECT RAISE(FAIL, 'forced invalidation failure'); END`);
+    } finally {
+      await initial.store.close();
+    }
+
+    // sections invalidates and commits before tags reaches this trigger. Reverting to cfg makes
+    // the durable signature match again, but the derived section row is still gone.
+    const withoutSectionsOrTags: ResolvedConfig = { ...cfg, features: { sections: false, tags: false } };
+    await assert.rejects(() => open(withoutSectionsOrTags), /forced invalidation failure/);
+
+    const native = new DatabaseSync(join(configDir, STATE_DIR, 'cache.db'));
+    try {
+      assert.equal((native.prepare('SELECT COUNT(*) AS n FROM sections').get() as { n: number }).n, 0, 'the fixture must commit section invalidation before tags fails');
+      assert.equal((native.prepare("SELECT value FROM meta WHERE key = 'core_ready'").get() as { value: string }).value, '0');
+      native.exec('DROP TRIGGER fail_tag_invalidation');
+    } finally {
+      native.close();
+    }
+
+    const retried = await open(cfg);
+    try {
+      assert.deepEqual(await rows(retried.store, 'SELECT "path", heading FROM sections'), [{ path: 'a.md', heading: 'Durable heading' }]);
+      assert.deepEqual(await rows(retried.store, 'SELECT "path", tag FROM tags'), [{ path: 'a.md', tag: 'durable-tag' }]);
+      assert.equal(statSync(join(rootDir, 'a.md')).mtimeMs, sourceMtime, 'the retry proof must not depend on a source stamp change');
+    } finally {
+      await retried.store.close();
+    }
+  });
+
+  it('clears a disabled feature when retrying the same failed config', async () => {
+    const rootDir = tmpTree();
+    const configDir = tmpTree();
+    const configPath = join(configDir, 'sense.config.json');
+    writeNote(rootDir, 'a.md', { frontmatter: { tags: ['must-clear'] }, body: 'unchanged source' });
+    const sourceMtime = statSync(join(rootDir, 'a.md')).mtimeMs;
+    const cfg: ResolvedConfig = { version: 5, store: 'sqlite', presets: { default: { include: ['**/*.md'] } }, queries: {}, rootDir, configDir, baseDir: rootDir, configPath };
+
+    const initial = await open(cfg);
+    try {
+      await initial.store.exec(`CREATE TRIGGER fail_tag_invalidation BEFORE DELETE ON tags BEGIN SELECT RAISE(FAIL, 'forced invalidation failure'); END`);
+    } finally {
+      await initial.store.close();
+    }
+
+    const withoutTags: ResolvedConfig = { ...cfg, features: { tags: false } };
+    await assert.rejects(() => open(withoutTags), /forced invalidation failure/);
+    const native = new DatabaseSync(join(configDir, STATE_DIR, 'cache.db'));
+    try {
+      assert.equal((native.prepare('SELECT COUNT(*) AS n FROM tags').get() as { n: number }).n, 1);
+      native.exec('DROP TRIGGER fail_tag_invalidation');
+    } finally {
+      native.close();
+    }
+
+    const retried = await open(withoutTags);
+    try {
+      assert.deepEqual(await rows(retried.store, 'SELECT "path", tag FROM tags'), []);
+      assert.equal(statSync(join(rootDir, 'a.md')).mtimeMs, sourceMtime);
+    } finally {
+      await retried.store.close();
+    }
+  });
+
+  it('clears disabled embedding rows while recovering an empty tree', async () => {
+    const rootDir = tmpTree();
+    const configDir = tmpTree();
+    const configPath = join(configDir, 'sense.config.json');
+    writeNote(rootDir, 'a.md', { body: 'embedded before recovery' });
+    const embedded: ResolvedConfig = {
+      version: 5,
+      store: 'sqlite',
+      presets: { default: { include: ['**/*.md'], signals: { vectors: 1 } } },
+      embed: { model: writeModel(), provider: 'static' },
+      queries: {},
+      rootDir,
+      configDir,
+      baseDir: rootDir,
+      configPath,
+    };
+    const initial = await open(embedded);
+    await initial.store.close();
+    unlinkSync(join(rootDir, 'a.md'));
+
+    const native = new DatabaseSync(join(configDir, STATE_DIR, 'cache.db'));
+    try {
+      native.prepare("UPDATE meta SET value = '0' WHERE key = 'core_ready'").run();
+    } finally {
+      native.close();
+    }
+
+    const withoutEmbed: ResolvedConfig = { version: 5, store: 'sqlite', presets: { default: { include: ['**/*.md'], signals: { words: 1 } } }, queries: {}, rootDir, configDir, baseDir: rootDir, configPath };
+    const recovered = await open(withoutEmbed);
+    try {
+      assert.deepEqual(await rows(recovered.store, 'SELECT "path" FROM frontmatter'), []);
+      assert.deepEqual(await rows(recovered.store, 'SELECT "path" FROM embeddings'), []);
+    } finally {
+      await recovered.store.close();
+    }
+  });
+
+  it('does not create disabled embedding schema while recovering a never-embedded tree', async () => {
+    await forEachStore(async (store) => {
+      const rootDir = tmpTree();
+      const configDir = tmpTree();
+      const configPath = join(configDir, 'sense.config.json');
+      writeNote(rootDir, 'a.md', { body: 'never embedded' });
+      const cfg: ResolvedConfig = {
+        version: 5,
+        store,
+        presets: { default: { include: ['**/*.md'] } },
+        queries: {},
+        rootDir,
+        configDir,
+        baseDir: rootDir,
+        configPath,
+      };
+      const initial = await open(cfg);
+      try {
+        assert.deepEqual(await rows(initial.store, "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'embeddings'"), []);
+        await initial.store.exec("UPDATE meta SET value = '0' WHERE key = 'core_ready'");
+      } finally {
+        await initial.store.close();
+      }
+
+      const recovered = await open(cfg);
+      try {
+        assert.deepEqual(await rows(recovered.store, "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'embeddings'"), [], `${store}: recovery created disabled embedding schema`);
+      } finally {
+        await recovered.store.close();
+      }
+    });
+  });
+
+  it('keeps no-build on the last completed generation until an explicit incremental or forced build', async () => {
+    await forEachStore(async (store) => {
+      const rootDir = tmpTree();
+      const configDir = tmpTree();
+      const configPath = join(configDir, 'sense.config.json');
+      const configText = JSON.stringify({ version: 5, root: rootDir, store, presets: { default: { include: ['**/*.md'] } }, queries: {} });
+      writeFileSync(configPath, configText);
+      writeNote(rootDir, 'a.md', { body: 'first indexed generation' });
+      const cfg: ResolvedConfig = { version: 5, store, presets: { default: { include: ['**/*.md'] } }, queries: {}, rootDir, configDir, baseDir: rootDir, configPath };
+
+      await build(cfg);
+      writeNote(rootDir, 'a.md', { body: 'second live generation' });
+      writeNote(rootDir, 'b.md', { body: 'new live note' });
+
+      const stale = await open(cfg, { build: false });
+      try {
+        assert.deepEqual(await rows<{ path: string; text: string }>(stale.store, 'SELECT "path", text FROM indexed_sources ORDER BY "path"'), [{ path: 'a.md', text: '---\n\n---\n\nfirst indexed generation\n' }], `${store}: no-build read newer live files`);
+      } finally {
+        await stale.store.close();
+      }
+
+      await build(cfg);
+      const fresh = await open(cfg, { build: false });
+      try {
+        assert.deepEqual(
+          (await rows<{ path: string }>(fresh.store, 'SELECT "path" FROM frontmatter ORDER BY "path"')).map((row) => row.path),
+          ['a.md', 'b.md'],
+          `${store}: incremental build did not publish additions`
+        );
+      } finally {
+        await fresh.store.close();
+      }
+
+      const aBeforeForce = readFileSync(join(rootDir, 'a.md'), 'utf8');
+      await build(cfg, { force: true });
+      assert.equal(readFileSync(join(rootDir, 'a.md'), 'utf8'), aBeforeForce, `${store}: force changed a source note`);
+      assert.equal(readFileSync(configPath, 'utf8'), configText, `${store}: force changed its owner config`);
+      assert.equal(existsSync(join(rootDir, '.sense')), false, `${store}: config-owned state leaked into the tree root`);
+    });
+  });
+
   it('keeps visible rows current across every store', async () => {
     await forEachStore(async (store: ParityStoreName) => {
       const { baseDir, aMtime, bMtime } = initialTree();

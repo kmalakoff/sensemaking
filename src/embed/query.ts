@@ -1,11 +1,9 @@
-import { existsSync } from 'node:fs';
-import { join } from 'node:path';
 import type { Config, ResolvedConfig } from '../config/index.ts';
 import { SenseError } from '../errors.ts';
 import type { Chunk } from '../features/embed.ts';
 import { embed } from '../features/embed.ts';
 import { progress } from '../output/progress.ts';
-import { parseFile } from '../scan/index.ts';
+import { parseSource } from '../scan/index.ts';
 import type { Store, VectorCandidate, VectorSimilar } from '../store/types.ts';
 import { takeChunkText } from './handoff.ts';
 import { checkLanguageFit } from './langfit.ts';
@@ -27,10 +25,11 @@ export function toStore(full: Float32Array, dims: number, int8: boolean): { v: F
 }
 
 // Embed rows whose vector is NULL. Reconcile hands its chunk text over in memory when it ran in
-// this process (handoff.ts); a row left pending by an earlier command re-derives from the file.
-export async function embedPending(store: Store, cfg: Config, baseDir: string): Promise<void> {
+// this process (handoff.ts); a row left pending by an earlier command re-derives from the exact
+// source string persisted with that indexed generation.
+export async function embedPending(store: Store, cfg: Config, allowed?: ReadonlySet<string>): Promise<void> {
   const provider = await getProvider(cfg); // throws EMBED_DISABLED before touching the table
-  const dirty = await store.vectors.pending();
+  const dirty = (await store.vectors.pending()).filter((row) => allowed?.has(row.path) ?? true);
   if (dirty.length === 0) return;
   const storeDims = Math.min(STORE_DIMS, provider.dims);
 
@@ -42,26 +41,25 @@ export async function embedPending(store: Store, cfg: Config, baseDir: string): 
   }
 
   const textByPath = takeChunkText(store) ?? new Map<string, string[]>();
+  const sourceStmt = await store.prepare('SELECT text FROM indexed_sources WHERE "path" = ?');
 
   const jobs: Array<{ path: string; chunk: number; text: string }> = [];
   for (const [path, chunkIdxs] of byPath) {
     const texts = textByPath.get(path);
     if (texts && chunkIdxs.every((idx) => idx < texts.length)) {
-      // A stat, not a parse: a file that vanished since reconcile is skipped here even though its
-      // text comes from memory, and the next reconcile removes its rows.
-      if (!existsSync(join(baseDir, path))) continue;
       for (const idx of chunkIdxs) jobs.push({ path, chunk: idx, text: texts[idx] });
       continue;
     }
-    // Reconcile ran in another process (`sense map` earlier, or a background `sense watch`), so
-    // its chunk text is gone: re-derive this one file.
-    let chunks: Chunk[];
-    try {
-      chunks = parseFile({ relPath: path, absPath: join(baseDir, path), mtimeMs: 0, ctimeMs: 0, size: 0, presets: [], embed: true }, [embed], cfg).doc.extracted.embed as Chunk[];
-    } catch {
-      continue; // vanished since reconcile; the next reconcile removes its rows
+    // A prior process may have reconciled the row, so its in-memory handoff is gone. Re-derive
+    // from that indexed generation's stored source, never from a newer live file.
+    const source = (await sourceStmt.get(path)) as { text: string } | undefined;
+    if (!source) throw new SenseError('INDEX_NOT_READY', `indexed source text is missing for ${path}; run \`sense build --force\` (or library build(config, { force: true })) before preparing vectors`);
+    const chunks = parseSource({ relPath: path, absPath: path, mtimeMs: 0, ctimeMs: 0, size: Buffer.byteLength(source.text), presets: [], embed: true }, source.text, [embed], cfg).doc.extracted.embed as Chunk[];
+    for (const idx of chunkIdxs) {
+      const chunk = chunks[idx];
+      if (!chunk) throw new SenseError('INDEX_NOT_READY', `indexed vector metadata for ${path} does not match its indexed source; run \`sense build --force\` (or library build(config, { force: true }))`);
+      jobs.push({ path, chunk: idx, text: chunk.text });
     }
-    for (const idx of chunkIdxs) if (chunks[idx]) jobs.push({ path, chunk: idx, text: chunks[idx].text });
   }
 
   // Over the exact texts about to be embedded, before any of them are: a mismatch fails
@@ -72,8 +70,8 @@ export async function embedPending(store: Store, cfg: Config, baseDir: string): 
     jobs.map((j) => j.text)
   );
 
-  // The lazy build is the one long silence a first search hits (measured 23s at
-  // 26k notes); progress makes it distinguishable from a hang.
+  // Preparing a large configured scope can take long enough to look stalled, so report each
+  // completed provider batch.
   const report = progress('embedding chunks', jobs.length);
   for (let i = 0; i < jobs.length; i += provider.batchCap) {
     const batch = jobs.slice(i, i + provider.batchCap);
@@ -91,13 +89,18 @@ export async function embedPending(store: Store, cfg: Config, baseDir: string): 
   report.finish();
 }
 
+export async function ensureDocumentEmbeddings(store: Store, _cfg: Config, allowed: ReadonlySet<string>): Promise<void> {
+  const pending = (await store.vectors.pending()).filter((row) => allowed.has(row.path));
+  if (pending.length > 0) {
+    throw new SenseError('INDEX_NOT_READY', `${pending.length} indexed chunk(s) in the requested scope still need vectors; run \`sense build\` (or library build(config)) before querying with build disabled`);
+  }
+}
+
 // Best chunk per file by cosine, its line range riding along; FTS5 operators are stripped as
 // lexical syntax. Similarity comes back because the fused score cannot express match quality.
 export async function semanticCandidates(store: Store, cfg: Config, terms: string, fetch: number, allowed?: Set<string>): Promise<VectorCandidate[]> {
   const rootDir = (cfg as Partial<ResolvedConfig>).rootDir ?? (cfg as Partial<ResolvedConfig>).baseDir;
   if (!rootDir) throw new SenseError('EMBED_MODEL', 'semantic expansion needs a resolved config (use loadConfig/open)');
-  await embedPending(store, cfg, rootDir);
-
   const provider = await getProvider(cfg);
   const storeDims = Math.min(STORE_DIMS, provider.dims);
   const text = (terms.match(/[\p{L}\p{N}]+/gu) ?? []).filter((t) => !['AND', 'OR', 'NOT', 'NEAR'].includes(t)).join(' ');

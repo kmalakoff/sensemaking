@@ -4,13 +4,14 @@ import { type Config, STORE_NAMES, type StoreName } from './types.ts';
 
 // Shape check for hand-edited files, so a typo names itself instead of surfacing as a
 // TypeError. Unknown top-level keys warn (forward compat); unknown keys inside a block error.
-const KNOWN_KEYS = new Set(['$schema', 'version', 'root', 'presets', 'features', 'embed', 'store', 'queries']);
+const KNOWN_KEYS = new Set(['$schema', 'version', 'root', 'build', 'presets', 'features', 'embed', 'store', 'queries']);
 const KNOWN_PRESET_KEYS = new Set(['include', 'exclude', 'k', 'signals', 'where']);
 const KNOWN_FEATURE_KEYS = new Set(['links', 'sections', 'tags', 'rank']);
 // The one source of truth for what the embed block accepts. schema.json carries an editor-facing
 // copy for autocomplete; nothing at runtime reads it.
 export const KNOWN_EMBED_KEYS = new Set(['model', 'provider', 'url', 'key', 'languages', 'chunkTokens']);
 const SAVED_SEARCH_KEYS = new Set(['search', 'preset', 'include', 'exclude', 'where', 'k']);
+const RESERVED_QUERY_NAMES = new Set(['init', 'build', 'watch', 'status', 'download', 'sql', 'search', 'map', 'peek', 'path', 'related']);
 
 export function unknownConfigKeys(cfg: Record<string, unknown>): string[] {
   return Object.keys(cfg).filter((k) => !KNOWN_KEYS.has(k));
@@ -152,6 +153,9 @@ function validatePreset(name: string, value: unknown, configPath: string): void 
 
 // A queries.<name> entry: { sql } or a saved search { search, preset?, include?, exclude?, where?, k? }.
 function validateSavedQuery(name: string, value: unknown, configPath: string): void {
+  if (RESERVED_QUERY_NAMES.has(name)) {
+    throw new SenseError('CONFIG_INVALID', `${configPath}: queries.${name} uses a reserved command name and can never be run as a saved query`);
+  }
   // A bare string is rejected rather than inferred to be SQL: an entry says which of the two
   // verbs it runs, the same choice the CLI makes explicit.
   if (typeof value === 'string') {
@@ -208,6 +212,9 @@ export function validateConfig(parsed: unknown, configPath: string): Config {
 
   if (cfg.root !== undefined && (typeof cfg.root !== 'string' || cfg.root.length === 0)) {
     throw new SenseError('CONFIG_INVALID', `${configPath}: root must be a non-empty path string`);
+  }
+  if (cfg.build !== undefined && typeof cfg.build !== 'boolean') {
+    throw new SenseError('CONFIG_INVALID', `${configPath}: build must be a boolean`);
   }
 
   // `checks` is rejected by name, not warned: silence would hide that assertions are gone.

@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { DuckDBInstance } from '@duckdb/node-api';
 import type { SenseError } from '../../../../src/errors.ts';
 import { createConnection } from '../../../../src/store/duckdb/connection.ts';
-import { createLexicalIndex, markContentStale } from '../../../../src/store/duckdb/lexical.ts';
+import { assertFtsReady, createLexicalIndex, markContentStale, prepareFts } from '../../../../src/store/duckdb/lexical.ts';
 import { ORDERED_BM25_MACRO, validateNativeMacroContract } from '../../../../src/store/duckdb/ordered-bm25.ts';
 import { getMeta } from '../../../../src/store/shared.ts';
 import type { Connection } from '../../../../src/store/types.ts';
@@ -54,13 +54,18 @@ async function insertDoc(conn: Connection, path: string, title: string, summary:
 
 const BASE = { whereJoin: '', whereCond: '', scopeCond: '' };
 
+async function preparedIndex(conn: Connection): Promise<ReturnType<typeof createLexicalIndex>> {
+  await prepareFts(conn);
+  return createLexicalIndex(conn);
+}
+
 describe('queryLexical (duckdb)', () => {
   it('uses the generated native BM25 formula with deterministic subscore accumulation', async () => {
     const conn = await makeConn();
     await insertDoc(conn, 'a.md', '', '', 'alpha beta gamma');
     await insertDoc(conn, 'b.md', '', '', 'alpha beta gamma');
     await insertDoc(conn, 'frequency.md', '', '', 'alpha alpha alpha');
-    const { query } = createLexicalIndex(conn);
+    const { query } = await preparedIndex(conn);
     const expected = ['a.md', 'b.md'];
     for (let i = 0; i < 12; i++)
       assert.deepEqual(
@@ -90,7 +95,7 @@ describe('queryLexical (duckdb)', () => {
   it('rejects a changed native version or macro contract', async () => {
     const conn = await makeConn();
     await insertDoc(conn, 'a.md', '', '', 'alpha beta');
-    await createLexicalIndex(conn).query('alpha', { ...BASE, limit: 10 });
+    await (await preparedIndex(conn)).query('alpha', { ...BASE, limit: 10 });
     const native = (await (
       await conn.prepare(`
       SELECT version() AS version, function_type, parameters, parameter_types, macro_definition
@@ -120,7 +125,7 @@ describe('queryLexical (duckdb)', () => {
     const conn = await makeConn();
     await insertDoc(conn, 'a.md', 'Astronomy', '', 'stars and planets');
     await insertDoc(conn, 'b.md', 'Cooking', '', 'recipes and food');
-    const { query } = createLexicalIndex(conn);
+    const { query } = await preparedIndex(conn);
     const hits = await query('astronomy', { ...BASE, limit: 10 });
     assert.deepEqual(
       hits.map((h) => h.path),
@@ -133,7 +138,7 @@ describe('queryLexical (duckdb)', () => {
     const conn = await makeConn();
     await insertDoc(conn, 'title-hit.md', 'widget', '', 'nothing else relevant here');
     await insertDoc(conn, 'body-hit.md', 'unrelated', '', 'a widget is mentioned only in passing here');
-    const { query } = createLexicalIndex(conn);
+    const { query } = await preparedIndex(conn);
     const hits = await query('widget', { ...BASE, limit: 10 });
     assert.deepEqual(
       hits.map((h) => h.path),
@@ -145,7 +150,7 @@ describe('queryLexical (duckdb)', () => {
     const conn = await makeConn();
     await insertDoc(conn, 'both.md', '', '', 'apple and banana together');
     await insertDoc(conn, 'apple-only.md', '', '', 'just an apple here');
-    const { query } = createLexicalIndex(conn);
+    const { query } = await preparedIndex(conn);
     const hits = await query('apple banana', { ...BASE, limit: 10 });
     assert.deepEqual(
       hits.map((h) => h.path),
@@ -157,7 +162,7 @@ describe('queryLexical (duckdb)', () => {
     const conn = await makeConn();
     await insertDoc(conn, 'adjacent.md', '', '', 'stars and planets fill the sky');
     await insertDoc(conn, 'apart.md', '', '', 'planets orbit distant stars');
-    const { query } = createLexicalIndex(conn);
+    const { query } = await preparedIndex(conn);
     const hits = await query('"stars and planets"', { ...BASE, limit: 10 });
     assert.deepEqual(
       hits.map((h) => h.path),
@@ -169,7 +174,7 @@ describe('queryLexical (duckdb)', () => {
     const conn = await makeConn();
     const large = `${'padding '.repeat(120_000)}needle target`;
     await insertDoc(conn, 'large.md', '', '', large);
-    const { query } = createLexicalIndex(conn);
+    const { query } = await preparedIndex(conn);
     const hits = await query('"needle target"', { ...BASE, limit: 1 });
     assert.deepEqual(
       hits.map((hit) => hit.path),
@@ -181,7 +186,7 @@ describe('queryLexical (duckdb)', () => {
     const conn = await makeConn();
     await insertDoc(conn, 'hit.md', '', '', 'a customer-facing dashboard');
     await insertDoc(conn, 'spaced.md', '', '', 'a customer facing away from the dashboard');
-    const { query } = createLexicalIndex(conn);
+    const { query } = await preparedIndex(conn);
     const hits = await query('"Customer-Facing"', { ...BASE, limit: 10 });
     assert.deepEqual(
       hits.map((h) => h.path),
@@ -192,7 +197,7 @@ describe('queryLexical (duckdb)', () => {
   it('a quoted punctuation-only phrase is empty, even when mixed with a word', async () => {
     const conn = await makeConn();
     await insertDoc(conn, 'hit.md', '', '', 'apple dashboard');
-    const { query } = createLexicalIndex(conn);
+    const { query } = await preparedIndex(conn);
     assert.deepEqual(await query('"!!!"', { ...BASE, limit: 10 }), []);
     assert.deepEqual(await query('apple "!!!"', { ...BASE, limit: 10 }), []);
   });
@@ -201,7 +206,7 @@ describe('queryLexical (duckdb)', () => {
     const conn = await makeConn();
     await insertDoc(conn, 'zh.md', '', '', '今天天气非常好,适合出去散步。');
     await insertDoc(conn, 'other.md', '', '', 'unrelated english text');
-    const { query } = createLexicalIndex(conn);
+    const { query } = await preparedIndex(conn);
     const hits = await query('天气', { ...BASE, limit: 10 });
     assert.deepEqual(
       hits.map((h) => h.path),
@@ -216,7 +221,7 @@ describe('queryLexical (duckdb)', () => {
     await conn.exec(`CREATE TEMP TABLE _search_scope ("path" TEXT)`);
     const stmt = await conn.prepare('INSERT INTO _search_scope VALUES (?)');
     await stmt.run('in-scope.md');
-    const { query } = createLexicalIndex(conn);
+    const { query } = await preparedIndex(conn);
     const hits = await query('apple', { whereJoin: '', whereCond: '', scopeCond: `AND content.path IN (SELECT "path" FROM _search_scope)`, limit: 10 });
     assert.deepEqual(
       hits.map((h) => h.path),
@@ -224,16 +229,21 @@ describe('queryLexical (duckdb)', () => {
     );
   });
 
-  it('rebuilds the fts index after markStale(), picking up content written since the last query', async () => {
+  it('requires preparation after markStale(), then picks up the changed content', async () => {
     const conn = await makeConn();
     await insertDoc(conn, 'a.md', 'first', '', 'first body');
-    const { query, markStale } = createLexicalIndex(conn);
+    const { query, markStale } = await preparedIndex(conn);
     assert.deepEqual(
       (await query('second', { ...BASE, limit: 10 })).map((h) => h.path),
       []
     );
     await insertDoc(conn, 'b.md', 'second', '', 'second body');
     await markStale();
+    await assert.rejects(
+      () => query('second', { ...BASE, limit: 10 }),
+      (err: SenseError) => err.code === 'INDEX_NOT_READY'
+    );
+    await prepareFts(conn);
     assert.deepEqual(
       (await query('second', { ...BASE, limit: 10 })).map((h) => h.path),
       ['b.md']
@@ -243,7 +253,7 @@ describe('queryLexical (duckdb)', () => {
   it('an empty terms string returns zero rows without touching the fts extension', async () => {
     const conn = await makeConn();
     await insertDoc(conn, 'a.md', 'first', '', 'first body');
-    const { query } = createLexicalIndex(conn);
+    const { query } = await preparedIndex(conn);
     assert.deepEqual(await query('   ', { ...BASE, limit: 10 }), []);
   });
 });
@@ -280,7 +290,7 @@ describe('queryLexical (duckdb): rejected FTS5 operators', () => {
   it('does not reject a lowercase "or"/"and"/"not" bareword (not an FTS5 operator unless uppercase)', async () => {
     const conn = await makeConn();
     await insertDoc(conn, 'a.md', '', '', 'foo or bar and not baz');
-    const { query } = createLexicalIndex(conn);
+    const { query } = await preparedIndex(conn);
     const hits = await query('foo or bar', { ...BASE, limit: 10 });
     assert.deepEqual(
       hits.map((h) => h.path),
@@ -291,7 +301,7 @@ describe('queryLexical (duckdb): rejected FTS5 operators', () => {
   it('does not reject a quoted phrase, even one that contains operator-shaped text', async () => {
     const conn = await makeConn();
     await insertDoc(conn, 'a.md', '', '', 'foo AND bar together');
-    const { query } = createLexicalIndex(conn);
+    const { query } = await preparedIndex(conn);
     const hits = await query('"foo AND bar"', { ...BASE, limit: 10 });
     assert.deepEqual(
       hits.map((h) => h.path),
@@ -303,18 +313,42 @@ describe('queryLexical (duckdb): rejected FTS5 operators', () => {
 // PLAN 3.60: a fresh connection must trust meta.fts_stale over assuming stale, or every CLI
 // invocation pays a full rebuild regardless of whether content changed since the last one.
 describe('queryLexical (duckdb): fts staleness persists across connections (PLAN 3.60)', () => {
+  it('detects a missing durable artifact despite a clear marker and recovers on preparation', async () => {
+    const conn = await makeConn();
+    await insertDoc(conn, 'a.md', 'artifact', '', 'durable artifact');
+    await prepareFts(conn);
+    assert.equal(await getMeta(conn, 'fts_stale'), '0');
+    await conn.exec('DROP SCHEMA fts_main_content CASCADE');
+
+    await assert.rejects(
+      () => assertFtsReady(conn),
+      (err: SenseError) => {
+        assert.equal(err.code, 'INDEX_NOT_READY');
+        assert.match(err.message, /artifact is missing/);
+        return true;
+      }
+    );
+
+    await prepareFts(conn);
+    await assert.doesNotReject(() => assertFtsReady(conn));
+    assert.deepEqual(
+      (await createLexicalIndex(conn).query('artifact', { ...BASE, limit: 10 })).map((row) => row.path),
+      ['a.md']
+    );
+  });
+
   it('a second connection over an unchanged cache does not rebuild', async () => {
     const dbPath = join(tmpTree(), 'cache.duckdb');
     const first = await openFileConn(dbPath);
     await insertDoc(first.conn, 'a.md', 'first', '', 'first body');
-    await createLexicalIndex(first.conn).query('first', { ...BASE, limit: 10 });
+    await (await preparedIndex(first.conn)).query('first', { ...BASE, limit: 10 });
     assert.equal(await getMeta(first.conn, 'fts_stale'), '0');
     first.close();
 
     const second = await openFileConn(dbPath);
     assert.equal(await getMeta(second.conn, 'fts_stale'), '0', "the clear must have persisted to disk, not just this connection's memory");
     const rebuilds = countFtsRebuilds(second.conn);
-    const secondIndex = createLexicalIndex(second.conn);
+    const secondIndex = await preparedIndex(second.conn);
     const hits = await secondIndex.query('first', { ...BASE, limit: 10 });
     assert.deepEqual(
       hits.map((h) => h.path),
@@ -334,7 +368,7 @@ describe('queryLexical (duckdb): fts staleness persists across connections (PLAN
     const dbPath = join(tmpTree(), 'cache.duckdb');
     const first = await openFileConn(dbPath);
     await insertDoc(first.conn, 'a.md', 'first', '', 'first body');
-    await createLexicalIndex(first.conn).query('first', { ...BASE, limit: 10 });
+    await (await preparedIndex(first.conn)).query('first', { ...BASE, limit: 10 });
     first.close();
 
     const second = await openFileConn(dbPath);
@@ -342,6 +376,7 @@ describe('queryLexical (duckdb): fts staleness persists across connections (PLAN
     // Mirrors what reconcileContent (reconcile.ts) does inside its own transaction when content changes.
     await markContentStale(second.conn);
     const rebuilds = countFtsRebuilds(second.conn);
+    await prepareFts(second.conn);
     const hits = await createLexicalIndex(second.conn).query('second', { ...BASE, limit: 10 });
     assert.deepEqual(
       hits.map((h) => h.path),
@@ -355,11 +390,12 @@ describe('queryLexical (duckdb): fts staleness persists across connections (PLAN
   it('recreates the connection-local adapter at the rebuild boundary', async () => {
     const conn = await makeConn();
     await insertDoc(conn, 'a.md', 'first', '', 'first body');
-    const index = createLexicalIndex(conn);
+    const index = await preparedIndex(conn);
     await index.query('first', { ...BASE, limit: 10 });
     await conn.exec(`CREATE OR REPLACE TEMP MACRO ${ORDERED_BM25_MACRO}(docname, query_string, fields := NULL, k := 1.2, b := 0.75, conjunctive := false) AS NULL`);
     await insertDoc(conn, 'b.md', 'second', '', 'second body');
     await markContentStale(conn);
+    await prepareFts(conn);
     assert.deepEqual(
       (await index.query('second', { ...BASE, limit: 10 })).map((hit) => hit.path),
       ['b.md']

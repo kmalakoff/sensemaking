@@ -21,6 +21,7 @@ export type SenseErrorCode =
   | 'STORE_DEPENDENCY_MISSING'
   | 'STORE_CAPABILITY_MISSING'
   | 'STORE_BUSY'
+  | 'INDEX_NOT_READY'
   | 'LEXICAL_NULL_PATH';
 
 export class SenseError extends Error {

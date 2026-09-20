@@ -4,7 +4,7 @@ import { DatabaseSync } from 'node:sqlite';
 import type { Config, ResolvedConfig } from '../../config/index.ts';
 import { featureSignature } from '../../config/index.ts';
 import { activeFeatures, FEATURES } from '../../features/index.ts';
-import type { OpenResult } from '../open.ts';
+import type { InternalOpenOptions, OpenResult } from '../open.ts';
 import { openWithDialect } from '../open.ts';
 import { getMeta, setMeta } from '../shared.ts';
 import { BEGIN_WRITE, withTransaction } from '../transaction.ts';
@@ -17,7 +17,7 @@ import { createStore } from './store.ts';
 export const DB_FILENAME = 'cache.db';
 // Cache shape version, independent of the config's own `version`. Bumping it rebuilds
 // existing trees on first query.
-export const SCHEMA_VERSION = '20';
+export const SCHEMA_VERSION = '21';
 
 export type { OpenResult };
 
@@ -40,6 +40,7 @@ async function createContentTable(conn: Connection): Promise<void> {
 async function ensureSchemaTables(conn: Connection, cfg: Config): Promise<void> {
   await conn.exec(`CREATE TABLE IF NOT EXISTS frontmatter ("path" TEXT PRIMARY KEY, "_mtime" REAL, "_ctime" REAL, "_size" INTEGER, "_parse_error" TEXT)`);
   await createContentTable(conn);
+  await conn.exec(`CREATE TABLE IF NOT EXISTS indexed_sources ("path" TEXT PRIMARY KEY, text TEXT NOT NULL)`);
   // Coverage, not ownership: a path can appear under several presets. path leads the PK so the
   // per-doc delete is an index hit -- keyed the other way, cold builds went quadratic.
   await conn.exec(`CREATE TABLE IF NOT EXISTS preset_files ("path" TEXT, preset TEXT, PRIMARY KEY ("path", preset))`);
@@ -64,15 +65,15 @@ function setJournalWal(db: DatabaseSync): void {
   }
 }
 
-async function connect(dbPath: string, _cfg: ResolvedConfig): Promise<{ handle: SqliteHandle; conn: Connection }> {
-  const db = new DatabaseSync(dbPath);
+async function connect(dbPath: string, _cfg: ResolvedConfig, options: { existingOnly: boolean; observational: boolean }): Promise<{ handle: SqliteHandle; conn: Connection }> {
+  const db = new DatabaseSync(dbPath, options.existingOnly ? { readOnly: true } : {});
   try {
     // Before journal_mode, not after: converting a fresh database to WAL takes a brief exclusive
     // lock, and with no timeout set yet a second process opening the same tree fails in 1ms.
     db.exec('PRAGMA busy_timeout = 30000');
     // busy_timeout does not cover the WAL conversion itself: SQLite does not invoke the busy
     // handler for it, so a concurrent cold open needs its own bounded wait.
-    setJournalWal(db);
+    if (!options.observational) setJournalWal(db);
     registerFunctions(db);
     const conn = createConnection(db);
     return { handle: { db }, conn };
@@ -110,6 +111,6 @@ export const sqliteOpenDialect: OpenDialect<SqliteHandle> = {
   createStore: (handle, conn) => createStore(handle.db, conn),
 };
 
-export async function openSqlite(cfg: ResolvedConfig): Promise<OpenResult> {
-  return openWithDialect(cfg, sqliteOpenDialect);
+export async function openSqlite(cfg: ResolvedConfig, options?: InternalOpenOptions): Promise<OpenResult> {
+  return openWithDialect(cfg, sqliteOpenDialect, options);
 }

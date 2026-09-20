@@ -164,16 +164,14 @@ function httpSuite(vendor: string, defaults?: { model: string; languages: string
       this.timeout(120_000);
       const baseDir = tmpTree();
       writeNote(baseDir, 'zh.md', { body: CHINESE_SENTENCES.map((line, i) => `## S${i}\n\n${line}`).join('\n\n') });
-      const { store: db, cfg } = await open(baseDir, ['en']);
       await assert.rejects(
-        () => search(db, cfg, LANGUAGE_CASES.zh.query),
+        () => open(baseDir, ['en']),
         (err: SenseError) => {
           assert.equal(err.code, 'EMBED_MODEL_MISMATCH');
           assert.match(err.message, /"cmn"/);
           return true;
         }
       );
-      await db.close();
     });
   });
 }

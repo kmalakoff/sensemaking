@@ -40,7 +40,7 @@ const api = await import(pathToFileURL(join(packageRoot, 'dist', 'esm', 'index.j
 const send = (message) => process.stdout.write(JSON.stringify(message) + '\n');
 const lockWait = channel('sensemaking.store.lock-wait');
 const onLockWait = ({ store }) => send({ type: 'lock-observed', store });
-if (role === 'reader') lockWait.subscribe(onLockWait);
+if (role === 'reader' || role === 'reader2' || role === 'writer') lockWait.subscribe(onLockWait);
 const input = createInterface({ input: process.stdin });
 const command = () => new Promise((resolve, reject) => {
   const onLine = (line) => {
@@ -59,12 +59,17 @@ const command = () => new Promise((resolve, reject) => {
 try {
   const cfg = api.loadConfig(configPath);
   if (role === 'writer') {
-    const opened = await api.open(cfg);
+    const opening = api.open(cfg);
+    send({ type: 'open-launched' });
+    const opened = await opening;
     try {
       await opened.store.transaction(async () => {
         const update = await opened.store.prepare('UPDATE content SET text = ? WHERE "path" = ?');
         await update.run('committed-a', 'a.md');
         await update.run('committed-b', 'b.md');
+        const indexed = await opened.store.prepare('UPDATE indexed_sources SET text = ? WHERE "path" = ?');
+        await indexed.run('committed-a', 'a.md');
+        await indexed.run('committed-b', 'b.md');
         send({ type: 'held' });
         const release = await command();
         if (release?.type !== 'release') throw new Error('writer expected release command');
@@ -74,12 +79,12 @@ try {
       await opened.store.close();
     }
     send({ type: 'done' });
-  } else if (role === 'reader') {
+  } else if (role === 'reader' || role === 'reader2') {
     send({ type: 'ready' });
     const go = await command();
     if (go?.type !== 'go') throw new Error('reader expected go command');
     send({ type: 'attempting' });
-    const opening = api.open(cfg);
+    const opening = role === 'reader2' ? api.open(cfg, { build: false }) : api.open(cfg);
     send({ type: 'open-launched' });
     const opened = await opening;
     try {
@@ -87,11 +92,13 @@ try {
       const probe = await command();
       if (probe?.type !== 'probe') throw new Error('reader expected probe command');
       const rows = await (await opened.store.prepare('SELECT "path", text FROM content WHERE "path" IN (?, ?) ORDER BY "path"')).all('a.md', 'b.md');
-      send({ type: 'read-before-release', rows });
+      const snippets = await (await opened.store.prepare('SELECT "path", text FROM indexed_sources WHERE "path" IN (?, ?) ORDER BY "path"')).all('a.md', 'b.md');
+      send({ type: 'read-before-release', rows, snippets });
       const release = await command();
       if (release?.type !== 'release') throw new Error('reader expected release command');
       const fresh = await (await opened.store.prepare('SELECT "path", text FROM content WHERE "path" IN (?, ?) ORDER BY "path"')).all('a.md', 'b.md');
-      send({ type: 'read', rows: fresh });
+      const freshSnippets = await (await opened.store.prepare('SELECT "path", text FROM indexed_sources WHERE "path" IN (?, ?) ORDER BY "path"')).all('a.md', 'b.md');
+      send({ type: 'read', rows: fresh, snippets: freshSnippets });
     } finally {
       await opened.store.close();
     }
@@ -112,6 +119,7 @@ interface Message {
   type: string;
   store?: string;
   rows?: Array<{ path: string; text: string }>;
+  snippets?: Array<{ path: string; text: string }>;
   message?: string;
 }
 
@@ -131,7 +139,11 @@ interface Waiter {
   close?: () => void;
 }
 
-function startChild(role: 'writer' | 'reader', configPath: string): ProtocolChild {
+async function waitForAny(process: ProtocolChild, types: string[]): Promise<Message> {
+  return Promise.race(types.map((type) => process.waitFor(type)));
+}
+
+function startChild(role: 'writer' | 'reader' | 'reader2', configPath: string): ProtocolChild {
   const child = spawn(process.execPath, ['--input-type=module', '-e', CHILD, role, configPath, packageRoot], {
     cwd: packageRoot,
     detached: true,
@@ -163,7 +175,7 @@ function startChild(role: 'writer' | 'reader', configPath: string): ProtocolChil
           fail(new Error(`child protocol error: ${message.message ?? 'unknown child error'}`));
           return;
         }
-        for (const waiter of waiters.get(message.type) ?? []) waiter.resolve(message);
+        for (const waiter of [...(waiters.get(message.type) ?? [])]) waiter.resolve(message);
         waiters.delete(message.type);
       } catch (err) {
         fail(new Error(`child returned malformed protocol: ${line}`, { cause: err }));
@@ -201,7 +213,7 @@ function startChild(role: 'writer' | 'reader', configPath: string): ProtocolChil
           reject(err);
         },
       };
-      waiter.timer = setTimeout(() => waiter.reject(new Error(`child produced no ${type} within ${DEADLINE_MS}ms; stderr=${stderr || 'none'}`)), DEADLINE_MS);
+      waiter.timer = setTimeout(() => waiter.reject(new Error(`child produced no ${type} within ${DEADLINE_MS}ms; messages=${JSON.stringify(messages)}; stderr=${stderr || 'none'}`)), DEADLINE_MS);
       waiter.close = () => waiter.reject(new Error(`child exited before ${type}: ${child.signalCode ?? child.exitCode}; stderr=${stderr || 'none'}`));
       const list = waiters.get(type) ?? [];
       list.push(waiter);
@@ -241,7 +253,6 @@ async function runOverlap(store: ParityStoreName): Promise<void> {
   writeFileSync(configPath, JSON.stringify({ version: 5, store, presets: { default: { include: ['**/*.md'] } }, queries: {} }));
   writeNote(baseDir, 'a.md', { body: 'old-a' });
   writeNote(baseDir, 'b.md', { body: 'old-b' });
-
   await withTreeForStore(store, baseDir, async ({ store: opened }) => {
     const baseline = await (await opened.prepare('SELECT "path", text FROM content WHERE "path" IN (?, ?) ORDER BY "path"')).all('a.md', 'b.md');
     assert.deepEqual(
@@ -256,6 +267,7 @@ async function runOverlap(store: ParityStoreName): Promise<void> {
 
   let writer: ProtocolChild | undefined;
   let reader: ProtocolChild | undefined;
+  let bodyError: unknown;
   try {
     if (store === 'sqlite') {
       reader = startChild('reader', configPath);
@@ -332,10 +344,16 @@ async function runOverlap(store: ParityStoreName): Promise<void> {
     await closeChild(reader);
   } catch (err) {
     const detail = [writer?.stderr, reader?.stderr].filter(Boolean).join('\n');
-    throw new Error(`${store}: held-writer reader proof failed${detail ? `; stderr=${detail}` : ''}`, { cause: err });
-  } finally {
-    await Promise.all([killChild(writer), killChild(reader)]);
+    const reason = err instanceof Error ? err.message : String(err);
+    bodyError = new Error(`${store}: held-writer reader proof failed: ${reason}${detail ? `; stderr=${detail}` : ''}`, { cause: err });
   }
+  // allSettled so a cleanup failure (e.g. a raw taskkill error) never skips the other child's
+  // cleanup, and never silently replaces a real body failure the way a throwing finally would.
+  const cleanupResults = await Promise.allSettled([killChild(writer), killChild(reader)]);
+  const cleanupErrors = cleanupResults.filter((result): result is PromiseRejectedResult => result.status === 'rejected').map((result) => result.reason);
+  if (bodyError && cleanupErrors.length > 0) throw new AggregateError([bodyError, ...cleanupErrors], `${store}: held-writer reader proof failed and cleanup also failed`);
+  if (bodyError) throw bodyError;
+  if (cleanupErrors.length > 0) throw cleanupErrors.length === 1 ? cleanupErrors[0] : new AggregateError(cleanupErrors, `${store}: held-writer reader cleanup failed`);
 
   await withTreeForStore(store, baseDir, async ({ store: opened }) => {
     const fresh = await (await opened.prepare('SELECT "path", text FROM content WHERE "path" IN (?, ?) ORDER BY "path"')).all('a.md', 'b.md');
@@ -350,7 +368,123 @@ async function runOverlap(store: ParityStoreName): Promise<void> {
   });
 }
 
+async function runHeldReaderAcceptance(store: ParityStoreName): Promise<void> {
+  const baseDir = scratchDir(`held-reader-acceptance-${store}`);
+  const configPath = join(baseDir, 'sense.config.json');
+  writeFileSync(configPath, JSON.stringify({ version: 5, store, presets: { default: { include: ['**/*.md'] } }, queries: {} }));
+  writeNote(baseDir, 'a.md', { body: 'old-a' });
+  writeNote(baseDir, 'b.md', { body: 'old-b' });
+  const oldSources = [
+    { path: 'a.md', text: '---\n\n---\n\nold-a\n' },
+    { path: 'b.md', text: '---\n\n---\n\nold-b\n' },
+  ];
+  const committedSources = [
+    { path: 'a.md', text: 'committed-a' },
+    { path: 'b.md', text: 'committed-b' },
+  ];
+  await withTreeForStore(store, baseDir, async () => {});
+
+  let firstReader: ProtocolChild | undefined;
+  let secondReader: ProtocolChild | undefined;
+  let writer: ProtocolChild | undefined;
+  let stage = 'initial';
+  try {
+    // Leg one: establish reader/reader overlap (or native contention), then drain both
+    // readers before testing writer acquisition so DuckDB/Turso cannot race the waiters.
+    stage = 'leg1-first-reader-start';
+    firstReader = startChild('reader2', configPath);
+    await firstReader.waitFor('ready');
+    firstReader.send({ type: 'go' });
+    await firstReader.waitFor('open-ready');
+    firstReader.send({ type: 'probe' });
+    await firstReader.waitFor('read-before-release');
+
+    stage = 'leg1-second-reader-attempt';
+    secondReader = startChild('reader2', configPath);
+    await secondReader.waitFor('ready');
+    secondReader.send({ type: 'go' });
+    await secondReader.waitFor('attempting');
+    const secondOutcome = await waitForAny(secondReader, ['open-ready', 'lock-observed']);
+    const secondLocked = secondOutcome.type === 'lock-observed';
+    if (store === 'sqlite') assert.equal(secondLocked, false, `${store}: observational readers must coexist`);
+    stage = 'leg1-release-readers';
+    firstReader.send({ type: 'release' });
+    await firstReader.waitFor('read');
+    if (secondLocked) await secondReader.waitFor('open-ready');
+    secondReader.send({ type: 'probe' });
+    await secondReader.waitFor('read-before-release');
+    secondReader.send({ type: 'release' });
+    await secondReader.waitFor('read');
+    await Promise.all([closeChild(firstReader), closeChild(secondReader)]);
+
+    // Leg two: hold a fresh reader while the writer actually attempts its open.
+    stage = 'leg2-fresh-reader-start';
+    firstReader = startChild('reader2', configPath);
+    await firstReader.waitFor('ready');
+    firstReader.send({ type: 'go' });
+    await firstReader.waitFor('open-ready');
+    stage = 'leg2-writer-attempt';
+    writer = startChild('writer', configPath);
+    await writer.waitFor('open-launched');
+    const writerOutcome = await waitForAny(writer, ['held', 'lock-observed']);
+    const writerLocked = writerOutcome.type === 'lock-observed';
+    firstReader.send({ type: 'probe' });
+    const beforeCommit = await firstReader.waitFor('read-before-release');
+    if (!writerLocked) {
+      if (store === 'sqlite') {
+        assert.deepEqual(
+          beforeCommit.rows,
+          [
+            { path: 'a.md', text: 'old-a' },
+            { path: 'b.md', text: 'old-b' },
+          ],
+          `${store}: reader sees committed state during held writer transaction`
+        );
+        assert.deepEqual(beforeCommit.snippets, oldSources, `${store}: snippets remain committed during held writer transaction`);
+      }
+    }
+    if (store === 'sqlite') assert.equal(writerLocked, false, `${store}: writer must reach its transaction`);
+    stage = 'leg2-release-reader';
+    firstReader.send({ type: 'release' });
+    await firstReader.waitFor('read');
+    if (writerLocked) await writer.waitFor('held');
+    writer.send({ type: 'release' });
+    await writer.waitFor('committed');
+    await writer.waitFor('done');
+
+    stage = 'post-commit-reopen';
+    secondReader = startChild('reader2', configPath);
+    await secondReader.waitFor('ready');
+    secondReader.send({ type: 'go' });
+    await secondReader.waitFor('open-ready');
+    secondReader.send({ type: 'probe' });
+    const committed = await secondReader.waitFor('read-before-release');
+    assert.deepEqual(
+      committed.rows,
+      [
+        { path: 'a.md', text: 'committed-a' },
+        { path: 'b.md', text: 'committed-b' },
+      ],
+      `${store}: reopened reader must see committed authored text and indexed snippet source`
+    );
+    assert.deepEqual(committed.snippets, committedSources, `${store}: reopened reader must see committed stored snippets`);
+    secondReader.send({ type: 'release' });
+    await secondReader.waitFor('read');
+    await Promise.all([closeChild(firstReader), closeChild(secondReader), closeChild(writer)]);
+  } catch (err) {
+    const snapshot = (child: ProtocolChild | undefined) => (child ? JSON.stringify(child.messages) : 'not-started');
+    throw new Error(`${store}: acceptance failed at ${stage}; first=${snapshot(firstReader)}; second=${snapshot(secondReader)}; writer=${snapshot(writer)}`, { cause: err });
+  } finally {
+    await Promise.all([killChild(firstReader), killChild(secondReader), killChild(writer)]);
+  }
+}
+
 describe('held writer and independent reader', () => {
+  it('records concurrent reader and writer access while the first reader is held', async function () {
+    this.timeout(60_000);
+    await forEachStore(runHeldReaderAcceptance);
+  });
+
   it('never exposes partial state or a raw native lock failure', async function () {
     this.timeout(90_000);
     await forEachStore(runOverlap);

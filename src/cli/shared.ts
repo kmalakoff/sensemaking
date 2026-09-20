@@ -6,14 +6,15 @@ import { columnHint } from '../output/column-hint.ts';
 import type { Row, RowFormat } from '../output/output.ts';
 import { printRowStream } from '../output/output.ts';
 import { searchError } from '../output/search-error.ts';
-import type { OpenResult } from '../store/index.ts';
-import { openStore } from '../store/index.ts';
+import { openStoreFor } from '../store/index.ts';
+import type { BuildRequirement, OpenResult } from '../store/open.ts';
 import type { Store } from '../store/types.ts';
 import type { Ctx } from './types.ts';
 
 // Spreadable option fragments -- one flag name keeps one meaning across every command's table.
 export const FORMAT: ParseArgsOptionsConfig = { format: { type: 'string', default: 'table' } };
 export const CONFIG: ParseArgsOptionsConfig = { config: { type: 'string' } };
+export const NO_BUILD: ParseArgsOptionsConfig = { 'no-build': { type: 'boolean', default: false } };
 // The scope vocabulary every scoped command shares: named preset, ad hoc include/exclude
 // globs, a where SQL condition. search adds k on top.
 export const SCOPE: ParseArgsOptionsConfig = {
@@ -113,15 +114,29 @@ export function printWarnings(warnings: string[]): void {
   for (const w of warnings) console.warn(w);
 }
 
-export async function withDb(ctx: Ctx, configPath: string | undefined, fn: (store: OpenResult['store'], cfg: ResolvedConfig) => void | Promise<void>): Promise<void> {
-  const cfg = ctx.resolveConfig(configPath);
-  const { store, warnings } = await openStore(cfg);
+export interface DbOpenOptions {
+  noBuild: boolean;
+  requirements: ReadonlySet<BuildRequirement> | ((cfg: ResolvedConfig) => ReadonlySet<BuildRequirement>);
+}
+
+export async function withResolvedDb(cfg: ResolvedConfig, options: DbOpenOptions, fn: (store: OpenResult['store'], cfg: ResolvedConfig, build: boolean) => void | Promise<void>): Promise<void> {
+  const requirements = typeof options.requirements === 'function' ? options.requirements(cfg) : options.requirements;
+  const build = !options.noBuild && cfg.build !== false;
+  const { store, warnings } = await openStoreFor(cfg, {
+    build,
+    requirements,
+  });
   printWarnings(warnings);
   try {
-    await fn(store, cfg);
+    await fn(store, cfg, build);
   } finally {
     await store.close();
   }
+}
+
+export async function withDb(ctx: Ctx, configPath: string | undefined, options: DbOpenOptions, fn: (store: OpenResult['store'], cfg: ResolvedConfig, build: boolean) => void | Promise<void>): Promise<void> {
+  const cfg = ctx.resolveConfig(configPath, { writeMigration: !options.noBuild, query: true });
+  return withResolvedDb(cfg, options, fn);
 }
 
 // `--preset` on SQL binds a temp `scope` table rather than transparently filtering: temp views shadowing the base tables can't cover `content`, since FTS5 MATCH treats the table name as a hidden column.
@@ -135,7 +150,7 @@ async function bindScope(store: Store, cfg: ResolvedConfig, preset: string): Pro
 }
 
 // An unbound `?` silently binds NULL, so mismatched param counts fail loudly instead.
-export async function runSql(cfg: ResolvedConfig, sql: string, params: string[], format: RowFormat, label: string, preset?: string): Promise<void> {
+export async function runSql(cfg: ResolvedConfig, sql: string, params: string[], format: RowFormat, label: string, noBuild: boolean, preset?: string): Promise<void> {
   const placeholderCount = (sql.match(/\?/g) ?? []).length;
   if (params.length !== placeholderCount) {
     console.error(`${label} expects ${placeholderCount} parameter(s), got ${params.length}`);
@@ -148,22 +163,20 @@ export async function runSql(cfg: ResolvedConfig, sql: string, params: string[],
     console.error(`add: JOIN scope ON scope."path" = <table>."path"`);
     process.exit(2);
   }
-  const { store, warnings } = await openStore(cfg);
-  printWarnings(warnings);
-  if (preset !== undefined) await bindScope(store, cfg, preset);
-  // Streamed, not collected: `sql`'s result size is the caller's business, not ours. columns() reads the statement's own metadata, so a 0-row csv gets a header too.
-  // A mid-stream SQLite error (e.g. SQLITE_BUSY outlasting busy_timeout) may leave partial output; the nonzero exit code is the failure signal, not a completeness guarantee.
-  try {
-    const statement = await store.raw.prepare(sql);
-    const columns = statement.columns().map((c) => c.name);
-    await printRowStream(statement.iterate(...params) as AsyncIterable<Row>, format, columns);
-  } catch (err) {
-    const hinted = columnHint(await store.docs.columns(), err as Error); // columns read while the store is still open
-    await store.close();
-    // A saved query or ad-hoc SQL can carry `content MATCH ?` too, so the same FTS5 punctuation trap applies to its bound parameters.
-    // SQL without MATCH gets its error verbatim; search advice on a plain typo would mislead.
-    if (/\bMATCH\b/i.test(sql)) throw searchError(hinted, params.join(' '));
-    throw hinted;
-  }
-  await store.close();
+  await withResolvedDb(cfg, { noBuild, requirements: new Set<BuildRequirement>(['core']) }, async (store) => {
+    if (preset !== undefined) await bindScope(store, cfg, preset);
+    // Streamed, not collected: `sql`'s result size is the caller's business, not ours. columns() reads the statement's own metadata, so a 0-row csv gets a header too.
+    // A mid-stream SQLite error (e.g. SQLITE_BUSY outlasting busy_timeout) may leave partial output; the nonzero exit code is the failure signal, not a completeness guarantee.
+    try {
+      const statement = await store.raw.prepare(sql);
+      const columns = statement.columns().map((c) => c.name);
+      await printRowStream(statement.iterate(...params) as AsyncIterable<Row>, format, columns);
+    } catch (err) {
+      const hinted = columnHint(await store.docs.columns(), err as Error); // columns read while the store is still open
+      // A saved query or ad-hoc SQL can carry `content MATCH ?` too, so the same FTS5 punctuation trap applies to its bound parameters.
+      // SQL without MATCH gets its error verbatim; search advice on a plain typo would mislead.
+      if (/\bMATCH\b/i.test(sql)) throw searchError(hinted, params.join(' '));
+      throw hinted;
+    }
+  });
 }

@@ -135,6 +135,21 @@ export async function reconcile(conn: Connection, cfg: Config, paths: ReconcileP
       // couples to. ON CONFLICT DO UPDATE preserves that rowid, so a reparse keeps its identity.
       await stages.time('text-index', () => dialect.reconcileContent(conn, contentTouched, parsedDocs, delta, cfg));
 
+      // Exact source text belongs to the same indexed generation as content and section ranges.
+      // The upsert also covers an added path another writer committed while this build waited.
+      if (contentTouched.length > 0)
+        await conn.runBatch(
+          'DELETE FROM indexed_sources WHERE "path" = ?',
+          contentTouched.map((p) => [p])
+        );
+      await appendRows(
+        conn,
+        'indexed_sources',
+        ['path', 'text'],
+        'INSERT INTO indexed_sources ("path", text) VALUES (?, ?) ON CONFLICT("path") DO UPDATE SET text = excluded.text',
+        parsedDocs.map((doc) => [doc.relPath, doc.source])
+      );
+
       // A preset edit forces a full rebuild, so an unchanged doc's coverage is already correct;
       // new docs have nothing to clear, which keeps cold builds linear.
       await stages.time('presets', async () => {

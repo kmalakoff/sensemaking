@@ -2,6 +2,7 @@ import { createRequire } from 'node:module';
 import { parseArgs } from 'node:util';
 import { COMMANDS, USAGE } from './cli/index.ts';
 import type { Ctx } from './cli/types.ts';
+import type { LoadConfigOptions } from './config/index.ts';
 import { loadConfig, SUPPORTED_CONFIG_VERSION } from './config/index.ts';
 
 // Parsing and dispatch only; commands lazy-load from src/cli/, so nothing heavy is imported
@@ -24,10 +25,17 @@ function usage(name: string): string {
   return [`usage: ${name} <name> [params...] [--format table|json|csv] [--config path]`, ...lines, `       ${name} --list`, `       ${name} --version`].join('\n');
 }
 
-function resolveConfigFor(name: string, configPath: string | undefined) {
-  const cfg = loadConfig(configPath);
+function resolveConfigFor(name: string, configPath: string | undefined, options: LoadConfigOptions & { query?: boolean } = {}) {
+  // Read the query policy before allowing a migration to write configuration state.
+  let cfg = loadConfig(configPath, options.query ? { writeMigration: false } : options);
+  const writeMigration = options.writeMigration !== false && (!options.query || cfg.build !== false);
+  if (options.query && writeMigration && cfg.migratedFrom !== undefined) cfg = loadConfig(configPath);
   if (cfg.migratedFrom !== undefined) {
-    console.warn(`${name}: migrated ${cfg.configPath} from config version ${cfg.migratedFrom} to ${SUPPORTED_CONFIG_VERSION}`);
+    console.warn(
+      !writeMigration
+        ? `${name}: ${cfg.configPath} needs migration from config version ${cfg.migratedFrom} to ${SUPPORTED_CONFIG_VERSION}; using the migrated form in memory only (run ${name} build to update the file)`
+        : `${name}: migrated ${cfg.configPath} from config version ${cfg.migratedFrom} to ${SUPPORTED_CONFIG_VERSION}`
+    );
   }
   if (cfg.unknownKeys !== undefined) {
     console.warn(`${name}: ${cfg.configPath} sets ${cfg.unknownKeys.join(', ')}, which this build does not read (no effect); see schema.json for the keys it does`);
@@ -106,7 +114,7 @@ export default async function cli(argv: string[], name: string): Promise<void> {
   const ctx: Ctx = {
     name,
     argv: argv.slice(1),
-    resolveConfig: (configPath) => resolveConfigFor(name, configPath),
+    resolveConfig: (configPath, options) => resolveConfigFor(name, configPath, options),
     usageError(message) {
       console.error(message);
       process.exit(2);

@@ -145,15 +145,15 @@ describe('llm-wiki example config (skills/sense-setup/EXAMPLES.md)', () => {
 
   it('sense status and sense map report per-preset coverage for both wiki and raw', () => {
     const dir = llmWikiTree();
+    const built = runCli(['build'], { cwd: dir });
+    assert.equal(built.status, 0, built.stderr);
     const status = runCli(['status', '--format', 'json'], { cwd: dir });
     assert.equal(status.status, 0, status.stderr);
     const statusPresets = JSON.parse(status.stdout).presets as Array<{ name: string; files: number; embedded: number }>;
     const byName = new Map(statusPresets.map((p) => [p.name, p]));
     assert.equal(byName.get('default')?.files, 2, 'default (wiki/**) covers the two wiki pages');
     assert.equal(byName.get('raw')?.files, 2, 'raw covers the two raw sources');
-    // Vectors are lazy: rows start NULL and fill on the first search, so a fresh status
-    // reports 0 embedded for both presets, not "vectors off".
-    assert.equal(byName.get('raw')?.embedded, 0, 'nothing embedded yet on a fresh index');
+    assert.equal(byName.get('raw')?.embedded, 2, 'explicit build prepares every configured vector scope');
 
     const map = runCli(['map', '--format', 'json'], { cwd: dir });
     assert.equal(map.status, 0, map.stderr);

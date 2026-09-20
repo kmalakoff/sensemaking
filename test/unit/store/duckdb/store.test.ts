@@ -1,9 +1,13 @@
 import assert from 'node:assert';
+import type { ResolvedConfig } from 'sensemaking';
+import { openStoreFor } from '../../../../src/store/index.ts';
+import type { BuildRequirement } from '../../../../src/store/open.ts';
 import { writeModel } from '../../../lib/model.ts';
 import { openConfig, tmpTree, writeNote } from '../../../lib/tree.ts';
 
 function duckdbTree(baseDir: string, embed?: Parameters<typeof openConfig>[0]['embed']) {
-  return openConfig({ store: 'duckdb', presets: { default: { include: ['**/*.md'] } }, embed, queries: {}, baseDir, configPath: null } as Parameters<typeof openConfig>[0]);
+  const cfg = { store: 'duckdb', presets: { default: { include: ['**/*.md'] } }, embed, queries: {}, baseDir, configPath: null } as ResolvedConfig;
+  return embed ? openStoreFor(cfg, { build: true, requirements: new Set<BuildRequirement>(['core']) }) : openConfig(cfg);
 }
 
 describe('createStore (duckdb)', () => {

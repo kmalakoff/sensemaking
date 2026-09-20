@@ -4,7 +4,7 @@ import { featureSignature } from '../../config/index.ts';
 import { STORE_DIMS } from '../../embed/types.ts';
 import { SenseError } from '../../errors.ts';
 import { activeFeatures, FEATURES } from '../../features/index.ts';
-import type { OpenResult } from '../open.ts';
+import type { InternalOpenOptions, OpenResult } from '../open.ts';
 import { openWithDialect } from '../open.ts';
 import { getMeta, setMeta } from '../shared.ts';
 import type { Connection, OpenDialect } from '../types.ts';
@@ -16,7 +16,7 @@ import { createStore } from './store.ts';
 export const DB_FILENAME = 'cache.turso.db';
 // Independent of sqlite's and duckdb's SCHEMA_VERSION: each store's cache shape evolves
 // separately. Covers the FTS indexes, the "_ngram" sidecar columns, and embeddings.vector's width.
-export const SCHEMA_VERSION = '8';
+export const SCHEMA_VERSION = '9';
 
 export type { OpenResult };
 
@@ -25,6 +25,7 @@ export type { OpenResult };
 async function ensureSchema(_handle: Database, conn: Connection, cfg: Config): Promise<void> {
   await conn.exec(`CREATE TABLE IF NOT EXISTS frontmatter ("path" TEXT PRIMARY KEY, "_mtime" REAL, "_ctime" REAL, "_size" INTEGER, "_parse_error" TEXT)`);
   await conn.exec(`CREATE TABLE IF NOT EXISTS content ("path" TEXT PRIMARY KEY, title TEXT, summary TEXT, text TEXT, title_stem TEXT, summary_stem TEXT, text_stem TEXT, title_ngram TEXT, summary_ngram TEXT, text_ngram TEXT)`);
+  await conn.exec(`CREATE TABLE IF NOT EXISTS indexed_sources ("path" TEXT PRIMARY KEY, text TEXT NOT NULL)`);
   for (const ddl of CONTENT_FTS_DDL) await conn.exec(ddl);
   await conn.exec(`CREATE TABLE IF NOT EXISTS preset_files ("path" TEXT, preset TEXT, PRIMARY KEY ("path", preset))`);
   await conn.exec('CREATE INDEX IF NOT EXISTS preset_files_preset ON preset_files(preset)');
@@ -41,8 +42,8 @@ async function ensureSchema(_handle: Database, conn: Connection, cfg: Config): P
   if ((await getMeta(conn, 'features')) === null) await setMeta(conn, 'features', featureSignature(cfg, FEATURES));
 }
 
-async function close(handle: Database): Promise<void> {
-  await checkpointWal(handle);
+async function close(handle: Database, options: { observational?: boolean } = {}): Promise<void> {
+  if (!options.observational) await checkpointWal(handle);
   await handle.close();
 }
 
@@ -50,7 +51,7 @@ async function setDerivedBusyTimeout(_handle: Database, conn: Connection, ms: nu
   await conn.exec(`PRAGMA busy_timeout = ${ms}`);
 }
 
-async function connect(dbPath: string, _cfg: ResolvedConfig): Promise<{ handle: Database; conn: Connection }> {
+async function connect(dbPath: string, _cfg: ResolvedConfig, options: { existingOnly: boolean; observational: boolean }): Promise<{ handle: Database; conn: Connection }> {
   // Dynamic, not a top-level import: a sqlite or duckdb tree must never attempt to resolve this
   // optional dependency until a turso tree is actually opened. Installed on first use if missing.
   let turso: Awaited<ReturnType<typeof tursoApi>>;
@@ -63,9 +64,9 @@ async function connect(dbPath: string, _cfg: ResolvedConfig): Promise<{ handle: 
 
   let db: Database;
   try {
-    // `timeout` is connect-time only in this client; the derived value is set via runtime PRAGMA
-    // below. Options in native.ts, shared with reclaimSpace's own connection.
-    db = await turso.connect(dbPath, { ...CONNECT_OPTS, experimental: [...CONNECT_OPTS.experimental] });
+    // Turso's readonly mode rejects native FTS SELECTs and TEMP query tables. Existing-only opens
+    // stay query-capable; shared no-build orchestration and observational close prevent upkeep writes.
+    db = await turso.connect(dbPath, { ...CONNECT_OPTS, experimental: [...CONNECT_OPTS.experimental], ...(options.existingOnly ? { fileMustExist: true } : {}) });
   } catch (err) {
     throw new SenseError('STORE_DEPENDENCY_MISSING', `store "turso" failed to open ${dbPath}: ${(err as Error).message}`);
   }
@@ -85,9 +86,9 @@ export const tursoOpenDialect: OpenDialect<Database> = {
   isLocked: (err) => /File is locked by another process|locked a portion of the file/.test(err.message),
   ensureSchema,
   setDerivedBusyTimeout,
-  createStore: (handle, conn) => createStore(handle, conn),
+  createStore: (handle, conn, _cfg, options) => createStore(handle, conn, options),
 };
 
-export async function openTurso(cfg: ResolvedConfig): Promise<OpenResult> {
-  return openWithDialect(cfg, tursoOpenDialect);
+export async function openTurso(cfg: ResolvedConfig, options?: InternalOpenOptions): Promise<OpenResult> {
+  return openWithDialect(cfg, tursoOpenDialect, options);
 }

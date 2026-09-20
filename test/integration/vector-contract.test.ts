@@ -63,8 +63,8 @@ describe('portable vector contract', () => {
         name,
         baseDir,
         async ({ store }) => {
-          const pending = await store.vectors.pending();
-          await installVectors(store, pending);
+          const chunks = (await (await store.prepare('SELECT "path", chunk FROM embeddings ORDER BY "path", chunk')).all()) as Array<{ path: string; chunk: number }>;
+          await installVectors(store, chunks);
           const query = queryVector();
           const candidateNames = PATHS.map((path) => path.replace('.md', ''));
           const candidates = await store.vectors.candidates(query, STORE_DIMS, 20);
@@ -128,8 +128,8 @@ describe('portable vector contract', () => {
           assert.ok(chunks.length >= 2, `${name}: fixture must produce at least two authored chunks`);
           const q = new Int8Array(STORE_DIMS);
           q[0] = 127;
-          const pending = await store.vectors.pending();
-          await store.vectors.writeVectors(pending.map(({ path, chunk }) => ({ path, chunk, scale: 1 / 127, vector: Buffer.from(q.buffer) })));
+          const chunksToWrite = (await (await store.prepare('SELECT "path", chunk FROM embeddings ORDER BY "path", chunk')).all()) as Array<{ path: string; chunk: number }>;
+          await store.vectors.writeVectors(chunksToWrite.map(({ path, chunk }) => ({ path, chunk, scale: 1 / 127, vector: Buffer.from(q.buffer) })));
           const candidates = await store.vectors.candidates(queryVector(), STORE_DIMS, 1);
           assert.deepEqual(
             candidates.map(({ path, lines }) => ({ path, lines })),
