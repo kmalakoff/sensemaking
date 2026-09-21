@@ -53,9 +53,10 @@ than a derivation that was never performed.
 The name carries three things a shorter one loses. *snippet* prefixes the
 domain, so every future snippet flag sorts beside it in `--help`. *char* names
 the unit, which is the decision this design turns on: a budget in tokens would
-mean a different thing to every caller. *limit* says it is a ceiling, not a
-size, and it usually is one, because a cut lands on a word edge below the cap
-and a short note yields a short snippet.
+mean a different thing to every caller. *limit* is a character budget for the
+rendered passage. Cuts normally land on word edges within that budget, but a
+matched word is preserved whole even when it makes the passage exceed the
+requested limit.
 
 `--snippet-count-limit` bounds snippets per note: the same three parts in the
 same order. Parallel rather than a plural (`--snippets-limit`) because two flags

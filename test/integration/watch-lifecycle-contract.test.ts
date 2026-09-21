@@ -7,6 +7,7 @@ import { loadConfig, open, STATE_DIR, SUPPORTED_CONFIG_VERSION, search } from 's
 import { startMeasuredWatcher } from '../../benchmark/lib/measured-watcher.mjs';
 import { nativeObserverDeadlineMs, waitForNativeIndex } from '../../benchmark/lib/native-observer.mjs';
 import { captureFileManifest, readIndexSnapshot, verifyIndexSnapshot } from '../../benchmark/lib/work-tree.mjs';
+import { runCli } from '../lib/cli.ts';
 import { packageRoot, scratchDir } from '../lib/scratch.ts';
 import { openTreeForStore, type ParityStoreName, STORE_NAMES } from '../lib/stores.ts';
 
@@ -45,6 +46,20 @@ async function verifyFreshPublicSearch(store: ParityStoreName, baseDir: string, 
   }
 }
 
+function verifyFreshCliSearch(store: ParityStoreName, baseDir: string): void {
+  const fresh = runCli(['search', 'freshneedle', '--no-build', '--format', 'json'], { cwd: baseDir });
+  assert.equal(fresh.status, 0, `${store}: CLI no-build query failed: ${fresh.stderr}`);
+  assert.deepEqual(
+    (JSON.parse(fresh.stdout) as Array<{ path: string }>).map((row) => row.path),
+    ['a.md'],
+    `${store}: CLI no-build query must return the freshly committed authored path`
+  );
+
+  const stale = runCli(['search', 'legacyneedle', '--no-build', '--format', 'json'], { cwd: baseDir });
+  assert.equal(stale.status, 0, `${store}: CLI absent no-build query failed: ${stale.stderr}`);
+  assert.deepEqual(JSON.parse(stale.stdout), [], `${store}: CLI no-build query must not return the old indexed term`);
+}
+
 describe('public watcher freshness lifecycle', () => {
   for (const store of STORE_NAMES)
     it(`${store}: native freshness before public search and after reopen`, async function () {
@@ -81,6 +96,8 @@ describe('public watcher freshness lifecycle', () => {
         assert.equal(observed.state, 'ready', `${store}: watcher native state`);
         watcher.assertRunning();
         await verifyFreshPublicSearch(store, tree, 'freshneedle', expectedRow);
+        verifyFreshCliSearch(store, tree);
+        watcher.assertRunning();
       } finally {
         await watcher.close(deadlineMs);
       }

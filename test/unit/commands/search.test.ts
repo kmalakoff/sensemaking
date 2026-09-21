@@ -16,6 +16,11 @@ describe('snippet marking uses the lexical contract without rewriting authored t
     assert.equal(result.snippets[0], '…«customer»-«facing» dashboard.');
   });
 
+  it('preserves a matched word longer than the character budget', () => {
+    const result = computeSnippets('supercalifragilisticexpialidocious tail.', ['supercalifragilisticexpialidocious'], 8, 1);
+    assert.equal(result.snippets[0], '«supercalifragilisticexpialidocious»…');
+  });
+
   it('retains a Porter stem match after words with other initials', () => {
     const result = computeSnippets(`${'oak '.repeat(1000)}She runs here.`, ['running'], 80, 1);
     assert.equal(result.snippets[0], '…«runs» here.');
