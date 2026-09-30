@@ -240,8 +240,8 @@ describe('runWatch', () => {
   });
 
   // The callback fires before the reconcile closes its store, so aborting there makes shutdown
-  // drain a real pooled cycle rather than guessing whether a timer has started it.
-  it('aborting from a pooled reconcile callback closes cleanly', async () => {
+  // drain a pooled-sized cycle. Production uses workers when the host has at least two threads.
+  it('aborting from a pooled-sized reconcile callback closes cleanly', async () => {
     const baseDir = tree();
     const cfg = cfgFor(baseDir);
     const controller = new AbortController();
@@ -255,7 +255,7 @@ describe('runWatch', () => {
     });
     try {
       await ready;
-      for (let i = 0; i < 300; i++) writeNote(baseDir, `n${i}.md`, { frontmatter: { [`k${i}`]: 1 } });
+      for (let i = 0; i < 300; i++) writeNote(baseDir, `n${i}.md`, { frontmatter: { [`k${i}`]: 1 }, body: 'x'.repeat(3500) });
       await waitUntil(() => events.find((event) => event.type === 'reconciled' && event.parsed === 300 && event.total === 300));
       await done;
     } finally {

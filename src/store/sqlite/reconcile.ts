@@ -26,8 +26,8 @@ export function contentRow(doc: ParsedDoc): unknown[] {
 async function reconcileContent(conn: Connection, touched: string[], docs: ParsedDoc[], _delta: ReconcileDelta, _cfg: Config): Promise<void> {
   // FTS5 has no upsert, so delete-before-insert, coupled to the frontmatter rowid (indexed via
   // its PRIMARY KEY) rather than the UNINDEXED `path` column, which a per-row DELETE would scan to find.
-  // `touched` already covers a path a concurrent reconcile turned out to have created first --
-  // see reconcile.ts's post-lock revalidation, which folds such paths in before calling here.
+  // builder.ts's generation fence rejects a plan whose added/touched classification went stale
+  // behind another publication, so this receives one classification from the locked generation.
   if (touched.length > 0)
     await conn.runBatch(
       'DELETE FROM content WHERE rowid = (SELECT rowid FROM frontmatter WHERE "path" = ?)',

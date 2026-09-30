@@ -1,5 +1,9 @@
+import { statSync } from 'node:fs';
+import { availableParallelism } from 'node:os';
+import { join } from 'node:path';
 import assert from 'assert';
 import { enabledFeatures } from '../../../src/config/access.ts';
+import { PARSE_BYTES_PER_WORKER } from '../../../src/scan/reparse.ts';
 import { FEATURE_HOOKS, FIXED_STAGES, STAGES_VERSION, type Stages, stageRecorder, unaccountedMs } from '../../../src/store/stages.ts';
 import { scratchDir } from '../../lib/scratch.ts';
 import { forEachStore, openTreeForStore } from '../../lib/stores.ts';
@@ -20,6 +24,12 @@ function expectedKeys(cfg: Parameters<typeof enabledFeatures>[0]): Set<string> {
   for (const feature of enabledFeatures(cfg)) for (const hook of FEATURE_HOOKS) keys.add(`feature:${feature}:${hook}`);
   return keys;
 }
+
+const STAGE_FILE_COUNT = 2;
+const STAGE_WORKLOADS = [
+  { name: 'serial', body: 's'.repeat(PARSE_BYTES_PER_WORKER / 4), poolSized: false },
+  { name: 'pooled', body: 'p'.repeat(PARSE_BYTES_PER_WORKER), poolSized: true },
+] as const;
 
 describe('store/stages', () => {
   describe('recorder', () => {
@@ -83,19 +93,25 @@ describe('store/stages', () => {
       });
     });
 
-    // The pool threshold is where the worker sum appears; either side of it the residual must stay
-    // non-negative, which a two-note tree can never show since it always takes the serial path.
-    for (const [count, pooled] of [
-      [199, false],
-      [201, true],
-    ] as const) {
-      it(`keeps the residual non-negative at ${count} files (${pooled ? 'pooled' : 'serial'})`, async () => {
-        const dir = scratchDir('stages-threshold');
-        for (let i = 0; i < count; i++) writeNote(dir, `n${i}.md`, { frontmatter: { title: `N${i}` }, body: `note ${i} links [[n${(i + 1) % count}]]` });
+    // Worker time appears only when the authored bytes provide two full production shares and the
+    // host can run two workers. Both paths must leave a non-negative residual.
+    for (const workload of STAGE_WORKLOADS) {
+      it(`keeps the residual non-negative for a balanced ${workload.name} byte workload`, async () => {
+        const dir = scratchDir('stages-bytes');
+        for (let i = 0; i < STAGE_FILE_COUNT; i++) writeNote(dir, `n${i}.md`, { body: workload.body });
+        const expectedSourceBytes = Buffer.byteLength(`---\n\n---\n\n${workload.body}\n`);
+        const sourceBytes = Array.from({ length: STAGE_FILE_COUNT }, (_, i) => statSync(join(dir, `n${i}.md`)).size);
+        assert.deepEqual(new Set(sourceBytes), new Set([expectedSourceBytes]), `${workload.name} fixture files are not balanced at the authored byte size`);
+        const aggregateBytes = sourceBytes.reduce((sum, size) => sum + size, 0);
+        assert.equal(aggregateBytes, STAGE_FILE_COUNT * expectedSourceBytes, `${workload.name} fixture aggregate bytes changed unexpectedly`);
+        if (workload.poolSized) assert.ok(aggregateBytes > 2 * PARSE_BYTES_PER_WORKER, 'pooled fixture no longer provides two production byte shares');
+        else assert.ok(aggregateBytes < PARSE_BYTES_PER_WORKER, 'serial fixture now reaches the production byte threshold');
+
         const opened = await openTreeForStore('sqlite', dir);
         try {
           const { stages } = opened;
-          assert.strictEqual(stages.parseWorkerMs > 0, pooled, `parseWorkerMs ${stages.parseWorkerMs} at ${count} files`);
+          const shouldPool = workload.poolSized && availableParallelism() >= 2;
+          assert.strictEqual(stages.parseWorkerMs > 0, shouldPool, `parseWorkerMs ${stages.parseWorkerMs} for ${workload.name} workload with ${availableParallelism()} available threads`);
           assert.ok(unaccountedMs(stages) >= 0, `residual ${unaccountedMs(stages)} ms of ${stages.totalMs}`);
         } finally {
           await opened.store.close();

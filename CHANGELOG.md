@@ -2,6 +2,58 @@
 
 All notable changes to sensemaking are documented here.
 
+## [0.26.0] - 2026-10-01
+
+### Added
+
+- The root API now exports `findPath` with `PathOptions` and `relatedNotes` with
+  `RelatedOptions` and `RelatedResult`. Path endpoints and the related-note seed resolve across
+  the indexed tree; path intermediates and related candidates obey the requested scope. Related
+  queries return five results by default, matching the CLI.
+- `search`, `open`, and `build` accept an optional `AbortSignal`. Cancellation is cooperative for
+  native SQL and CPU work, waits for transaction and cleanup completion, and covers embedding
+  requests, response bodies, and retry delays. Caller-aborted watchers skip the final freshness
+  pass, while process-signal shutdown still runs it.
+
+### Changed
+
+- **TypeScript signature change:** `search()` returns `Promise<SearchResult[]>` instead of
+  `Promise<Row[]>`. `Peek.sections` and `TreeMap.fields`, `hubs`, and `recent` now use their
+  exported structured types. Runtime fields are unchanged, but callers that annotated these
+  values as `Row[]` must use the new types or inference.
+- High-level search, related, path, map, and peek queries now read one committed index generation.
+  They reject an incompatible retained handle with `INDEX_NOT_READY` instead of combining rows
+  from different generations. Semantic provider work remains outside the read transaction.
+- Cache schemas advance from 21 to 22 for SQLite, 5 to 6 for DuckDB, and 9 to 10 for Turso.
+  Existing disposable indexes rebuild on the next build-enabled open; `--no-build` and
+  `{ build: false }` report that a rebuild is required. Source notes and configuration are unchanged.
+- Parser batches balance source bytes across workers, Turso cosine scoring avoids repeated norm
+  calculations, and narrow semantic scopes avoid scanning unrelated vectors where the store can
+  filter them.
+
+### Fixed
+
+- Builds and watchers reuse embeddings for unchanged chunks after timestamp-only or unrelated
+  metadata changes. Changed chunks and embedding configuration changes still invalidate vectors.
+- DuckDB avoids rebuilding its full-text index when a reparse changes only timestamps or
+  metadata outside the indexed title, summary, and body. Real text changes still refresh the index.
+- DuckDB reparses update only changed frontmatter values, avoiding wide writes for timestamp-only
+  changes while preserving native value types and feature-owned columns.
+- Turso finalizes native prepared statements after each execution, including failed queries and
+  interrupted result iteration, while reusable Sense statements continue to work.
+  Continuous query loops also allow cleanup to run between executions, avoiding accumulated
+  native-result memory.
+  Large index builds also avoid oversized native INSERT statements while preserving transaction
+  atomicity.
+- Index builds publish feature schema, rows, feature identity, and readiness as one generation.
+  Failed or competing builds no longer expose partial feature tables, and delayed embedding
+  results cannot attach to replaced chunks.
+- Changing an embedding service's effective endpoint now invalidates vectors, just like changing
+  its provider or model, without storing endpoint credentials in the index identity.
+- Scoped peek rejects an explicitly excluded path before basename fallback and filters resolved
+  neighbors before applying output limits. Shared link and fused-search ties use bytewise path
+  order for stable results.
+
 ## [0.25.0] - 2026-09-19
 
 ### Added

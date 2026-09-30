@@ -2,7 +2,7 @@ import assert from 'node:assert';
 import { existsSync, readFileSync, statSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { build, open, type ResolvedConfig, STATE_DIR, search } from 'sensemaking';
+import { build, open, type ResolvedConfig, STATE_DIR, SUPPORTED_CONFIG_VERSION, search } from 'sensemaking';
 import { writeModel } from '../lib/model.ts';
 import { forEachStore, type openTreeForStore, type ParityStoreName, withTreeForStore } from '../lib/stores.ts';
 import { tmpTree, writeNote } from '../lib/tree.ts';
@@ -171,7 +171,7 @@ describe('store lifecycle: cold, no-op, edit, add, delete', () => {
     }
   });
 
-  it('fully recovers a partially committed feature invalidation after config reverts', async () => {
+  it('rolls back a failed feature invalidation without withdrawing the published generation', async () => {
     const rootDir = tmpTree();
     const configDir = tmpTree();
     const configPath = join(configDir, 'sense.config.json');
@@ -185,16 +185,16 @@ describe('store lifecycle: cold, no-op, edit, add, delete', () => {
     } finally {
       await initial.store.close();
     }
+    const before = await persistentSnapshot(cfg);
 
-    // sections invalidates and commits before tags reaches this trigger. Reverting to cfg makes
-    // the durable signature match again, but the derived section row is still gone.
+    // Sections runs before tags, so this proves the earlier deletion and readiness metadata share
+    // the same rollback boundary as the later failing feature.
     const withoutSectionsOrTags: ResolvedConfig = { ...cfg, features: { sections: false, tags: false } };
     await assert.rejects(() => open(withoutSectionsOrTags), /forced invalidation failure/);
+    assert.deepEqual(await persistentSnapshot(cfg), before, 'failed invalidation changed the last published generation');
 
     const native = new DatabaseSync(join(configDir, STATE_DIR, 'cache.db'));
     try {
-      assert.equal((native.prepare('SELECT COUNT(*) AS n FROM sections').get() as { n: number }).n, 0, 'the fixture must commit section invalidation before tags fails');
-      assert.equal((native.prepare("SELECT value FROM meta WHERE key = 'core_ready'").get() as { value: string }).value, '0');
       native.exec('DROP TRIGGER fail_tag_invalidation');
     } finally {
       native.close();
@@ -224,9 +224,11 @@ describe('store lifecycle: cold, no-op, edit, add, delete', () => {
     } finally {
       await initial.store.close();
     }
+    const before = await persistentSnapshot(cfg);
 
     const withoutTags: ResolvedConfig = { ...cfg, features: { tags: false } };
     await assert.rejects(() => open(withoutTags), /forced invalidation failure/);
+    assert.deepEqual(await persistentSnapshot(cfg), before, 'failed retry changed the published generation');
     const native = new DatabaseSync(join(configDir, STATE_DIR, 'cache.db'));
     try {
       assert.equal((native.prepare('SELECT COUNT(*) AS n FROM tags').get() as { n: number }).n, 1);
@@ -241,6 +243,35 @@ describe('store lifecycle: cold, no-op, edit, add, delete', () => {
       assert.equal(statSync(join(rootDir, 'a.md')).mtimeMs, sourceMtime);
     } finally {
       await retried.store.close();
+    }
+  });
+
+  it('rolls back newly enabled feature schema when the same publication fails', async () => {
+    const rootDir = tmpTree();
+    const configDir = tmpTree();
+    const configPath = join(configDir, 'sense.config.json');
+    writeNote(rootDir, 'a.md', { frontmatter: { tags: ['newly-enabled'] }, body: '# Existing section\n\nunchanged source' });
+    const cfg: ResolvedConfig = { version: SUPPORTED_CONFIG_VERSION, store: 'sqlite', presets: { default: { include: ['**/*.md'] } }, features: { tags: false }, queries: {}, rootDir, configDir, baseDir: rootDir, configPath };
+
+    const initial = await open(cfg);
+    try {
+      await initial.store.exec(`CREATE TRIGGER fail_section_disable BEFORE DELETE ON sections BEGIN SELECT RAISE(FAIL, 'forced feature-enable failure'); END`);
+    } finally {
+      await initial.store.close();
+    }
+    const before = await persistentSnapshot(cfg);
+
+    const enableTagsWhileDisablingSections: ResolvedConfig = { ...cfg, features: { sections: false } };
+    await assert.rejects(() => open(enableTagsWhileDisablingSections), /forced feature-enable failure/);
+    assert.deepEqual(await persistentSnapshot(cfg), before, 'failed feature enable changed rows or publication metadata');
+
+    const native = new DatabaseSync(join(configDir, STATE_DIR, 'cache.db'));
+    try {
+      assert.equal((native.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'tags'").get() as { n: number }).n, 0, 'failed feature-enable DDL escaped its publication transaction');
+      assert.equal((native.prepare('SELECT COUNT(*) AS n FROM sections').get() as { n: number }).n, 1, 'failed feature enable changed prior feature rows');
+      native.exec('DROP TRIGGER fail_section_disable');
+    } finally {
+      native.close();
     }
   });
 
@@ -353,6 +384,33 @@ describe('store lifecycle: cold, no-op, edit, add, delete', () => {
       assert.equal(readFileSync(configPath, 'utf8'), configText, `${store}: force changed its owner config`);
       assert.equal(existsSync(join(rootDir, '.sense')), false, `${store}: config-owned state leaked into the tree root`);
     });
+  });
+
+  it('rejects a pre-aborted forced build before clearing the published cache', async () => {
+    const rootDir = tmpTree();
+    const configDir = tmpTree();
+    const configPath = join(configDir, 'sense.config.json');
+    writeNote(rootDir, 'a.md', { body: 'published before cancellation' });
+    const cfg: ResolvedConfig = {
+      version: SUPPORTED_CONFIG_VERSION,
+      store: 'sqlite',
+      presets: { default: { include: ['**/*.md'] } },
+      queries: {},
+      rootDir,
+      configDir,
+      baseDir: rootDir,
+      configPath,
+    };
+    await build(cfg);
+    const before = await persistentSnapshot(cfg);
+    const reason = { kind: 'authored pre-abort' };
+    const controller = new AbortController();
+    controller.abort(reason);
+
+    const [outcome] = await Promise.allSettled([build(cfg, { force: true, signal: controller.signal })]);
+    assert.equal(outcome.status, 'rejected');
+    if (outcome.status === 'rejected') assert.equal(outcome.reason, reason, 'build must preserve the caller-authored cancellation reason');
+    assert.deepEqual(await persistentSnapshot(cfg), before, 'pre-aborted force cleared or changed the published cache');
   });
 
   it('keeps visible rows current across every store', async () => {

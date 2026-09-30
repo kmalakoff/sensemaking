@@ -2,12 +2,11 @@ import type { Database } from '@tursodatabase/database';
 import { STORE_DIMS } from '../../embed/types.ts';
 import { getColumns, getMeta, setMeta } from '../shared.ts';
 import { withTransaction } from '../transaction.ts';
-import type { Capability, Connection, Statement, Store } from '../types.ts';
-import { hasVectorRow, pendingRows } from '../vectors.ts';
+import type { Capability, Connection, Statement, Store, VectorStore } from '../types.ts';
+import { createNativeVectorScopeOwner, hasVectorRow, pendingRows } from '../vectors.ts';
 import { cacheFilePath, checkpointWal, fileSize, reclaimSpace } from './connection.ts';
 import { fieldStats } from './fieldStats.ts';
 import { queryLexical } from './lexical.ts';
-import { rewriteFunctions } from './sql-functions.ts';
 import { scanCandidates, scanSimilar, writeVectorBatch } from './vectors.ts';
 
 // No 'segment': has()/basename() resolve via SQL rewrite below (sql-functions.ts), but segment() has no SQL form and the client cannot register it as a UDF.
@@ -20,6 +19,18 @@ const BLOAT_FACTOR = 1.5;
 // Shares one Connection instance (conn) with the builder's own reconcile call so transaction depth
 // (see transaction.ts) is tracked against the same object everywhere.
 export function createStore(db: Database, conn: Connection, options: { observational?: boolean } = {}): Store {
+  const vectorScope = createNativeVectorScopeOwner();
+  // The column's fixed DDL width (STORE_DIMS) is what every scan binds against, not the
+  // interface's per-call storeDims -- see vectors.ts's padded() for why a shorter vector is still correct against a wider column.
+  const vectors: VectorStore = {
+    pending: () => pendingRows(conn),
+    writeVectors: (rows) => writeVectorBatch(conn, STORE_DIMS, rows),
+    candidates: (qv, _storeDims, fetch, allowed) => scanCandidates(conn, qv, STORE_DIMS, fetch, allowed, vectorScope.activeFor(allowed)),
+    similar: (path, opts) => scanSimilar(conn, STORE_DIMS, path, opts, vectorScope.activeFor(opts.allowed)),
+    hasVector: (path) => hasVectorRow(conn, path),
+  };
+  vectorScope.bind(vectors);
+
   return {
     name: 'turso',
     capabilities: CAPABILITIES,
@@ -44,25 +55,17 @@ export function createStore(db: Database, conn: Connection, options: { observati
     lexical: {
       query: (terms, opts) => queryLexical(conn, terms, opts),
     },
-    // The column's fixed DDL width (STORE_DIMS) is what every scan binds against, not the
-    // interface's per-call storeDims -- see vectors.ts's padded() for why a shorter vector is still correct against a wider column.
-    vectors: {
-      pending: () => pendingRows(conn),
-      writeVectors: (rows) => writeVectorBatch(conn, STORE_DIMS, rows),
-      candidates: (qv, _storeDims, fetch, allowed) => scanCandidates(conn, qv, STORE_DIMS, fetch, allowed),
-      similar: (path, opts) => scanSimilar(conn, STORE_DIMS, path, opts),
-      hasVector: (path) => hasVectorRow(conn, path),
-    },
+    vectors,
     async engineStatus() {
       // Read back rather than recomputed: this is what open() actually set (3x the largest
       // recorded reconcile, floored at 30s, capped at 10min). Turso's PRAGMA busy_timeout names its column "busy_timeout" (spike-verified), not "timeout" like real SQLite.
-      const row = (await (await db.prepare('PRAGMA busy_timeout')).get()) as { busy_timeout: number };
+      const row = (await (await conn.prepare('PRAGMA busy_timeout')).get()) as { busy_timeout: number };
       return { busy_timeout: `${row.busy_timeout}ms (derived: 3x the largest reconcile this cache has recorded, floored at 30000ms)` };
     },
     raw: {
       async prepare(sql: string) {
-        const stmt = await db.prepare(rewriteFunctions(sql));
-        stmt.safeIntegers(true); // int64 past 2^53 arrives as BigInt instead of losing precision
+        const stmt = await conn.prepare(sql);
+        stmt.setReadBigInts(true); // int64 past 2^53 arrives as BigInt instead of losing precision
         return {
           columns: () => stmt.columns(),
           // sense sql streams through the client's own async generator.

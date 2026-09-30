@@ -1,9 +1,8 @@
 import assert from 'node:assert';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { SearchOptions, SenseError } from 'sensemaking';
-import { mapTree, peek, search } from 'sensemaking';
-import { relatedNotes } from '../../src/commands/index.ts';
+import type { PathOptions, RelatedOptions, RelatedResult, SearchOptions, SenseError } from 'sensemaking';
+import { findPath as findScopedPath, mapTree, peek, relatedNotes, search } from 'sensemaking';
 import { SenseError as StoreSenseError } from '../../src/errors.ts';
 import { findPath } from '../../src/graph/traverse.ts';
 import { runCli } from '../lib/cli.ts';
@@ -89,12 +88,12 @@ describe('store parity: portable surface (sqlite reference)', () => {
             );
           }
           queries.push(
-            findPath(store, 'a.md', 'c.md').then((result) => {
+            findScopedPath(store, cfg, 'a.md', 'c.md').then((result) => {
               assert.deepEqual(result, ['a.md', 'b.md', 'c.md'], name);
             })
           );
           queries.push(
-            findPath(store, 'a.md', 'c.md', { allowed: new Set(['a.md', 'c.md']) }).then((result) => {
+            findScopedPath(store, cfg, 'a.md', 'c.md', { include: ['a.md', 'c.md'] }).then((result) => {
               assert.equal(result, null, name);
             })
           );
@@ -118,6 +117,24 @@ describe('store parity: portable surface (sqlite reference)', () => {
   it('docCount matches the authored tree', async () => {
     const baseDir = fixtureTree();
     await forEachStore(async (store) => withTreeForStore(store, baseDir, async ({ store: s }) => assert.equal(await docCount(s), 3, store)));
+  });
+
+  it('uses binary UTF-8 bytes as the default path collation', async () => {
+    const baseDir = tmpTree();
+    const byteFirst = '\uE000.md';
+    const utf16First = '😀.md';
+    writeNote(baseDir, utf16First, { body: 'emoji' });
+    writeNote(baseDir, byteFirst, { body: 'private use' });
+    await forEachStore(async (name) =>
+      withTreeForStore(name, baseDir, async ({ store }) => {
+        const rows = (await (await store.prepare('SELECT "path" FROM frontmatter WHERE "path" IN (?, ?) ORDER BY "path" ASC')).all(utf16First, byteFirst)) as Array<{ path: string }>;
+        assert.deepEqual(
+          rows.map((row) => row.path),
+          [byteFirst, utf16First],
+          `${name}: U+E000 precedes the emoji by UTF-8 bytes, opposite JavaScript UTF-16 order`
+        );
+      })
+    );
   });
 
   it('frontmatter values agree, including mixed-type dynamic columns', async () => {
@@ -1036,8 +1053,9 @@ async function relatedEvidence(store: ParityStoreName, baseDir: string, embed: {
     store,
     baseDir,
     async ({ store: s, cfg }) => {
-      const rows = await relatedNotes(s, cfg, target, {}, 10);
-      const top = await relatedNotes(s, cfg, target, {}, 1);
+      const options: RelatedOptions = { k: 10 };
+      const rows: RelatedResult[] = await relatedNotes(s, cfg, target, options);
+      const top = await relatedNotes(s, cfg, target, { k: 1 });
       const hasVector = Object.fromEntries(await Promise.all(['similar.md', 'unrelated.md'].map(async (path) => [path, await s.vectors.hasVector(path)] as const)));
       return { rows, top, hasVector };
     },
@@ -1138,7 +1156,8 @@ describe('store parity: scoped commands (authored fixtures)', () => {
     writeNote(baseDir, 'b.md', { body: '[[c]]' });
     writeNote(baseDir, 'c.md', { body: 'end.' });
     await forEachStore(async (store) =>
-      withTreeForStore(store, baseDir, async ({ store: s }) => {
+      withTreeForStore(store, baseDir, async ({ store: s, cfg }) => {
+        const pathOptions: PathOptions = { maxDepth: 2 };
         assert.deepEqual(await findPath(s, 'a.md', 'c.md'), ['a.md', 'b.md', 'c.md'], store);
         assert.deepEqual(await findPath(s, 'a.md', 'c.md', { directed: true }), ['a.md', 'b.md', 'c.md'], `${store}: directed forward`);
         assert.equal(await findPath(s, 'c.md', 'a.md', { directed: true }), null, `${store}: directed reverse`);
@@ -1146,6 +1165,8 @@ describe('store parity: scoped commands (authored fixtures)', () => {
         assert.deepEqual(await findPath(s, 'a.md', 'c.md', { maxDepth: 2 }), ['a.md', 'b.md', 'c.md'], `${store}: maxDepth exact`);
         assert.deepEqual(await findPath(s, 'a.md', 'c.md', { allowed: new Set(['a.md', 'b.md', 'c.md']) }), ['a.md', 'b.md', 'c.md'], store);
         assert.equal(await findPath(s, 'a.md', 'c.md', { allowed: new Set(['a.md', 'c.md']) }), null, store);
+        assert.deepEqual(await findScopedPath(s, cfg, 'a', 'c', pathOptions), ['a.md', 'b.md', 'c.md'], `${store}: high-level root entrypoint`);
+        assert.equal(await findScopedPath(s, cfg, 'a.md', 'c.md', { include: ['a.md', 'c.md'] }), null, `${store}: high-level scope`);
       })
     );
   });

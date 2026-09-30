@@ -1,3 +1,6 @@
+import type { TreeMap } from '../commands/map.ts';
+import type { Peek } from '../commands/peek.ts';
+
 // rows -> table (default) | json | csv
 
 export type Row = Record<string, unknown>;
@@ -145,12 +148,12 @@ function cellLines(value: unknown): string[] {
   return [cell(value)];
 }
 
-function renderRows(rows: Row[], format: Format, width = process.stdout.columns): string {
+function renderRows(rows: object[], format: Format, width = process.stdout.columns): string {
   if (format === 'json') return stringifyJson(rows, 2);
   if (rows.length === 0) return '(0 rows)';
 
   const columns = Object.keys(rows[0]);
-  const linesByCell = rows.map((row) => columns.map((col) => cellLines(row[col])));
+  const linesByCell = rows.map((row) => columns.map((col) => cellLines(Reflect.get(row, col))));
   const heights = linesByCell.map((cellsInRow) => Math.max(1, ...cellsInRow.map((lines) => lines.length)));
   const natural = columns.map((col, i) => Math.max(col.length, ...linesByCell.flatMap((cellsInRow) => cellsInRow[i]).map((line) => line.length)));
   const widths = width && width > MIN_COLUMN ? fitWidths(natural, width) : natural;
@@ -198,16 +201,7 @@ export function presetsLines(presets: Array<{ name: string; files: number; embed
   return ['presets:', ...presets.map((p) => `  ${p.name}: ${p.files} file(s), ${p.embedded} embedded${p.signals.vectors !== undefined ? '' : ` (signals: ${signalLabels(p.signals)})`}`)];
 }
 
-export function renderMap(result: {
-  docs: { count: number; bytes: number };
-  fields: Row[];
-  fieldsTotal: number;
-  features: { on: string[]; off: string[] };
-  presets: Array<{ name: string; files: number; embedded: number; signals: Record<string, number> }>;
-  hubs: Row[];
-  recent: Row[];
-  recentCaveat: string | null;
-}): string {
+export function renderMap(result: TreeMap): string {
   const parts = [`docs: ${result.docs.count} (${Math.round(result.docs.bytes / 1024)} KB)`, featuresLine(result.features), '', ...presetsLines(result.presets), '', renderRows(result.fields, 'table')];
   if (result.fieldsTotal > result.fields.length) parts.push(`(+${result.fieldsTotal - result.fields.length} more fields)`);
   if (result.hubs.length > 0) parts.push('\nhubs (by link rank):', renderRows(result.hubs, 'table'));
@@ -218,7 +212,7 @@ export function renderMap(result: {
   return parts.join('\n');
 }
 
-export function renderPeek(result: { path: string; tokens: number; frontmatter: Row; parseError?: string | null; sections: Row[]; outbound: string[]; backlinks: string[]; unresolved: string[]; sectionsTotal: number; outboundTotal: number; backlinksTotal: number; unresolvedTotal: number; off: string[] }): string {
+export function renderPeek(result: Peek): string {
   const lines = [`${result.path}  (~${result.tokens} tokens)`];
   // Otherwise a refused parse is indistinguishable from a note that has no frontmatter, which
   // is the confusion the whole quarantine design exists to remove.
@@ -226,7 +220,7 @@ export function renderPeek(result: { path: string; tokens: number; frontmatter: 
   for (const [key, value] of Object.entries(result.frontmatter)) lines.push(`  ${key}: ${value}`);
   if (result.sections.length > 0) {
     lines.push('', 'sections:');
-    for (const s of result.sections) lines.push(`  ${'#'.repeat(s.level as number)} ${s.heading}  [L${s.start_line}-${s.end_line}, ~${s.tokens}t]`);
+    for (const s of result.sections) lines.push(`  ${'#'.repeat(s.level)} ${s.heading}  [L${s.start_line}-${s.end_line}, ~${s.tokens}t]`);
     if (result.sectionsTotal > result.sections.length) lines.push(`  (+${result.sectionsTotal - result.sections.length} more sections -- sections table has all of them)`);
   } else if (result.off.includes('sections')) lines.push('', 'sections: off (features.sections)');
   if (result.off.includes('links')) {

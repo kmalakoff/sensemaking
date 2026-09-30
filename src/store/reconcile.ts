@@ -7,7 +7,7 @@ import type { ParsePool } from '../scan/pool.ts';
 import { reparseFiles } from '../scan/reparse.ts';
 import { recordLockWaitMs } from './lock-wait.ts';
 import { appendRows, getColumns, quoteIdent } from './shared.ts';
-import { featureStage, type Stages, stageRecorder } from './stages.ts';
+import { featureStage, type StageRecorder, type Stages, stageRecorder } from './stages.ts';
 import { withTransaction } from './transaction.ts';
 import type { Connection, ReconcileDialect } from './types.ts';
 
@@ -26,19 +26,55 @@ export interface ReconcilePaths {
   configDir: string;
 }
 
-export async function reconcile(conn: Connection, cfg: Config, paths: ReconcilePaths, dialect: ReconcileDialect, pool?: ParsePool, forcedPaths?: ReadonlySet<string>): Promise<{ parsed: number; warnings: string[]; stages: Stages }> {
-  const { rootDir, configDir } = paths;
+export interface ReconcileSnapshot {
+  existingRows: Array<{ path: string; _mtime: number; _size: number }>;
+  seenColumns: Set<string>;
+}
+
+export interface ReconcilePlan {
+  mutated: boolean;
+  parsed: number;
+  warnings: string[];
+  apply(conn: Connection): Promise<void>;
+  finish(txMs: number): Stages;
+  record(conn: Connection, txMs: number): Promise<void>;
+}
+
+export interface ReconcileTiming {
+  stages: StageRecorder;
+  elapsed(): number;
+  workerParseMs: number;
+  txMs: number;
+}
+
+export function createReconcileTiming(cfg: Config): ReconcileTiming {
   const start = process.hrtime.bigint();
+  return {
+    stages: stageRecorder(activeFeatures(cfg).map((feature) => feature.name)),
+    elapsed: () => Number(process.hrtime.bigint() - start) / 1e6,
+    workerParseMs: 0,
+    txMs: 0,
+  };
+}
+
+// Called inside the builder's short planning snapshot, alongside its metadata baseline. Parsing
+// happens only after that transaction closes; publication later rejects this state if generation
+// or configuration moved in the meantime.
+export async function readReconcileSnapshot(conn: Connection, timing: ReconcileTiming): Promise<ReconcileSnapshot> {
+  const existingRows = await timing.stages.time('existing', async () => {
+    const existingStmt = await conn.prepare('SELECT "path", "_mtime", "_size" FROM frontmatter');
+    return (await existingStmt.all()) as ReconcileSnapshot['existingRows'];
+  });
+  return { existingRows, seenColumns: await getColumns(conn) };
+}
+
+export async function prepareReconcile(snapshot: ReconcileSnapshot, cfg: Config, paths: ReconcilePaths, dialect: ReconcileDialect, timing: ReconcileTiming, pool?: ParsePool, forcedPaths?: ReadonlySet<string>): Promise<ReconcilePlan> {
+  const { rootDir, configDir } = paths;
   const features = activeFeatures(cfg);
-  const stages = stageRecorder(features.map((f) => f.name));
-  const elapsed = () => Number(process.hrtime.bigint() - start) / 1e6;
+  const { stages, elapsed } = timing;
   const files = await stages.time('list', () => listFiles(cfg, rootDir));
   const currentSet = new Set(files.map((f) => f.relPath));
-
-  const existingRows = await stages.time('existing', async () => {
-    const existingStmt = await conn.prepare('SELECT "path", "_mtime", "_size" FROM frontmatter');
-    return (await existingStmt.all()) as Array<{ path: string; _mtime: number; _size: number }>;
-  });
+  const existingRows = snapshot.existingRows;
   const existing = new Map(existingRows.map((r) => [r.path, r]));
   // A path whose coverage moved between presets (forcedPaths) but is no longer covered at all is
   // already caught below by !currentSet.has, since it can only be forced by having existed under
@@ -52,15 +88,25 @@ export async function reconcile(conn: Connection, cfg: Config, paths: ReconcileP
     return !row || row._mtime !== f.mtimeMs || row._size !== f.size || (forcedPaths?.has(f.relPath) ?? false);
   });
 
-  if (vanished.length === 0 && toReparse.length === 0) return { parsed: 0, warnings: [], stages: stages.take(elapsed(), 0) };
+  if (vanished.length === 0 && toReparse.length === 0) {
+    return {
+      mutated: false,
+      parsed: 0,
+      warnings: [],
+      apply: async () => {},
+      finish: (txMs) => stages.take(elapsed(), txMs, timing.workerParseMs),
+      record: async () => {},
+    };
+  }
 
-  const seenColumns = await getColumns(conn);
+  const seenColumns = new Set(snapshot.seenColumns);
 
   // Bulk reparses (a sync, a cold build) are the long silences a query can hit; short
   // reconciles stay silent (progress() has a threshold).
   const report = progress('reparsing files', toReparse.length);
   // Pool wall time, dispatch to drain, so this stage shares a clock with every other one.
   const { docs: parsedDocs, warnings, newColumns, workerParseMs } = await stages.time('parse', () => reparseFiles(toReparse, features, cfg, seenColumns, report.tick, { pool }));
+  timing.workerParseMs += workerParseMs;
   report.finish();
   for (const col of newColumns) seenColumns.add(col);
 
@@ -86,29 +132,16 @@ export async function reconcile(conn: Connection, cfg: Config, paths: ReconcileP
   // be reinserted fresh. Disjoint from `added`, which has nothing to clear.
   const touched = [...vanished, ...reparsedExisting];
 
-  const txStart = Date.now();
-  await withTransaction(
-    conn,
-    async () => {
-      // Re-read inside the write transaction: newColumns came from a read taken before it opened, so a
-      // concurrent reconcile may have added some of them since. ALTER has no IF NOT EXISTS.
+  return {
+    mutated: true,
+    parsed: parsedDocs.length,
+    warnings,
+    async apply(conn) {
+      // The generation fence already proved the planning snapshot current under this write lock.
+      // Re-read columns only because schema setup is not itself a core generation publication.
       const present = await getColumns(conn);
       const missingColumns = newColumns.filter((col) => !present.has(col));
       if (missingColumns.length > 0) await stages.time('alter', () => dialect.addColumns(conn, missingColumns));
-
-      // Revalidated once the lock is held, before this process's own frontmatter upsert below:
-      // `added` came from a path read taken before this transaction's lock, so a path still
-      // called "added" here may already have a content row from a concurrent reconcile that
-      // committed while this one waited. One SELECT, not a DELETE per added file -- with no
-      // contention it returns the same set `existing` already ruled out, so nothing extra clears.
-      let contentTouched = touched;
-      if (added.length > 0)
-        contentTouched = await stages.time('added-recheck', async () => {
-          const currentPathsStmt = await conn.prepare('SELECT "path" FROM frontmatter');
-          const currentPaths = new Set(((await currentPathsStmt.all()) as Array<{ path: string }>).map((r) => r.path));
-          const staleAdded = added.filter((p) => currentPaths.has(p));
-          return staleAdded.length > 0 ? [...touched, ...staleAdded] : touched;
-        });
 
       if (parsedDocs.length > 0) {
         const toRow = (doc: (typeof parsedDocs)[number]) =>
@@ -117,30 +150,26 @@ export async function reconcile(conn: Connection, cfg: Config, paths: ReconcileP
             if (col === '_mtime') return doc.mtimeMs;
             if (col === '_ctime') return doc.ctimeMs;
             if (col === '_size') return doc.size;
-            // Written per parse, unlike _rank, which a feature pass owns and the upsert skips.
             if (col === '_parse_error') return doc.parseError;
             return doc.data[col] ?? null;
           });
-        // A path in `added` has no existing frontmatter row, so it can never conflict; the rest
-        // genuinely can, and keep the upsert.
         await stages.time('fm-upsert', async () => {
           const newDocs = parsedDocs.filter((d) => addedSet.has(d.relPath));
           const updateDocs = parsedDocs.filter((d) => !addedSet.has(d.relPath));
           await appendRows(conn, 'frontmatter', writableColumns, insertSql, newDocs.map(toRow));
-          if (updateDocs.length > 0) await conn.runBatch(insertSql, updateDocs.map(toRow));
+          if (updateDocs.length > 0) {
+            const rows = updateDocs.map(toRow);
+            if (dialect.updateFrontmatter) await dialect.updateFrontmatter(conn, writableColumns, rows);
+            else await conn.runBatch(insertSql, rows);
+          }
         });
       }
 
-      // After the upsert, so every doc already has the frontmatter row sqlite's content rowid
-      // couples to. ON CONFLICT DO UPDATE preserves that rowid, so a reparse keeps its identity.
-      await stages.time('text-index', () => dialect.reconcileContent(conn, contentTouched, parsedDocs, delta, cfg));
-
-      // Exact source text belongs to the same indexed generation as content and section ranges.
-      // The upsert also covers an added path another writer committed while this build waited.
-      if (contentTouched.length > 0)
+      await stages.time('text-index', () => dialect.reconcileContent(conn, touched, parsedDocs, delta, cfg));
+      if (touched.length > 0)
         await conn.runBatch(
           'DELETE FROM indexed_sources WHERE "path" = ?',
-          contentTouched.map((p) => [p])
+          touched.map((p) => [p])
         );
       await appendRows(
         conn,
@@ -150,8 +179,6 @@ export async function reconcile(conn: Connection, cfg: Config, paths: ReconcileP
         parsedDocs.map((doc) => [doc.relPath, doc.source])
       );
 
-      // A preset edit forces a full rebuild, so an unchanged doc's coverage is already correct;
-      // new docs have nothing to clear, which keeps cold builds linear.
       await stages.time('presets', async () => {
         if (touched.length > 0)
           await conn.runBatch(
@@ -160,14 +187,9 @@ export async function reconcile(conn: Connection, cfg: Config, paths: ReconcileP
           );
         const presetRows: unknown[][] = [];
         for (const doc of parsedDocs) for (const presetName of doc.presets) presetRows.push([doc.relPath, presetName]);
-        // DO NOTHING, not a bare INSERT: the added/touched split above comes from a read taken
-        // before this transaction's lock, so a path this process calls "added" can already have
-        // its (path, preset) row committed by a concurrent reconcile -- the row would be identical either way.
         await appendRows(conn, 'preset_files', ['path', 'preset'], 'INSERT INTO preset_files ("path", preset) VALUES (?, ?) ON CONFLICT("path", preset) DO NOTHING', presetRows);
       });
 
-      // Before the feature hooks, never after: rank's afterReconcile reads frontmatter as PageRank's
-      // node set, so a lingering vanished row would dilute rank mass across every surviving note.
       if (vanished.length > 0)
         await stages.time('vanished', () =>
           conn.runBatch(
@@ -176,8 +198,6 @@ export async function reconcile(conn: Connection, cfg: Config, paths: ReconcileP
           )
         );
 
-      // Timed per feature per hook, so link resolution and PageRank are named stages without
-      // links.ts or rank.ts knowing anything about this, and a new feature is visible for free.
       if (touched.length > 0) for (const feature of features) await stages.time(featureStage(feature.name, 'remove'), () => feature.remove?.(conn, touched, delta));
       for (const feature of features) {
         const docsForFeature: ExtractedDoc[] = parsedDocs.map((doc) => ({ path: doc.relPath, extracted: doc.extracted[feature.name] }));
@@ -185,13 +205,29 @@ export async function reconcile(conn: Connection, cfg: Config, paths: ReconcileP
       }
       for (const feature of features) await stages.time(featureStage(feature.name, 'after'), () => feature.afterReconcile?.(conn, delta));
     },
-    dialect.beginMode()
-  );
+    finish: (txMs) => stages.take(elapsed(), txMs, timing.workerParseMs),
+    async record(conn, txMs) {
+      recordLockWaitMs(configDir, txMs);
+      if (dialect.recordDuration) await stages.time('meta', () => dialect.recordDuration?.(conn, txMs));
+    },
+  };
+}
 
-  const durationMs = Date.now() - txStart;
-  // Every store, not just the ones with a PRAGMA to derive: connectUnlocked's lock-wait budget needs it too.
-  recordLockWaitMs(configDir, durationMs);
-  if (dialect.recordDuration) await stages.time('meta', () => dialect.recordDuration?.(conn, durationMs));
-
-  return { parsed: parsedDocs.length, warnings, stages: stages.take(elapsed(), durationMs, workerParseMs) };
+// Lower-level entrypoint retained only for focused reconcile tests. It has no generation fence;
+// production publication must go through builder.ts, and any new caller must provide exclusivity.
+export async function reconcile(conn: Connection, cfg: Config, paths: ReconcilePaths, dialect: ReconcileDialect, pool?: ParsePool, forcedPaths?: ReadonlySet<string>): Promise<{ parsed: number; warnings: string[]; stages: Stages }> {
+  const timing = createReconcileTiming(cfg);
+  const snapshot = await withTransaction(conn, () => readReconcileSnapshot(conn, timing));
+  const plan = await prepareReconcile(snapshot, cfg, paths, dialect, timing, pool, forcedPaths);
+  if (!plan.mutated) return { parsed: plan.parsed, warnings: plan.warnings, stages: plan.finish(0) };
+  const txStart = Date.now();
+  let txMs: number;
+  try {
+    await withTransaction(conn, () => plan.apply(conn), dialect.beginMode());
+  } finally {
+    txMs = Date.now() - txStart;
+    timing.txMs += txMs;
+  }
+  await plan.record(conn, txMs);
+  return { parsed: plan.parsed, warnings: plan.warnings, stages: plan.finish(timing.txMs) };
 }

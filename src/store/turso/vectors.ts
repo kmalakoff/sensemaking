@@ -1,5 +1,5 @@
 import type { Connection, VectorCandidate, VectorSimilar, VectorWriteRow } from '../types.ts';
-import { asCosine, compareVectorScores, sampleEvenly } from '../vectors.ts';
+import { asCosine, compareVectorScores, NATIVE_VECTOR_SCOPE_TABLE, sampleEvenly } from '../vectors.ts';
 
 // Native F32_BLOB(dims) columns, dims fixed at DDL time (open.ts, STORE_DIMS). Both scans
 // score in JS: a per-row vector_distance_cos measured 3.5-8x slower on this row engine.
@@ -31,16 +31,16 @@ function dequantize(row: VectorWriteRow, dims: number): Float32Array {
   return out;
 }
 
-function cosineSimilarity(a: Float32Array, b: Float32Array): number {
+function vectorNorm(vector: Float32Array): number {
+  let norm = 0;
+  for (let d = 0; d < vector.length; d++) norm += vector[d] * vector[d];
+  return Math.sqrt(norm);
+}
+
+function cosineSimilarity(a: Float32Array, b: Float32Array, aNorm: number, bNorm: number): number {
   let dot = 0;
-  let na = 0;
-  let nb = 0;
-  for (let d = 0; d < a.length; d++) {
-    dot += a[d] * b[d];
-    na += a[d] * a[d];
-    nb += b[d] * b[d];
-  }
-  return dot / (Math.sqrt(na) * Math.sqrt(nb) + 1e-32);
+  for (let d = 0; d < a.length; d++) dot += a[d] * b[d];
+  return dot / (aNorm * bNorm + 1e-32);
 }
 
 // `scale` stays NULL: the column exists so the row shape matches the other stores, and
@@ -55,15 +55,18 @@ export async function writeVectorBatch(conn: Connection, dims: number, rows: Vec
 
 // Best chunk per file by cosine. GROUP BY with MIN() cannot do this on 0.7.2: the aggregate
 // is right but the bare start_line/end_line come from an arbitrary row in the group.
-export async function scanCandidates(conn: Connection, qv: Float32Array, dims: number, fetch: number, allowed?: Set<string>): Promise<VectorCandidate[]> {
+export async function scanCandidates(conn: Connection, qv: Float32Array, dims: number, fetch: number, allowed?: Set<string>, nativeScope = false): Promise<VectorCandidate[]> {
   const q = padded(qv, dims);
-  const stmt = await conn.prepare('SELECT "path", chunk, start_line, end_line, vector FROM embeddings WHERE vector IS NOT NULL ORDER BY "path", chunk');
+  const queryNorm = vectorNorm(q);
+  const scope = nativeScope ? ` AND "path" IN (SELECT "path" FROM ${NATIVE_VECTOR_SCOPE_TABLE})` : '';
+  const stmt = await conn.prepare(`SELECT "path", chunk, start_line, end_line, vector FROM embeddings WHERE vector IS NOT NULL${scope} ORDER BY "path", chunk`);
   const rows = (await stmt.all()) as Array<{ path: string; chunk: number; start_line: number; end_line: number; vector: Buffer }>;
 
   const best = new Map<string, { score: number; chunk: number; lines: string }>();
   for (const row of rows) {
     if (allowed && !allowed.has(row.path)) continue;
-    const score = cosineSimilarity(q, decode(row.vector, dims));
+    const vector = decode(row.vector, dims);
+    const score = cosineSimilarity(q, vector, queryNorm, vectorNorm(vector));
     const existing = best.get(row.path);
     if (!existing || score > existing.score || (score === existing.score && row.chunk < existing.chunk)) {
       best.set(row.path, { score, chunk: row.chunk, lines: `L${row.start_line}-${row.end_line}` });
@@ -78,21 +81,26 @@ export async function scanCandidates(conn: Connection, qv: Float32Array, dims: n
 
 // Max cosine over (target chunk, other chunk) pairs. The SQL cross-join duckdb uses measured
 // 6-8x slower here at 26k chunks (2026-08-30).
-export async function scanSimilar(conn: Connection, dims: number, path: string, opts: { exclude: Set<string>; allowed?: Set<string>; k: number }): Promise<VectorSimilar[]> {
+export async function scanSimilar(conn: Connection, dims: number, path: string, opts: { exclude: Set<string>; allowed?: Set<string>; k: number }, nativeScope = false): Promise<VectorSimilar[]> {
   if (opts.allowed && opts.allowed.size === 0) return [];
   const targetStmt = await conn.prepare('SELECT vector FROM embeddings WHERE "path" = ? AND vector IS NOT NULL ORDER BY chunk');
   const targetRows = (await targetStmt.all(path)) as Array<{ vector: Buffer }>;
   if (targetRows.length === 0) return [];
-  const targets = sampleEvenly(targetRows).map((row) => decode(row.vector, dims));
+  const targets = sampleEvenly(targetRows).map((row) => {
+    const vector = decode(row.vector, dims);
+    return { vector, norm: vectorNorm(vector) };
+  });
 
-  const stmt = await conn.prepare('SELECT "path", vector FROM embeddings WHERE vector IS NOT NULL');
+  const scope = nativeScope ? ` AND "path" IN (SELECT "path" FROM ${NATIVE_VECTOR_SCOPE_TABLE})` : '';
+  const stmt = await conn.prepare(`SELECT "path", vector FROM embeddings WHERE vector IS NOT NULL${scope}`);
   const rows = (await stmt.all()) as Array<{ path: string; vector: Buffer }>;
   const best = new Map<string, number>();
   for (const row of rows) {
     if (row.path === path || opts.exclude.has(row.path) || (opts.allowed && !opts.allowed.has(row.path))) continue;
     const other = decode(row.vector, dims);
+    const otherNorm = vectorNorm(other);
     for (const t of targets) {
-      const score = cosineSimilarity(t, other);
+      const score = cosineSimilarity(t.vector, other, t.norm, otherNorm);
       const existing = best.get(row.path);
       if (existing === undefined || score > existing) best.set(row.path, score);
     }

@@ -1,11 +1,15 @@
 import { type ChildProcess, spawn } from 'node:child_process';
-import { writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:http';
 import { join } from 'node:path';
 import assert from 'assert';
+import { build, loadConfig, open, type ResolvedConfig, SUPPORTED_CONFIG_VERSION, search } from 'sensemaking';
 import { startMeasuredWatcher } from '../../benchmark/lib/measured-watcher.mjs';
 import { signalProcessTree } from '../../benchmark/lib/native-observer.mjs';
 import { readWatchClaim, WATCH_HEARTBEAT_INTERVAL_MS, WATCH_STALE_HEARTBEAT_MS, type WatchClaimRecord } from '../../src/watch-claim.ts';
+import { writeModel } from '../lib/model.ts';
 import { packageRoot, scratchDir } from '../lib/scratch.ts';
+import { listen } from '../lib/server.ts';
 import { forEachStore, type ParityStoreName, withTreeForStore } from '../lib/stores.ts';
 import { writeNote } from '../lib/tree.ts';
 
@@ -27,8 +31,100 @@ async function killMeasuredWatcher(watcher: ReturnType<typeof startMeasuredWatch
   await watcher.closed;
 }
 
+async function controlledMixedClientProvider(queryInput: string) {
+  let queryRequests = 0;
+  let queryReleased = false;
+  let markQueryStarted!: () => void;
+  const queryStarted = new Promise<void>((resolve) => {
+    markQueryStarted = resolve;
+  });
+  let releaseHeldQuery!: () => void;
+  const heldQueryReleased = new Promise<void>((resolve) => {
+    releaseHeldQuery = resolve;
+  });
+  const server = createServer((req, res) => {
+    let raw = '';
+    req.on('data', (chunk) => {
+      raw += chunk;
+    });
+    req.on('end', () => {
+      let input: string[];
+      try {
+        const body = JSON.parse(raw) as { input?: unknown };
+        if (!Array.isArray(body.input) || !body.input.every((value) => typeof value === 'string')) throw new Error('invalid input');
+        input = body.input;
+      } catch {
+        res.statusCode = 400;
+        res.end('invalid fixture request');
+        return;
+      }
+      // This is a scheduling/protocol fixture, not evidence about external embedding quality.
+      const reply = () => {
+        if (res.destroyed) return;
+        res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify({ data: input.map((_text, index) => ({ index, embedding: [1, 0] })) }));
+      };
+      if (input.length === 1 && input[0] === queryInput) {
+        queryRequests++;
+        markQueryStarted();
+        void heldQueryReleased.then(reply);
+        return;
+      }
+      reply();
+    });
+  });
+  const endpoint = await listen(server);
+  return {
+    endpoint,
+    queryStarted,
+    get queryReleased() {
+      return queryReleased;
+    },
+    get queryRequests() {
+      return queryRequests;
+    },
+    releaseQuery() {
+      if (queryReleased) return;
+      queryReleased = true;
+      releaseHeldQuery();
+    },
+    server,
+  };
+}
+
+async function closeServer(server: ReturnType<typeof createServer>): Promise<void> {
+  await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
+}
+
+async function pendingVectorCount(cfg: ResolvedConfig): Promise<number> {
+  const opened = await open(cfg, { build: false });
+  let bodyFailed = false;
+  let bodyError: unknown;
+  let count: number | undefined;
+  try {
+    count = (await opened.store.vectors.pending()).length;
+  } catch (err) {
+    bodyFailed = true;
+    bodyError = err;
+  }
+  let closeFailed = false;
+  let closeError: unknown;
+  try {
+    await opened.store.close();
+  } catch (err) {
+    closeFailed = true;
+    closeError = err;
+  }
+  if (bodyFailed && closeFailed) throw new AggregateError([bodyError, closeError], 'reading vector readiness and closing its store both failed');
+  if (bodyFailed) throw bodyError;
+  if (closeFailed) throw closeError;
+  if (count === undefined) throw new Error('vector readiness read produced no count');
+  return count;
+}
+
 const CHILD = String.raw`
 import { channel } from 'node:diagnostics_channel';
+import { existsSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -36,11 +132,31 @@ import { pathToFileURL } from 'node:url';
 const role = process.argv[1];
 const configPath = process.argv[2];
 const packageRoot = process.argv[3];
+const releasePath = process.argv[4];
+const label = process.argv[5];
 const api = await import(pathToFileURL(join(packageRoot, 'dist', 'esm', 'index.js')).href);
 const send = (message) => process.stdout.write(JSON.stringify(message) + '\n');
 const lockWait = channel('sensemaking.store.lock-wait');
 const onLockWait = ({ store }) => send({ type: 'lock-observed', store });
 if (role === 'reader' || role === 'reader2' || role === 'writer') lockWait.subscribe(onLockWait);
+const buildPlan = channel('sensemaking.store.build-plan');
+const pause = new Int32Array(new SharedArrayBuffer(4));
+const onBuildPlan = ({ attempt, baseline, wantedSignature }) => {
+  send({ type: 'planned', attempt, generation: baseline.generation, wantedSignature, label });
+  while (!existsSync(releasePath)) Atomics.wait(pause, 0, 0, 10);
+};
+if (role === 'builder') buildPlan.subscribe(onBuildPlan);
+const candidatesRead = channel('sensemaking.search.candidates-read');
+const onCandidatesRead = ({ paths }) => {
+  send({ type: 'search-candidates', paths });
+  const deadline = Date.now() + 30000;
+  const wait = new Int32Array(new SharedArrayBuffer(4));
+  while (!existsSync(releasePath)) {
+    if (Date.now() >= deadline) throw new Error('search snapshot release file was not created');
+    Atomics.wait(wait, 0, 0, 25);
+  }
+};
+if (role === 'search-reader') candidatesRead.subscribe(onCandidatesRead);
 const input = createInterface({ input: process.stdin });
 const command = () => new Promise((resolve, reject) => {
   const onLine = (line) => {
@@ -58,7 +174,11 @@ const command = () => new Promise((resolve, reject) => {
 
 try {
   const cfg = api.loadConfig(configPath);
-  if (role === 'writer') {
+  if (role === 'builder') {
+    const result = await api.build(cfg);
+    send({ type: 'built', parsed: result.parsed, label });
+    send({ type: 'done' });
+  } else if (role === 'writer') {
     const opening = api.open(cfg);
     send({ type: 'open-launched' });
     const opened = await opening;
@@ -103,6 +223,18 @@ try {
       await opened.store.close();
     }
     send({ type: 'done' });
+  } else if (role === 'search-reader') {
+    send({ type: 'ready' });
+    const go = await command();
+    if (go?.type !== 'go') throw new Error('search reader expected go command');
+    const opened = await api.open(cfg, { build: false });
+    try {
+      const rows = await api.search(opened.store, cfg, 'old');
+      send({ type: 'search-result', rows });
+    } finally {
+      await opened.store.close();
+    }
+    send({ type: 'done' });
   } else {
     throw new Error('unknown child role');
   }
@@ -111,6 +243,8 @@ try {
   process.exitCode = 1;
 } finally {
   lockWait.unsubscribe(onLockWait);
+  buildPlan.unsubscribe(onBuildPlan);
+  candidatesRead.unsubscribe(onCandidatesRead);
   input.close();
 }
 `;
@@ -118,9 +252,15 @@ try {
 interface Message {
   type: string;
   store?: string;
-  rows?: Array<{ path: string; text: string }>;
+  rows?: Array<{ path: string; text?: string; snippets?: string[] }>;
+  paths?: string[];
   snippets?: Array<{ path: string; text: string }>;
   message?: string;
+  attempt?: number;
+  generation?: string | null;
+  wantedSignature?: string;
+  parsed?: number;
+  label?: string;
 }
 
 interface ProtocolChild {
@@ -143,8 +283,8 @@ async function waitForAny(process: ProtocolChild, types: string[]): Promise<Mess
   return Promise.race(types.map((type) => process.waitFor(type)));
 }
 
-function startChild(role: 'writer' | 'reader' | 'reader2', configPath: string): ProtocolChild {
-  const child = spawn(process.execPath, ['--input-type=module', '-e', CHILD, role, configPath, packageRoot], {
+function startChild(role: 'writer' | 'reader' | 'reader2' | 'builder' | 'search-reader', configPath: string, releasePath = '', label = ''): ProtocolChild {
+  const child = spawn(process.execPath, ['--input-type=module', '-e', CHILD, role, configPath, packageRoot, releasePath, label], {
     cwd: packageRoot,
     detached: true,
     stdio: ['pipe', 'pipe', 'pipe'],
@@ -236,6 +376,56 @@ function startChild(role: 'writer' | 'reader' | 'reader2', configPath: string): 
   };
 }
 
+async function runSearchSnapshotOverlap(): Promise<void> {
+  const baseDir = scratchDir('search-snapshot-sqlite');
+  const configPath = join(baseDir, 'sense.config.json');
+  const releaseFile = join(baseDir, 'release-search-reader');
+  writeFileSync(configPath, JSON.stringify({ version: SUPPORTED_CONFIG_VERSION, store: 'sqlite', presets: { default: { include: ['**/*.md'], signals: { words: 1 } } }, queries: {} }));
+  writeNote(baseDir, 'a.md', { body: 'old alpha' });
+  writeNote(baseDir, 'b.md', { body: 'old beta' });
+  await withTreeForStore('sqlite', baseDir, async () => {}, { presets: { default: { include: ['**/*.md'], signals: { words: 1 } } } });
+
+  let writer: ProtocolChild | undefined;
+  let reader: ProtocolChild | undefined;
+  try {
+    writer = startChild('writer', configPath);
+    await writer.waitFor('held');
+
+    reader = startChild('search-reader', configPath, releaseFile);
+    await reader.waitFor('ready');
+    reader.send({ type: 'go' });
+    const candidates = await reader.waitFor('search-candidates');
+    assert.deepEqual(new Set(candidates.paths), new Set(['a.md', 'b.md']), 'the reader selected both rows from the old committed generation');
+
+    writer.send({ type: 'release' });
+    await writer.waitFor('committed');
+    writeFileSync(releaseFile, 'release');
+
+    const result = await reader.waitFor('search-result');
+    assert.deepEqual(new Set(result.rows?.map((row) => row.path)), new Set(['a.md', 'b.md']), 'the ranked rows remain from the same committed generation');
+    const snippets = result.rows?.flatMap((row) => row.snippets ?? []) ?? [];
+    const unmarkedSnippets = snippets.map((snippet) => snippet.replace(/[«»]/g, ''));
+    assert.ok(
+      unmarkedSnippets.some((snippet) => snippet.includes('old alpha')),
+      JSON.stringify(result.rows)
+    );
+    assert.ok(
+      unmarkedSnippets.some((snippet) => snippet.includes('old beta')),
+      JSON.stringify(result.rows)
+    );
+    assert.ok(
+      snippets.every((snippet) => !snippet.includes('committed-')),
+      'hydration must not read bytes committed after candidate selection'
+    );
+
+    await writer.waitFor('done');
+    await reader.waitFor('done');
+    await Promise.all([closeChild(writer), closeChild(reader)]);
+  } finally {
+    await Promise.all([killChild(writer), killChild(reader)]);
+  }
+}
+
 async function closeChild(process: ProtocolChild): Promise<void> {
   process.child.stdin?.end();
   await process.closed;
@@ -247,10 +437,39 @@ async function killChild(process: ProtocolChild | undefined): Promise<void> {
   await process.closed;
 }
 
+async function finishChildren(children: Array<ProtocolChild | undefined>, bodyFailed: boolean, bodyError: unknown, context: string): Promise<void> {
+  const cleanup = await Promise.allSettled(children.map(killChild));
+  const cleanupErrors = cleanup.filter((result): result is PromiseRejectedResult => result.status === 'rejected').map((result) => result.reason);
+  if (bodyFailed && cleanupErrors.length > 0) throw new AggregateError([bodyError, ...cleanupErrors], `${context} failed and cleanup also failed`);
+  if (bodyFailed) throw bodyError;
+  if (cleanupErrors.length > 0) throw cleanupErrors.length === 1 ? cleanupErrors[0] : new AggregateError(cleanupErrors, `${context} cleanup failed`);
+}
+
+function writeSqliteConfig(configDir: string, filename: string, rootDir: string): { configPath: string; cfg: ResolvedConfig } {
+  const configPath = join(configDir, filename);
+  writeFileSync(configPath, JSON.stringify({ version: SUPPORTED_CONFIG_VERSION, root: rootDir, store: 'sqlite', presets: { default: { include: ['**/*.md'] } }, queries: {} }));
+  return { configPath, cfg: loadConfig(configPath) };
+}
+
+async function publishedState(cfg: ResolvedConfig): Promise<{ generation: string; features: string; sources: Array<{ path: string; text: string }> }> {
+  const opened = await open(cfg, { build: false });
+  try {
+    const generation = (await (await opened.store.prepare("SELECT value FROM meta WHERE key = 'core_generation'")).get()) as { value: string } | undefined;
+    if (!generation) throw new Error('published index has no core generation');
+    const features = (await (await opened.store.prepare("SELECT value FROM meta WHERE key = 'features'")).get()) as { value: string } | undefined;
+    if (!features) throw new Error('published index has no feature signature');
+    const sources = (await (await opened.store.prepare('SELECT "path", text FROM indexed_sources ORDER BY "path"')).all()) as Array<{ path: string; text: string }>;
+    return { generation: generation.value, features: features.value, sources };
+  } finally {
+    await opened.store.close();
+  }
+}
+
 async function runOverlap(store: ParityStoreName): Promise<void> {
   const baseDir = scratchDir(`held-reader-${store}`);
   const configPath = join(baseDir, 'sense.config.json');
-  writeFileSync(configPath, JSON.stringify({ version: 5, store, presets: { default: { include: ['**/*.md'] } }, queries: {} }));
+  const configBytes = JSON.stringify({ version: SUPPORTED_CONFIG_VERSION, store, presets: { default: { include: ['**/*.md'] } }, queries: {} });
+  writeFileSync(configPath, configBytes);
   writeNote(baseDir, 'a.md', { body: 'old-a' });
   writeNote(baseDir, 'b.md', { body: 'old-b' });
   await withTreeForStore(store, baseDir, async ({ store: opened }) => {
@@ -355,6 +574,8 @@ async function runOverlap(store: ParityStoreName): Promise<void> {
   if (bodyError) throw bodyError;
   if (cleanupErrors.length > 0) throw cleanupErrors.length === 1 ? cleanupErrors[0] : new AggregateError(cleanupErrors, `${store}: held-writer reader cleanup failed`);
 
+  assert.equal(readFileSync(configPath, 'utf8'), configBytes, `${store}: store overlap must leave the current config untouched`);
+
   await withTreeForStore(store, baseDir, async ({ store: opened }) => {
     const fresh = await (await opened.prepare('SELECT "path", text FROM content WHERE "path" IN (?, ?) ORDER BY "path"')).all('a.md', 'b.md');
     assert.deepEqual(
@@ -371,7 +592,7 @@ async function runOverlap(store: ParityStoreName): Promise<void> {
 async function runHeldReaderAcceptance(store: ParityStoreName): Promise<void> {
   const baseDir = scratchDir(`held-reader-acceptance-${store}`);
   const configPath = join(baseDir, 'sense.config.json');
-  writeFileSync(configPath, JSON.stringify({ version: 5, store, presets: { default: { include: ['**/*.md'] } }, queries: {} }));
+  writeFileSync(configPath, JSON.stringify({ version: SUPPORTED_CONFIG_VERSION, store, presets: { default: { include: ['**/*.md'] } }, queries: {} }));
   writeNote(baseDir, 'a.md', { body: 'old-a' });
   writeNote(baseDir, 'b.md', { body: 'old-b' });
   const oldSources = [
@@ -479,7 +700,411 @@ async function runHeldReaderAcceptance(store: ParityStoreName): Promise<void> {
   }
 }
 
+describe('bounded core publication', () => {
+  it('keeps the committed generation readable while a no-op builder is active', async function () {
+    this.timeout(60_000);
+    const rootDir = scratchDir('active-noop-root');
+    const configDir = scratchDir('active-noop-config');
+    const { configPath, cfg } = writeSqliteConfig(configDir, 'sense.config.json', rootDir);
+    const releasePath = join(configDir, 'release-noop');
+    writeNote(rootDir, 'a.md', { body: 'last committed content' });
+    await build(cfg);
+    const before = await publishedState(cfg);
+
+    let builder: ProtocolChild | undefined;
+    let bodyFailed = false;
+    let bodyError: unknown;
+    try {
+      builder = startChild('builder', configPath, releasePath, 'noop');
+      const planned = await builder.waitFor('planned');
+      assert.equal(planned.attempt, 0);
+      assert.equal(planned.generation, before.generation);
+      assert.deepEqual(await publishedState(cfg), before, 'an active planner withdrew the published generation');
+
+      writeFileSync(releasePath, 'release');
+      const built = await builder.waitFor('built');
+      assert.equal(built.parsed, 0);
+      await builder.waitFor('done');
+      await closeChild(builder);
+      assert.deepEqual(await publishedState(cfg), before, 'a no-op build advanced or changed the published generation');
+    } catch (err) {
+      bodyFailed = true;
+      bodyError = err;
+    }
+    await finishChildren([builder], bodyFailed, bodyError, 'active no-op publication proof');
+  });
+
+  it('publishes one watcher generation while a semantic query and no-op builder are gated', async function () {
+    this.timeout(90_000);
+    const queryInput = 'mixedqueryanchor';
+    const oldBody = `${queryInput} old authored snippet`;
+    const newBody = `${queryInput} new generation authored snippet`;
+    const baseDir = scratchDir('mixed-client-sqlite');
+    const configPath = join(baseDir, 'sense.config.json');
+    const releasePath = join(baseDir, 'release-mixed-builder');
+    const provider = await controlledMixedClientProvider(queryInput);
+
+    type SearchRows = Awaited<ReturnType<typeof search>>;
+    let watcher: ReturnType<typeof startMeasuredWatcher> | undefined;
+    let builder: ProtocolChild | undefined;
+    let queryOpened: Awaited<ReturnType<typeof open>> | undefined;
+    let queryOutcome: Promise<PromiseSettledResult<SearchRows>> | undefined;
+    let querySettled = false;
+    let queryOutcomeConsumed = false;
+    let builderGateObserved = false;
+    let builderOutcomeObserved = false;
+    let bodyFailed = false;
+    let bodyError: unknown;
+    try {
+      writeFileSync(
+        configPath,
+        JSON.stringify({
+          version: SUPPORTED_CONFIG_VERSION,
+          store: 'sqlite',
+          presets: { default: { include: ['**/*.md'], signals: { words: 1, vectors: 1 } } },
+          embed: { provider: 'openai', model: 'mixed-client-protocol-fixture', url: provider.endpoint },
+          queries: {},
+        })
+      );
+      const cfg = loadConfig(configPath);
+      writeNote(baseDir, 'a.md', { body: oldBody });
+      await build(cfg);
+      assert.equal(await pendingVectorCount(cfg), 0, 'initial vectors must be ready before watcher startup');
+
+      // Force one known startup reparse, then consume its post-start event before defining G0.
+      // This separates buffered startup output from the later authored edit without relying on
+      // native notification timing; the edit wait below still permits the shipped fallback pass.
+      const startupMtime = new Date(Date.now() + 60_000);
+      utimesSync(join(baseDir, 'a.md'), startupMtime, startupMtime);
+      const activeWatcher = startMeasuredWatcher({ pkgRoot: packageRoot, configPath });
+      watcher = activeWatcher;
+      const started = await activeWatcher.waitFor('started', 0, DEADLINE_MS);
+      const startupReconciled = await activeWatcher.waitFor('reconciled', started.next, WATCH_HEARTBEAT_INTERVAL_MS + DEADLINE_MS);
+      assert.deepEqual({ parsed: startupReconciled.event.parsed, total: startupReconciled.event.total, warnings: startupReconciled.event.warnings }, { parsed: 1, total: 1, warnings: [] }, 'watcher did not report the forced baseline startup reparse');
+      assert.equal(await pendingVectorCount(cfg), 0, 'startup reconciliation did not leave baseline vectors ready');
+      const before = await publishedState(cfg);
+      assert.deepEqual(before.sources, [{ path: 'a.md', text: `---\n\n---\n\n${oldBody}\n` }]);
+
+      const activeQuery = await open(cfg, { build: false });
+      queryOpened = activeQuery;
+      const queryOperation = search(activeQuery.store, cfg, queryInput, { k: 1 });
+      const observedQueryOutcome = Promise.allSettled([queryOperation]).then(([outcome]) => {
+        querySettled = true;
+        return outcome;
+      });
+      queryOutcome = observedQueryOutcome;
+      const queryStart = await Promise.race([provider.queryStarted.then(() => ({ type: 'started' as const })), observedQueryOutcome.then((outcome) => ({ type: 'settled' as const, outcome }))]);
+      if (queryStart.type === 'settled') {
+        queryOutcomeConsumed = true;
+        if (queryStart.outcome.status === 'rejected') throw queryStart.outcome.reason;
+        throw new Error('semantic query settled before its uniquely authored provider input was held');
+      }
+
+      const activeBuilder = startChild('builder', configPath, releasePath, 'mixed-noop');
+      builder = activeBuilder;
+      const firstPlan = await activeBuilder.waitFor('planned');
+      builderGateObserved = true;
+      assert.equal(firstPlan.attempt, 0);
+      assert.equal(firstPlan.generation, before.generation);
+      assert.equal(firstPlan.wantedSignature, before.features);
+
+      const editDeadline = Date.now() + WATCH_HEARTBEAT_INTERVAL_MS + DEADLINE_MS;
+      let editCursor = activeWatcher.events.length;
+      writeNote(baseDir, 'a.md', { body: newBody });
+      let reconciled: Awaited<ReturnType<typeof activeWatcher.waitFor>>;
+      for (;;) {
+        const remainingMs = editDeadline - Date.now();
+        if (remainingMs <= 0) throw new Error('watcher produced no authored edit reconciliation before the fallback-aware deadline');
+        const event = await activeWatcher.waitFor('reconciled', editCursor, remainingMs);
+        editCursor = event.next;
+        if (event.event.parsed === 0) continue;
+        reconciled = event;
+        break;
+      }
+      assert.deepEqual({ parsed: reconciled.event.parsed, total: reconciled.event.total, warnings: reconciled.event.warnings }, { parsed: 1, total: 1, warnings: [] }, 'watcher did not publish the one authored edit');
+
+      assert.equal(provider.queryReleased, false, 'watcher publication released the held semantic query');
+      assert.equal(querySettled, false, 'semantic query settled before the watcher publication oracle');
+      assert.equal(existsSync(releasePath), false, 'watcher publication released the no-op builder gate');
+      assert.equal(
+        activeBuilder.messages.some((message) => message.type === 'built' || (message.type === 'planned' && message.attempt === 1)),
+        false,
+        'the no-op builder advanced past its attempt-0 gate before watcher publication'
+      );
+      assert.equal(activeBuilder.child.exitCode, null, 'the gated builder exited before watcher publication');
+      assert.equal(activeBuilder.child.signalCode, null, 'the gated builder received a signal before watcher publication');
+
+      const published = await publishedState(cfg);
+      assert.equal(Number(published.generation), Number(before.generation) + 1, 'watcher must publish exactly one new core generation');
+      assert.equal(published.features, before.features);
+      assert.deepEqual(published.sources, [{ path: 'a.md', text: `---\n\n---\n\n${newBody}\n` }], 'watcher generation did not publish the authored indexed bytes');
+      assert.equal(await pendingVectorCount(cfg), 0, 'watcher event preceded vector readiness for the published generation');
+
+      writeFileSync(releasePath, 'release');
+      const built = await activeBuilder.waitFor('built');
+      assert.equal(built.parsed, 0, 'stale no-op builder reparsed the watcher generation');
+      await activeBuilder.waitFor('done');
+      builderOutcomeObserved = true;
+      const plans = activeBuilder.messages.filter((message) => message.type === 'planned');
+      assert.deepEqual(
+        plans.map((message) => ({ attempt: message.attempt, generation: message.generation })),
+        [
+          { attempt: 0, generation: before.generation },
+          { attempt: 1, generation: published.generation },
+        ],
+        'no-op builder did not replan exactly once from the watcher generation'
+      );
+      assert.ok(
+        plans.every((plan) => plan.wantedSignature === before.features),
+        'bounded replan changed the configured feature signature'
+      );
+      const afterBuilder = await publishedState(cfg);
+      assert.equal(afterBuilder.generation, published.generation, 'replanned no-op builder advanced the watcher generation');
+      assert.deepEqual(afterBuilder.sources, published.sources);
+
+      provider.releaseQuery();
+      const completedQuery = await observedQueryOutcome;
+      queryOutcomeConsumed = true;
+      if (completedQuery.status === 'rejected') throw completedQuery.reason;
+      assert.deepEqual(
+        completedQuery.value.map((row) => row.path),
+        ['a.md'],
+        'prepared semantic query did not return the authored watcher path'
+      );
+      const snippets = completedQuery.value.flatMap((row) => row.snippets);
+      const unmarked = snippets.map((snippet) => snippet.replaceAll(/[«»]/g, ''));
+      assert.ok(
+        unmarked.some((snippet) => snippet.includes(newBody)),
+        JSON.stringify(completedQuery.value)
+      );
+      assert.ok(
+        unmarked.every((snippet) => !snippet.includes(oldBody)),
+        'prepared query hydrated snippet bytes from the superseded generation'
+      );
+      assert.equal(provider.queryRequests, 1, 'fixture held something other than the one uniquely authored query request');
+
+      const finalState = await publishedState(cfg);
+      assert.equal(Number(finalState.generation), Number(before.generation) + 1);
+      assert.deepEqual(finalState.sources, [{ path: 'a.md', text: `---\n\n---\n\n${newBody}\n` }]);
+    } catch (err) {
+      bodyFailed = true;
+      bodyError = err;
+    }
+
+    const cleanupErrors: unknown[] = [];
+    try {
+      if (!existsSync(releasePath)) writeFileSync(releasePath, 'release');
+    } catch (err) {
+      cleanupErrors.push(err);
+    }
+    try {
+      provider.releaseQuery();
+    } catch (err) {
+      cleanupErrors.push(err);
+    }
+
+    const gateCleanup: Array<Promise<void>> = [];
+    if (queryOutcome && !queryOutcomeConsumed) {
+      gateCleanup.push(
+        queryOutcome.then((outcome) => {
+          queryOutcomeConsumed = true;
+          if (outcome.status === 'rejected') throw outcome.reason;
+        })
+      );
+    }
+    if (builder && builderGateObserved && !builderOutcomeObserved) {
+      gateCleanup.push(
+        builder.waitFor('done').then(() => {
+          builderOutcomeObserved = true;
+        })
+      );
+    }
+    const gateResults = await Promise.allSettled(gateCleanup);
+    cleanupErrors.push(...gateResults.filter((result): result is PromiseRejectedResult => result.status === 'rejected').map((result) => result.reason));
+
+    const resourceCleanup = await Promise.allSettled([
+      Promise.resolve().then(() => (queryOpened ? queryOpened.store.close() : undefined)),
+      Promise.resolve().then(() => (watcher ? watcher.close(DEADLINE_MS) : undefined)),
+      Promise.resolve().then(() => (builder && builderOutcomeObserved ? closeChild(builder) : killChild(builder))),
+      closeServer(provider.server),
+    ]);
+    cleanupErrors.push(...resourceCleanup.filter((result): result is PromiseRejectedResult => result.status === 'rejected').map((result) => result.reason));
+    if (bodyFailed && cleanupErrors.length > 0) throw new AggregateError([bodyError, ...cleanupErrors], 'mixed-client acceptance and cleanup both failed');
+    if (bodyFailed) throw bodyError;
+    if (cleanupErrors.length > 0) throw cleanupErrors.length === 1 ? cleanupErrors[0] : new AggregateError(cleanupErrors, 'mixed-client acceptance cleanup failed');
+  });
+
+  it('replans one of two same-signature builders and publishes the edit once', async function () {
+    this.timeout(60_000);
+    const rootDir = scratchDir('same-signature-root');
+    const configDir = scratchDir('same-signature-config');
+    const { configPath, cfg } = writeSqliteConfig(configDir, 'sense.config.json', rootDir);
+    const releaseA = join(configDir, 'release-a');
+    const releaseB = join(configDir, 'release-b');
+    writeNote(rootDir, 'a.md', { body: 'initial content' });
+    await build(cfg);
+    const before = await publishedState(cfg);
+    writeNote(rootDir, 'a.md', { body: 'published once' });
+
+    let first: ProtocolChild | undefined;
+    let second: ProtocolChild | undefined;
+    let bodyFailed = false;
+    let bodyError: unknown;
+    try {
+      first = startChild('builder', configPath, releaseA, 'first');
+      second = startChild('builder', configPath, releaseB, 'second');
+      const [firstPlan, secondPlan] = await Promise.all([first.waitFor('planned'), second.waitFor('planned')]);
+      assert.equal(firstPlan.generation, before.generation);
+      assert.equal(secondPlan.generation, before.generation);
+
+      writeFileSync(releaseA, 'release');
+      writeFileSync(releaseB, 'release');
+      const [firstBuilt, secondBuilt] = await Promise.all([first.waitFor('built'), second.waitFor('built')]);
+      await Promise.all([first.waitFor('done'), second.waitFor('done')]);
+      assert.deepEqual(
+        [firstBuilt.parsed, secondBuilt.parsed].sort((a, b) => (a ?? -1) - (b ?? -1)),
+        [0, 1],
+        'the stale same-signature plan was not replanned against the committed edit'
+      );
+      const replans = [...first.messages, ...second.messages].filter((message) => message.type === 'planned' && message.attempt === 1);
+      assert.equal(replans.length, 1, 'exactly one stale plan must use the bounded replan');
+      await Promise.all([closeChild(first), closeChild(second)]);
+
+      const after = await publishedState(cfg);
+      assert.equal(Number(after.generation), Number(before.generation) + 1, 'same content was published as more than one core generation');
+      assert.deepEqual(after.sources, [{ path: 'a.md', text: '---\n\n---\n\npublished once\n' }]);
+    } catch (err) {
+      bodyFailed = true;
+      bodyError = err;
+    }
+    await finishChildren([first, second], bodyFailed, bodyError, 'same-signature publication proof');
+  });
+
+  it('replans a stale different-config builder without stamping its old plan', async function () {
+    this.timeout(60_000);
+    const configDir = scratchDir('different-config-cache');
+    const rootA = scratchDir('different-config-a');
+    const rootB = scratchDir('different-config-b');
+    const a = writeSqliteConfig(configDir, 'a.config.json', rootA);
+    const b = writeSqliteConfig(configDir, 'b.config.json', rootB);
+    const releaseA = join(configDir, 'release-a');
+    const releaseB = join(configDir, 'release-b');
+    writeNote(rootA, 'a.md', { body: 'a before race' });
+    writeNote(rootB, 'b.md', { body: 'b configured tree' });
+    await build(a.cfg);
+    const before = await publishedState(a.cfg);
+    writeNote(rootA, 'a.md', { body: 'a configured tree' });
+
+    let first: ProtocolChild | undefined;
+    let second: ProtocolChild | undefined;
+    let bodyFailed = false;
+    let bodyError: unknown;
+    try {
+      first = startChild('builder', a.configPath, releaseA, 'a');
+      second = startChild('builder', b.configPath, releaseB, 'b');
+      const [firstPlan, secondPlan] = await Promise.all([first.waitFor('planned'), second.waitFor('planned')]);
+      assert.equal(firstPlan.generation, before.generation);
+      assert.equal(secondPlan.generation, before.generation);
+      assert.notEqual(firstPlan.wantedSignature, secondPlan.wantedSignature, 'the fixture must submit different durable configurations');
+
+      writeFileSync(releaseA, 'release');
+      writeFileSync(releaseB, 'release');
+      const [firstBuilt, secondBuilt] = await Promise.all([first.waitFor('built'), second.waitFor('built')]);
+      await Promise.all([first.waitFor('done'), second.waitFor('done')]);
+      assert.deepEqual([firstBuilt.parsed, secondBuilt.parsed], [1, 1]);
+      const replans = [...first.messages, ...second.messages].filter((message) => message.type === 'planned' && message.attempt === 1);
+      assert.equal(replans.length, 1, 'exactly one different-config plan must be rejected and replanned');
+      const finalLabel = replans[0].label;
+      assert.ok(finalLabel === 'a' || finalLabel === 'b');
+      await Promise.all([closeChild(first), closeChild(second)]);
+
+      const finalCfg = finalLabel === 'a' ? a.cfg : b.cfg;
+      const staleCfg = finalLabel === 'a' ? b.cfg : a.cfg;
+      const finalState = await publishedState(finalCfg);
+      assert.equal(Number(finalState.generation), Number(before.generation) + 2, 'both distinct core publications must advance the generation');
+      assert.deepEqual(finalState.sources, finalLabel === 'a' ? [{ path: 'a.md', text: '---\n\n---\n\na configured tree\n' }] : [{ path: 'b.md', text: '---\n\n---\n\nb configured tree\n' }], 'the final signature was stamped over rows from the stale configuration plan');
+      await assert.rejects(async () => {
+        const unexpected = await open(staleCfg, { build: false });
+        try {
+          throw new Error('the superseded configuration unexpectedly opened the final generation');
+        } finally {
+          await unexpected.store.close();
+        }
+      }, /built for different configuration features/);
+    } catch (err) {
+      bodyFailed = true;
+      bodyError = err;
+    }
+    await finishChildren([first, second], bodyFailed, bodyError, 'different-config publication proof');
+  });
+
+  it('replans when local model identity changes after planning', async function () {
+    this.timeout(60_000);
+    const rootDir = scratchDir('model-identity-root');
+    const configDir = scratchDir('model-identity-config');
+    const model = writeModel();
+    const configPath = join(configDir, 'sense.config.json');
+    const releasePath = join(configDir, 'release-model-identity');
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        version: SUPPORTED_CONFIG_VERSION,
+        root: rootDir,
+        store: 'sqlite',
+        presets: { default: { include: ['**/*.md'], signals: { words: 1 } } },
+        embed: { provider: 'static', model },
+        queries: {},
+      })
+    );
+    const cfg = loadConfig(configPath);
+    writeNote(rootDir, 'a.md', { body: 'local identity content' });
+    await build(cfg);
+    const before = await publishedState(cfg);
+
+    let builder: ProtocolChild | undefined;
+    let bodyFailed = false;
+    let bodyError: unknown;
+    try {
+      builder = startChild('builder', configPath, releasePath, 'model-identity');
+      const planned = await builder.waitFor('planned');
+      assert.equal(planned.attempt, 0);
+      assert.equal(planned.wantedSignature, before.features);
+
+      const changedTime = new Date(Date.now() + 60_000);
+      utimesSync(join(model, 'model.safetensors'), changedTime, changedTime);
+      writeFileSync(releasePath, 'release');
+
+      const built = await builder.waitFor('built');
+      assert.equal(built.parsed, 1, 'the identity-only replan must rebuild against the changed local model metadata');
+      await builder.waitFor('done');
+      const plans = builder.messages.filter((message) => message.type === 'planned');
+      assert.deepEqual(
+        plans.map((message) => message.attempt),
+        [0, 1],
+        'the stale identity plan must take exactly the bounded replan'
+      );
+      assert.notEqual(plans[0].wantedSignature, plans[1].wantedSignature, 'the real local model metadata change must alter the durable signature');
+      await closeChild(builder);
+
+      const after = await publishedState(cfg);
+      assert.equal(after.features, plans[1].wantedSignature, 'publication stamped a stale planned model identity');
+      assert.notEqual(after.features, plans[0].wantedSignature, 'publication retained the signature planned before model metadata changed');
+      assert.equal(Number(after.generation), Number(before.generation) + 1);
+      assert.deepEqual(after.sources, before.sources);
+    } catch (err) {
+      bodyFailed = true;
+      bodyError = err;
+    }
+    await finishChildren([builder], bodyFailed, bodyError, 'local model identity publication proof');
+  });
+});
+
 describe('held writer and independent reader', () => {
+  it('keeps lexical candidates and indexed snippet bytes in one committed generation', async function () {
+    this.timeout(60_000);
+    await runSearchSnapshotOverlap();
+  });
+
   it('records concurrent reader and writer access while the first reader is held', async function () {
     this.timeout(60_000);
     await forEachStore(runHeldReaderAcceptance);
@@ -494,7 +1119,7 @@ describe('held writer and independent reader', () => {
     this.timeout(60_000);
     const baseDir = scratchDir('watch-held-reconcile');
     const configPath = join(baseDir, 'sense.config.json');
-    writeFileSync(configPath, JSON.stringify({ version: 5, store: 'sqlite', presets: { default: { include: ['**/*.md'] } }, queries: {} }));
+    writeFileSync(configPath, JSON.stringify({ version: SUPPORTED_CONFIG_VERSION, store: 'sqlite', presets: { default: { include: ['**/*.md'] } }, queries: {} }));
     writeNote(baseDir, 'a.md', { body: 'old-a' });
     writeNote(baseDir, 'b.md', { body: 'old-b' });
     await withTreeForStore('sqlite', baseDir, async () => {});

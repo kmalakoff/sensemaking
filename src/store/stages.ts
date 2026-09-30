@@ -16,8 +16,8 @@ export interface Stages {
   // The write transaction's own duration. It contains most of the spans below, so it is reported
   // beside them rather than among them, and never counts toward the sum.
   txMs: number;
-  // Summed worker-side parseFile time inside `parse`: CPU across workers, not a wall span, so it
-  // sits beside the spans like txMs and never counts toward the sum. 0 on the serial path.
+  // Summed worker-side parseFile elapsed time inside `parse`: concurrent workers can make it
+  // exceed the wall span, so it sits beside the spans like txMs and never counts toward the sum.
   parseWorkerMs: number;
   // Disjoint spans, so `totalMs` less their sum is time no stage claims.
   spans: Record<string, number>;

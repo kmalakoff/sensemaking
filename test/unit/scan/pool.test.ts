@@ -8,9 +8,9 @@ import { tmpTree, writeNote } from '../../lib/tree.ts';
 const cfg: Config = { presets: { default: { include: ['**/*.md'] } }, queries: {} };
 
 describe('ParsePool', () => {
-  it('creates one pool on the first run() and reuses it on a later call, even with a different maxWorkers', async () => {
+  it('reuses an equivalent worker count and recreates the pool after a serialized count change', async () => {
     const baseDir = tmpTree();
-    writeNote(baseDir, 'a.md');
+    for (let i = 0; i < 4; i++) writeNote(baseDir, `${i}.md`);
     const files = listFiles(cfg, baseDir);
 
     const pool = new ParsePool();
@@ -19,13 +19,15 @@ describe('ParsePool', () => {
       await pool.run(files, [], cfg, undefined, 2);
       assert.equal(pool.poolsCreated, 1, 'first run() did not construct a pool');
 
-      // A different maxWorkers must not force a second pool: the first dispatch fixes the size.
-      await pool.run(files, [], cfg, undefined, 8);
-      assert.equal(pool.poolsCreated, 1, 'second run() constructed a second pool instead of reusing the first');
+      await pool.run(files, [], structuredClone(cfg), undefined, 2);
+      assert.equal(pool.poolsCreated, 1, 'equivalent context and worker count did not reuse the pool');
+
+      await pool.run(files, [], cfg, undefined, 4);
+      assert.equal(pool.poolsCreated, 2, 'a changed worker count did not replace the pool');
 
       await pool.close();
       await pool.run(files, [], cfg, undefined, 2);
-      assert.equal(pool.poolsCreated, 2, 'run() after close() did not construct a fresh pool');
+      assert.equal(pool.poolsCreated, 3, 'run() after close() did not construct a fresh pool');
     } finally {
       await pool.close();
     }
@@ -92,7 +94,7 @@ describe('ParsePool', () => {
 
   it('drains submitted work after a callback failure before running queued different-context work', async () => {
     const baseDir = tmpTree();
-    for (let i = 0; i < 4; i++) writeNote(baseDir, `${i}.md`, { body: `Authored ${i} #tag-${i}` });
+    for (let i = 0; i < 10; i++) writeNote(baseDir, `${i}.md`, { body: `Authored ${i} #tag-${i}` });
     const files = listFiles(cfg, baseDir);
     const tags = FEATURES.filter((feature) => feature.name === 'tags');
     const callbackError = new Error('callback failed');
@@ -110,14 +112,17 @@ describe('ParsePool', () => {
         },
         1
       );
-      const queued = pool.run([files[3]], tags, cfg, undefined, 1);
+      const queued = pool.run(files.slice(6), tags, cfg, undefined, 2);
 
       await assert.rejects(failed, (err) => err === callbackError);
       const queuedResult = await queued;
 
       assert.equal(completed, files.length, 'the failed dispatch did not drain every submitted task');
-      assert.deepEqual(queuedResult[0].doc.extracted, { tags: ['tag-3'] });
-      assert.equal(pool.poolsCreated, 2, 'the queued context change did not replace the drained pool');
+      assert.deepEqual(
+        queuedResult.map((result) => result.doc.extracted),
+        [{ tags: ['tag-6'] }, { tags: ['tag-7'] }, { tags: ['tag-8'] }, { tags: ['tag-9'] }]
+      );
+      assert.equal(pool.poolsCreated, 2, 'the queued context/count change did not replace the drained pool');
     } finally {
       await pool.close();
     }

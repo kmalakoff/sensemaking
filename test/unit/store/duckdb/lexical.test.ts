@@ -1,13 +1,17 @@
 import assert from 'node:assert';
+import { rmSync, statSync, utimesSync } from 'node:fs';
 import { join } from 'node:path';
 import { DuckDBInstance } from '@duckdb/node-api';
 import type { SenseError } from '../../../../src/errors.ts';
+import { listFiles, parseFile } from '../../../../src/scan/index.ts';
 import { createConnection } from '../../../../src/store/duckdb/connection.ts';
 import { assertFtsReady, createLexicalIndex, markContentStale, prepareFts } from '../../../../src/store/duckdb/lexical.ts';
 import { ORDERED_BM25_MACRO, validateNativeMacroContract } from '../../../../src/store/duckdb/ordered-bm25.ts';
+import { duckdbDialect } from '../../../../src/store/duckdb/reconcile.ts';
 import { getMeta } from '../../../../src/store/shared.ts';
+import { withTransaction } from '../../../../src/store/transaction.ts';
 import type { Connection } from '../../../../src/store/types.ts';
-import { tmpTree } from '../../../lib/tree.ts';
+import { tmpTree, writeNote } from '../../../lib/tree.ts';
 
 async function makeConn(): Promise<Connection> {
   const instance = await DuckDBInstance.create(':memory:');
@@ -313,6 +317,125 @@ describe('queryLexical (duckdb): rejected FTS5 operators', () => {
 // PLAN 3.60: a fresh connection must trust meta.fts_stale over assuming stale, or every CLI
 // invocation pays a full rebuild regardless of whether content changed since the last one.
 describe('queryLexical (duckdb): fts staleness persists across connections (PLAN 3.60)', () => {
+  it('does not rebuild after mtime-only or unrelated-frontmatter reparses with identical searchable values', async () => {
+    const baseDir = tmpTree();
+    const cfg = { presets: { default: { include: ['**/*.md'] } }, queries: {} };
+    const file = join(baseDir, 'a.md');
+    writeNote(baseDir, 'a.md', { frontmatter: { title: 'Durable', summary: 'Summary', priority: 1 }, body: 'Unchanged body.' });
+    const opened = await openFileConn(join(tmpTree(), 'cache.duckdb'));
+    try {
+      await insertDoc(opened.conn, 'a.md', 'Durable', 'Summary', 'Unchanged body.');
+      await prepareFts(opened.conn);
+      const rebuilds = countFtsRebuilds(opened.conn);
+      const previousMtime = statSync(file).mtimeMs;
+      for (const metadataChange of [false, true]) {
+        if (metadataChange) writeNote(baseDir, 'a.md', { frontmatter: { title: 'Durable', summary: 'Summary', priority: 2 }, body: 'Unchanged body.' });
+        const mtime = previousMtime + (metadataChange ? 20_000 : 10_000);
+        utimesSync(file, mtime / 1000, mtime / 1000);
+        const doc = parseFile(listFiles(cfg, baseDir)[0]).doc;
+        assert.notEqual(doc.mtimeMs, previousMtime);
+        assert.equal(doc.data.priority, metadataChange ? 2 : 1);
+        await withTransaction(opened.conn, () => duckdbDialect.reconcileContent(opened.conn, ['a.md'], [doc], { files: [], reparsed: ['a.md'], added: [], vanished: [] }, cfg));
+        assert.equal(await getMeta(opened.conn, 'fts_stale'), '0');
+        await prepareFts(opened.conn);
+        assert.equal(rebuilds(), 0);
+        assert.deepEqual(await (await opened.conn.prepare('SELECT * FROM content')).all(), [{ path: 'a.md', title: 'Durable', summary: 'Summary', text: 'Unchanged body.' }]);
+        assert.deepEqual(
+          (await createLexicalIndex(opened.conn).query('durable', { ...BASE, limit: 10 })).map((row) => row.path),
+          ['a.md']
+        );
+      }
+    } finally {
+      opened.close();
+    }
+  });
+
+  it('an identical reparse preserves prior stale and missing-artifact recovery across connections', async () => {
+    for (const recovery of ['stale', 'missing']) {
+      const baseDir = tmpTree();
+      const cfg = { presets: { default: { include: ['**/*.md'] } }, queries: {} };
+      writeNote(baseDir, 'a.md', { frontmatter: { title: 'Recovery' }, body: 'Durable body.' });
+      const doc = parseFile(listFiles(cfg, baseDir)[0]).doc;
+      const dbPath = join(tmpTree(), 'cache.duckdb');
+      const first = await openFileConn(dbPath);
+      try {
+        await insertDoc(first.conn, 'a.md', 'Recovery', '', 'Durable body.');
+        await prepareFts(first.conn);
+        if (recovery === 'stale') await withTransaction(first.conn, () => markContentStale(first.conn));
+        else await first.conn.exec('DROP SCHEMA fts_main_content CASCADE');
+      } finally {
+        first.close();
+      }
+      const second = await openFileConn(dbPath);
+      try {
+        const rebuilds = countFtsRebuilds(second.conn);
+        await withTransaction(second.conn, () => duckdbDialect.reconcileContent(second.conn, ['a.md'], [doc], { files: [], reparsed: ['a.md'], added: [], vanished: [] }, cfg));
+        assert.equal(await getMeta(second.conn, 'fts_stale'), recovery === 'stale' ? '1' : '0');
+        await prepareFts(second.conn);
+        assert.equal(rebuilds(), 1, recovery);
+        assert.equal(await getMeta(second.conn, 'fts_stale'), '0');
+        assert.deepEqual(
+          (await createLexicalIndex(second.conn).query('recovery', { ...BASE, limit: 10 })).map((row) => row.path),
+          ['a.md']
+        );
+      } finally {
+        second.close();
+      }
+    }
+  });
+
+  it('rebuilds exactly once for genuine title, summary, body, addition and deletion changes', async () => {
+    const baseDir = tmpTree();
+    const cfg = { presets: { default: { include: ['**/*.md'] } }, queries: {} };
+    writeNote(baseDir, 'a.md', { frontmatter: { title: 'Original', summary: 'Initial' }, body: 'Starting body.' });
+    const opened = await openFileConn(join(tmpTree(), 'cache.duckdb'));
+    try {
+      await insertDoc(opened.conn, 'a.md', 'Original', 'Initial', 'Starting body.');
+      await prepareFts(opened.conn);
+      const rebuilds = countFtsRebuilds(opened.conn);
+      const changes = [
+        { title: 'Retitled', summary: 'Initial', body: 'Starting body.', query: 'retitled' },
+        { title: 'Retitled', summary: 'Resummarized', body: 'Starting body.', query: 'resummarized' },
+        { title: 'Retitled', summary: 'Resummarized', body: 'Replacement body.', query: 'replacement' },
+      ];
+      for (const [i, change] of changes.entries()) {
+        writeNote(baseDir, 'a.md', { frontmatter: { title: change.title, summary: change.summary }, body: change.body });
+        const doc = parseFile(listFiles(cfg, baseDir)[0]).doc;
+        await withTransaction(opened.conn, () => duckdbDialect.reconcileContent(opened.conn, ['a.md'], [doc], { files: [], reparsed: ['a.md'], added: [], vanished: [] }, cfg));
+        assert.equal(await getMeta(opened.conn, 'fts_stale'), '1');
+        await prepareFts(opened.conn);
+        assert.equal(rebuilds(), i + 1);
+        assert.deepEqual(
+          (await createLexicalIndex(opened.conn).query(change.query, { ...BASE, limit: 10 })).map((row) => row.path),
+          ['a.md']
+        );
+      }
+      writeNote(baseDir, 'b.md', { frontmatter: { title: 'Additional' }, body: 'Added body.' });
+      const addedFile = listFiles(cfg, baseDir).find((file) => file.relPath === 'b.md');
+      assert.ok(addedFile);
+      const added = parseFile(addedFile).doc;
+      await withTransaction(opened.conn, () => duckdbDialect.reconcileContent(opened.conn, [], [added], { files: [], reparsed: ['b.md'], added: ['b.md'], vanished: [] }, cfg));
+      await prepareFts(opened.conn);
+      assert.equal(rebuilds(), 4);
+      assert.deepEqual(
+        (await createLexicalIndex(opened.conn).query('additional', { ...BASE, limit: 10 })).map((row) => row.path),
+        ['b.md']
+      );
+      rmSync(join(baseDir, 'b.md'));
+      await withTransaction(opened.conn, () => duckdbDialect.reconcileContent(opened.conn, ['b.md'], [], { files: [], reparsed: [], added: [], vanished: ['b.md'] }, cfg));
+      await prepareFts(opened.conn);
+      assert.equal(rebuilds(), 5);
+      assert.deepEqual(
+        (await createLexicalIndex(opened.conn).query('additional', { ...BASE, limit: 10 })).map((row) => row.path),
+        []
+      );
+      assert.deepEqual(await (await opened.conn.prepare('SELECT * FROM content')).all(), [{ path: 'a.md', title: 'Retitled', summary: 'Resummarized', text: 'Replacement body.' }]);
+      assert.equal(await getMeta(opened.conn, 'fts_stale'), '0');
+    } finally {
+      opened.close();
+    }
+  });
+
   it('detects a missing durable artifact despite a clear marker and recovers on preparation', async () => {
     const conn = await makeConn();
     await insertDoc(conn, 'a.md', 'artifact', '', 'durable artifact');

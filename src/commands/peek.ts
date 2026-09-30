@@ -6,7 +6,8 @@ import { SenseError } from '../errors.ts';
 import { serialQuery } from '../lib/serial-query.ts';
 import type { Row } from '../output/output.ts';
 import type { Store } from '../store/types.ts';
-import { INTERNAL_COLUMNS, scopedPaths } from './scope.ts';
+import { INTERNAL_COLUMNS, materializeScope, scopedPaths } from './scope.ts';
+import { assertQuerySnapshot } from './snapshot.ts';
 
 // Note resolution shared by peek and path: an exact path, or a unique basename (case
 // insensitive, .md stripped).
@@ -20,41 +21,71 @@ export function resolveNote(paths: string[], arg: string): string {
   throw new SenseError('NOTE_NOT_FOUND', `no note matches "${arg}"`);
 }
 
+/** Structured, bounded metadata returned by the root {@link peek} API. */
 export interface Peek {
   path: string;
   tokens: number;
   frontmatter: Row;
-  // Set when the note's frontmatter was refused, so an empty frontmatter block reads as "did
-  // not parse" rather than "has none". Same reason `_parse_error` sits in the row.
+  /** Set when frontmatter parsing failed, distinguishing that case from an empty block. */
   parseError: string | null;
-  sections: Row[];
+  sections: PeekSection[];
   outbound: string[];
   backlinks: string[];
   unresolved: string[];
-  // Totals before truncation: a hub can have thousands of backlinks (or a note thousands of
-  // headings), and peek's whole point is bounded output.
+  /** Totals before each bounded list is truncated. */
   sectionsTotal: number;
   outboundTotal: number;
   backlinksTotal: number;
   unresolvedTotal: number;
-  // Bounded k-hop expansion beyond the immediate ring already shown by outbound/backlinks
-  // (depth starts at 2).
-  off: FeatureName[]; // disabled features whose blocks are omitted (not empty)
+  /** Disabled features whose result blocks are omitted rather than returned empty. */
+  off: FeatureName[];
+}
+
+export interface PeekSection {
+  level: number;
+  heading: string;
+  start_line: number;
+  end_line: number;
+  tokens: number;
 }
 
 const PEEK_LIST_LIMIT = 20;
 
-// peek: everything about one note except its prose -- frontmatter, outline with line
-// ranges + token estimates (so the follow-up Read is a range, not the file), links both ways.
+/**
+ * Returns indexed metadata for a note in scope. Exact excluded paths fail before scoped basename
+ * resolution; resolved neighbors stay in scope, while unresolved written targets remain visible.
+ */
 export function peek(store: Store, cfg: ResolvedConfig, pathArg: string, overrides: SearchOverrides = {}): Promise<Peek> {
   return serialQuery(store, () => peekIndexed(store, cfg, pathArg, overrides));
 }
 
 async function peekIndexed(store: Store, cfg: ResolvedConfig, pathArg: string, overrides: SearchOverrides): Promise<Peek> {
   return store.transaction(async () => {
+    await assertQuerySnapshot(store, cfg);
     const pathsStmt = await store.prepare('SELECT "path" FROM frontmatter');
     const paths = ((await pathsStmt.all()) as Array<{ path: string }>).map((r) => r.path);
-    const path = resolveNote(paths, pathArg);
+    const allowed = await scopedPaths(store, cfg, overrides);
+    if (paths.includes(pathArg) && !allowed.has(pathArg)) {
+      throw new SenseError('NOTE_NOT_FOUND', `note "${pathArg}" exists but is outside the current scope; change the preset, include/exclude patterns, or where condition`);
+    }
+    let path: string;
+    try {
+      path = resolveNote([...allowed], pathArg);
+    } catch (err) {
+      if (err instanceof SenseError && err.code === 'NOTE_NOT_FOUND') {
+        let excludedPath: string;
+        try {
+          excludedPath = resolveNote(paths, pathArg);
+        } catch (unscopedErr) {
+          if (unscopedErr instanceof SenseError && unscopedErr.code === 'NOTE_AMBIGUOUS') {
+            throw new SenseError('NOTE_NOT_FOUND', `no note in the current scope matches "${pathArg}"; indexed matches exist outside the scope, so change the preset, include/exclude patterns, or where condition`);
+          }
+          throw err;
+        }
+        throw new SenseError('NOTE_NOT_FOUND', `note "${excludedPath}" exists but is outside the current scope; change the preset, include/exclude patterns, or where condition`);
+      }
+      throw err;
+    }
 
     const rowStmt = await store.prepare('SELECT * FROM frontmatter WHERE "path" = ?');
     const row = (await rowStmt.get(path)) as Row;
@@ -65,23 +96,23 @@ async function peekIndexed(store: Store, cfg: ResolvedConfig, pathArg: string, o
     }
 
     let sectionsTotal = 0;
-    let sections: Row[] = [];
+    let sections: PeekSection[] = [];
     if (featureEnabled(cfg, 'sections')) {
       sectionsTotal = ((await (await store.prepare('SELECT COUNT(*) AS n FROM sections WHERE "path" = ?')).get(path)) as { n: number }).n;
-      sections = (await (await store.prepare('SELECT level, heading, start_line, end_line, tokens FROM sections WHERE "path" = ? ORDER BY idx LIMIT ?')).all(path, PEEK_LIST_LIMIT)) as Row[];
+      sections = (await (await store.prepare('SELECT level, heading, start_line, end_line, tokens FROM sections WHERE "path" = ? ORDER BY idx LIMIT ?')).all(path, PEEK_LIST_LIMIT)) as PeekSection[];
     }
 
     let outbound: string[] = [];
     let backlinks: string[] = [];
     let unresolved: string[] = [];
     let backlinksTotal = 0;
-    await scopedPaths(store, cfg, overrides); // validates --preset/--where/--include/--exclude even though peek's own output isn't scope-filtered
     if (featureEnabled(cfg, 'links')) {
-      const out = (await (await store.prepare('SELECT target, dst FROM links WHERE src = ? AND (dst IS NULL OR dst != src) ORDER BY target')).all(path)) as Array<{ target: string; dst: string | null }>;
-      outbound = [...new Set(out.filter((l) => l.dst !== null).map((l) => l.dst as string))];
+      await materializeScope(store, '_peek_scope', allowed);
+      const out = (await (await store.prepare('SELECT target, dst FROM links WHERE src = ? AND (dst IS NULL OR (dst != src AND dst IN (SELECT "path" FROM _peek_scope))) ORDER BY target')).all(path)) as Array<{ target: string; dst: string | null }>;
+      outbound = [...new Set(out.filter((l): l is { target: string; dst: string } => l.dst !== null).map((l) => l.dst))];
       unresolved = out.filter((l) => l.dst === null).map((l) => l.target);
-      backlinksTotal = ((await (await store.prepare('SELECT COUNT(DISTINCT src) AS n FROM links WHERE dst = ? AND src != dst')).get(path)) as { n: number }).n;
-      backlinks = ((await (await store.prepare('SELECT DISTINCT src FROM links WHERE dst = ? AND src != dst ORDER BY src LIMIT ?')).all(path, PEEK_LIST_LIMIT)) as Array<{ src: string }>).map((r) => r.src);
+      backlinksTotal = ((await (await store.prepare('SELECT COUNT(DISTINCT src) AS n FROM links WHERE dst = ? AND src != dst AND src IN (SELECT "path" FROM _peek_scope)')).get(path)) as { n: number }).n;
+      backlinks = ((await (await store.prepare('SELECT DISTINCT src FROM links WHERE dst = ? AND src != dst AND src IN (SELECT "path" FROM _peek_scope) ORDER BY src LIMIT ?')).all(path, PEEK_LIST_LIMIT)) as Array<{ src: string }>).map((r) => r.src);
     }
 
     // content.text is the stripped body already computed at reconcile time (no extra file read),

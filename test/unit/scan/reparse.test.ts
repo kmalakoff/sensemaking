@@ -6,7 +6,7 @@ import { SenseError } from '../../../src/errors.ts';
 import { FEATURES } from '../../../src/features/index.ts';
 import type { Feature } from '../../../src/features/types.ts';
 import { listFiles, parseFile } from '../../../src/scan/index.ts';
-import { reparseFiles } from '../../../src/scan/reparse.ts';
+import { PARSE_BYTES_PER_WORKER, type ReparseOptions, reparseFiles } from '../../../src/scan/reparse.ts';
 import { reviveError, serializeError } from '../../../src/scan/worker-error.ts';
 import { tmpTree, writeNote } from '../../lib/tree.ts';
 import { liveWorkerHandles } from '../../lib/worker-handles.ts';
@@ -111,20 +111,23 @@ describe('reparseFiles', () => {
     assert.equal(called, false);
   });
 
-  // threshold: 0 forces every file through the real tinypool pool, real worker threads, no
-  // mocking. The two cases probe the shipped boundary itself: 199 files stay serial, 200 pool -- without them the constant could move to 2000, or the comparison flip to >, with the suite still green.
-  describe('the shipped dispatch threshold (200 files)', () => {
+  // threshold: 0 forces files through the real tinypool pool and real worker threads.
+  describe('the shipped byte dispatch policy', () => {
     // Pooling is visible while it runs, not after: the pool holds one MessagePort per thread
     // and releases them on destroy, so the check samples during the dispatch.
-    async function pooledDuring(fileCount: number): Promise<boolean> {
+    async function pooledDuring(sizes: number[], options: ReparseOptions = {}): Promise<boolean> {
       const baseDir = tmpTree();
-      for (let i = 0; i < fileCount; i++) writeNote(baseDir, `n${String(i).padStart(4, '0')}.md`);
+      for (const [i, size] of sizes.entries()) writeFileSync(join(baseDir, `n${String(i).padStart(4, '0')}.md`), 'x'.repeat(size));
       const files = listFiles(cfg, baseDir);
-      assert.equal(files.length, fileCount, 'fixture did not produce the intended file count');
+      assert.deepEqual(
+        files.map((file) => file.size),
+        sizes,
+        'fixture did not produce the intended byte sizes'
+      );
 
       const baseline = liveWorkerHandles();
       let sawWorkers = false;
-      const dispatch = reparseFiles(files, [], cfg, new Set());
+      const dispatch = reparseFiles(files, [], cfg, new Set(), undefined, options);
       const sampler = setInterval(() => {
         if (liveWorkerHandles() > baseline) sawWorkers = true;
       }, 1);
@@ -136,12 +139,43 @@ describe('reparseFiles', () => {
       return sawWorkers;
     }
 
-    it('stays serial one file below the threshold', async () => {
-      assert.equal(await pooledDuring(199), false, '199 files spun up worker threads');
+    it('keeps the demonstrated 200-small-note shape serial', async () => {
+      assert.equal(await pooledDuring(Array.from({ length: 200 }, () => 1)), false, '200 tiny files spun up worker threads');
     });
 
-    it('pools at the threshold', async () => {
-      assert.equal(await pooledDuring(200), true, '200 files did not spin up worker threads');
+    it('stays serial one byte below the two-worker boundary', async () => {
+      assert.equal(await pooledDuring([PARSE_BYTES_PER_WORKER, PARSE_BYTES_PER_WORKER - 1]), false, 'sub-boundary bytes spun up worker threads');
+    });
+
+    it('pools at the two-worker byte boundary with only two large files', async () => {
+      assert.equal(await pooledDuring([PARSE_BYTES_PER_WORKER, PARSE_BYTES_PER_WORKER], { maxWorkers: 2 }), true, 'two large files did not spin up worker threads');
+    });
+
+    it('stays serial when one dominant file leaves less than one byte share for companions', async () => {
+      const sizes = [PARSE_BYTES_PER_WORKER * 4, ...Array.from({ length: 63 }, () => 1024)];
+      assert.equal(await pooledDuring(sizes, { maxWorkers: 8 }), false, 'a dominant file with a sub-share remainder spun up worker threads');
+    });
+
+    it('stays serial one byte below the companion-share boundary', async () => {
+      assert.equal(await pooledDuring([PARSE_BYTES_PER_WORKER * 4, PARSE_BYTES_PER_WORKER - 1], { maxWorkers: 2 }), false, 'a sub-boundary companion spun up worker threads');
+    });
+
+    it('pools at the companion-share boundary', async () => {
+      assert.equal(await pooledDuring([PARSE_BYTES_PER_WORKER * 4, PARSE_BYTES_PER_WORKER], { maxWorkers: 2 }), true, 'a full-share companion did not spin up worker threads');
+    });
+
+    it('pools a balanced four-file workload with two aggregate byte shares', async () => {
+      const halfShare = PARSE_BYTES_PER_WORKER / 2;
+      assert.equal(await pooledDuring([halfShare, halfShare, halfShare, halfShare], { maxWorkers: 2 }), true, 'balanced files did not spin up worker threads');
+    });
+
+    it('does not create workers for empty input or one large file', async () => {
+      assert.equal(await pooledDuring([]), false, 'empty input spun up worker threads');
+      assert.equal(await pooledDuring([PARSE_BYTES_PER_WORKER * 2]), false, 'one file spun up an idle worker');
+    });
+
+    it('stays serial when only one worker is available', async () => {
+      assert.equal(await pooledDuring([PARSE_BYTES_PER_WORKER, PARSE_BYTES_PER_WORKER], { maxWorkers: 1 }), false, 'one-worker execution created a pool');
     });
   });
 
@@ -181,11 +215,14 @@ describe('reparseFiles', () => {
     // completion order cannot be file order. A unique frontmatter key per file makes newColumns a direct readout of collection order -- collect-as-complete scrambles it.
     it('preserves file order when completion order cannot be file order', async () => {
       const baseDir = tmpTree();
-      writeNote(baseDir, 'f00.md', { frontmatter: { k00: 1 }, body: 'word '.repeat(200_000) });
-      for (let i = 1; i < 60; i++) writeNote(baseDir, `f${String(i).padStart(2, '0')}.md`, { frontmatter: { [`k${String(i).padStart(2, '0')}`]: 1 } });
+      writeNote(baseDir, 'f00.md', { frontmatter: { k00: 1, created: '2024-13-40T99:99' }, body: 'word '.repeat(200_000) });
+      for (let i = 1; i < 60; i++) {
+        const key = `k${String(i).padStart(2, '0')}`;
+        writeNote(baseDir, `f${String(i).padStart(2, '0')}.md`, { frontmatter: i === 59 ? { [key]: 1, path: 'reserved-collision' } : { [key]: 1 } });
+      }
       const files = listFiles(cfg, baseDir);
 
-      const result = await reparseFiles(files, [], cfg, new Set(), undefined, { threshold: 0, maxWorkers: 4 });
+      const result = await reparseFiles(files, [], cfg, new Set(['created']), undefined, { threshold: 0, maxWorkers: 4 });
 
       assert.deepEqual(
         result.docs.map((d) => d.relPath),
@@ -195,6 +232,7 @@ describe('reparseFiles', () => {
         result.newColumns,
         files.map((f) => `k${f.relPath.slice(1, 3)}`)
       );
+      assert.deepEqual(result.warnings, ['warning: f00.md: created is not a valid date (2024-13-40T99:99), so it is invisible to every date comparison', 'warning: f59.md has a frontmatter key named "path", which is reserved; ignoring it']);
     });
 
     // The pooled path cannot send a Feature across the thread boundary, so it sends the names and
@@ -212,16 +250,26 @@ describe('reparseFiles', () => {
       assert.deepEqual(pooled.docs[0].extracted, serial.docs[0].extracted);
     });
 
-    it('releases every worker handle when a dispatch fails, not only when it succeeds', async () => {
+    it('continues a batch after per-file failures, aggregates them, and releases every worker', async () => {
       const baseDir = tmpTree();
-      writeNote(baseDir, 'gone.md');
+      for (let i = 0; i < 10; i++) writeNote(baseDir, `n${i}.md`);
       const files = listFiles(cfg, baseDir);
       const { rmSync } = await import('node:fs');
       rmSync(files[0].absPath);
+      rmSync(files[1].absPath);
       const baseline = liveWorkerHandles();
+      const ticks: number[] = [];
 
-      await assert.rejects(reparseFiles(files, [], cfg, new Set(), undefined, { threshold: 0, maxWorkers: 2 }));
+      await assert.rejects(
+        reparseFiles(files, [], cfg, new Set(), (done) => ticks.push(done), { threshold: 0, maxWorkers: 2 }),
+        (err) => {
+          assert.ok(err instanceof AggregateError);
+          assert.equal(err.errors.length, 2);
+          return true;
+        }
+      );
 
+      assert.deepEqual(ticks, [1, 2, 3, 4, 5, 6, 7, 8], 'successful files after failures did not report progress');
       assert.equal(liveWorkerHandles(), baseline, 'pool still holds worker handles after a failed dispatch');
     });
 

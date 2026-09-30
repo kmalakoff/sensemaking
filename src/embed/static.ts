@@ -3,7 +3,7 @@ import Module from 'node:module';
 import { join } from 'node:path';
 import { SenseError } from '../errors.ts';
 import { downloadModel, isDownloadable, MODEL_FILENAMES, MODEL_FILES, modelDir, readLanguages } from './store.ts';
-import type { EmbedProvider } from './types.ts';
+import type { EmbedCallOptions, EmbedProvider } from './types.ts';
 
 const BATCH_CAP = 64;
 
@@ -67,5 +67,18 @@ export async function staticProvider(model: string, root?: string): Promise<Embe
   }
 
   // Symmetric model: document and query embedding are the same call.
-  return { id: `static:${model}`, dims, batchCap: BATCH_CAP, languages, embedDocuments: async (texts) => texts.map(one), embedQuery: async (text) => one(text) };
+  return {
+    id: `static:${model}`,
+    dims,
+    batchCap: BATCH_CAP,
+    languages,
+    embedDocuments: async (texts: string[], options?: EmbedCallOptions) => {
+      options?.signal?.throwIfAborted();
+      return texts.map(one);
+    },
+    embedQuery: async (text: string, options?: EmbedCallOptions) => {
+      options?.signal?.throwIfAborted();
+      return one(text);
+    },
+  };
 }

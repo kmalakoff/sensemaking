@@ -19,8 +19,8 @@ export interface ReparseResult {
 }
 
 export interface ReparseOptions {
-  // Overrides DEFAULT_THRESHOLD below, so tests can force either dispatch mode without
-  // needing thousands of fixture files. Internal: no caller in src/ passes it.
+  // Overrides PARSE_BYTES_PER_WORKER below. Zero forces worker dispatch in tests.
+  // Internal: no caller in src/ passes it.
   threshold?: number;
   // Overrides DEFAULT_MAX_WORKERS below.
   maxWorkers?: number;
@@ -29,9 +29,9 @@ export interface ReparseOptions {
   pool?: ParsePool;
 }
 
-// Measured 2026-08-29 on a 14-core Apple M4 Pro: serial and pooled cross between 160-180 files
-// (pool fixed cost ~85-100ms), so 200 keeps margin. 8 workers ties 10 in a 6,566-file sweep; 12+ trends worse.
-const DEFAULT_THRESHOLD = 200;
+// The 2026-09-26 comparison kept ~326 KiB updates serial and 5.86 MiB work pooled.
+// Companion byte shares prevent one dominant file from selecting workers for a tiny remainder.
+export const PARSE_BYTES_PER_WORKER = 512 * 1024;
 const DEFAULT_MAX_WORKERS = 8;
 
 // Per-file feature filtering, shared by the serial loop (reads `features` from the caller) and
@@ -56,24 +56,50 @@ function reparseSerial(files: FileStat[], features: Feature[], cfg: Config, onPa
 async function reparsePooled(files: FileStat[], features: Feature[], cfg: Config, onParsed: ((done: number) => void) | undefined, maxWorkers: number, pool: ParsePool | undefined): Promise<FileResult[]> {
   if (pool) return pool.run(files, features, cfg, onParsed, maxWorkers);
   const ephemeral = new ParsePool();
+  let results: FileResult[] | undefined;
+  let dispatchError: unknown;
+  let dispatchFailed = false;
   try {
-    const results = await ephemeral.run(files, features, cfg, onParsed, maxWorkers);
-    await ephemeral.close();
-    return results;
+    results = await ephemeral.run(files, features, cfg, onParsed, maxWorkers);
   } catch (err) {
-    // Tear the pool down before rethrowing, but a close failure must not mask the parse
-    // failure that caused it -- not a `finally`, for that reason.
-    await ephemeral.close().catch(() => {});
-    throw err;
+    dispatchFailed = true;
+    dispatchError = err;
   }
+  try {
+    await ephemeral.close();
+  } catch (closeError) {
+    if (dispatchFailed) throw new AggregateError([dispatchError, closeError], 'parse dispatch and pool close failed');
+    throw closeError;
+  }
+  if (dispatchFailed) throw dispatchError;
+  if (results === undefined) throw new Error('parse dispatch finished without results');
+  return results;
+}
+
+function parseWorkerCount(files: FileStat[], bytesPerWorker: number, maxWorkers: number): number {
+  if (files.length === 0) return 0;
+  const available = Math.max(1, Math.min(maxWorkers, files.length));
+  if (bytesPerWorker === 0) return available;
+  let totalBytes = 0;
+  let largestBytes = 0;
+  for (const file of files) {
+    totalBytes += file.size;
+    largestBytes = Math.max(largestBytes, file.size);
+  }
+  const aggregateWorkers = Math.floor(totalBytes / bytesPerWorker);
+  // The largest file is indivisible, so extra workers need full shares among the remainder.
+  const companionWorkers = 1 + Math.floor((totalBytes - largestBytes) / bytesPerWorker);
+  return Math.min(available, aggregateWorkers, companionWorkers);
 }
 
 // `onParsed` receives the running count (1-based) after each file, mirroring a Progress.tick
 // call; pass one in to keep progress reporting working without this module owning a reporter.
 export async function reparseFiles(files: FileStat[], features: Feature[], cfg: Config, knownColumns: ReadonlySet<string>, onParsed?: (done: number) => void, options: ReparseOptions = {}): Promise<ReparseResult> {
-  const threshold = options.threshold ?? DEFAULT_THRESHOLD;
+  const threshold = options.threshold ?? PARSE_BYTES_PER_WORKER;
   const maxWorkers = options.maxWorkers ?? Math.min(DEFAULT_MAX_WORKERS, availableParallelism());
-  const results = files.length >= threshold ? await reparsePooled(files, features, cfg, onParsed, maxWorkers, options.pool) : reparseSerial(files, features, cfg, onParsed);
+  const workerCount = parseWorkerCount(files, threshold, maxWorkers);
+  const pooled = files.length > 0 && (threshold === 0 || workerCount >= 2);
+  const results = pooled ? await reparsePooled(files, features, cfg, onParsed, workerCount, options.pool) : reparseSerial(files, features, cfg, onParsed);
 
   const docs: ParsedDoc[] = [];
   const warnings: string[] = [];

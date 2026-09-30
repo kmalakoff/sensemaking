@@ -47,16 +47,19 @@ function validateRequirements(cfg: ResolvedConfig, entry: StoreEntry, requiremen
 }
 
 export async function openStoreFor(cfg: ResolvedConfig, options: InternalOpenOptions): Promise<OpenResult> {
+  options.signal?.throwIfAborted();
   const entry = entryFor(storeName(cfg));
   validateRequirements(cfg, entry, options.requirements ?? new Set<BuildRequirement>(['core']));
   return entry.open(cfg, options);
 }
 
+/** Opens a store through the root `open` API, preparing capabilities unless `build` is `false`. */
 export async function openStore(cfg: ResolvedConfig, options: OpenOptions = {}): Promise<OpenResult> {
   const buildEnabled = options.build !== false;
   return openStoreFor(cfg, {
     build: buildEnabled,
     requirements: buildEnabled ? requirementsFor(cfg) : new Set<BuildRequirement>(['core']),
+    signal: options.signal,
   });
 }
 
@@ -75,8 +78,12 @@ export async function lexicalReadiness(cfg: ResolvedConfig): Promise<{ ready: bo
   }
 }
 
+/** Options for the root `build(config, options)` API. */
 export interface BuildOptions {
+  /** Recreates the derived cache before building. */
   force?: boolean;
+  /** Cancels supported provider I/O and stops between phases after active native work finishes. */
+  signal?: AbortSignal;
 }
 
 export interface BuildResult {
@@ -87,9 +94,11 @@ export interface BuildResult {
   stages: Stages;
 }
 
+/** Builds every configured capability, waiting for active native work and cleanup before settling. */
 export async function buildIndex(cfg: ResolvedConfig, options: BuildOptions = {}): Promise<BuildResult> {
+  options.signal?.throwIfAborted();
   if (options.force) clearCache(cfg);
-  const opened = await openStoreFor(cfg, { build: true, requirements: requirementsFor(cfg) });
+  const opened = await openStoreFor(cfg, { build: true, requirements: requirementsFor(cfg), signal: options.signal });
   try {
     const { store: _store, ...result } = opened;
     return result;

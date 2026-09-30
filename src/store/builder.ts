@@ -1,4 +1,6 @@
-import { type Config, featureEnabled } from '../config/index.ts';
+import { channel } from 'node:diagnostics_channel';
+import { type Config, featureEnabled, featureSignature, type ResolvedConfig } from '../config/index.ts';
+import { SenseError } from '../errors.ts';
 import { embed } from '../features/embed.ts';
 import { FEATURES } from '../features/index.ts';
 import { rank } from '../features/rank.ts';
@@ -6,181 +8,343 @@ import type { ReconcileDelta } from '../features/types.ts';
 import { listFiles } from '../scan/index.ts';
 import { ParsePool } from '../scan/pool.ts';
 import { reparseFiles } from '../scan/reparse.ts';
-import type { EmbedChangeKind } from './embed-scope.ts';
-import type { FeatureToggle } from './feature-scope.ts';
-import { NARROW_FEATURE_TABLE } from './feature-scope.ts';
-import { type ReconcilePaths, reconcile } from './reconcile.ts';
-import { getColumns } from './shared.ts';
+import { classifyEmbedChange } from './embed-scope.ts';
+import { classifyFeatureToggles, type FeatureToggle, isFeatureOnlyChange, NARROW_FEATURE_TABLE } from './feature-scope.ts';
+import { forcedPresetPaths, isPresetOnlyChange } from './preset-scope.ts';
+import { CORE_GENERATION_META_KEY, CORE_READY_META_KEY, FEATURE_SIGNATURE_META_KEY } from './readiness.ts';
+import { createReconcileTiming, prepareReconcile, type ReconcilePaths, type ReconcileSnapshot, type ReconcileTiming, readReconcileSnapshot } from './reconcile.ts';
+import { setMeta } from './shared.ts';
+import { changedSignatureKeys, embedIdentityAdopted, signatureDiff } from './signature.ts';
 import type { Stages } from './stages.ts';
 import { withTransaction } from './transaction.ts';
 import type { Connection, ReconcileDialect } from './types.ts';
 
-// Owns bringing a store's index current: the write half `Store` (types.ts) deliberately does not
-// carry. A one-shot open calls build() once; a watcher calls it repeatedly on the same instance.
+interface BuildResult {
+  parsed: number;
+  warnings: string[];
+  stages: Stages;
+  messages: string[];
+}
+
 export interface Builder {
-  // forcedPaths (open.ts's preset-only narrow rebuild) applies to this call alone, not future ones.
-  build(forcedPaths?: ReadonlySet<string>): Promise<{ parsed: number; warnings: string[]; stages: Stages }>;
-  // Repairs an incomplete generation in place, including state owned by disabled features.
-  recover(): Promise<{ parsed: number; warnings: string[]; stages: Stages }>;
-  // Narrow embed invalidation (open.ts, embed-scope.ts's classifyEmbedChange): 'model' nulls every
-  // vector/scale in place; 'chunk' rebuilds every embedding row. Neither touches another table.
-  invalidate(kind: EmbedChangeKind): Promise<{ parsed: number }>;
-  // Narrow feature-toggle invalidation (open.ts, feature-scope.ts's classifyFeatureToggles): a
-  // toggle drops (or, turning back on, fully re-derives) that feature's own table; rank instead
-  // nulls or recomputes its `_rank` column, since rows written while a feature was off are
-  // untrustworthy (reconcile.ts's activeFeatures skips a disabled feature's hooks entirely).
-  invalidateFeatures(toggles: FeatureToggle[]): Promise<{ parsed: number }>;
-  // Releases the parse worker pool, if this lifetime ever created one; never the connection.
+  build(): Promise<BuildResult>;
   close(): Promise<void>;
-  // Pools this lifetime has constructed, so reuse is observable rather than inferred.
   readonly poolsCreated: number;
 }
 
-// 'model': the provider or model name moved but chunk boundaries did not, so only the vector
-// values are stale. No reparse, and no table but embeddings is touched.
-async function nullEmbedVectors(conn: Connection, dialect: ReconcileDialect): Promise<{ parsed: number }> {
-  await withTransaction(conn, () => conn.exec('UPDATE embeddings SET vector = NULL, scale = NULL'), dialect.beginMode());
-  return { parsed: 0 };
+interface CoreBaseline {
+  schemaVersion: string | null;
+  features: string | null;
+  ready: string | null;
+  generation: string | null;
 }
 
-// 'chunk': chunkTokens or the chunk version moved, so chunk boundaries genuinely changed. Rebuilds
-// every embedding row through the embed feature's own remove/store, touching no other table.
-async function rebuildEmbeddings(conn: Connection, cfg: Config, baseDir: string, dialect: ReconcileDialect, pool: ParsePool): Promise<{ parsed: number }> {
-  const existingStmt = await conn.prepare('SELECT "path" FROM frontmatter');
-  const existingPaths = new Set((await existingStmt.all()).map((r) => (r as { path: string }).path));
-  // A file added since the last build has no row yet; leaving it for build() to insert avoids a
-  // primary-key collision between this INSERT and build()'s own insert for the same new file.
-  const files = listFiles(cfg, baseDir).filter((f) => f.embed && existingPaths.has(f.relPath));
-  if (files.length === 0) return { parsed: 0 };
+interface PlanningSnapshot {
+  baseline: CoreBaseline;
+  reconcile: ReconcileSnapshot;
+  tables: Set<string>;
+}
 
+interface PreparedInvalidation {
+  mutated: boolean;
+  parsed: number;
+  apply(conn: Connection): Promise<void>;
+}
+
+interface BuildClassification {
+  embedKind: ReturnType<typeof classifyEmbedChange>;
+  featureToggles: FeatureToggle[];
+  forcedPaths?: ReadonlySet<string>;
+  fullRebuild: boolean;
+  messages: string[];
+}
+
+type EnsureFeatureSchema = (cfg: ResolvedConfig) => Promise<void>;
+
+class StaleBuildPlan extends Error {}
+
+const buildPlan = channel('sensemaking.store.build-plan');
+const SCHEMA_VERSION_META_KEY = 'schema_version';
+
+async function readCoreBaseline(conn: Connection): Promise<CoreBaseline> {
+  const keys = [SCHEMA_VERSION_META_KEY, FEATURE_SIGNATURE_META_KEY, CORE_READY_META_KEY, CORE_GENERATION_META_KEY];
+  const stmt = await conn.prepare(`SELECT key, value FROM meta WHERE key IN (${keys.map(() => '?').join(', ')})`);
+  const values = new Map(((await stmt.all(...keys)) as Array<{ key: string; value: string }>).map((row) => [row.key, row.value]));
+  return {
+    schemaVersion: values.get(SCHEMA_VERSION_META_KEY) ?? null,
+    features: values.get(FEATURE_SIGNATURE_META_KEY) ?? null,
+    ready: values.get(CORE_READY_META_KEY) ?? null,
+    generation: values.get(CORE_GENERATION_META_KEY) ?? null,
+  };
+}
+
+function sameBaseline(a: CoreBaseline, b: CoreBaseline): boolean {
+  return a.schemaVersion === b.schemaVersion && a.features === b.features && a.ready === b.ready && a.generation === b.generation;
+}
+
+function nextGeneration(value: string | null): string {
+  const current = value === null ? 0 : Number(value);
+  if (!Number.isSafeInteger(current) || current < 0 || current === Number.MAX_SAFE_INTEGER) throw new SenseError('INDEX_NOT_READY', `the durable core generation is invalid (${value ?? 'missing'}); run sense build --force to recreate the derived index`);
+  return String(current + 1);
+}
+
+async function readPlanningSnapshot(conn: Connection, timing: ReconcileTiming): Promise<PlanningSnapshot> {
+  return withTransaction(conn, async () => {
+    const baseline = await readCoreBaseline(conn);
+    const reconcile = await readReconcileSnapshot(conn, timing);
+    const tablesStmt = await conn.prepare("SELECT name FROM sqlite_master WHERE type = 'table'");
+    const tables = new Set(((await tablesStmt.all()) as Array<{ name: string }>).map((row) => row.name));
+    return { baseline, reconcile, tables };
+  });
+}
+
+function activeSchemaMissing(snapshot: PlanningSnapshot, cfg: Config): boolean {
+  for (const feature of FEATURES) {
+    if (!featureEnabled(cfg, feature.name)) continue;
+    if (feature.name === 'rank') {
+      if (!snapshot.reconcile.seenColumns.has('_rank')) return true;
+      continue;
+    }
+    const table = feature.name === 'embed' ? 'embeddings' : NARROW_FEATURE_TABLE[feature.name];
+    if (table && !snapshot.tables.has(table)) return true;
+  }
+  return false;
+}
+
+function classifyBuild(snapshot: PlanningSnapshot, cfg: Config, paths: ReconcilePaths, wanted: string): BuildClassification {
+  const before = snapshot.baseline.features;
+  const recover = snapshot.baseline.ready === '0';
+  const messages: string[] = [];
+  if (recover) messages.push('sense: recovering an incomplete index generation in place');
+  if (!recover && before !== null && before === wanted && activeSchemaMissing(snapshot, cfg)) {
+    messages.push('sense: recovering missing feature schema in place');
+    return { embedKind: null, featureToggles: [], fullRebuild: true, messages };
+  }
+  if (recover || before === null || before === wanted) return { embedKind: null, featureToggles: [], fullRebuild: recover, messages };
+
+  const changedKeys = changedSignatureKeys(before, wanted);
+  if (changedKeys.size === 1 && changedKeys.has('embed') && embedIdentityAdopted(before, wanted)) {
+    messages.push("sense: recorded the embedding model's resolved identity; vectors are unaffected");
+    return { embedKind: null, featureToggles: [], fullRebuild: false, messages };
+  }
+
+  const embedKind = changedKeys.size === 1 && changedKeys.has('embed') ? classifyEmbedChange(before, wanted) : null;
+  if (embedKind !== null) {
+    messages.push(embedKind === 'model' ? 'sense: config change (embed settings) invalidates only the stale vectors' : 'sense: config change (embed settings) rebuilds only the embeddings it affects');
+    return { embedKind, featureToggles: [], fullRebuild: false, messages };
+  }
+
+  const presetForced = isPresetOnlyChange(changedKeys) ? forcedPresetPaths(cfg, paths.rootDir, before, changedKeys) : null;
+  if (presetForced !== null) {
+    messages.push(`sense: config change (${signatureDiff(before, wanted)}) reparses only the files it affects`);
+    return { embedKind: null, featureToggles: [], forcedPaths: presetForced, fullRebuild: false, messages };
+  }
+
+  const toggles = isFeatureOnlyChange(changedKeys) ? classifyFeatureToggles(before, wanted, changedKeys) : null;
+  if (toggles !== null) {
+    messages.push(`sense: config change (${signatureDiff(before, wanted)}) reparses only the feature it affects`);
+    return { embedKind: null, featureToggles: toggles, fullRebuild: false, messages };
+  }
+
+  messages.push(`sense: config change (${signatureDiff(before, wanted)}) rebuilds the index`);
+  return { embedKind: null, featureToggles: [], fullRebuild: true, messages };
+}
+
+async function prepareEmbedInvalidation(kind: NonNullable<BuildClassification['embedKind']>, snapshot: PlanningSnapshot, cfg: Config, paths: ReconcilePaths, pool: ParsePool): Promise<PreparedInvalidation> {
+  if (kind === 'model') {
+    return { mutated: true, parsed: 0, apply: (conn) => conn.exec('UPDATE embeddings SET vector = NULL, scale = NULL') };
+  }
+
+  const existing = new Set(snapshot.reconcile.existingRows.map((row) => row.path));
+  const files = listFiles(cfg, paths.rootDir).filter((file) => file.embed && existing.has(file.relPath));
   const { docs } = await reparseFiles(files, [embed], cfg, new Set(), undefined, { pool });
-  const paths = docs.map((d) => d.relPath);
-  const delta: ReconcileDelta = { files, reparsed: paths, added: [], vanished: [] };
-  await withTransaction(
-    conn,
-    async () => {
-      await embed.remove?.(conn, paths, delta);
+  const pathsChanged = docs.map((doc) => doc.relPath);
+  const delta: ReconcileDelta = { files, reparsed: pathsChanged, added: [], vanished: [] };
+  return {
+    mutated: true,
+    parsed: docs.length,
+    async apply(conn) {
+      // Chunk changes can also change the model. Clear every affected row even when
+      // its text identity happens to match under the new configuration.
+      if (pathsChanged.length > 0)
+        await conn.runBatch(
+          'DELETE FROM embeddings WHERE "path" = ?',
+          pathsChanged.map((path) => [path])
+        );
       await embed.store?.(
         conn,
-        docs.map((d) => ({ path: d.relPath, extracted: d.extracted.embed })),
+        docs.map((doc) => ({ path: doc.relPath, extracted: doc.extracted.embed })),
         delta
       );
     },
-    dialect.beginMode()
-  );
-  return { parsed: docs.length };
+  };
 }
 
-// One feature's own table, dropped and (turning on) fully re-derived across every indexed file.
-// Rows left over from before this feature was disabled are untrustworthy by construction (files
-// added, edited, or deleted got no remove/store for it), so this never diffs against them --
-// dropping every row and reparsing the whole tree is the only safe path back to consistent state.
-async function invalidateFeatureTable(conn: Connection, cfg: Config, baseDir: string, dialect: ReconcileDialect, pool: ParsePool, toggle: FeatureToggle): Promise<{ parsed: number }> {
-  const table = NARROW_FEATURE_TABLE[toggle.name];
-  const feature = FEATURES.find((f) => f.name === toggle.name);
-  if (!feature) throw new Error(`invalidateFeatureTable: no registered feature named "${toggle.name}"`);
-
-  if (!toggle.turnedOn) {
-    await withTransaction(conn, () => conn.exec(`DELETE FROM ${table}`), dialect.beginMode());
-    return { parsed: 0 };
-  }
-
-  const files = listFiles(cfg, baseDir);
-  const { docs } = await reparseFiles(files, [feature], cfg, new Set(), undefined, { pool });
-  const docsForFeature = docs.map((d) => ({ path: d.relPath, extracted: d.extracted[feature.name] }));
-  const paths = docs.map((d) => d.relPath);
-  // Every path counts as added, not just touched: nothing stale to diff against. Links resolves
-  // dst inside store() itself when added.length equals files.length (a cold build).
-  const delta: ReconcileDelta = { files, reparsed: paths, added: paths, vanished: [] };
-  await withTransaction(
-    conn,
-    async () => {
-      await conn.exec(`DELETE FROM ${table}`);
-      await feature.store?.(conn, docsForFeature, delta);
-      await feature.afterReconcile?.(conn, delta);
-    },
-    dialect.beginMode()
-  );
-  return { parsed: docs.length };
-}
-
-// rank has no table of its own: frontmatter._rank is the only state it owns. Guarded on column
-// presence, since links can toggle off while rank has never been enabled for this tree.
-async function nullRank(conn: Connection, dialect: ReconcileDialect): Promise<void> {
-  const columns = await getColumns(conn);
-  if (!columns.has('_rank')) return;
-  await withTransaction(conn, () => conn.exec('UPDATE frontmatter SET "_rank" = NULL'), dialect.beginMode());
-}
-
-// Whole-tree and reparse-free: PageRank is computed from the links table, not from files, so
-// turning rank back on needs no reparseFiles pass at all.
-async function rerunRank(conn: Connection, dialect: ReconcileDialect): Promise<void> {
-  const delta: ReconcileDelta = { files: [], reparsed: [], added: [], vanished: [] };
-  await withTransaction(
-    conn,
-    async () => {
-      await rank.afterReconcile?.(conn, delta);
-    },
-    dialect.beginMode()
-  );
-}
-
-async function invalidateFeatureToggles(conn: Connection, cfg: Config, baseDir: string, dialect: ReconcileDialect, pool: ParsePool, toggles: FeatureToggle[]): Promise<{ parsed: number }> {
-  const byName = new Map(toggles.map((toggle) => [toggle.name, toggle]));
+async function prepareFeatureInvalidation(toggles: FeatureToggle[], snapshot: PlanningSnapshot, cfg: Config, paths: ReconcilePaths, pool: ParsePool): Promise<PreparedInvalidation> {
+  if (toggles.length === 0) return { mutated: false, parsed: 0, apply: async () => {} };
+  const prepared = new Map<string, { feature: (typeof FEATURES)[number]; docs: Awaited<ReturnType<typeof reparseFiles>>['docs']; files: ReturnType<typeof listFiles> }>();
   let parsed = 0;
-
-  // links first, if present: rank's rerun below (whether from its own toggle or the co-change
-  // rankToggle carries) must read the links table after it is back in its new state.
-  const linksToggle = byName.get('links');
-  if (linksToggle) {
-    parsed += (await invalidateFeatureTable(conn, cfg, baseDir, dialect, pool, linksToggle)).parsed;
-    // Unconditional, per rank's dependency on links: nulling is a no-op (guarded) when rank was
-    // never enabled for this tree, so this is safe even when no feature:rank segment changed.
-    if (!linksToggle.turnedOn) await nullRank(conn, dialect);
-  }
-
-  // rank's effective on/off (featureEnabled's links dependency) only appears as a changed
-  // `feature:rank` segment when it actually flips -- whether that's rank's own config or a
-  // links toggle taking it along -- so honoring it here is complete on its own.
-  const rankToggle = byName.get('rank');
-  if (rankToggle) {
-    if (rankToggle.turnedOn) await rerunRank(conn, dialect);
-    else await nullRank(conn, dialect);
-  }
-
   for (const toggle of toggles) {
-    if (toggle.name === 'links' || toggle.name === 'rank') continue;
-    parsed += (await invalidateFeatureTable(conn, cfg, baseDir, dialect, pool, toggle)).parsed;
+    if (!toggle.turnedOn || toggle.name === 'rank') continue;
+    const feature = FEATURES.find((candidate) => candidate.name === toggle.name);
+    if (!feature) throw new Error(`prepareFeatureInvalidation: no registered feature named "${toggle.name}"`);
+    const files = listFiles(cfg, paths.rootDir);
+    const { docs } = await reparseFiles(files, [feature], cfg, new Set(), undefined, { pool });
+    parsed += docs.length;
+    prepared.set(toggle.name, { feature, docs, files });
   }
-  return { parsed };
+
+  const applyTable = async (conn: Connection, toggle: FeatureToggle): Promise<void> => {
+    const table = NARROW_FEATURE_TABLE[toggle.name];
+    if (!table) return;
+    if (!toggle.turnedOn) {
+      if (snapshot.tables.has(table)) await conn.exec(`DELETE FROM ${table}`);
+      return;
+    }
+    const plan = prepared.get(toggle.name);
+    if (!plan) throw new Error(`prepareFeatureInvalidation: missing prepared feature "${toggle.name}"`);
+    const pathsChanged = plan.docs.map((doc) => doc.relPath);
+    const delta: ReconcileDelta = { files: plan.files, reparsed: pathsChanged, added: pathsChanged, vanished: [] };
+    await conn.exec(`DELETE FROM ${table}`);
+    await plan.feature.store?.(
+      conn,
+      plan.docs.map((doc) => ({ path: doc.relPath, extracted: doc.extracted[plan.feature.name] })),
+      delta
+    );
+    await plan.feature.afterReconcile?.(conn, delta);
+  };
+
+  const nullRank = async (conn: Connection): Promise<void> => {
+    if (snapshot.reconcile.seenColumns.has('_rank')) await conn.exec('UPDATE frontmatter SET "_rank" = NULL');
+  };
+
+  return {
+    mutated: true,
+    parsed,
+    async apply(conn) {
+      const byName = new Map(toggles.map((toggle) => [toggle.name, toggle]));
+      const linksToggle = byName.get('links');
+      if (linksToggle) {
+        await applyTable(conn, linksToggle);
+        if (!linksToggle.turnedOn) await nullRank(conn);
+      }
+      const rankToggle = byName.get('rank');
+      if (rankToggle) {
+        if (rankToggle.turnedOn) await rank.afterReconcile?.(conn, { files: [], reparsed: [], added: [], vanished: [] });
+        else await nullRank(conn);
+      }
+      for (const toggle of toggles) {
+        if (toggle.name !== 'links' && toggle.name !== 'rank') await applyTable(conn, toggle);
+      }
+    },
+  };
 }
 
-async function recoverIncomplete(conn: Connection, cfg: Config, paths: ReconcilePaths, dialect: ReconcileDialect, pool: ParsePool): Promise<{ parsed: number; warnings: string[]; stages: Stages }> {
-  const disabled = FEATURES.filter((feature) => !featureEnabled(cfg, feature.name));
-  for (const feature of disabled) {
-    if (feature.name !== 'embed') await feature.schema(conn);
+function recoveryToggles(cfg: Config, snapshot: PlanningSnapshot): FeatureToggle[] {
+  const toggles: FeatureToggle[] = [];
+  for (const feature of FEATURES) {
+    const table = NARROW_FEATURE_TABLE[feature.name];
+    if (table && !featureEnabled(cfg, feature.name) && snapshot.tables.has(table)) toggles.push({ name: feature.name, turnedOn: false });
   }
-
-  const toggles: FeatureToggle[] = disabled.filter((feature) => feature.name !== 'embed').map((feature) => ({ name: feature.name, turnedOn: false }));
-  await invalidateFeatureToggles(conn, cfg, paths.rootDir, dialect, pool, toggles);
-  if (disabled.some((feature) => feature.name === 'embed')) {
-    const embeddingsTable = await conn.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'embeddings'");
-    if ((await embeddingsTable.all()).length > 0) await withTransaction(conn, () => conn.exec('DELETE FROM embeddings'), dialect.beginMode());
-  }
-
-  const forcedPaths = new Set(listFiles(cfg, paths.rootDir).map((file) => file.relPath));
-  return reconcile(conn, cfg, paths, dialect, pool, forcedPaths);
+  return toggles;
 }
 
-// The pool is created at most once, lazily, on whichever build() or invalidate() call first
-// needs it, and reused by every later call on this instance.
-export function createBuilder(conn: Connection, cfg: Config, paths: ReconcilePaths, dialect: ReconcileDialect): Builder {
+async function prepareInvalidation(classification: BuildClassification, snapshot: PlanningSnapshot, cfg: Config, paths: ReconcilePaths, pool: ParsePool): Promise<PreparedInvalidation> {
+  const plans: PreparedInvalidation[] = [];
+  if (classification.embedKind) plans.push(await prepareEmbedInvalidation(classification.embedKind, snapshot, cfg, paths, pool));
+  if (classification.featureToggles.length > 0) plans.push(await prepareFeatureInvalidation(classification.featureToggles, snapshot, cfg, paths, pool));
+  if (classification.fullRebuild) {
+    plans.push(await prepareFeatureInvalidation(recoveryToggles(cfg, snapshot), snapshot, cfg, paths, pool));
+    // Full rebuild and recovery must not reuse vectors from the prior generation.
+    if (snapshot.tables.has('embeddings')) {
+      plans.push({ mutated: true, parsed: 0, apply: (conn) => conn.exec('DELETE FROM embeddings') });
+    }
+    if (!featureEnabled(cfg, 'rank') && snapshot.reconcile.seenColumns.has('_rank')) {
+      plans.push({ mutated: true, parsed: 0, apply: (conn) => conn.exec('UPDATE frontmatter SET "_rank" = NULL') });
+    }
+  }
+  return {
+    mutated: plans.some((plan) => plan.mutated),
+    parsed: plans.reduce((sum, plan) => sum + plan.parsed, 0),
+    async apply(conn) {
+      for (const plan of plans) await plan.apply(conn);
+    },
+  };
+}
+
+function forcedPaths(classification: BuildClassification, snapshot: PlanningSnapshot): ReadonlySet<string> | undefined {
+  if (!classification.fullRebuild) return classification.forcedPaths;
+  // New paths are reparsed by definition. Forcing every previously indexed path makes every
+  // survivor a reparse without a second filesystem scan outside prepareReconcile's one listing.
+  return new Set(snapshot.reconcile.existingRows.map((row) => row.path));
+}
+
+async function publishAttempt(conn: Connection, liveCfg: ResolvedConfig, dialect: ReconcileDialect, pool: ParsePool, ensureFeatureSchema: EnsureFeatureSchema, timing: ReconcileTiming, attempt: number): Promise<BuildResult> {
+  const cfg = structuredClone(liveCfg);
+  const configIdentity = JSON.stringify(cfg);
+  const paths: ReconcilePaths = { rootDir: cfg.rootDir ?? cfg.baseDir, configDir: cfg.configDir ?? cfg.baseDir };
+  const wanted = featureSignature(cfg, FEATURES);
+  const snapshot = await readPlanningSnapshot(conn, timing);
+  const classification = classifyBuild(snapshot, cfg, paths, wanted);
+  const invalidation = await prepareInvalidation(classification, snapshot, cfg, paths, pool);
+  const reconcile = await prepareReconcile(snapshot.reconcile, cfg, paths, dialect, timing, pool, forcedPaths(classification, snapshot));
+  const mutated = classification.fullRebuild || invalidation.mutated || reconcile.mutated || snapshot.baseline.features !== wanted || snapshot.baseline.ready !== '1';
+
+  if (buildPlan.hasSubscribers) buildPlan.publish({ attempt, baseline: snapshot.baseline, wantedSignature: wanted });
+  const txStart = Date.now();
+  let txMs: number;
+  try {
+    await withTransaction(
+      conn,
+      async () => {
+        const current = await readCoreBaseline(conn);
+        const currentWanted = featureSignature(liveCfg, FEATURES);
+        if (!sameBaseline(current, snapshot.baseline) || JSON.stringify(liveCfg) !== configIdentity || currentWanted !== wanted) {
+          throw new StaleBuildPlan('core generation or configuration changed while this build was planning');
+        }
+        if (!mutated) return;
+        await ensureFeatureSchema(cfg);
+        await invalidation.apply(conn);
+        await reconcile.apply(conn);
+        const publishedWanted = featureSignature(liveCfg, FEATURES);
+        if (JSON.stringify(liveCfg) !== configIdentity || publishedWanted !== wanted) throw new StaleBuildPlan('configuration changed while this build was publishing');
+        await setMeta(conn, FEATURE_SIGNATURE_META_KEY, wanted);
+        await setMeta(conn, CORE_READY_META_KEY, '1');
+        await setMeta(conn, CORE_GENERATION_META_KEY, nextGeneration(snapshot.baseline.generation));
+      },
+      dialect.beginMode()
+    );
+  } finally {
+    txMs = Date.now() - txStart;
+    timing.txMs += txMs;
+  }
+  if (reconcile.mutated) await reconcile.record(conn, txMs);
+  return {
+    parsed: invalidation.parsed + reconcile.parsed,
+    warnings: reconcile.warnings,
+    stages: reconcile.finish(timing.txMs),
+    messages: classification.messages,
+  };
+}
+
+export function createBuilder(conn: Connection, cfg: ResolvedConfig, dialect: ReconcileDialect, ensureFeatureSchema: EnsureFeatureSchema): Builder {
   const pool = new ParsePool();
   return {
-    build: (forcedPaths) => reconcile(conn, cfg, paths, dialect, pool, forcedPaths),
-    recover: () => recoverIncomplete(conn, cfg, paths, dialect, pool),
-    invalidate: (kind) => (kind === 'model' ? nullEmbedVectors(conn, dialect) : rebuildEmbeddings(conn, cfg, paths.rootDir, dialect, pool)),
-    invalidateFeatures: (toggles) => invalidateFeatureToggles(conn, cfg, paths.rootDir, dialect, pool, toggles),
+    async build() {
+      // One clock and recorder span both bounded attempts. Baseline/catalog reads and feature
+      // invalidation preparation are included in totalMs but remain intentionally unlabelled;
+      // existing/list/parse and publication stages accumulate under their established labels.
+      const timing = createReconcileTiming(cfg);
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          return await publishAttempt(conn, cfg, dialect, pool, ensureFeatureSchema, timing, attempt);
+        } catch (err) {
+          if (!(err instanceof StaleBuildPlan)) throw err;
+          if (attempt === 1) throw new SenseError('STORE_BUSY', 'the index changed during both bounded publication attempts; wait for the competing build to finish and retry');
+        }
+      }
+      throw new Error('unreachable build attempt state');
+    },
     close: () => pool.close(),
     get poolsCreated() {
       return pool.poolsCreated;

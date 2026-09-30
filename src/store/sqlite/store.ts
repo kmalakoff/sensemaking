@@ -1,8 +1,8 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { getColumns } from '../shared.ts';
 import { withTransaction } from '../transaction.ts';
-import type { Capability, Connection, Statement, Store, VectorWriteRow } from '../types.ts';
-import { hasVectorRow, pendingRows } from '../vectors.ts';
+import type { Capability, Connection, Statement, Store, VectorStore, VectorWriteRow } from '../types.ts';
+import { createNativeVectorScopeOwner, hasVectorRow, pendingRows } from '../vectors.ts';
 import { fieldStats } from './fieldStats.ts';
 import { queryLexical } from './lexical.ts';
 import { scanCandidates, scanSimilar, writeVectorBatch } from './vectors.ts';
@@ -12,6 +12,26 @@ export const CAPABILITIES: ReadonlySet<Capability> = new Set(['vectors', 'segmen
 // Wraps the synchronous DatabaseSync connection in the async Store interface, sharing one
 // Connection instance (conn) with the builder's own reconcile call so transaction depth is tracked against the same object everywhere.
 export function createStore(db: DatabaseSync, conn: Connection): Store {
+  const vectorScope = createNativeVectorScopeOwner();
+  const vectors: VectorStore = {
+    async pending() {
+      return pendingRows(conn);
+    },
+    async writeVectors(rows: VectorWriteRow[]) {
+      await writeVectorBatch(conn, rows);
+    },
+    async candidates(qv, storeDims, fetch, allowed) {
+      return scanCandidates(conn, qv, storeDims, fetch, allowed, vectorScope.activeFor(allowed));
+    },
+    async similar(path, opts) {
+      return scanSimilar(conn, path, opts, vectorScope.activeFor(opts.allowed));
+    },
+    async hasVector(path) {
+      return hasVectorRow(conn, path);
+    },
+  };
+  vectorScope.bind(vectors);
+
   return {
     name: 'sqlite',
     capabilities: CAPABILITIES,
@@ -40,23 +60,7 @@ export function createStore(db: DatabaseSync, conn: Connection): Store {
         return queryLexical(conn, terms, opts);
       },
     },
-    vectors: {
-      async pending() {
-        return pendingRows(conn);
-      },
-      async writeVectors(rows: VectorWriteRow[]) {
-        await writeVectorBatch(conn, rows);
-      },
-      async candidates(qv, storeDims, fetch, allowed) {
-        return scanCandidates(conn, qv, storeDims, fetch, allowed);
-      },
-      async similar(path, opts) {
-        return scanSimilar(conn, path, opts);
-      },
-      async hasVector(path) {
-        return hasVectorRow(conn, path);
-      },
-    },
+    vectors,
     async engineStatus() {
       // Read back rather than recomputed: this is what open() actually set (3x the largest
       // recorded reconcile, floored at 30s, capped at 10min), not a value re-derived here.

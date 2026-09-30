@@ -2,8 +2,8 @@ import assert from 'node:assert';
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { Row } from 'sensemaking';
-import { build, loadConfig, mapTree, open, peek, type ResolvedConfig, SUPPORTED_CONFIG_VERSION, search } from 'sensemaking';
+import type { PeekSection, Row, SearchResult, TreeMapField, TreeMapHub, TreeMapRecent } from 'sensemaking';
+import { build, loadConfig, mapTree, open, peek, type ResolvedConfig, SenseError, SUPPORTED_CONFIG_VERSION, search } from 'sensemaking';
 import { resolveNote, scopedPaths } from '../../src/commands/index.ts';
 import { renderPeek } from '../../src/output/output.ts';
 import { openStoreFor } from '../../src/store/index.ts';
@@ -43,7 +43,7 @@ describe('search', () => {
 
     const opened = await open(cfg, { build: false });
     try {
-      const rows = (await search(opened.store, cfg, 'price')) as Array<{ snippets: string[] }>;
+      const rows: SearchResult[] = await search(opened.store, cfg, 'price');
       assert.match(rows[0].snippets.join(' '), /old indexed/);
       assert.doesNotMatch(rows[0].snippets.join(' '), /newer live/);
     } finally {
@@ -53,7 +53,7 @@ describe('search', () => {
 
   it('BM25 matches carry via=match with a snippet', async () => {
     const { store: db, cfg } = await openTree(makeTree());
-    const rows = (await search(db, cfg, 'price')) as Array<{ path: string; via: string; snippets: string[] }>;
+    const rows: SearchResult[] = await search(db, cfg, 'price');
     const floor = rows.find((r) => r.path === 'floor.md');
     assert.ok(floor, `expected floor.md in results: ${JSON.stringify(rows.map((r) => r.path))}`);
     assert.ok(floor.via.includes('match'));
@@ -104,15 +104,18 @@ describe('mapTree', () => {
   it('reports counts, field coverage, hubs, and recent', async () => {
     const { store: db, cfg } = await openTree(makeTree());
     const result = await mapTree(db, cfg);
+    const fields: TreeMapField[] = result.fields;
+    const hubs: TreeMapHub[] = result.hubs;
+    const recent: TreeMapRecent[] = result.recent;
     assert.equal(result.docs.count, 4);
-    const status = result.fields.find((f: Row) => f.field === 'status');
+    const status = fields.find((f) => f.field === 'status');
     assert.equal(status?.coverage, 4);
-    assert.ok(!result.fields.some((f: Row) => f.field === '_rank'), 'internal columns are not fields');
+    assert.ok(!result.fields.some((f) => f.field === '_rank'), 'internal columns are not fields');
     assert.ok(
-      (result.hubs as Array<{ path: string }>).some((h) => h.path === 'context.md'),
+      hubs.some((h) => h.path === 'context.md'),
       'the linked-to note is a hub'
     );
-    assert.equal(result.recent.length, 4);
+    assert.equal(recent.length, 4);
   });
 
   it('without rank there are no hubs, everything else stands', async () => {
@@ -218,6 +221,12 @@ describe('mapTree scope', () => {
     assert.ok(parsed.recent.every((r) => r.path.startsWith('wiki/')));
   });
 
+  it('sense map --help lists every scope option the command accepts', () => {
+    const result = runCli(['map', '--help'], { cwd: tmpTree() });
+    assert.equal(result.status, 0, result.stderr);
+    for (const option of ['--preset name', '--include glob ...', '--exclude glob ...', '--no-exclude', '--where "<sql>"']) assert.ok(result.stdout.includes(option), `${option} missing from map help: ${result.stdout}`);
+  });
+
   it('sense map with no flags scopes to the default preset (the whole tree here)', async () => {
     const base = scopedMapTree();
     writeFileSync(join(base, 'sense.config.json'), JSON.stringify({ version: 4, presets: mapPresets, queries: {} }));
@@ -236,13 +245,21 @@ describe('peek', () => {
     return baseDir;
   }
 
+  function duplicateBasenameTree(): string {
+    const baseDir = tmpTree();
+    write(baseDir, 'visible/note.md', 'visible body');
+    write(baseDir, 'hidden/note.md', 'hidden body');
+    return baseDir;
+  }
+
   it('returns frontmatter, outline with line ranges, and links both ways', async () => {
     const { store: db, cfg } = await openTree(structured());
     const result = await peek(db, cfg, 'note.md');
+    const firstSection: PeekSection = result.sections[0];
     assert.equal(result.frontmatter.title, 'Structured');
     assert.equal(result.sections.length, 2);
-    assert.equal(result.sections[0].heading, 'Alpha');
-    assert.ok((result.sections[0].start_line as number) > 0);
+    assert.equal(firstSection.heading, 'Alpha');
+    assert.ok(firstSection.start_line > 0);
     assert.deepEqual(result.outbound, ['other.md']);
     assert.deepEqual(result.backlinks, ['other.md']);
     assert.ok(result.tokens > 0);
@@ -259,6 +276,58 @@ describe('peek', () => {
     await assert.rejects(peek(db, cfg, 'missing'), /no note matches/);
   });
 
+  it('resolves a basename within scope even when the full index has another match', async () => {
+    const { store: db, cfg } = await openTree(duplicateBasenameTree());
+    try {
+      const result = await peek(db, cfg, 'note', { include: ['visible/**'] });
+      assert.equal(result.path, 'visible/note.md');
+    } finally {
+      await db.close();
+    }
+  });
+
+  it('rejects an exact indexed path before scoped basename fallback can substitute another note', async () => {
+    const { store: db, cfg } = await openTree(duplicateBasenameTree());
+    try {
+      await assert.rejects(peek(db, cfg, 'hidden/note.md', { include: ['visible/**'] }), /note "hidden\/note\.md" exists but is outside the current scope/);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it('rejects an indexed target excluded by path scope or where', async () => {
+    const baseDir = tmpTree();
+    write(baseDir, 'visible.md', 'visible body', { status: 'active' });
+    write(baseDir, 'hidden.md', 'hidden body', { status: 'archived' });
+    const { store: db, cfg } = await openTree(baseDir);
+    try {
+      await assert.rejects(peek(db, cfg, 'hidden.md', { include: ['visible.md'] }), /outside the current scope/);
+      await assert.rejects(peek(db, cfg, 'hidden.md', { where: "f.status = 'active'" }), /outside the current scope/);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it('scopes resolved neighbors without reclassifying authored unresolved links', async () => {
+    const baseDir = tmpTree();
+    write(baseDir, 'visible/hub.md', 'links to [[visible/inside]], [[hidden/outside]], and [[missing]]');
+    write(baseDir, 'visible/inside.md', 'links back to [[hub]]');
+    write(baseDir, 'hidden/outside.md', 'links back to [[hub]]');
+    for (let i = 0; i < 25; i++) write(baseDir, `hidden/backlink${String(i).padStart(2, '0')}.md`, 'links back to [[hub]]');
+    const { store: db, cfg } = await openTree(baseDir);
+    try {
+      const result = await peek(db, cfg, 'visible/hub.md', { include: ['visible/**'] });
+      assert.deepEqual(result.outbound, ['visible/inside.md']);
+      assert.equal(result.outboundTotal, 1);
+      assert.deepEqual(result.backlinks, ['visible/inside.md']);
+      assert.equal(result.backlinksTotal, 1);
+      assert.deepEqual(result.unresolved, ['missing']);
+      assert.equal(result.unresolvedTotal, 1);
+    } finally {
+      await db.close();
+    }
+  });
+
   it('token price is floored by the raw byte estimate, so heavy frontmatter/syntax cannot vanish from it', async () => {
     const baseDir = tmpTree();
     write(baseDir, 'heavy.md', 'short body', { title: 'H', filler: 'x'.repeat(2000) });
@@ -266,6 +335,48 @@ describe('peek', () => {
     const result = await peek(db, cfg, 'heavy.md');
     const size = readFileSync(join(baseDir, 'heavy.md'), 'utf8').length;
     assert.ok(result.tokens >= Math.ceil(size / 4), `tokens (${result.tokens}) undercounts the raw byte estimate (${Math.ceil(size / 4)})`);
+  });
+});
+
+describe('map and peek published configuration', () => {
+  it('rejects retained-handle reads after another builder publishes a different feature signature', async () => {
+    const { configPath } = configuredTree();
+    const originalCfg = loadConfig(configPath);
+    await build(originalCfg);
+
+    const retained = await open(originalCfg, { build: false });
+    let current: Awaited<ReturnType<typeof open>> | undefined;
+    let bodyFailed = false;
+    let bodyError: unknown;
+    let cleanupErrors: unknown[] = [];
+    try {
+      assert.equal((await mapTree(retained.store, originalCfg)).docs.count, 1);
+      assert.equal((await peek(retained.store, originalCfg, 'a.md')).path, 'a.md');
+
+      const changed = { ...JSON.parse(readFileSync(configPath, 'utf8')), features: { links: false } };
+      writeFileSync(configPath, JSON.stringify(changed, null, 2));
+      const currentCfg = loadConfig(configPath);
+      await build(currentCfg);
+
+      const isNotReady = (err: unknown): boolean => err instanceof SenseError && err.code === 'INDEX_NOT_READY';
+      await assert.rejects(mapTree(retained.store, originalCfg), isNotReady);
+      await assert.rejects(peek(retained.store, originalCfg, 'a.md'), isNotReady);
+
+      current = await open(currentCfg, { build: false });
+      assert.equal((await mapTree(current.store, currentCfg)).docs.count, 1);
+      const result = await peek(current.store, currentCfg, 'a.md');
+      assert.equal(result.path, 'a.md');
+      assert.ok(result.off.includes('links'));
+    } catch (err) {
+      bodyFailed = true;
+      bodyError = err;
+    } finally {
+      const cleanup = await Promise.allSettled([Promise.resolve().then(() => retained.store.close()), Promise.resolve().then(() => current?.store.close())]);
+      cleanupErrors = cleanup.filter((result): result is PromiseRejectedResult => result.status === 'rejected').map((result) => result.reason);
+    }
+    if (bodyFailed && cleanupErrors.length > 0) throw new AggregateError([bodyError, ...cleanupErrors], 'map and peek snapshot proof and cleanup both failed');
+    if (cleanupErrors.length > 0) throw cleanupErrors.length === 1 ? cleanupErrors[0] : new AggregateError(cleanupErrors, 'map and peek snapshot cleanup failed');
+    if (bodyFailed) throw bodyError;
   });
 });
 

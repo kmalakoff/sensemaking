@@ -1,14 +1,11 @@
-import { relatedNotes, resolveRelatedSeed } from '../commands/related.ts';
+import { RELATED_DEFAULT_K, relatedNotes, resolveRelatedSeed } from '../commands/related.ts';
 import { scopedPaths } from '../commands/scope.ts';
 import { resolveSearch } from '../config/index.ts';
-import type { Row } from '../output/output.ts';
 import { printRows } from '../output/output.ts';
 import { type BuildRequirement, prepareDocumentEmbeddings } from '../store/open.ts';
 import { USAGE } from './index.ts';
 import { CONFIG, FORMAT, NO_BUILD, parse, parseK, rowFormatOf, SCOPE, scopeOf, withDb } from './shared.ts';
 import type { Command } from './types.ts';
-
-const RELATED_DEFAULT_K = 5;
 
 const relatedCmd: Command = (ctx) => {
   const usage = `usage: ${ctx.name} ${USAGE.related}`;
@@ -25,7 +22,7 @@ const relatedCmd: Command = (ctx) => {
       const allowed = await scopedPaths(store, cfg, overrides);
       await prepareDocumentEmbeddings(store, cfg, new Set([...allowed, path]));
     }
-    printRows((await relatedNotes(store, cfg, pathArg, overrides, k)) as Row[], format);
+    printRows(await relatedNotes(store, cfg, pathArg, { ...overrides, k }), format);
   });
 };
 export default relatedCmd;

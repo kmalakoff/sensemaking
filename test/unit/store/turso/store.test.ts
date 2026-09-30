@@ -35,8 +35,8 @@ describe('createStore (turso)', () => {
     const baseDir = tmpTree();
     writeNote(baseDir, 'a.md', { frontmatter: { title: 'A' } });
     const { store } = await tursoTree(baseDir);
-    await store.exec('CREATE TABLE embeddings ("path" TEXT, chunk INTEGER, scale REAL, vector BLOB, PRIMARY KEY ("path", chunk))');
-    await store.exec(`INSERT INTO embeddings ("path", chunk, scale, vector) VALUES ('a.md', 0, NULL, NULL)`);
+    await store.exec('CREATE TABLE embeddings ("path" TEXT, chunk INTEGER, content_identity TEXT NOT NULL, scale REAL, vector BLOB, PRIMARY KEY ("path", chunk))');
+    await store.exec(`INSERT INTO embeddings ("path", chunk, content_identity, scale, vector) VALUES ('a.md', 0, 'authored-a-0', NULL, NULL)`);
     assert.deepEqual(await store.vectors.pending(), [{ path: 'a.md', chunk: 0 }]);
     assert.equal(await store.vectors.hasVector('a.md'), false);
     await store.exec(`UPDATE embeddings SET vector = X'00' WHERE "path" = 'a.md' AND chunk = 0`);

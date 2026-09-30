@@ -2,6 +2,10 @@
 // int8 at 256 dims is quality-free vs f32-512 when fused; also the duckdb store's FLOAT[N] width.
 export const STORE_DIMS = 256;
 
+export interface EmbedCallOptions {
+  signal?: AbortSignal;
+}
+
 // The provider contract every wire protocol implements: a Liskov-substitutable
 // surface so query/search code never branches on provider identity.
 export interface EmbedProvider {
@@ -9,6 +13,6 @@ export interface EmbedProvider {
   dims: number;
   batchCap: number; // max texts per embedDocuments call
   languages?: string[]; // declared model languages, for the language-fit check
-  embedDocuments(texts: string[]): Promise<Float32Array[]>;
-  embedQuery(text: string): Promise<Float32Array>;
+  embedDocuments(texts: string[], options?: EmbedCallOptions): Promise<Float32Array[]>;
+  embedQuery(text: string, options?: EmbedCallOptions): Promise<Float32Array>;
 }

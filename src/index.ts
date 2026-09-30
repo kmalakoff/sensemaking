@@ -1,8 +1,8 @@
 // Public library API. Deliberately small: every export is a stability promise;
 // internals (feature registry, graph, scan, meta) stay module-private.
 
-export type { Peek, PresetCoverage, SearchOptions, TreeMap } from './commands/index.ts';
-export { mapTree, peek, presetCoverage, search } from './commands/index.ts';
+export type { PathOptions, Peek, PeekSection, PresetCoverage, RelatedOptions, RelatedResult, SearchOptions, SearchResult, SearchResultVia, TreeMap, TreeMapField, TreeMapHub, TreeMapRecent } from './commands/index.ts';
+export { findPath, mapTree, peek, presetCoverage, relatedNotes, search } from './commands/index.ts';
 export type { Config, EmbedConfig, FeatureName, InitOverrides, LoadConfigOptions, Preset, ResolvedConfig, SavedQuery, SavedSearch, SearchOverrides, SignalName, SignalWeights, StoreName } from './config/index.ts';
 export { CONFIG_FILENAME, initConfig, loadConfig, migrateConfig, SIGNAL_NAMES, STATE_DIR, STORE_NAMES, SUPPORTED_CONFIG_VERSION } from './config/index.ts';
 export type { SenseErrorCode } from './errors.ts';

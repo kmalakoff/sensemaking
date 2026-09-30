@@ -5,7 +5,7 @@ description: "Query a markdown tree with the sense CLI: filter notes by frontmat
 
 # sense
 
-Use sense to locate evidence in a markdown tree before reading files. With the config default `"build": true`, CLI queries incrementally scan the configured tree for the capabilities they need; vector preparation is limited to the eligible scope. Config `"build": false` or a one-query `--no-build` reads the last completed indexed generation, checks requested readiness and does not scan live files. Explicit build and watch prepare it regardless of that default. Results contain paths, metadata, excerpts, and line ranges. Read the returned files or ranges when the task needs their prose.
+Use sense to locate evidence in a markdown tree before reading files. With the config default `"build": true`, CLI queries incrementally scan the configured tree for the capabilities they need; vector preparation is limited to the eligible scope. Config `"build": false` or a one-query `--no-build` reads the last completed indexed generation, checks requested readiness and does not scan live files. Explicit build and watch prepare it regardless of that default. Results contain paths, metadata, snippets, and line ranges. Read the returned files or ranges when the task needs their prose.
 
 Setup, store selection, presets, and note design belong to the `sense-setup` skill. Translating an Obsidian Bases file belongs to `sense-bases`.
 
@@ -73,7 +73,9 @@ Read [search evidence and troubleshooting](references/search.md) when a search w
 
 ## Scope and output
 
-Bare commands use the `default` preset. `--preset <name>` chooses another. For `search`, `--include`, `--exclude`, and `--no-exclude` change the query scope for one invocation, but cannot reach files that no preset indexes. `sense status` shows actual coverage.
+Bare commands use the `default` preset. `--preset <name>` chooses another. For `search`, `map`, `peek`, `path`, and `related`, `--include`, `--exclude`, and `--no-exclude` change the query scope for one invocation, but cannot reach files that no preset indexes. `sense status` shows actual coverage. Scope selects results; presets are not a security boundary.
+
+`peek` rejects an exact path outside scope before trying a basename, resolves basenames within scope, and shows only scoped resolved links and backlinks; unresolved targets remain as written. `path` resolves its endpoints across the indexed tree and scopes intermediate notes. `related` resolves its seed across the indexed tree and scopes result candidates.
 
 `--where` filters search and graph commands against frontmatter alias `f`:
 

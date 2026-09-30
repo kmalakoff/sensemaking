@@ -3,6 +3,7 @@ import type { ResolvedConfig, SearchOverrides } from '../config/index.ts';
 import { anyPresetEmbeds, resolveSearch } from '../config/index.ts';
 import { columnHint } from '../output/column-hint.ts';
 import type { Store } from '../store/types.ts';
+import { NATIVE_VECTOR_SCOPE_TABLE, reserveNativeVectorScope } from '../store/vectors.ts';
 
 export const INTERNAL_COLUMNS = new Set(['path', '_mtime', '_ctime', '_size', '_rank', '_parse_error']);
 
@@ -69,6 +70,66 @@ export async function materializeScope(store: Store, table: string, paths: Set<s
     `INSERT INTO ${table} ("path") VALUES (?)`,
     [...paths].map((p) => [p])
   );
+}
+
+// Native vector adapters can consume a small exact scope through their connection-local temp
+// table. The reservation is tied to this Store's VectorStore wrapper, so another Store cannot
+// activate it by receiving the same Set object.
+export async function withMaterializedVectorScope<T>(store: Store, allowed: Set<string>, callback: () => Promise<T>, knownTotal?: number): Promise<T> {
+  const reservation = reserveNativeVectorScope(store.vectors, allowed);
+  if (!reservation) return callback();
+
+  if (allowed.size === 0) {
+    reservation.invalidate();
+    return callback();
+  }
+
+  let total = knownTotal;
+  if (total === undefined) {
+    try {
+      const stmt = await store.prepare('SELECT COUNT(*) AS count FROM frontmatter');
+      const row = (await stmt.get()) as { count: number | bigint };
+      total = Number(row.count);
+    } catch (err) {
+      reservation.invalidate();
+      throw err;
+    }
+  }
+  // Materialization only buys work when this is a nonempty true narrowing and the allowed side
+  // is no larger than its complement. Direct adapter calls and broader scopes retain JS filtering.
+  if (allowed.size >= total || allowed.size > total - allowed.size) {
+    reservation.invalidate();
+    return callback();
+  }
+
+  let operationFailed = false;
+  let operationError: unknown;
+  let result!: T;
+  try {
+    await materializeScope(store, NATIVE_VECTOR_SCOPE_TABLE, allowed);
+    reservation.activate();
+    result = await callback();
+  } catch (err) {
+    operationFailed = true;
+    operationError = err;
+  }
+
+  let cleanupFailed = false;
+  let cleanupError: unknown;
+  try {
+    reservation.deactivate();
+    await store.exec(`DROP TABLE IF EXISTS ${NATIVE_VECTOR_SCOPE_TABLE}`);
+  } catch (err) {
+    cleanupFailed = true;
+    cleanupError = err;
+  } finally {
+    reservation.invalidate();
+  }
+
+  if (operationFailed && cleanupFailed) throw new AggregateError([operationError, cleanupError], 'native vector scope operation and cleanup failed');
+  if (operationFailed) throw operationError;
+  if (cleanupFailed) throw cleanupError;
+  return result;
 }
 
 export async function setupMapScope(store: Store, paths: Set<string>): Promise<void> {

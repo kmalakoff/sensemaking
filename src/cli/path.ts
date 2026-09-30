@@ -1,6 +1,4 @@
-import { resolveNote } from '../commands/peek.ts';
-import { scopedPaths } from '../commands/scope.ts';
-import { findPath } from '../graph/traverse.ts';
+import { findPath } from '../commands/path.ts';
 import type { Row } from '../output/output.ts';
 import { printRows } from '../output/output.ts';
 import type { BuildRequirement } from '../store/open.ts';
@@ -24,11 +22,7 @@ const pathCmd: Command = (ctx) => {
   const maxDepth = parseMaxDepth(values['max-depth'] as string | undefined, ctx.usageError);
   const format = formatOf(values);
   return withDb(ctx, values.config as string | undefined, { noBuild: values['no-build'] === true, requirements: new Set<BuildRequirement>(['core']) }, async (store, cfg) => {
-    const paths = ((await (await store.prepare('SELECT "path" FROM frontmatter')).all()) as Array<{ path: string }>).map((r) => r.path);
-    const from = resolveNote(paths, a);
-    const to = resolveNote(paths, b);
-    const allowed = await scopedPaths(store, cfg, scopeOf(values));
-    const hops = await findPath(store, from, to, { maxDepth, allowed });
+    const hops = await findPath(store, cfg, a, b, { ...scopeOf(values), maxDepth });
 
     if (format === 'json') {
       console.log(JSON.stringify(hops));

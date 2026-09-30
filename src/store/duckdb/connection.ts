@@ -96,6 +96,7 @@ export function createConnection(duckdb: DuckDBConnection): DuckdbConnection {
 
       await withTransaction(conn, async () => {
         const appender = await duckdb.createAppender(table);
+        const errors: unknown[] = [];
         try {
           for (const row of rows) {
             for (const column of physical) {
@@ -111,9 +112,16 @@ export function createConnection(duckdb: DuckDBConnection): DuckdbConnection {
             appender.endRow();
           }
           appender.flushSync();
-        } finally {
-          appender.closeSync();
+        } catch (err) {
+          errors.push(err);
         }
+        try {
+          appender.closeSync();
+        } catch (err) {
+          errors.push(err);
+        }
+        if (errors.length === 1) throw errors[0];
+        if (errors.length > 1) throw new AggregateError(errors, errors[0] instanceof Error ? `${errors[0].message}; appender cleanup also failed` : 'DuckDB appender execution and cleanup failed');
       });
     },
     // One crossing regardless of row count: rewriteBatch folds recognized shapes into a multi-row statement (batch.ts),

@@ -22,7 +22,7 @@ sense status
 
 By default, the config indexes its own directory. A top-level `root` can point at another markdown tree. Relative roots resolve from the config directory, and `.sense/` remains beside the config. Use this when separate consumers need their own presets, saved queries, or caches over one tree.
 
-Globs and indexed paths are relative to the selected root. Run `sense status` and `sense map` after changing the config to confirm preset coverage and the selected store. A change that affects indexed content rebuilds the relevant cache and reports the reason.
+Globs and indexed paths are relative to the selected root. Run `sense status` and `sense map` after changing the config to confirm preset coverage and the selected store. A change that affects indexed content rebuilds the relevant cache and reports the reason. A build-enabled command replaces an incompatible derived cache format and repairs incomplete feature state; config `"build": false` or `--no-build` reports the required build without rebuilding or repairing the Sense index.
 
 ## Choose the store
 
@@ -86,7 +86,7 @@ Vectors require two choices. The top-level `embed` block names the model and pro
 }
 ```
 
-The config's `"build": true` default lets CLI queries prepare their needed capabilities. Set `"build": false` for manual-build or watch workflows. The first build-enabled vector search downloads a named static model and embeds its eligible scope. `sense build` and `sense watch` prepare all configured capabilities regardless of this setting; `sense download` fetches the model earlier when CI, offline work, or timing makes that useful. A config change that alters the model, vector coverage, or chunking can rebuild vectors. Config `"build": false` or `--no-build` requires the requested vector scope to be ready and does not read newer live files.
+The config's `"build": true` default lets CLI queries prepare their needed capabilities. Set `"build": false` for manual-build or watch workflows. The first build-enabled vector search downloads a named static model and embeds its eligible scope. `sense build` and `sense watch` prepare all configured capabilities regardless of this setting; `sense download` fetches the model earlier when CI, offline work, or timing makes that useful. A config change that alters the provider, model, effective endpoint, vector coverage, or chunking can invalidate or rebuild vectors. Config `"build": false` or `--no-build` requires the requested vector scope to be ready and does not read newer live files.
 
 Read [embedding setup](references/embeddings.md) when choosing a provider or model, supporting a non-English tree, changing chunk size, or tuning signal weights.
 

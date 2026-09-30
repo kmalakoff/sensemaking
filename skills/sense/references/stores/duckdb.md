@@ -4,7 +4,7 @@ Read this guide when `store` is `duckdb`.
 
 Sense stores the cache at `.sense/cache.duckdb`. It is a DuckDB database file with frontmatter values in `VARIANT` columns and embeddings in native fixed-width float arrays. Use this store when another DuckDB tool needs to inspect or analyze the cache.
 
-The first open installs `@duckdb/node-api` if needed. Its native download is about 110 MB. DuckDB holds the cache file for the connection's lifetime, so another sense command waits for the current command or watcher cycle to close it.
+The first open installs `@duckdb/node-api` if needed. Its native download is about 110 MB. Under DuckDB's [concurrency model](https://duckdb.org/docs/current/connect/concurrency), Sense opens an existing cache for no-build observation in read-only mode, so several independent reader processes can coexist. A build-enabled command or watcher opens it read-write and excludes every other process until it closes. Contenders wait within Sense's bounded lock budget, then fail with `STORE_BUSY`. This cross-process rule does not promise writer/reader coexistence or unrestricted sharing by independently configured DuckDB instances in one process.
 
 ## `sense search` grammar
 

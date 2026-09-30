@@ -1,4 +1,5 @@
 import { stat } from 'node:fs/promises';
+import { setImmediate } from 'node:timers/promises';
 import type { Database } from '@tursodatabase/database';
 import { rewriteInsert } from '../batch.ts';
 import { setMeta } from '../shared.ts';
@@ -11,37 +12,98 @@ import { rewriteFunctions } from './sql-functions.ts';
 // so its type is derived structurally from Database.prepare()'s return type instead.
 type TursoStatement = Awaited<ReturnType<Database['prepare']>>;
 
-// @tursodatabase/database/compat offers a synchronous escape hatch, but it measured only 4-12%
-// faster than this promise client, so this wraps the async client in the same Connection/Statement shape 1:1.
-class TursoStatementWrapper implements Statement {
-  private stmt: TursoStatement;
+// Bound native multi-row compilation work; this is not Turso's variable-count limit.
+export const INSERT_BIND_BUDGET = 8192;
 
-  constructor(stmt: TursoStatement) {
+async function closeStatement(stmt: TursoStatement, failed: boolean, failure: unknown): Promise<void> {
+  try {
+    await stmt.close();
+  } catch (cleanup) {
+    if (failed) throw new AggregateError([failure, cleanup], 'Turso statement execution and cleanup failed');
+    throw cleanup;
+  } finally {
+    // Native result cleanup can wait on the event loop even after the statement is finalized.
+    await setImmediate();
+  }
+}
+
+// Native statements are finalized after execution. Reusing the portable statement prepares
+// it again; column metadata remains available after execution without retaining native state.
+class TursoStatementWrapper implements Statement {
+  private stmt: TursoStatement | null;
+  private readonly metadata: Array<{ name: string }>;
+  private readBigInts = false;
+  private readonly db: Database;
+  private readonly sql: string;
+
+  constructor(db: Database, sql: string, stmt: TursoStatement) {
+    this.db = db;
+    this.sql = sql;
     this.stmt = stmt;
+    this.metadata = stmt.columns();
+  }
+
+  private async acquire(): Promise<TursoStatement> {
+    const retained = this.stmt;
+    this.stmt = null;
+    const stmt = retained ?? (await this.db.prepare(this.sql));
+    try {
+      stmt.safeIntegers(this.readBigInts);
+    } catch (error) {
+      await closeStatement(stmt, true, error);
+      throw error;
+    }
+    return stmt;
+  }
+
+  private async execute<T>(operation: (stmt: TursoStatement) => Promise<T>): Promise<T> {
+    const stmt = await this.acquire();
+    let failed = false;
+    let failure: unknown;
+    try {
+      return await operation(stmt);
+    } catch (error) {
+      failed = true;
+      failure = error;
+      throw error;
+    } finally {
+      await closeStatement(stmt, failed, failure);
+    }
   }
 
   async run(...params: unknown[]): Promise<RunResult> {
-    return this.stmt.run(...params);
+    return this.execute((stmt) => stmt.run(...params));
   }
 
   async get(...params: unknown[]): Promise<unknown> {
-    return this.stmt.get(...params);
+    return this.execute((stmt) => stmt.get(...params));
   }
 
   async all(...params: unknown[]): Promise<unknown[]> {
-    return this.stmt.all(...params);
+    return this.execute((stmt) => stmt.all(...params));
   }
 
   async *iterate(...params: unknown[]): AsyncIterable<unknown> {
-    yield* this.stmt.iterate(...params);
+    const stmt = await this.acquire();
+    let failed = false;
+    let failure: unknown;
+    try {
+      yield* stmt.iterate(...params);
+    } catch (error) {
+      failed = true;
+      failure = error;
+      throw error;
+    } finally {
+      await closeStatement(stmt, failed, failure);
+    }
   }
 
   columns(): Array<{ name: string }> {
-    return this.stmt.columns();
+    return this.metadata;
   }
 
   setReadBigInts(enabled: boolean): void {
-    this.stmt.safeIntegers(enabled);
+    this.readBigInts = enabled;
   }
 }
 
@@ -96,34 +158,44 @@ export function createConnection(db: Database): Connection {
       await db.exec(sql);
     },
     async prepare(sql: string): Promise<Statement> {
-      return new TursoStatementWrapper(await db.prepare(rewriteFunctions(sql)));
+      const rewritten = rewriteFunctions(sql);
+      const stmt = await db.prepare(rewritten);
+      try {
+        return new TursoStatementWrapper(db, rewritten, stmt);
+      } catch (error) {
+        await closeStatement(stmt, true, error);
+        throw error;
+      }
     },
-    // Folds a plain INSERT into one multi-row VALUES statement (shared rewriteInsert, ../batch.ts):
-    // no bind-variable ceiling to chunk against, measured empirically. UPDATE/DELETE keep the per-row loop.
+    // Fold INSERTs into bounded multi-row statements in one transaction. UPDATE/DELETE keep
+    // the per-row loop; each native statement owns its finalization and cleanup turn.
     async runBatch(sql: string, paramRows: unknown[][]): Promise<void> {
       if (paramRows.length === 0) return;
       await withTransaction(
         conn,
         async () => {
-          const rewritten = rewriteInsert(sql, paramRows.length);
-          if (rewritten) {
-            const stmt = await db.prepare(rewritten.sql);
+          const shape = rewriteInsert(sql, 1);
+          const batchRows = shape ? Math.max(1, Math.floor(INSERT_BIND_BUDGET / shape.width)) : paramRows.length;
+          for (let offset = 0; offset < paramRows.length; offset += batchRows) {
+            const rows = shape ? paramRows.slice(offset, offset + batchRows) : paramRows;
+            const rewritten = shape ? rewriteInsert(sql, rows.length) : null;
+            const stmt = await db.prepare(rewritten?.sql ?? sql);
+            let failed = false;
+            let failure: unknown;
             try {
-              // One flat array, not spread: spreading tens of thousands of args hits a JS call-stack
-              // limit well before turso enforces any variable-count ceiling (measured; see PLAN.md).
-              await stmt.run(paramRows.flat());
+              if (rewritten) {
+                // Pass one array: spreading a wide tuple can exceed the JS argument limit.
+                await stmt.run(rows.flat());
+              } else {
+                for (const row of rows) await stmt.run(row);
+              }
+            } catch (error) {
+              failed = true;
+              failure = error;
+              throw error;
             } finally {
-              await stmt.close();
+              await closeStatement(stmt, failed, failure);
             }
-            return;
-          }
-          // Finalized here because nothing else will: open() hands back a connection the caller
-          // can hold across many batches, and nothing else owns this statement's lifetime.
-          const stmt = await db.prepare(sql);
-          try {
-            for (const row of paramRows) await stmt.run(row);
-          } finally {
-            await stmt.close();
           }
         },
         BEGIN_WRITE

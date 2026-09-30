@@ -1,6 +1,8 @@
 import assert from 'node:assert';
 import { search } from 'sensemaking';
 import { computeSnippets } from '../../../src/commands/search.ts';
+import type { Candidates } from '../../../src/commands/signals.ts';
+import { linksCandidates } from '../../../src/commands/signals.ts';
 import { writeModel } from '../../lib/model.ts';
 import { openConfig, tmpTree, writeNote } from '../../lib/tree.ts';
 
@@ -93,5 +95,56 @@ describe('scoped search does not starve on a truncated global pool', () => {
       rows.every((r) => r.path.startsWith('target')),
       JSON.stringify(rows)
     );
+  });
+});
+
+describe('shared search tie order', () => {
+  it('uses bytewise path order for equal link ranks before the fetch boundary', async () => {
+    const baseDir = tmpTree();
+    const byteFirst = '\uE000-leaf.md';
+    const utf16First = '😀-leaf.md';
+    writeNote(baseDir, 'seed.md', { body: '[[😀-leaf]] [[\uE000-leaf]]' });
+    writeNote(baseDir, utf16First, { body: 'emoji leaf' });
+    writeNote(baseDir, byteFirst, { body: 'private-use leaf' });
+    const { store } = await openConfig({ presets: { default: { include: ['**/*.md'] } }, queries: {}, baseDir, configPath: null });
+    try {
+      const candidates: Candidates = new Map([['seed.md', { score: 1, via: 'match' }]]);
+      // UTF-16 compares the emoji's high surrogate before U+E000; UTF-8 byte order is the reverse.
+      const paths = ['seed.md', utf16First, byteFirst];
+      await linksCandidates(store, candidates, [{ path: 'seed.md' }], paths, new Set(paths), 2, 1);
+      assert.deepEqual([...candidates.keys()], ['seed.md', byteFirst], 'the UTF-8-byte-first tied leaf must survive the fetch boundary despite reversed node insertion');
+    } finally {
+      await store.close();
+    }
+  });
+
+  it('uses bytewise path order for equal shared fused scores', async () => {
+    const baseDir = tmpTree();
+    writeNote(baseDir, 'z-word-first.md', { frontmatter: { title: 'Needle' }, body: '[[a-link-first]]' });
+    writeNote(baseDir, 'a-link-first.md', { body: 'needle' });
+    writeNote(baseDir, 'c-leaf.md', { body: '[[a-link-first]]' });
+    const { store, cfg } = await openConfig({ presets: { default: { include: ['**/*.md'], signals: { words: 1, links: 1 } } }, queries: {}, baseDir, configPath: null });
+    try {
+      const lexical = await store.lexical.query('needle', { whereJoin: '', whereCond: '', scopeCond: '', limit: 30 });
+      assert.deepEqual(
+        lexical.map((row) => row.path),
+        ['z-word-first.md', 'a-link-first.md'],
+        'this SQLite fixture supplies distinct precursor ranks; it is not a native-ranking equivalence claim'
+      );
+      const rows = await search(store, cfg, 'needle', { k: 2 });
+      const raw = (await (await store.prepare('SELECT "path", score FROM _search WHERE "path" IN (?, ?) ORDER BY "path"')).all('a-link-first.md', 'z-word-first.md')) as Array<{ path: string; score: number }>;
+      const crossedScore = 1 / 60 + 1 / 61;
+      assert.deepEqual(raw, [
+        { path: 'a-link-first.md', score: crossedScore },
+        { path: 'z-word-first.md', score: crossedScore },
+      ]);
+      assert.equal(rows[0].score, rows[1].score, 'the rounded public scores retain the tied shape');
+      assert.deepEqual(
+        rows.map((row) => row.path),
+        ['a-link-first.md', 'z-word-first.md']
+      );
+    } finally {
+      await store.close();
+    }
   });
 });

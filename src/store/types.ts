@@ -53,8 +53,11 @@ export interface ReconcileDialect {
   // Adds `names` to frontmatter, already filtered to columns this connection doesn't have yet.
   // sqlite/turso loop (their ADD COLUMN is metadata-only); duckdb issues one statement per call.
   addColumns(conn: Connection, names: string[]): Promise<void>;
-  // Deletes content rows for `touched`, inserts rows for `docs`; `delta` carries the tree state a
-  // strategy may need. Must not open its own transaction, and must not return before its own
+  // Replaces this engine's existing-row frontmatter upsert, inside the caller's
+  // publication transaction. Preserve non-writable columns and repair missing rows.
+  updateFrontmatter?(conn: Connection, writableColumns: string[], rows: unknown[][]): Promise<void>;
+  // Reconciles searchable content for `touched` paths and parsed `docs`; `delta` carries the tree
+  // state a strategy may need. Must not open its own transaction, and must not return before its own
   // multi-step strategy (e.g. turso's DROP/rebuild) completes.
   reconcileContent(conn: Connection, touched: string[], docs: ParsedDoc[], delta: ReconcileDelta, cfg: Config): Promise<void>;
   // Records this reconcile's write-transaction duration. sqlite/turso use it for open()'s derived
@@ -84,9 +87,14 @@ export interface OpenDialect<Handle> {
   // 'GenericFailure' on every failure alike with rawCode undefined. Neither exposes anything a
   // predicate could switch on, so each dialect pins its engine's wordings and unit-tests them.
   isLocked?(err: Error): boolean;
-  // Schema DDL beyond frontmatter/preset_files/meta (content table, feature hooks); sole owner of
-  // whether it wraps itself in a write transaction (sqlite: yes, guards a cold-open ALTER race; duckdb/turso: no).
-  ensureSchema(handle: Handle, conn: Connection, cfg: Config): Promise<void>;
+  // Minimal, configuration-independent schema needed before the builder can capture a planning
+  // snapshot. This bootstrap may commit independently because no feature generation is published.
+  ensureCoreSchema(handle: Handle, conn: Connection): Promise<void>;
+  // Configuration-dependent persistent DDL. The builder invokes this only inside its fenced write
+  // transaction, so a failed feature enable cannot leave catalog changes under the old signature.
+  ensureFeatureSchema(handle: Handle, conn: Connection, cfg: Config): Promise<void>;
+  // Connection-local preparation with no durable cache effect (DuckDB's TEMP vector stage).
+  prepareConnection?(handle: Handle, conn: Connection, cfg: Config): Promise<void>;
   // Installs the derived busy_timeout PRAGMA right before reconcile (sqlite/turso); absent for
   // duckdb, which has no such PRAGMA.
   setDerivedBusyTimeout?(handle: Handle, conn: Connection, ms: number): Promise<void>;

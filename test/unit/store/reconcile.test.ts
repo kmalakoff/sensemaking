@@ -26,7 +26,7 @@ function baseDialect(overrides: Partial<ReconcileDialect> = {}): ReconcileDialec
 }
 
 // A fresh, real connection to the tree's own cache file, opened after the store that built the
-// schema has closed -- reconcile() is called directly against it, the same shape open() itself uses.
+// schema has closed. Direct reconcile() is an exclusive lower-level test surface, not publication.
 function freshConnection(dbPath: string): { db: DatabaseSync; conn: Connection } {
   const db = new DatabaseSync(dbPath);
   return { db, conn: createConnection(db) };

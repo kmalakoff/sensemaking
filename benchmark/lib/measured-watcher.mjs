@@ -51,17 +51,27 @@ async function childMain(pkgRoot, configPath) {
       });
     });
     if (command.type === 'stop') return;
-    let watchRejected = false;
-    let watchError;
+    // Test-only control: exercise the registered JavaScript signal handler on every OS. This
+    // does not claim to reproduce Windows OS signal delivery, where child.kill behaves differently.
+    const onControl = (message) => {
+      if (message?.type === 'request-graceful-stop') process.emit('SIGINT', 'SIGINT');
+    };
+    process.on('message', onControl);
     try {
-      await runWatch(loadConfig(configPath), { force: command.force === true, signal: controller.signal, onEvent: (event) => process.stdout.write(`${JSON.stringify(event)}\n`) });
-    } catch (err) {
-      watchRejected = true;
-      watchError = err;
-    }
-    if (watchRejected) {
-      const event = { type: 'run-watch-rejected', error: { name: watchError?.name ?? 'Error', code: watchError?.code ?? null, message: watchError?.message ?? String(watchError) } };
-      await new Promise((resolveWrite, rejectWrite) => process.stdout.write(`${JSON.stringify(event)}\n`, (err) => (err ? rejectWrite(err) : resolveWrite())));
+      let watchRejected = false;
+      let watchError;
+      try {
+        await runWatch(loadConfig(configPath), { force: command.force === true, signal: controller.signal, onEvent: (event) => process.stdout.write(`${JSON.stringify(event)}\n`) });
+      } catch (err) {
+        watchRejected = true;
+        watchError = err;
+      }
+      if (watchRejected) {
+        const event = { type: 'run-watch-rejected', error: { name: watchError?.name ?? 'Error', code: watchError?.code ?? null, message: watchError?.message ?? String(watchError) } };
+        await new Promise((resolveWrite, rejectWrite) => process.stdout.write(`${JSON.stringify(event)}\n`, (err) => (err ? rejectWrite(err) : resolveWrite())));
+      }
+    } finally {
+      process.off('message', onControl);
     }
   } catch (err) {
     process.stderr.write(`${err?.stack ?? err}\n`);
@@ -157,6 +167,18 @@ export function startMeasuredWatcher({ pkgRoot, configPath, force = false, defer
   };
   const waitFor = (type, after, deadlineMs) => waitForAny([type], after, deadlineMs);
 
+  const requestGracefulStop = async () => {
+    if (!events.some((event) => event.type === 'started')) throw new Error('measured watcher cannot request a graceful stop before observing its started event');
+    if (child.exitCode !== null || child.signalCode !== null || !child.connected) throw new Error('measured watcher cannot request a graceful stop after its child exited or disconnected');
+    await new Promise((resolveSend, rejectSend) => {
+      try {
+        child.send({ type: 'request-graceful-stop' }, (err) => (err ? rejectSend(new Error(`measured watcher graceful-stop transport failed: ${err.message}`, { cause: err })) : resolveSend()));
+      } catch (err) {
+        rejectSend(new Error(`measured watcher graceful-stop transport failed: ${err?.message ?? err}`, { cause: err }));
+      }
+    });
+  };
+
   /** @param {string | null} [expectedErrorCode] */
   const close = async (graceMs, expectedErrorCode = null) => {
     if (child.exitCode === null && child.signalCode === null) child.stdin.end();
@@ -184,7 +206,7 @@ export function startMeasuredWatcher({ pkgRoot, configPath, force = false, defer
     if (failure) throw failure;
     if (child.exitCode !== null || child.signalCode !== null) throw new Error(`measured watcher is not running: ${stderr.trim() || `exit ${child.exitCode ?? 'null'}${child.signalCode ? ` (${child.signalCode})` : ''}`}`);
   };
-  return { child, closed, events, ready, start, waitFor, waitForAny, assertRunning, close };
+  return { child, closed, events, ready, start, waitFor, waitForAny, requestGracefulStop, assertRunning, close };
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url) && process.argv[2] === '--child') await childMain(process.argv[3], process.argv[4]);

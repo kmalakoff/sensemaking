@@ -3,9 +3,8 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { createServer, type Server } from 'http';
-import type { Config, ResolvedConfig } from 'sensemaking';
-import { peek, presetCoverage, type SenseError, search } from 'sensemaking';
-import { relatedNotes } from '../../src/commands/index.ts';
+import type { Config, RelatedOptions, RelatedResult, ResolvedConfig } from 'sensemaking';
+import { peek, presetCoverage, relatedNotes, type SenseError, search } from 'sensemaking';
 import { languageDistribution } from '../../src/embed/distribution.ts';
 import { takeChunkText } from '../../src/embed/handoff.ts';
 import { embedPending, similarNotes } from '../../src/embed/query.ts';
@@ -45,6 +44,11 @@ function openSemantic(baseDir: string, embed: Config['embed']) {
   return openConfig({ presets: { default: { include: ['**/*.md'] } }, embed, queries: {}, baseDir, configPath: null });
 }
 
+async function settlementOf<T>(promise: Promise<T>): Promise<PromiseSettledResult<T>> {
+  const [outcome] = await Promise.allSettled([promise]);
+  return outcome;
+}
+
 // Nothing downloads implicitly. search has
 // two other signals to fall back on and says so; related has none and must say why.
 describe('missing model', () => {
@@ -81,11 +85,17 @@ describe('embed feature', () => {
   it('semantic expansion surfaces a note FTS5 cannot reach, labeled via=vector with a lines range', async () => {
     const { store: db, cfg } = await openSemantic(fruitTree(), { model: writeModel(), provider: 'static' });
     const rows = (await search(db, cfg, 'pomme')) as Array<{ path: string; via: string; lines: string }>;
+    const narrowed = (await search(db, cfg, 'pomme', { where: `f."path" = 'a.md'` })) as Array<{ path: string; via: string }>;
     await db.close();
     const hit = rows[0];
     assert.equal(hit.path, 'a.md', JSON.stringify(rows));
     assert.equal(hit.via, 'vector'); // zero FTS matches for 'pomme'
     assert.match(hit.lines, /^L\d+-\d+$/);
+    assert.deepEqual(
+      narrowed.map((row) => [row.path, row.via]),
+      [['a.md', 'vector']],
+      'an exact half-tree allowed set takes the native scope without changing authored results'
+    );
   });
 
   it('a term both matched and vector-near composes via=match+vector', async () => {
@@ -188,11 +198,13 @@ describe('declared signals', () => {
 describe('embed api type', () => {
   let server: Server;
   let url: string;
+  let requests = 0;
 
   before(async () => {
     // Minimal OpenAI-compatible /embeddings endpoint: apple/pomme collapse to one
     // direction, everything else to another.
     server = createServer((req, res) => {
+      requests++;
       let body = '';
       req.on('data', (c) => {
         body += c;
@@ -215,6 +227,100 @@ describe('embed api type', () => {
     await db.close();
     assert.equal(rows[0].path, 'a.md', JSON.stringify(rows));
     assert.equal(rows[0].via, 'vector');
+  });
+
+  it('does not call the query provider for an empty or vector-ineligible resolved scope', async () => {
+    const baseDir = fruitTree();
+    writeNote(baseDir, 'stub.md', { frontmatter: { title: 'Stub' }, body: '' });
+    const { store: db, cfg } = await openSemantic(baseDir, { model: 'test-model', provider: 'openai', url });
+    try {
+      const before = requests;
+      await assert.rejects(search(db, cfg, 'pomme', { k: 0 }), /must be a positive finite integer/);
+      assert.equal(requests, before, 'invalid options must fail before remote query embedding');
+      assert.deepEqual(await search(db, cfg, 'pomme', { include: ['missing/**'] }), []);
+      assert.equal(requests, before, 'an empty scope must not start remote query embedding');
+      assert.deepEqual(await search(db, cfg, 'pomme', { include: ['stub.md'] }), []);
+      assert.equal(requests, before, 'a scope with no embedded chunks must not start remote query embedding');
+    } finally {
+      await db.close();
+    }
+  });
+
+  it('cancels a public semantic search without stranding the same store handle', async () => {
+    let releaseQuery: (() => void) | undefined;
+    let markQueryStarted: (() => void) | undefined;
+    let held = false;
+    const queryReleased = new Promise<void>((resolve) => {
+      releaseQuery = resolve;
+    });
+    const queryStarted = new Promise<void>((resolve) => {
+      markQueryStarted = resolve;
+    });
+    const controlled = createServer((req, res) => {
+      let body = '';
+      req.on('data', (chunk) => {
+        body += chunk;
+      });
+      req.on('end', () => {
+        const parsed: unknown = JSON.parse(body);
+        if (parsed === null || typeof parsed !== 'object' || !('input' in parsed) || !Array.isArray(parsed.input) || !parsed.input.every((value) => typeof value === 'string')) {
+          res.writeHead(400).end();
+          return;
+        }
+        const input = parsed.input;
+        const respond = () => {
+          if (res.destroyed) return;
+          const data = input.map((text) => ({ embedding: /apple|pomme/i.test(text) ? [1, 0, 0, 0] : [0, 1, 0, 0] }));
+          res.setHeader('content-type', 'application/json');
+          res.end(JSON.stringify({ data }));
+        };
+        if (!held && input.length === 1 && input[0] === 'pomme') {
+          held = true;
+          markQueryStarted?.();
+          void queryReleased.then(respond);
+        } else {
+          respond();
+        }
+      });
+    });
+    const controlledUrl = `${await listen(controlled)}/v1`;
+    const controller = new AbortController();
+    const reason = { operation: 'cancelled-search' };
+    let opened: Awaited<ReturnType<typeof openSemantic>> | undefined;
+    let searchOutcome: Promise<PromiseSettledResult<unknown>> | undefined;
+    let bodyFailed = false;
+    let bodyFailure: unknown;
+    try {
+      opened = await openSemantic(fruitTree(), { model: `cancel-search-${Date.now()}`, provider: 'openai', url: controlledUrl });
+      const pending = search(opened.store, opened.cfg, 'pomme', { signal: controller.signal });
+      searchOutcome = settlementOf(pending);
+      const readiness = await Promise.race([queryStarted.then(() => 'query-started' as const), searchOutcome.then(() => 'search-settled' as const)]);
+      assert.equal(readiness, 'query-started', 'the provider request must be held before search settles');
+      controller.abort(reason);
+      const cancelled = await searchOutcome;
+      assert.equal(cancelled.status, 'rejected');
+      if (cancelled.status === 'rejected') assert.strictEqual(cancelled.reason, reason);
+
+      const rows = await search(opened.store, opened.cfg, 'pomme');
+      assert.equal(rows[0]?.path, 'a.md', JSON.stringify(rows));
+    } catch (err) {
+      bodyFailed = true;
+      bodyFailure = err;
+    }
+
+    controller.abort(reason);
+    releaseQuery?.();
+    const serverClose = new Promise<void>((resolve, reject) => {
+      controlled.close((err) => (err ? reject(err) : resolve()));
+    });
+    const cleanupResults = await Promise.allSettled([searchOutcome ?? Promise.resolve(), Promise.resolve().then(() => opened?.store.close()), Promise.resolve().then(() => controlled.closeAllConnections()), serverClose]);
+    const cleanupFailures = cleanupResults.filter((result): result is PromiseRejectedResult => result.status === 'rejected').map((result) => result.reason);
+    if (bodyFailed) {
+      if (cleanupFailures.length > 0) throw new AggregateError([bodyFailure, ...cleanupFailures], 'public search cancellation and cleanup failed');
+      throw bodyFailure;
+    }
+    if (cleanupFailures.length === 1) throw cleanupFailures[0];
+    if (cleanupFailures.length > 1) throw new AggregateError(cleanupFailures, 'public search cancellation cleanup failed');
   });
 });
 
@@ -316,7 +422,7 @@ describe('similarity is a cosine, so it is bounded', () => {
     writeNote(baseDir, 'one.md', { frontmatter: { title: 'One' }, body });
     writeNote(baseDir, 'two.md', { frontmatter: { title: 'One' }, body });
     const { store: db, cfg } = await openSemantic(baseDir, { model: writeModel(), provider: 'static' });
-    const rows = await relatedNotes(db, cfg, 'one.md', {}, 5);
+    const rows = await relatedNotes(db, cfg, 'one.md', { k: 5 });
     await db.close();
     // int8 storage dequantises a little either side of the true cosine; clamping keeps the
     // column a number a reader can reason about.
@@ -397,7 +503,8 @@ describe('related command', () => {
     const peeked = await peek(db, cfg, 'target.md');
     assert.deepEqual(peeked.outbound, ['linked.md']);
     assert.deepEqual(peeked.backlinks, ['backlinker.md']);
-    const result = await relatedNotes(db, cfg, 'target.md', {}, 5);
+    const options: RelatedOptions = { k: 5 };
+    const result: RelatedResult[] = await relatedNotes(db, cfg, 'target.md', options);
     await db.close();
     const paths = result.map((r) => r.path);
     assert.ok(paths.includes('similar.md'), JSON.stringify(result));
@@ -411,9 +518,15 @@ describe('related command', () => {
   it('respects scope: a --where that drops a candidate keeps it out of related', async () => {
     const { store: db, cfg } = await openSemantic(relatedTree(), { model: writeModel(), provider: 'static' });
     await search(db, cfg, 'apple');
-    const result = await relatedNotes(db, cfg, 'target.md', { where: `f."path" != 'similar.md'` }, 5);
+    const result = await relatedNotes(db, cfg, 'target.md', { where: `f."path" != 'similar.md'`, k: 5 });
+    const narrowed = await relatedNotes(db, cfg, 'target.md', { where: `f."path" IN ('target.md', 'similar.md')`, k: 5 });
     await db.close();
     assert.ok(!result.map((r) => r.path).includes('similar.md'), JSON.stringify(result));
+    assert.deepEqual(
+      narrowed.map((row) => row.path),
+      ['similar.md'],
+      'a narrow scope keeps the seed available while limiting native candidate rows'
+    );
   });
 
   it('excludes every backlink, including those past the old display cap (>20)', async () => {
@@ -427,7 +540,7 @@ describe('related command', () => {
     const peeked = await peek(db, cfg, 'target.md');
     assert.equal(peeked.backlinksTotal, 22);
     assert.equal(peeked.backlinks.length, 20, 'peek display list is truncated; related must not inherit that truncation');
-    const result = await relatedNotes(db, cfg, 'target.md', {}, 5);
+    const result = await relatedNotes(db, cfg, 'target.md', { k: 5 });
     await db.close();
     assert.deepEqual(result, [], `every apple-similar note here is a backlink, so related must be empty: ${JSON.stringify(result)}`);
   });
@@ -436,7 +549,7 @@ describe('related command', () => {
   // table is then unambiguous: nothing near in meaning that this note does not already link to.
   it('errors when the tree names no embedding model, rather than answering []', async () => {
     const { store: db, cfg } = await openConfig({ presets: { default: { include: ['**/*.md'] } }, queries: {}, baseDir: relatedTree(), configPath: null });
-    await assert.rejects(() => relatedNotes(db, cfg, 'target.md', {}, 5), /no embedding model/);
+    await assert.rejects(() => relatedNotes(db, cfg, 'target.md', { k: 5 }), /no embedding model/);
     await db.close();
   });
 
@@ -451,7 +564,7 @@ describe('related command', () => {
     });
     // The files are embedded, via the overlapping vectors-on preset. Reading the signals is
     // what stops those vectors answering for a scope that declined them.
-    await assert.rejects(() => relatedNotes(db, cfg, 'target.md', { preset: 'lex' }, 5), /no "vectors" signal/);
+    await assert.rejects(() => relatedNotes(db, cfg, 'target.md', { preset: 'lex', k: 5 }), /no "vectors" signal/);
     await db.close();
   });
 
@@ -459,13 +572,13 @@ describe('related command', () => {
     const baseDir = relatedTree();
     writeNote(baseDir, 'stub.md', { frontmatter: { title: 'Stub' }, body: '' });
     const { store: db, cfg } = await openSemantic(baseDir, { model: writeModel(), provider: 'static' });
-    await assert.rejects(() => relatedNotes(db, cfg, 'stub.md', {}, 5), /no indexed text/);
+    await assert.rejects(() => relatedNotes(db, cfg, 'stub.md', { k: 5 }), /no indexed text/);
     await db.close();
   });
 
   it('answers on a freshly opened, fully prepared public handle', async () => {
     const { store: db, cfg } = await openSemantic(relatedTree(), { model: writeModel(), provider: 'static' });
-    const result = await relatedNotes(db, cfg, 'target.md', {}, 5);
+    const result = await relatedNotes(db, cfg, 'target.md', { k: 5 });
     await db.close();
     assert.ok(result.map((r) => r.path).includes('similar.md'), JSON.stringify(result));
   });
@@ -583,7 +696,7 @@ describe('related on a heading-dense note', () => {
     writeNote(baseDir, 'unrelated.md', { frontmatter: { title: 'Unrelated' }, body: 'stone' });
 
     const { store: db, cfg } = await openSemantic(baseDir, { model: writeModel(), provider: 'static' });
-    const result = await relatedNotes(db, cfg, 'target.md', {}, 5);
+    const result = await relatedNotes(db, cfg, 'target.md', { k: 5 });
     await db.close();
     assert.equal(result[0]?.path, 'similar.md', JSON.stringify(result));
   });

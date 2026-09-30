@@ -2,8 +2,7 @@
 // both FTS5 and row-returning INSERT ... RETURNING. Raise it only for a load-bearing capability.
 import { DatabaseSync } from 'node:sqlite';
 import type { Config, ResolvedConfig } from '../../config/index.ts';
-import { featureSignature } from '../../config/index.ts';
-import { activeFeatures, FEATURES } from '../../features/index.ts';
+import { activeFeatures } from '../../features/index.ts';
 import type { InternalOpenOptions, OpenResult } from '../open.ts';
 import { openWithDialect } from '../open.ts';
 import { getMeta, setMeta } from '../shared.ts';
@@ -17,7 +16,7 @@ import { createStore } from './store.ts';
 export const DB_FILENAME = 'cache.db';
 // Cache shape version, independent of the config's own `version`. Bumping it rebuilds
 // existing trees on first query.
-export const SCHEMA_VERSION = '21';
+export const SCHEMA_VERSION = '22';
 
 export type { OpenResult };
 
@@ -36,8 +35,8 @@ async function createContentTable(conn: Connection): Promise<void> {
 }
 
 // Content is a separate table (not a column on frontmatter) so `SELECT * FROM frontmatter`
-// can't dump file text into context. Features add their own tables after the core ones.
-async function ensureSchemaTables(conn: Connection, cfg: Config): Promise<void> {
+// can't dump file text into context. Feature schema is published later with its generation.
+async function ensureCoreSchemaTables(conn: Connection): Promise<void> {
   await conn.exec(`CREATE TABLE IF NOT EXISTS frontmatter ("path" TEXT PRIMARY KEY, "_mtime" REAL, "_ctime" REAL, "_size" INTEGER, "_parse_error" TEXT)`);
   await createContentTable(conn);
   await conn.exec(`CREATE TABLE IF NOT EXISTS indexed_sources ("path" TEXT PRIMARY KEY, text TEXT NOT NULL)`);
@@ -45,9 +44,7 @@ async function ensureSchemaTables(conn: Connection, cfg: Config): Promise<void> 
   // per-doc delete is an index hit -- keyed the other way, cold builds went quadratic.
   await conn.exec(`CREATE TABLE IF NOT EXISTS preset_files ("path" TEXT, preset TEXT, PRIMARY KEY ("path", preset))`);
   await conn.exec('CREATE INDEX IF NOT EXISTS preset_files_preset ON preset_files(preset)');
-  for (const feature of activeFeatures(cfg)) await feature.schema(conn);
   if ((await getMeta(conn, 'schema_version')) === null) await setMeta(conn, 'schema_version', SCHEMA_VERSION);
-  if ((await getMeta(conn, 'features')) === null) await setMeta(conn, 'features', featureSignature(cfg, FEATURES));
 }
 
 // Two processes opening the same fresh tree both try to convert it, and the loser gets SQLITE_BUSY
@@ -89,10 +86,13 @@ async function close(handle: SqliteHandle): Promise<void> {
   handle.db.close();
 }
 
-async function ensureSchema(_handle: SqliteHandle, conn: Connection, cfg: Config): Promise<void> {
-  // One writer at a time: the feature hooks check a column then add it, so two cold opens racing
-  // here both see it missing and the second ALTER fails with a duplicate column.
-  await withTransaction(conn, () => ensureSchemaTables(conn, cfg), BEGIN_WRITE);
+async function ensureCoreSchema(_handle: SqliteHandle, conn: Connection): Promise<void> {
+  // One writer at a time: two cold opens can bootstrap the same database concurrently.
+  await withTransaction(conn, () => ensureCoreSchemaTables(conn), BEGIN_WRITE);
+}
+
+async function ensureFeatureSchema(_handle: SqliteHandle, conn: Connection, cfg: Config): Promise<void> {
+  for (const feature of activeFeatures(cfg)) await feature.schema(conn);
 }
 
 async function setDerivedBusyTimeout(handle: SqliteHandle, _conn: Connection, ms: number): Promise<void> {
@@ -106,7 +106,8 @@ export const sqliteOpenDialect: OpenDialect<SqliteHandle> = {
   reconcileDialect: sqliteDialect,
   connect,
   close,
-  ensureSchema,
+  ensureCoreSchema,
+  ensureFeatureSchema,
   setDerivedBusyTimeout,
   createStore: (handle, conn) => createStore(handle.db, conn),
 };

@@ -1,22 +1,35 @@
 import type { FeatureName, ResolvedConfig, SearchOverrides } from '../config/index.ts';
 import { featureEnabled, featureStates } from '../config/index.ts';
 import { serialQuery } from '../lib/serial-query.ts';
-import type { Row } from '../output/output.ts';
 import type { FieldStat, Store } from '../store/types.ts';
 import { INTERNAL_COLUMNS, scopedPaths, setupMapScope } from './scope.ts';
+import { assertQuerySnapshot } from './snapshot.ts';
 import type { PresetCoverage } from './status.ts';
 import { presetCoverage } from './status.ts';
 
 export interface TreeMap {
   docs: { count: number; bytes: number };
-  fields: Row[]; // top 20 by coverage; fieldsTotal carries the real count
+  fields: TreeMapField[]; // top 20 by coverage; fieldsTotal carries the real count
   fieldsTotal: number;
   features: { on: FeatureName[]; off: FeatureName[] };
   presets: PresetCoverage[];
-  hubs: Row[];
-  recent: Row[];
+  hubs: TreeMapHub[];
+  recent: TreeMapRecent[];
   recentCaveat: string | null;
 }
+
+export type TreeMapField = FieldStat;
+
+export type TreeMapHub = {
+  path: string;
+  rank: number;
+  title: string;
+};
+
+export type TreeMapRecent = {
+  path: string;
+  modified: string;
+};
 
 // A result row is capped at SQLITE_MAX_COLUMN (2000, default); two aggregate expressions per
 // field keeps a chunk's row width safely under that regardless of how many fields the tree has.
@@ -42,6 +55,7 @@ export function mapTree(store: Store, cfg: ResolvedConfig, overrides: SearchOver
 
 async function mapIndexed(store: Store, cfg: ResolvedConfig, overrides: SearchOverrides): Promise<TreeMap> {
   return store.transaction(async () => {
+    await assertQuerySnapshot(store, cfg);
     await setupMapScope(store, await scopedPaths(store, cfg, overrides));
     const scopeWhere = 'WHERE "path" IN (SELECT "path" FROM _map_scope)';
     const scopeAnd = 'AND f."path" IN (SELECT "path" FROM _map_scope)';
@@ -54,10 +68,10 @@ async function mapIndexed(store: Store, cfg: ResolvedConfig, overrides: SearchOv
     const allFields: FieldStat[] = [];
     for (const group of chunk(columns, MAP_COLUMN_CHUNK)) allFields.push(...(await store.docs.fieldStats(group, scopeWhere)));
     allFields.sort((a, b) => b.coverage - a.coverage);
-    const fields = allFields.slice(0, 20) as unknown as Row[];
+    const fields = allFields.slice(0, 20);
 
     const hubs = featureEnabled(cfg, 'rank')
-      ? ((await (await store.prepare(`SELECT f."path" AS path, round(f."_rank" * 100, 2) AS rank, content.title FROM frontmatter f JOIN content ON content.path = f."path" WHERE f."_rank" IS NOT NULL ${scopeAnd} ORDER BY f."_rank" DESC, f."path" ASC LIMIT 8`)).all()) as Row[])
+      ? ((await (await store.prepare(`SELECT f."path" AS path, round(f."_rank" * 100, 2) AS rank, content.title FROM frontmatter f JOIN content ON content.path = f."path" WHERE f."_rank" IS NOT NULL ${scopeAnd} ORDER BY f."_rank" DESC, f."path" ASC LIMIT 8`)).all()) as TreeMapHub[])
       : [];
 
     const recent = ((await (await store.prepare(`SELECT "path", "_mtime" AS mtime FROM frontmatter ${scopeWhere} ORDER BY "_mtime" DESC, "path" ASC LIMIT 5`)).all()) as Array<{ path: string; mtime: number }>).map((r) => ({ path: r.path, modified: utcSecond(r.mtime) }));

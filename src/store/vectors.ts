@@ -1,4 +1,83 @@
-import type { Connection } from './types.ts';
+import type { Connection, VectorStore } from './types.ts';
+
+export const NATIVE_VECTOR_SCOPE_TABLE = '_vector_scope';
+
+type NativeVectorScopePhase = 'materializing' | 'active' | 'cleaning';
+
+interface NativeVectorScopeState {
+  token: object;
+  allowed: Set<string>;
+  phase: NativeVectorScopePhase;
+}
+
+interface NativeVectorScopeOwnerState {
+  vectors?: VectorStore;
+  scope?: NativeVectorScopeState;
+}
+
+interface NativeVectorScopeOwner {
+  bind(vectors: VectorStore): void;
+  activeFor(allowed: Set<string> | undefined): boolean;
+}
+
+interface NativeVectorScopeReservation {
+  activate(): void;
+  deactivate(): void;
+  invalidate(): void;
+}
+
+const nativeVectorScopeOwners = new WeakMap<VectorStore, NativeVectorScopeOwnerState>();
+
+// One owner is constructed beside one native store connection, then bound to that connection's
+// VectorStore wrapper. The adapter asks its own owner for a private boolean; no Set or reservation
+// can activate another Store, even when a caller reuses the same Set object across both.
+export function createNativeVectorScopeOwner(): NativeVectorScopeOwner {
+  const owner: NativeVectorScopeOwnerState = {};
+  return {
+    bind(vectors) {
+      if (owner.vectors) throw new Error('native vector scope owner is already bound');
+      if (nativeVectorScopeOwners.has(vectors)) throw new Error('VectorStore is already bound to a native vector scope owner');
+      owner.vectors = vectors;
+      nativeVectorScopeOwners.set(vectors, owner);
+    },
+    activeFor(allowed) {
+      return allowed !== undefined && owner.scope?.phase === 'active' && owner.scope.allowed === allowed;
+    },
+  };
+}
+
+export function reserveNativeVectorScope(vectors: VectorStore, allowed: Set<string>): NativeVectorScopeReservation | null {
+  const owner = nativeVectorScopeOwners.get(vectors);
+  if (!owner) return null;
+  if (owner.scope) throw new Error('native vector scope operation is already active for this Store');
+
+  const token = {};
+  owner.scope = { token, allowed, phase: 'materializing' };
+  let valid = true;
+
+  const current = (): NativeVectorScopeState => {
+    if (!valid || owner.scope?.token !== token) throw new Error('native vector scope reservation is no longer valid');
+    return owner.scope;
+  };
+
+  return {
+    activate() {
+      const scope = current();
+      if (scope.phase !== 'materializing') throw new Error(`native vector scope cannot activate from ${scope.phase}`);
+      scope.phase = 'active';
+    },
+    deactivate() {
+      const scope = current();
+      if (scope.phase === 'cleaning') throw new Error('native vector scope cleanup already started');
+      scope.phase = 'cleaning';
+    },
+    invalidate() {
+      if (!valid) return;
+      if (owner.scope?.token === token) owner.scope = undefined;
+      valid = false;
+    },
+  };
+}
 
 // Seed chunks that participate in a `related` scan. Cost is target_chunks x stored_chunks, so a
 // heading-dense seed multiplies a full-corpus scan (12.7s at 201 chunks/note unsampled).

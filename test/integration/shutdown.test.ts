@@ -19,8 +19,8 @@ describe('interrupting a pooled cold build', () => {
   // native handle, a Tantivy index mid-write), so a new store owes this proof too.
   const stores = STORE_NAMES;
 
-  // Past the 200-file pooling threshold, with bodies big enough that the reparse stage lasts
-  // long enough to be interrupted rather than finishing before the signal arrives.
+  // The balanced ~15.3 MiB workload provides many production byte shares, with bodies big enough
+  // that the reparse stage lasts long enough to be interrupted rather than finishing first.
   function bigTree(store: string): string {
     const baseDir = tmpTree();
     for (let i = 0; i < 800; i++) writeNote(baseDir, `n${i}.md`, { frontmatter: { [`k${i}`]: 1 }, body: 'word '.repeat(4000) });

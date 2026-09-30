@@ -1,7 +1,94 @@
 import assert from 'node:assert';
+import type { DuckdbConnection } from '../../../../src/store/duckdb/connection.ts';
 import { openNativeConnection } from '../../../lib/native-connection.ts';
 
 describe('createConnection (duckdb)', () => {
+  it('appendRows preserves arbitrary body and close failures, rolls back and remains reusable', async () => {
+    const opened = await openNativeConnection('duckdb', ':memory:');
+    const conn = opened.conn as DuckdbConnection;
+    const native = conn.duckdb;
+    const createAppender = native.createAppender.bind(native);
+    const appendRows = conn.appendRows?.bind(conn);
+    let closes = 0;
+    try {
+      assert.ok(appendRows);
+      await conn.exec('CREATE TABLE t ("path" TEXT PRIMARY KEY, owned TEXT DEFAULT \'Default\', title VARIANT)');
+      await appendRows('t', ['path', 'owned', 'title'], [['seed', 'Keep', 'Old']]);
+      native.createAppender = async (...args) => {
+        const appender = await createAppender(...args);
+        const flush = appender.flushSync.bind(appender);
+        const close = appender.closeSync.bind(appender);
+        appender.flushSync = () => {
+          flush();
+          throw null;
+        };
+        appender.closeSync = () => {
+          appender.closeSync = close;
+          close();
+          ++closes;
+          throw undefined;
+        };
+        return appender;
+      };
+      await assert.rejects(
+        () => appendRows('t', ['title', 'path'], [['New', 'added']]),
+        (err: unknown) => {
+          assert.ok(err instanceof AggregateError);
+          assert.deepEqual(err.errors, [null, undefined]);
+          return true;
+        }
+      );
+      native.createAppender = createAppender;
+      assert.equal(closes, 1);
+      assert.deepEqual(await (await conn.prepare('SELECT * FROM t ORDER BY "path"')).all(), [{ path: 'seed', owned: 'Keep', title: 'Old' }]);
+      await appendRows('t', ['title', 'path'], [['New', 'added']]);
+      assert.deepEqual(await (await conn.prepare('SELECT * FROM t ORDER BY "path"')).all(), [
+        { path: 'added', owned: 'Default', title: 'New' },
+        { path: 'seed', owned: 'Keep', title: 'Old' },
+      ]);
+    } finally {
+      native.createAppender = createAppender;
+      await opened.close();
+    }
+  });
+
+  it('appendRows preserves a lone arbitrary close failure and rolls back flushed rows', async () => {
+    const opened = await openNativeConnection('duckdb', ':memory:');
+    const conn = opened.conn as DuckdbConnection;
+    const native = conn.duckdb;
+    const createAppender = native.createAppender.bind(native);
+    const appendRows = conn.appendRows?.bind(conn);
+    try {
+      assert.ok(appendRows);
+      await conn.exec('CREATE TABLE t (a INTEGER)');
+      await appendRows('t', ['a'], [[1]]);
+      native.createAppender = async (...args) => {
+        const appender = await createAppender(...args);
+        const close = appender.closeSync.bind(appender);
+        appender.closeSync = () => {
+          appender.closeSync = close;
+          close();
+          throw undefined;
+        };
+        return appender;
+      };
+      await assert.rejects(
+        () => appendRows('t', ['a'], [[2]]),
+        (err: unknown) => {
+          assert.equal(err, undefined);
+          return true;
+        }
+      );
+      native.createAppender = createAppender;
+      assert.deepEqual(await (await conn.prepare('SELECT a FROM t')).all(), [{ a: 1 }]);
+      await appendRows('t', ['a'], [[3]]);
+      assert.deepEqual(await (await conn.prepare('SELECT a FROM t ORDER BY a')).all(), [{ a: 1 }, { a: 3 }]);
+    } finally {
+      native.createAppender = createAppender;
+      await opened.close();
+    }
+  });
+
   it('DuckDB BigInt bindings and reads preserve native rows', async () => {
     const opened = await openNativeConnection('duckdb', ':memory:');
     const { conn } = opened;

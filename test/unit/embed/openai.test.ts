@@ -122,4 +122,20 @@ describe('openai provider', () => {
     await assert.rejects(() => openaiProvider('text-embed', badUrl, undefined), /\/embeddings -> HTTP 500/);
     badServer.close();
   });
+
+  it('invalid JSON is terminal and is not retried', async () => {
+    let calls = 0;
+    const malformed = createServer((_req, res) => {
+      calls++;
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end('{');
+    });
+    const malformedUrl = await listen(malformed);
+    try {
+      await assert.rejects(() => openaiProvider('text-embed', malformedUrl, undefined), /\/embeddings returned invalid JSON/);
+      assert.equal(calls, 1);
+    } finally {
+      await new Promise<void>((resolve, reject) => malformed.close((err) => (err ? reject(err) : resolve())));
+    }
+  });
 });

@@ -18,7 +18,7 @@ Sense's [store benchmark summary](../store-benchmarks.md) measures the current a
 
 - DuckDB support is experimental.
 - The first open installs `@duckdb/node-api`, with a native download of about 110 MB.
-- DuckDB holds the cache file for the life of a connection. Concurrent sense commands wait for the current command or watcher cycle to close it.
+- Under DuckDB's [concurrency model](https://duckdb.org/docs/current/connect/concurrency), Sense opens an existing cache for no-build observation in read-only mode, so several independent reader processes can coexist. A build-enabled command or watcher opens it read-write and excludes every other process until it closes. Contenders wait within Sense's bounded lock budget, then fail with `STORE_BUSY`. This cross-process rule does not promise writer/reader coexistence or unrestricted sharing by independently configured DuckDB instances in one process.
 - `sense search` accepts bare words and quoted phrases. It rejects FTS5 boolean, prefix, `NEAR`, initial-token, grouping, and column-filter syntax.
 - SQLite's raw `MATCH`, `snippet()`, and `bm25()` queries do not port.
 - Mixed-type `VARIANT` fields can require explicit casts in predicates.

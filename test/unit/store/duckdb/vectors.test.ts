@@ -15,7 +15,7 @@ async function makeDb(dims = DIMS) {
   try {
     duckdb = await instance.connect();
     const conn = createConnection(duckdb);
-    await conn.exec(`CREATE TABLE embeddings ("path" TEXT, chunk INTEGER, start_line INTEGER, end_line INTEGER, scale REAL, vector FLOAT[${dims}], PRIMARY KEY ("path", chunk))`);
+    await conn.exec(`CREATE TABLE embeddings ("path" TEXT, chunk INTEGER, start_line INTEGER, end_line INTEGER, content_identity TEXT NOT NULL, scale REAL, vector FLOAT[${dims}], PRIMARY KEY ("path", chunk))`);
     await createVectorWriteStage(duckdb, dims);
     return { instance, duckdb, conn };
   } catch (err) {
@@ -42,8 +42,8 @@ async function withDb<T>(fn: (duckdb: Awaited<ReturnType<typeof makeDb>>['duckdb
 }
 
 async function insertPending(conn: Connection, path: string, chunk: number, start = 1, end = 1): Promise<void> {
-  const stmt = await conn.prepare('INSERT INTO embeddings ("path", chunk, start_line, end_line, scale, vector) VALUES (?, ?, ?, ?, NULL, NULL)');
-  await stmt.run(path, chunk, start, end);
+  const stmt = await conn.prepare('INSERT INTO embeddings ("path", chunk, start_line, end_line, content_identity, scale, vector) VALUES (?, ?, ?, ?, ?, NULL, NULL)');
+  await stmt.run(path, chunk, start, end, `authored:${path}:${chunk}`);
 }
 
 // A DIMS-wide vector with the given values at the leading dimensions, zero elsewhere -- lets

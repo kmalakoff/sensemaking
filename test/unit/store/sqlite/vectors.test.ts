@@ -4,7 +4,7 @@ import { toStore } from '../../../../src/embed/query.ts';
 import { createConnection } from '../../../../src/store/sqlite/connection.ts';
 import { scanCandidates, scanSimilar, writeVectorBatch } from '../../../../src/store/sqlite/vectors.ts';
 import type { Connection } from '../../../../src/store/types.ts';
-import { pendingRows } from '../../../../src/store/vectors.ts';
+import { NATIVE_VECTOR_SCOPE_TABLE, pendingRows } from '../../../../src/store/vectors.ts';
 import { assertSeparatedScores, cosineOracle, quantizeVector, separatedVectorFixture, VECTOR_DIMS } from '../../../lib/vectors.ts';
 
 const DIMS = VECTOR_DIMS;
@@ -12,7 +12,7 @@ const DIMS = VECTOR_DIMS;
 function makeDb(): { db: DatabaseSync; conn: Connection } {
   const db = new DatabaseSync(':memory:');
   try {
-    db.exec(`CREATE TABLE embeddings ("path" TEXT, chunk INTEGER, start_line INTEGER, end_line INTEGER, scale REAL, vector BLOB, PRIMARY KEY ("path", chunk))`);
+    db.exec(`CREATE TABLE embeddings ("path" TEXT, chunk INTEGER, start_line INTEGER, end_line INTEGER, content_identity TEXT NOT NULL, scale REAL, vector BLOB, PRIMARY KEY ("path", chunk))`);
     return { db, conn: createConnection(db) };
   } catch (err) {
     db.close();
@@ -30,11 +30,19 @@ async function withDb<T>(fn: (db: DatabaseSync, conn: Connection) => Promise<T>)
 }
 
 function insertPending(db: DatabaseSync, path: string, chunk: number, start = 1, end = 1): void {
-  db.prepare('INSERT INTO embeddings ("path", chunk, start_line, end_line, scale, vector) VALUES (?, ?, ?, ?, NULL, NULL)').run(path, chunk, start, end);
+  db.prepare('INSERT INTO embeddings ("path", chunk, start_line, end_line, content_identity, scale, vector) VALUES (?, ?, ?, ?, ?, NULL, NULL)').run(path, chunk, start, end, `authored:${path}:${chunk}`);
 }
 
 function int8(values: number[]): Buffer {
   return Buffer.from(Int8Array.from(values).buffer);
+}
+
+async function materializeNativeScope(conn: Connection, paths: Set<string>): Promise<void> {
+  await conn.exec(`CREATE TEMP TABLE ${NATIVE_VECTOR_SCOPE_TABLE} ("path" TEXT PRIMARY KEY)`);
+  await conn.runBatch(
+    `INSERT INTO ${NATIVE_VECTOR_SCOPE_TABLE} ("path") VALUES (?)`,
+    [...paths].map((path) => [path])
+  );
 }
 
 describe('int8 quantization round trip', () => {
@@ -131,6 +139,37 @@ describe('scanCandidates', () => {
         result.map((r) => r.path),
         ['b.md']
       );
+    });
+  });
+
+  it('uses the bound native scope for escaped paths in candidate and similar scans', async () => {
+    await withDb(async (db, conn) => {
+      const allowed = new Set(['quote"note.md', 'back\\slash.md', 'café/文.md']);
+      const rows = [
+        ['target.md', int8([127, 0])],
+        ['quote"note.md', int8([100, 0])],
+        ['back\\slash.md', int8([127, 0])],
+        ['café/文.md', int8([0, 127])],
+        ['outside.md', int8([-127, 0])],
+      ] as const;
+      for (const [path] of rows) insertPending(db, path, 0);
+      await writeVectorBatch(
+        conn,
+        rows.map(([path, vector]) => ({ path, chunk: 0, scale: 1 / 127, vector }))
+      );
+      await materializeNativeScope(conn, allowed);
+      try {
+        assert.deepEqual(
+          (await scanCandidates(conn, new Float32Array([1, 0]), 2, 10, allowed, true)).map((row) => row.path),
+          ['back\\slash.md', 'quote"note.md', 'café/文.md']
+        );
+        assert.deepEqual(
+          (await scanSimilar(conn, 'target.md', { exclude: new Set(), allowed, k: 10 }, true)).map((row) => row.path),
+          ['back\\slash.md', 'quote"note.md', 'café/文.md']
+        );
+      } finally {
+        await conn.exec(`DROP TABLE ${NATIVE_VECTOR_SCOPE_TABLE}`);
+      }
     });
   });
 
@@ -286,11 +325,22 @@ describe('scanSimilar', () => {
       rows.push({ path: 'other.md', chunk: 0, scale: 1 / 127, vector: int8([0, 127]) });
       await writeVectorBatch(conn, rows);
 
-      const result = await scanSimilar(conn, 'target.md', { exclude: new Set(), k: 10 });
-      assert.equal(result.length, 1);
-      assert.equal(result[0].path, 'other.md');
-      // Chunk 1's score is 1 but must not win here if the cap limits seeding to sampled chunks.
-      assert.equal(result[0].similarity, 0, 'an unsampled chunk must not affect the score');
+      const unscoped = await scanSimilar(conn, 'target.md', { exclude: new Set(), k: 10 });
+      assert.equal(unscoped.length, 1);
+      assert.equal(unscoped[0].path, 'other.md');
+      assert.equal(unscoped[0].similarity, 0, 'an unsampled chunk must not affect the direct scan');
+
+      const allowed = new Set(['other.md']);
+      await materializeNativeScope(conn, allowed);
+      try {
+        const result = await scanSimilar(conn, 'target.md', { exclude: new Set(), allowed, k: 10 }, true);
+        assert.equal(result.length, 1);
+        assert.equal(result[0].path, 'other.md');
+        // Chunk 1's score is 1 but must not win here if the cap limits seeding to sampled chunks.
+        assert.equal(result[0].similarity, 0, 'an unsampled chunk must not affect the score');
+      } finally {
+        await conn.exec(`DROP TABLE ${NATIVE_VECTOR_SCOPE_TABLE}`);
+      }
     });
   });
 });

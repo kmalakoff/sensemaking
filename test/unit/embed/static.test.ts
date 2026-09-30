@@ -7,6 +7,7 @@ import { staticProvider } from '../../../src/embed/static.ts';
 import { downloadModelRevision, MODEL_FILES, snapshotDir } from '../../../src/embed/store.ts';
 import type { EmbedProvider } from '../../../src/embed/types.ts';
 import { gate } from '../../lib/gate.ts';
+import { writeModel } from '../../lib/model.ts';
 
 // Oracle diff: fixtures are Python model2vec + tokenizers output, run once offline and
 // committed (test/fixtures/parity/generate.py); this suite reproduces them via JS with no Python in CI.
@@ -66,6 +67,22 @@ function assertVectorParity(category: string, expected: number[], actual: Float3
   const sim = cosine(actual, expected);
   assert.ok(sim >= 0.999999, `${category}: cosine similarity ${sim} below 0.999999`);
 }
+
+describe('static provider cancellation', () => {
+  it('preserves an already-aborted caller reason before synchronous embedding starts', async () => {
+    const provider = await staticProvider(writeModel());
+    const controller = new AbortController();
+    const reason = { operation: 'cancelled' };
+    controller.abort(reason);
+    let received: unknown;
+    try {
+      await provider.embedDocuments(['apple'], { signal: controller.signal });
+    } catch (err) {
+      received = err;
+    }
+    assert.strictEqual(received, reason);
+  });
+});
 
 describe('embedding parity against the Python reference', () => {
   let provider: EmbedProvider;

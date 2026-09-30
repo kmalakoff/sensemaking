@@ -22,7 +22,7 @@ For a static model, inspect current Model2Vec models and their cards rather than
 
 Naming a remote static model in the config authorizes its download. `sense download` performs that fetch before a query. A default vector query embeds its eligible scope; `sense build` and `sense watch` prepare all configured vector capabilities, while `--no-build` requires the requested scope to be ready.
 
-Changing the model changes the vector space and rebuilds embeddings. Changing preset coverage can also add, remove, or rebuild vector rows. Settle the broad scope before embedding a large tree.
+Changing the provider, model, or effective endpoint invalidates stored vector values while preserving the indexed chunks. Changing `embed.chunkTokens` rebuilds affected embedding rows, and changing preset coverage can add, remove, or rebuild them. A build-enabled command performs this work; config `"build": false` or `--no-build` reports incompatible or unprepared state without rebuilding or repairing the Sense index. Settle the broad scope before embedding a large tree.
 
 ## Chunk size
 

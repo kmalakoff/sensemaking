@@ -1,9 +1,8 @@
 import type { DuckDBConnection, DuckDBInstance } from '@duckdb/node-api';
 import type { Config, ResolvedConfig } from '../../config/index.ts';
-import { featureSignature } from '../../config/index.ts';
 import { STORE_DIMS } from '../../embed/types.ts';
 import { SenseError } from '../../errors.ts';
-import { activeFeatures, FEATURES } from '../../features/index.ts';
+import { activeFeatures } from '../../features/index.ts';
 import type { InternalOpenOptions, OpenResult } from '../open.ts';
 import { openWithDialect } from '../open.ts';
 import { getMeta, setMeta } from '../shared.ts';
@@ -19,7 +18,7 @@ import { createVectorWriteStage } from './vectors.ts';
 export const DB_FILENAME = 'cache.duckdb';
 // Independent of sqlite's SCHEMA_VERSION -- the two stores' cache shapes evolve separately (VARIANT frontmatter columns vs untyped).
 // The store name already joins the feature signature, so switching a config's `store` key rebuilds rather than reusing the other engine's cache.
-export const SCHEMA_VERSION = '5';
+export const SCHEMA_VERSION = '6';
 
 export type { OpenResult };
 
@@ -33,24 +32,29 @@ interface DuckdbHandle {
 // `content` is a plain table (not FTS-virtual): build prepares the persistent FTS index over it,
 // while contains() verification reads the table directly.
 // No tokenizer resolution: this store always uses the fts extension's default (porter) stemmer.
-async function ensureSchema(handle: DuckdbHandle, conn: Connection, cfg: Config): Promise<void> {
+async function ensureCoreSchema(_handle: DuckdbHandle, conn: Connection): Promise<void> {
   await conn.exec(`CREATE TABLE IF NOT EXISTS frontmatter ("path" TEXT PRIMARY KEY, "_mtime" DOUBLE, "_ctime" DOUBLE, "_size" INTEGER, "_parse_error" TEXT)`);
   await conn.exec(`CREATE TABLE IF NOT EXISTS content ("path" TEXT PRIMARY KEY, title TEXT, summary TEXT, text TEXT)`);
   await conn.exec(`CREATE TABLE IF NOT EXISTS indexed_sources ("path" TEXT PRIMARY KEY, text TEXT NOT NULL)`);
   await conn.exec(`CREATE TABLE IF NOT EXISTS preset_files ("path" TEXT, preset TEXT, PRIMARY KEY ("path", preset))`);
   await conn.exec('CREATE INDEX IF NOT EXISTS preset_files_preset ON preset_files(preset)');
+  if ((await getMeta(conn, 'schema_version')) === null) await setMeta(conn, 'schema_version', SCHEMA_VERSION);
+}
+
+async function ensureFeatureSchema(_handle: DuckdbHandle, conn: Connection, cfg: Config): Promise<void> {
   for (const feature of activeFeatures(cfg)) {
     // Native FLOAT[STORE_DIMS] instead of the embed feature's engine-neutral BLOB+scale DDL (vectors.ts). `scale` is kept, unused,
     // so the feature's shared reconcile-time INSERT/DELETE (features/embed.ts) names a column that exists on both stores.
     if (feature.name === 'embed') {
-      await conn.exec(`CREATE TABLE IF NOT EXISTS embeddings ("path" TEXT, chunk INTEGER, start_line INTEGER, end_line INTEGER, scale REAL, vector FLOAT[${STORE_DIMS}], PRIMARY KEY ("path", chunk))`);
-      await createVectorWriteStage(handle.duckdb, STORE_DIMS);
+      await conn.exec(`CREATE TABLE IF NOT EXISTS embeddings ("path" TEXT, chunk INTEGER, start_line INTEGER, end_line INTEGER, content_identity TEXT NOT NULL, scale REAL, vector FLOAT[${STORE_DIMS}], PRIMARY KEY ("path", chunk))`);
       continue;
     }
     await feature.schema(conn);
   }
-  if ((await getMeta(conn, 'schema_version')) === null) await setMeta(conn, 'schema_version', SCHEMA_VERSION);
-  if ((await getMeta(conn, 'features')) === null) await setMeta(conn, 'features', featureSignature(cfg, FEATURES));
+}
+
+async function prepareConnection(handle: DuckdbHandle, _conn: Connection, _cfg: Config): Promise<void> {
+  await createVectorWriteStage(handle.duckdb, STORE_DIMS);
 }
 
 // Order matters: the connection must be gone before the instance closes the WAL.
@@ -104,7 +108,9 @@ export const duckdbOpenDialect: OpenDialect<DuckdbHandle> = {
   // way: posix "Could not set lock on file ... Conflicting lock is held in <exe> (PID n)", Windows
   // "Cannot open file ... being used by another process". Both are the same condition.
   isLocked: (err) => /Could not set lock on file|being used by another process/.test(err.message),
-  ensureSchema,
+  ensureCoreSchema,
+  ensureFeatureSchema,
+  prepareConnection,
   prepareLexical: prepareFts,
   assertLexicalReady: assertFtsReady,
   createStore: (handle, conn) => createStore(handle.instance, handle.duckdb, conn),

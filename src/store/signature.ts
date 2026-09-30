@@ -27,6 +27,15 @@ export function embedIdentityAdopted(before: string, after: string): boolean {
   return b.indexOf('@') === -1 && at !== -1 && a.slice(0, at) === b;
 }
 
+// Embedding work captured against an unresolved static-model signature may finish under the
+// same model after its weight identity is known. Every published read still requires exactness.
+export function embeddingSignatureCompatible(expected: string | null, actual: string): boolean {
+  if (expected === actual) return true;
+  if (expected === null) return false;
+  const changed = changedSignatureKeys(expected, actual);
+  return changed.size === 1 && changed.has('embed') && embedIdentityAdopted(expected, actual);
+}
+
 // Names what moved, for the rebuild notice.
 export function signatureDiff(before: string, after: string): string {
   const changed = changedSignatureKeys(before, after);

@@ -6,7 +6,7 @@ import type { Store } from '../store/types.ts';
 
 type Direction = 'forward' | 'reverse' | 'both';
 
-interface FindPathOptions {
+export interface FindPathOptions {
   directed?: boolean;
   maxDepth?: number;
   allowed?: Set<string>;
@@ -68,10 +68,12 @@ async function reconstructPath(store: Store, to: string): Promise<string[]> {
 // One BFS from `from`, tracking a predecessor per node. Undirected by default, matching
 // personalizedRank; null when `to` is unreached within `maxDepth`.
 export function findPath(store: Store, from: string, to: string, opts: FindPathOptions = {}): Promise<string[] | null> {
-  return serialQuery(store, () => findIndexedPath(store, from, to, opts));
+  return serialQuery(store, () => store.transaction(() => findPathInSnapshot(store, from, to, opts)));
 }
 
-async function findIndexedPath(store: Store, from: string, to: string, opts: FindPathOptions): Promise<string[] | null> {
+// Internal entry for the scoped command wrapper, whose transaction also owns endpoint resolution
+// and scope reads. Direct graph callers use findPath() above and receive the same snapshot rule.
+export async function findPathInSnapshot(store: Store, from: string, to: string, opts: FindPathOptions): Promise<string[] | null> {
   if (from === to) return [from];
 
   const direction: Direction = opts.directed ? 'forward' : 'both';

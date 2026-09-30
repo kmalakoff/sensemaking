@@ -1,21 +1,28 @@
+import { channel } from 'node:diagnostics_channel';
 import { stemmer } from 'stemmer';
-import type { ResolvedConfig } from '../config/index.ts';
+import type { EffectiveSearch, ResolvedConfig } from '../config/index.ts';
 import { embedConfig, featureEnabled, resolveSearch } from '../config/index.ts';
-import { ensureDocumentEmbeddings } from '../embed/query.ts';
+import type { PreparedSemanticQuery } from '../embed/query.ts';
+import { ensureDocumentEmbeddings, prepareSemanticQuery } from '../embed/query.ts';
 import { localModelMissing, MODEL_FILENAMES } from '../embed/store.ts';
 import { SenseError } from '../errors.ts';
 import { serialQuery } from '../lib/serial-query.ts';
-import type { Row } from '../output/output.ts';
 import { bareTermSyntaxError, searchError } from '../output/search-error.ts';
 import type { LexicalHit, Store } from '../store/types.ts';
 import { foldForSearch, hasUnspacedRun, searchTokens, unspacedRuns } from '../text/segment.ts';
 import { materializeScope, narrowByWhere, rawScope, scopeHasEmbeddings } from './scope.ts';
+import type { Candidates, SearchResultVia } from './signals.ts';
 import { linksCandidates, vectorsCandidates, wordsCandidates } from './signals.ts';
+import { assertQuerySnapshot } from './snapshot.ts';
+
+export type { SearchResultVia } from './signals.ts';
 
 // Default budget behind --snippet-char-limit/--snippet-count-limit: the limit is whatever the
 // caller passes, these only say what happens when they pass nothing (DESIGN.md "Search snippets").
 export const SNIPPET_CHAR_LIMIT_DEFAULT = 80;
 export const SNIPPET_COUNT_LIMIT_DEFAULT = 1;
+
+const searchCandidatesRead = channel('sensemaking.search.candidates-read');
 
 // Bare terms from an FTS5 query string: strips operators/quoting, not real terms, so the
 // snippet scan matches what the query matched -- FTS5 operators are uppercase-only, so this is too.
@@ -273,6 +280,7 @@ async function lineRangeFor(store: Store, path: string, line: number): Promise<s
   return row ? `L${row.start_line}-${row.end_line}` : null;
 }
 
+/** Options for the root {@link search} API. */
 export interface SearchOptions {
   k?: number;
   where?: string; // SQL fragment against frontmatter alias `f`, e.g. "f.status = 'active'"
@@ -282,6 +290,25 @@ export interface SearchOptions {
   noExclude?: boolean; // --no-exclude: drop the preset's exclude for this command
   snippetCharLimit?: number; // --snippet-char-limit; defaults to SNIPPET_CHAR_LIMIT_DEFAULT
   snippetCountLimit?: number; // --snippet-count-limit; defaults to SNIPPET_COUNT_LIMIT_DEFAULT
+  /** Cancels supported provider I/O and stops between phases after active native work finishes. */
+  signal?: AbortSignal;
+}
+
+export type SearchResult = {
+  path: string;
+  title: string;
+  summary: string;
+  snippets: string[];
+  via: SearchResultVia;
+  score: number;
+  lines: string | null;
+  similarity?: number | null;
+};
+
+export interface SearchHydrationRow {
+  path: string;
+  snippets?: string[];
+  lines?: string | null;
 }
 
 function validateSearchOptions(opts: SearchOptions): void {
@@ -297,58 +324,121 @@ function validateSearchOptions(opts: SearchOptions): void {
 }
 
 // Hydrates already-ranked rows with snippets and containing-section ranges without reranking.
-export async function hydrateSearchRows(store: Store, cfg: ResolvedConfig, rows: Row[], matchedPaths: Set<string>, terms: string, opts: Pick<SearchOptions, 'snippetCharLimit' | 'snippetCountLimit'> = {}): Promise<void> {
+export async function hydrateSearchRows(store: Store, cfg: ResolvedConfig, rows: SearchHydrationRow[], matchedPaths: Set<string>, terms: string, opts: Pick<SearchOptions, 'snippetCharLimit' | 'snippetCountLimit'> = {}): Promise<void> {
   if (matchedPaths.size === 0) return;
   const bareTerms = extractBareTerms(terms);
   const charLimit = opts.snippetCharLimit ?? SNIPPET_CHAR_LIMIT_DEFAULT;
   const countLimit = opts.snippetCountLimit ?? SNIPPET_COUNT_LIMIT_DEFAULT;
   const sourceStmt = await store.prepare('SELECT text FROM indexed_sources WHERE "path" = ?');
   for (const row of rows) {
-    if (!matchedPaths.has(row.path as string)) continue;
+    if (!matchedPaths.has(row.path)) continue;
     const source = (await sourceStmt.get(row.path)) as { text: string } | undefined;
     if (!source) throw new SenseError('INDEX_NOT_READY', `indexed source text is missing for ${String(row.path)}; run \`sense build --force\` (or library build(config, { force: true })) before querying`);
     const text = source.text;
     const { snippets, offset } = computeSnippets(text, bareTerms, charLimit, countLimit);
     row.snippets = snippets;
-    if (row.lines == null) row.lines = featureEnabled(cfg, 'sections') ? await lineRangeFor(store, row.path as string, lineNumberAt(text, offset)) : null;
+    if (row.lines == null) row.lines = featureEnabled(cfg, 'sections') ? await lineRangeFor(store, row.path, lineNumberAt(text, offset)) : null;
   }
 }
 
-// The declared or defaulted signals compose via RRF; `via` names which ones produced each row.
-// `opts` arrives already resolved (config.ts:resolveSearch).
-export function search(store: Store, cfg: ResolvedConfig, terms: string, opts: SearchOptions = {}): Promise<Row[]> {
+/**
+ * Searches one committed published generation. Provider work precedes the final read transaction;
+ * cancellation waits for active native work and transaction cleanup before rejection.
+ */
+export function search(store: Store, cfg: ResolvedConfig, terms: string, opts: SearchOptions = {}): Promise<SearchResult[]> {
+  if (opts.signal?.aborted) return Promise.reject(opts.signal.reason);
   return serialQuery(store, () => searchIndexed(store, cfg, terms, opts));
 }
 
-async function searchIndexed(store: Store, cfg: ResolvedConfig, terms: string, opts: SearchOptions): Promise<Row[]> {
-  validateSearchOptions(opts);
-  const effective = resolveSearch(cfg, opts);
-  const { k, signals } = effective;
+interface SearchScope {
+  signature: string;
+  effective: EffectiveSearch;
+  allPaths: string[];
+  scopePaths: Set<string>;
+  allowedPaths: Set<string>;
+  semanticEligible: boolean;
+}
 
+async function readSearchScope(store: Store, cfg: ResolvedConfig, terms: string, opts: SearchOptions): Promise<SearchScope> {
+  const signature = await assertQuerySnapshot(store, cfg);
+  const effective = resolveSearch(cfg, opts);
   const allPaths = ((await (await store.prepare('SELECT "path" FROM frontmatter')).all()) as Array<{ path: string }>).map((r) => r.path);
   const scopePaths = await rawScope(store, cfg, opts, allPaths);
-  const scopeActive = scopePaths.size < allPaths.length;
-  // The set every candidate pool must be filtered to before truncation: scope narrowed by
-  // --where, the same composition scopedPaths() gives the other commands.
   let allowedPaths: Set<string>;
   try {
     allowedPaths = await narrowByWhere(store, scopePaths, effective.where);
   } catch (err) {
     throw searchError(err as Error, terms, effective.where);
   }
-  const fetch = Math.max(k * 3, 30);
+  const wantsVectors = effective.signals.vectors !== undefined;
+  if (wantsVectors) await ensureDocumentEmbeddings(store, cfg, allowedPaths);
+  const semanticEligible = wantsVectors && (await scopeHasEmbeddings(store, cfg, allowedPaths));
+  return { signature, effective, allPaths, scopePaths, allowedPaths, semanticEligible };
+}
 
+interface SemanticPreparationNeeded {
+  signature: string;
+}
+
+function needsSemanticPreparation(result: SearchResult[] | SemanticPreparationNeeded): result is SemanticPreparationNeeded {
+  return !Array.isArray(result);
+}
+
+async function searchIndexed(store: Store, cfg: ResolvedConfig, terms: string, opts: SearchOptions): Promise<SearchResult[]> {
+  validateSearchOptions(opts);
+  const initial = resolveSearch(cfg, opts);
+  opts.signal?.throwIfAborted();
   // A downloadable HF id proceeds -- getProvider fetches it lazily on consent. Only a
   // local path with missing files errors here, since nothing will ever fetch it for itself.
-  const wantsVectors = signals.vectors !== undefined;
+  const wantsVectors = initial.signals.vectors !== undefined;
   if (wantsVectors) {
     const e = embedConfig(cfg); // validate.ts guarantees this is set whenever "vectors" is declared
     if (localModelMissing(e)) {
-      throw new SenseError('EMBED_MODEL_MISSING', `preset "${effective.presetName}" searches with vectors, but the local model path "${e.model}" is missing ${MODEL_FILENAMES}; point embed.model at a directory containing them, or drop "vectors" from that preset's signals to search without them`);
+      throw new SenseError('EMBED_MODEL_MISSING', `preset "${initial.presetName}" searches with vectors, but the local model path "${e.model}" is missing ${MODEL_FILENAMES}; point embed.model at a directory containing them, or drop "vectors" from that preset's signals to search without them`);
     }
-    await ensureDocumentEmbeddings(store, cfg, allowedPaths);
   }
-  const semanticEnabled = wantsVectors && (await scopeHasEmbeddings(store, cfg, allowedPaths));
+
+  let prepared: PreparedSemanticQuery | undefined;
+  let preparedSignature: string | undefined;
+  if (wantsVectors) {
+    // This first snapshot only decides whether a semantic query can contribute. It closes before
+    // provider/model work, and the complete scope/readiness decision is repeated below.
+    const preflight = await store.transaction(() => readSearchScope(store, cfg, terms, opts));
+    opts.signal?.throwIfAborted();
+    if (preflight.semanticEligible) {
+      preparedSignature = preflight.signature;
+      prepared = await prepareSemanticQuery(cfg, terms, { signal: opts.signal });
+      opts.signal?.throwIfAborted();
+    }
+  }
+
+  opts.signal?.throwIfAborted();
+  let result = await store.transaction(() => searchSnapshot(store, cfg, terms, opts, prepared, preparedSignature));
+  opts.signal?.throwIfAborted();
+  if (!needsSemanticPreparation(result)) return result;
+
+  // The scope became vector-eligible after an empty/ineligible preflight. Leave that snapshot,
+  // prepare once, then take a fresh final snapshot rather than waiting on the provider inside it.
+  preparedSignature = result.signature;
+  prepared = await prepareSemanticQuery(cfg, terms, { signal: opts.signal });
+  opts.signal?.throwIfAborted();
+  result = await store.transaction(() => searchSnapshot(store, cfg, terms, opts, prepared, preparedSignature));
+  opts.signal?.throwIfAborted();
+  if (needsSemanticPreparation(result)) throw new SenseError('INDEX_NOT_READY', 'the semantic search scope changed while its query was being prepared; retry the search against a stable published index');
+  return result;
+}
+
+async function searchSnapshot(store: Store, cfg: ResolvedConfig, terms: string, opts: SearchOptions, prepared: PreparedSemanticQuery | undefined, preparedSignature: string | undefined): Promise<SearchResult[] | SemanticPreparationNeeded> {
+  const { signature, effective, allPaths, scopePaths, allowedPaths, semanticEligible } = await readSearchScope(store, cfg, terms, opts);
+  if (prepared !== undefined && signature !== preparedSignature) {
+    throw new SenseError('INDEX_NOT_READY', 'the index configuration changed while the semantic query was being prepared; retry after the current build finishes, or rebuild the index for this configuration');
+  }
+  if (semanticEligible && prepared === undefined) return { signature };
+
+  const { k, signals } = effective;
+  const fetch = Math.max(k * 3, 30);
+  const scopeActive = scopePaths.size < allPaths.length;
+  const semanticEnabled = semanticEligible && prepared !== undefined;
 
   // --where applies inside the candidate query (a post-filter would drop matches ranked past
   // the pool) and again on the final select, for link-derived rows.
@@ -360,7 +450,7 @@ async function searchIndexed(store: Store, cfg: ResolvedConfig, terms: string, o
   if (scopeActive) await materializeScope(store, '_search_scope', scopePaths);
   const scopeCond = scopeActive ? `AND content.path IN (SELECT "path" FROM _search_scope)` : '';
 
-  const candidates = new Map<string, { score: number; via: string }>();
+  const candidates: Candidates = new Map();
   let matchRows: LexicalHit[] = [];
   const hasEmptyPhrase = [...terms.matchAll(/"([^"]*)"/g)].some((match) => !/[\p{L}\p{N}_]/u.test(match[1]));
   const hasBareSyntaxOnly = /[()]/u.test(terms.replace(/"[^"]*"/g, ' '));
@@ -383,8 +473,8 @@ async function searchIndexed(store: Store, cfg: ResolvedConfig, terms: string, o
 
   let chunkLines = new Map<string, string>();
   let chunkSimilarity = new Map<string, number>();
-  if (semanticEnabled) {
-    ({ chunkLines, chunkSimilarity } = await vectorsCandidates(store, cfg, candidates, terms, fetch, allowedPaths, signals.vectors as number));
+  if (semanticEnabled && signals.vectors !== undefined && prepared !== undefined) {
+    ({ chunkLines, chunkSimilarity } = await vectorsCandidates(store, prepared, candidates, fetch, allowedPaths, allPaths.length, signals.vectors));
   }
 
   await store.exec('DROP TABLE IF EXISTS _search');
@@ -409,9 +499,10 @@ async function searchIndexed(store: Store, cfg: ResolvedConfig, terms: string, o
   const selectStmt = await store.prepare(
     `SELECT f."path" AS path, content.title, content.summary, NULL AS snippets, _search.via, round(_search.score, 4) AS score, _search.lines${similarityCol}
        FROM _search JOIN frontmatter f ON f."path" = _search."path" JOIN content ON content.path = _search."path"
-       ${where} ORDER BY _search.score DESC LIMIT ?`
+       ${where} ORDER BY _search.score DESC, _search."path" ASC LIMIT ?`
   );
-  const rows = (await selectStmt.all(k)) as Row[];
+  const rows = (await selectStmt.all(k)) as SearchResult[];
+  if (searchCandidatesRead.hasSubscribers) searchCandidatesRead.publish({ paths: rows.map((row) => row.path) });
   for (const row of rows) row.snippets = [];
 
   await hydrateSearchRows(store, cfg, rows, matchedPaths, terms, opts);

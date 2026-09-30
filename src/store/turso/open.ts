@@ -1,9 +1,8 @@
 import type { Database } from '@tursodatabase/database';
 import type { Config, ResolvedConfig } from '../../config/index.ts';
-import { featureSignature } from '../../config/index.ts';
 import { STORE_DIMS } from '../../embed/types.ts';
 import { SenseError } from '../../errors.ts';
-import { activeFeatures, FEATURES } from '../../features/index.ts';
+import { activeFeatures } from '../../features/index.ts';
 import type { InternalOpenOptions, OpenResult } from '../open.ts';
 import { openWithDialect } from '../open.ts';
 import { getMeta, setMeta } from '../shared.ts';
@@ -16,30 +15,32 @@ import { createStore } from './store.ts';
 export const DB_FILENAME = 'cache.turso.db';
 // Independent of sqlite's and duckdb's SCHEMA_VERSION: each store's cache shape evolves
 // separately. Covers the FTS indexes, the "_ngram" sidecar columns, and embeddings.vector's width.
-export const SCHEMA_VERSION = '9';
+export const SCHEMA_VERSION = '10';
 
 export type { OpenResult };
 
 // This store's Handle (types.ts's OpenDialect<Handle>) is the connected Database itself: no
 // extra native state to thread, unlike duckdb's separate instance/connection pair.
-async function ensureSchema(_handle: Database, conn: Connection, cfg: Config): Promise<void> {
+async function ensureCoreSchema(_handle: Database, conn: Connection): Promise<void> {
   await conn.exec(`CREATE TABLE IF NOT EXISTS frontmatter ("path" TEXT PRIMARY KEY, "_mtime" REAL, "_ctime" REAL, "_size" INTEGER, "_parse_error" TEXT)`);
   await conn.exec(`CREATE TABLE IF NOT EXISTS content ("path" TEXT PRIMARY KEY, title TEXT, summary TEXT, text TEXT, title_stem TEXT, summary_stem TEXT, text_stem TEXT, title_ngram TEXT, summary_ngram TEXT, text_ngram TEXT)`);
   await conn.exec(`CREATE TABLE IF NOT EXISTS indexed_sources ("path" TEXT PRIMARY KEY, text TEXT NOT NULL)`);
   for (const ddl of CONTENT_FTS_DDL) await conn.exec(ddl);
   await conn.exec(`CREATE TABLE IF NOT EXISTS preset_files ("path" TEXT, preset TEXT, PRIMARY KEY ("path", preset))`);
   await conn.exec('CREATE INDEX IF NOT EXISTS preset_files_preset ON preset_files(preset)');
+  if ((await getMeta(conn, 'schema_version')) === null) await setMeta(conn, 'schema_version', SCHEMA_VERSION);
+}
+
+async function ensureFeatureSchema(_handle: Database, conn: Connection, cfg: Config): Promise<void> {
   for (const feature of activeFeatures(cfg)) {
     // Native F32_BLOB(STORE_DIMS) instead of the embed feature's engine-neutral BLOB DDL. `scale`
     // is kept unused, so the shared reconcile-time INSERT/DELETE names a column both stores have.
     if (feature.name === 'embed') {
-      await conn.exec(`CREATE TABLE IF NOT EXISTS embeddings ("path" TEXT, chunk INTEGER, start_line INTEGER, end_line INTEGER, scale REAL, vector F32_BLOB(${STORE_DIMS}), PRIMARY KEY ("path", chunk))`);
+      await conn.exec(`CREATE TABLE IF NOT EXISTS embeddings ("path" TEXT, chunk INTEGER, start_line INTEGER, end_line INTEGER, content_identity TEXT NOT NULL, scale REAL, vector F32_BLOB(${STORE_DIMS}), PRIMARY KEY ("path", chunk))`);
       continue;
     }
     await feature.schema(conn);
   }
-  if ((await getMeta(conn, 'schema_version')) === null) await setMeta(conn, 'schema_version', SCHEMA_VERSION);
-  if ((await getMeta(conn, 'features')) === null) await setMeta(conn, 'features', featureSignature(cfg, FEATURES));
 }
 
 async function close(handle: Database, options: { observational?: boolean } = {}): Promise<void> {
@@ -84,7 +85,8 @@ export const tursoOpenDialect: OpenDialect<Database> = {
   // process", Windows "another process has locked a portion of the file (os error 33)". Distinct from
   // the write-time "database is locked" its connect-time `timeout` covers; that one never reaches here.
   isLocked: (err) => /File is locked by another process|locked a portion of the file/.test(err.message),
-  ensureSchema,
+  ensureCoreSchema,
+  ensureFeatureSchema,
   setDerivedBusyTimeout,
   createStore: (handle, conn, _cfg, options) => createStore(handle, conn, options),
 };

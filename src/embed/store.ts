@@ -4,7 +4,7 @@ import type { Config } from '../config/index.ts';
 import { embedConfig } from '../config/index.ts';
 import { SenseError } from '../errors.ts';
 import { writeFileAtomic } from '../lib/atomic-write.ts';
-import { fetchWithRetry } from './http.ts';
+import { type BufferedResponse, fetchWithRetry, HTTP_ATTEMPT_TIMEOUT_MS, MODEL_FILE_ATTEMPT_TIMEOUT_MS } from './http.ts';
 import { DEFAULT_MODELS_ROOT, hasModelFiles, isDownloadable, languagesPath, MODEL_FILES, readRef, snapshotDir, writeLanguages, writeRef } from './identity.ts';
 import { isKnownLanguageTag, MEASURED_MODEL_LANGUAGES } from './languages.ts';
 
@@ -36,14 +36,9 @@ async function resolveSha(model: string, root: string = DEFAULT_MODELS_ROOT): Pr
   const url = `https://huggingface.co/${model}/resolve/main/model.safetensors`;
   // redirect: manual -- the header rides the Hub's own response; following the LFS/CDN
   // redirect would read the CDN's headers instead, which do not carry it.
-  let res: Response;
-  try {
-    res = await fetchWithRetry(url, { method: 'HEAD', redirect: 'manual' });
-  } catch (err) {
-    throw new SenseError('EMBED_MODEL', `could not reach ${url}: ${(err as Error).message}`);
-  }
+  const res = await fetchWithRetry(url, { method: 'HEAD', redirect: 'manual' }, { attemptTimeoutMs: HTTP_ATTEMPT_TIMEOUT_MS });
   const sha = res.headers.get('x-repo-commit');
-  if (!sha) throw new SenseError('EMBED_MODEL', `${url}: response carried no x-repo-commit header`);
+  if (!sha) throw new SenseError('EMBED_MODEL', `${res.url}: response carried no x-repo-commit header`);
   writeRef(model, sha, root);
   return sha;
 }
@@ -51,6 +46,19 @@ async function resolveSha(model: string, root: string = DEFAULT_MODELS_ROOT): Pr
 interface HfModelInfo {
   cardData?: { language?: string | string[] };
   tags?: string[];
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((part) => typeof part === 'string');
+}
+
+function isHfModelInfo(value: unknown): value is HfModelInfo {
+  if (value === null || typeof value !== 'object') return false;
+  if ('tags' in value && value.tags !== undefined && !isStringArray(value.tags)) return false;
+  if (!('cardData' in value) || value.cardData === undefined) return true;
+  if (value.cardData === null || typeof value.cardData !== 'object') return false;
+  if (!('language' in value.cardData) || value.cardData.language === undefined) return true;
+  return typeof value.cardData.language === 'string' || isStringArray(value.cardData.language);
 }
 
 // cardData.language is the structured field; tags are a fallback for cards that only tag
@@ -77,9 +85,9 @@ async function ensureLanguages(model: string, root: string = DEFAULT_MODELS_ROOT
     writeLanguages(model, measured, root);
     return;
   }
-  let res: Response;
+  let res: BufferedResponse;
   try {
-    res = await fetchWithRetry(`https://huggingface.co/api/models/${model}`, {});
+    res = await fetchWithRetry(`https://huggingface.co/api/models/${model}`, {}, { attemptTimeoutMs: HTTP_ATTEMPT_TIMEOUT_MS });
   } catch {
     cardUnreadable(model);
     return;
@@ -90,7 +98,9 @@ async function ensureLanguages(model: string, root: string = DEFAULT_MODELS_ROOT
   }
   let info: HfModelInfo;
   try {
-    info = (await res.json()) as HfModelInfo;
+    const decoded: unknown = JSON.parse(new TextDecoder().decode(res.body));
+    if (!isHfModelInfo(decoded)) throw new Error('invalid model-card response');
+    info = decoded;
   } catch {
     cardUnreadable(model);
     return;
@@ -99,14 +109,9 @@ async function ensureLanguages(model: string, root: string = DEFAULT_MODELS_ROOT
 }
 
 async function fetchToFile(url: string, dest: string): Promise<void> {
-  let res: Response;
-  try {
-    res = await fetchWithRetry(url, {});
-  } catch (err) {
-    throw new SenseError('EMBED_MODEL', `could not reach ${url}: ${(err as Error).message}`);
-  }
-  if (!res.ok) throw new SenseError('EMBED_MODEL', `${url} -> HTTP ${res.status}`);
-  writeFileAtomic(dest, Buffer.from(await res.arrayBuffer()));
+  const res = await fetchWithRetry(url, {}, { attemptTimeoutMs: MODEL_FILE_ATTEMPT_TIMEOUT_MS });
+  if (!res.ok) throw new SenseError('EMBED_MODEL', `${res.url} -> HTTP ${res.status}`);
+  writeFileAtomic(dest, Buffer.from(res.body));
 }
 
 // Fetches an already-known sha straight into its snapshot dir, without touching refs/main --

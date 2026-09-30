@@ -256,6 +256,22 @@ describe('featureSignature', () => {
     const widened = featureSignature({ presets: { default: { include: ['**/*.md'] } }, queries: {} }, FEATURES);
     assert.notEqual(featureSignature(base, FEATURES), widened);
   });
+
+  it('uses the effective embedding endpoint but not credential configuration as vector identity', () => {
+    const base = { presets: { default: { include: ['*.md'] } }, queries: {} };
+    const signature = (url: string, key?: string) => featureSignature({ ...base, embed: { model: 'same-model', provider: 'openai' as const, url, key } }, FEATURES);
+
+    assert.notEqual(signature('http://localhost:11434/v1'), signature('http://localhost:1234/v1'));
+    assert.equal(signature('http://localhost:11434/v1'), signature('http://localhost:11434/v1/'));
+    assert.equal(signature('http://localhost:11434/v1', 'FIRST_TOKEN'), signature('http://localhost:11434/v1', 'SECOND_TOKEN'));
+  });
+
+  it('gives the implicit and explicit Cohere endpoint the same vector identity', () => {
+    const base = { presets: { default: { include: ['*.md'] } }, queries: {} };
+    const implicit = featureSignature({ ...base, embed: { model: 'same-model', provider: 'cohere' as const } }, FEATURES);
+    const explicit = featureSignature({ ...base, embed: { model: 'same-model', provider: 'cohere' as const, url: 'https://api.cohere.com/' } }, FEATURES);
+    assert.equal(implicit, explicit);
+  });
 });
 
 describe('embed block: openai url and declared languages', () => {

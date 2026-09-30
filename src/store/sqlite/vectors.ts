@@ -1,5 +1,5 @@
 import type { Connection, VectorCandidate, VectorSimilar, VectorWriteRow } from '../types.ts';
-import { asCosine, compareVectorScores, sampleEvenly } from '../vectors.ts';
+import { asCosine, compareVectorScores, NATIVE_VECTOR_SCOPE_TABLE, sampleEvenly } from '../vectors.ts';
 
 // One runBatch call per provider batch: the caller (embed/query.ts) already batches by the
 // provider's batchCap, so this is one crossing per batch, never per row.
@@ -13,8 +13,9 @@ export async function writeVectorBatch(conn: Connection, rows: VectorWriteRow[])
 
 // Best chunk per file by cosine, its line range riding along: the JS loop over stored int8
 // BLOBs this store's scan strategy is (a native store scans differently, same contract).
-export async function scanCandidates(conn: Connection, qv: Float32Array, storeDims: number, fetch: number, allowed?: Set<string>): Promise<VectorCandidate[]> {
-  const stmt = await conn.prepare('SELECT "path", chunk, start_line, end_line, vector FROM embeddings WHERE vector IS NOT NULL ORDER BY "path", chunk');
+export async function scanCandidates(conn: Connection, qv: Float32Array, storeDims: number, fetch: number, allowed?: Set<string>, nativeScope = false): Promise<VectorCandidate[]> {
+  const scope = nativeScope ? ` AND "path" IN (SELECT "path" FROM ${NATIVE_VECTOR_SCOPE_TABLE})` : '';
+  const stmt = await conn.prepare(`SELECT "path", chunk, start_line, end_line, vector FROM embeddings WHERE vector IS NOT NULL${scope} ORDER BY "path", chunk`);
   const rows = (await stmt.all()) as Array<{
     path: string;
     chunk: number;
@@ -56,7 +57,7 @@ export async function scanCandidates(conn: Connection, qv: Float32Array, storeDi
 
 // Note-to-note similarity is the max cosine over (target chunk, other chunk) pairs, one linear
 // scan of stored vectors.
-export async function scanSimilar(conn: Connection, path: string, opts: { exclude: Set<string>; allowed?: Set<string>; k: number }): Promise<VectorSimilar[]> {
+export async function scanSimilar(conn: Connection, path: string, opts: { exclude: Set<string>; allowed?: Set<string>; k: number }, nativeScope = false): Promise<VectorSimilar[]> {
   const targetStmt = await conn.prepare('SELECT vector FROM embeddings WHERE "path" = ? AND vector IS NOT NULL ORDER BY chunk');
   const targetRows = (await targetStmt.all(path)) as Array<{ vector: Uint8Array }>;
   if (targetRows.length === 0) return [];
@@ -68,7 +69,8 @@ export async function scanSimilar(conn: Connection, path: string, opts: { exclud
     return { v, norm: Math.sqrt(norm) };
   });
 
-  const stmt = await conn.prepare('SELECT "path", vector FROM embeddings WHERE vector IS NOT NULL');
+  const scope = nativeScope ? ` AND "path" IN (SELECT "path" FROM ${NATIVE_VECTOR_SCOPE_TABLE})` : '';
+  const stmt = await conn.prepare(`SELECT "path", vector FROM embeddings WHERE vector IS NOT NULL${scope}`);
   const rows = (await stmt.all()) as Array<{ path: string; vector: Uint8Array }>;
   const best = new Map<string, number>();
   for (const row of rows) {

@@ -12,18 +12,30 @@ const DEBOUNCE_MS = 200;
 
 export type WatchEvent = { type: 'started'; rootDir: string; dbPath: string } | { type: 'reconciled'; parsed: number; total: number; warnings: string[] } | { type: 'reconcile-error'; message: string };
 
+/** Options for the root {@link runWatch} API. */
 export interface WatchOptions {
   force?: boolean;
   onEvent?: (event: WatchEvent) => void;
-  // Aborting runs the same shutdown path as SIGINT/SIGTERM.
+  /** Caller abort cancels provider work, skips final preparation, and resolves after cleanup. */
   signal?: AbortSignal;
   debounceMs?: number;
   heartbeatIntervalMs?: number;
 }
 
-// Runs in the foreground until SIGINT/SIGTERM/signal abort. DuckDB and Turso hand the cache file to
-// one process at a time, so every reconcile cycle opens and closes instead of holding an idle lock.
+function isCallerAbort(signal: AbortSignal | undefined, reason: unknown): boolean {
+  return signal?.aborted === true && Object.is(reason, signal.reason);
+}
+
+function errorMessage(reason: unknown): string {
+  return reason instanceof Error ? reason.message : String(reason);
+}
+
+/**
+ * Runs in the foreground. Caller abort waits for active native work and cleanup; SIGINT/SIGTERM
+ * also run one final freshness pass. Cleanup failures reject either shutdown path.
+ */
 export async function runWatch(cfg: ResolvedConfig, opts: WatchOptions = {}): Promise<void> {
+  if (opts.signal?.aborted) return;
   const onEvent = opts.onEvent ?? (() => {});
   const debounceMs = opts.debounceMs ?? DEBOUNCE_MS;
   const reconcileIntervalMs = opts.heartbeatIntervalMs ?? WATCH_HEARTBEAT_INTERVAL_MS;
@@ -48,7 +60,9 @@ export async function runWatch(cfg: ResolvedConfig, opts: WatchOptions = {}): Pr
   let startupNotification = false;
   let scheduleReconcile: (() => void) | undefined;
   let stopping = false;
+  let callerCanceled = false;
   try {
+    opts.signal?.throwIfAborted();
     // Subscribe before the first build. Native watchers have no ready barrier, so startup also
     // performs an unconditional catch-up pass after the initial build.
     watcher = fsWatch(rootDir, { recursive: true }, (_event, filename) => {
@@ -62,7 +76,7 @@ export async function runWatch(cfg: ResolvedConfig, opts: WatchOptions = {}): Pr
     });
 
     const startupEvents: Array<{ parsed: number; total: number; warnings: string[] }> = [];
-    const { store: initialStore, dbPath, warnings: initialWarnings, parsed: initialParsed } = await openStore(cfg);
+    const { store: initialStore, dbPath, warnings: initialWarnings, parsed: initialParsed } = await openStore(cfg, { signal: opts.signal });
     let initialTotal = 0;
     try {
       // total is read before close: an event fires only once nothing is held open again.
@@ -70,6 +84,7 @@ export async function runWatch(cfg: ResolvedConfig, opts: WatchOptions = {}): Pr
     } finally {
       await initialStore.close();
     }
+    opts.signal?.throwIfAborted();
     if (claimFailure) throw claimFailure;
 
     startupEvents.push({ parsed: initialParsed, total: initialTotal, warnings: initialWarnings });
@@ -77,12 +92,14 @@ export async function runWatch(cfg: ResolvedConfig, opts: WatchOptions = {}): Pr
     // in progress. Each pass closes before the next one starts, so no stores overlap.
     do {
       startupNotification = false;
-      const { store, parsed, warnings } = await openStore(cfg);
+      opts.signal?.throwIfAborted();
+      const { store, parsed, warnings } = await openStore(cfg, { signal: opts.signal });
       try {
         if (parsed > 0 || warnings.length > 0) startupEvents.push({ parsed, total: await docCount(store), warnings });
       } finally {
         await store.close();
       }
+      opts.signal?.throwIfAborted();
       if (claimFailure) throw claimFailure;
     } while (startupNotification && !opts.signal?.aborted);
     startup = false;
@@ -94,7 +111,7 @@ export async function runWatch(cfg: ResolvedConfig, opts: WatchOptions = {}): Pr
 
     const tick = async (alwaysEmit: boolean): Promise<void> => {
       try {
-        const { store, parsed, warnings } = await openStore(cfg);
+        const { store, parsed, warnings } = await openStore(cfg, { signal: opts.signal });
         try {
           if (alwaysEmit || parsed > 0 || warnings.length > 0) {
             onEvent({ type: 'reconciled', parsed, total: await docCount(store), warnings });
@@ -103,7 +120,8 @@ export async function runWatch(cfg: ResolvedConfig, opts: WatchOptions = {}): Pr
           await store.close();
         }
       } catch (err) {
-        onEvent({ type: 'reconcile-error', message: (err as Error).message });
+        if (isCallerAbort(opts.signal, err)) return;
+        onEvent({ type: 'reconcile-error', message: errorMessage(err) });
       }
     };
 
@@ -147,14 +165,15 @@ export async function runWatch(cfg: ResolvedConfig, opts: WatchOptions = {}): Pr
 
     return await new Promise<void>((resolveShutdown, rejectShutdown) => {
       let shutdownReason: Error | null = null;
-      const shutdown = (reason?: Error) => {
+      const shutdown = (reason?: Error, canceledByCaller = false) => {
         shutdownReason ??= reason ?? null;
+        callerCanceled ||= canceledByCaller;
         if (stopping) return;
         stopping = true;
         const shutdownTask = (async () => {
           process.off('SIGINT', stopNormally);
           process.off('SIGTERM', stopNormally);
-          opts.signal?.removeEventListener('abort', stopNormally);
+          opts.signal?.removeEventListener('abort', stopForCaller);
           clearInterval(reconcileTimer);
           if (debounceTimer) clearTimeout(debounceTimer);
           watcher?.close();
@@ -163,7 +182,7 @@ export async function runWatch(cfg: ResolvedConfig, opts: WatchOptions = {}): Pr
           try {
             // A normal stop performs one final freshness pass. Ownership loss drains existing work
             // but starts nothing new because the replacement watcher now owns that responsibility.
-            if (!shutdownReason) {
+            if (!shutdownReason && !callerCanceled) {
               const { store: finalStore } = await openStore(cfg);
               await finalStore.close();
             }
@@ -182,13 +201,14 @@ export async function runWatch(cfg: ResolvedConfig, opts: WatchOptions = {}): Pr
         shutdownTask.then(resolveShutdown, rejectShutdown);
       };
       const stopNormally = () => shutdown();
+      const stopForCaller = () => shutdown(undefined, true);
       requestShutdown = shutdown;
       process.once('SIGINT', stopNormally);
       process.once('SIGTERM', stopNormally);
       if (claimFailure) shutdown(claimFailure);
-      else if (opts.signal?.aborted) shutdown();
+      else if (opts.signal?.aborted) stopForCaller();
       else {
-        opts.signal?.addEventListener('abort', stopNormally, { once: true });
+        opts.signal?.addEventListener('abort', stopForCaller, { once: true });
         try {
           onEvent({ type: 'started', rootDir, dbPath });
           if (!stopping) {
@@ -203,6 +223,7 @@ export async function runWatch(cfg: ResolvedConfig, opts: WatchOptions = {}): Pr
       }
     });
   } catch (err) {
+    const canceledByCaller = isCallerAbort(opts.signal, err);
     watcher?.close();
     if (claimCloseStarted) throw err;
     try {
@@ -210,6 +231,7 @@ export async function runWatch(cfg: ResolvedConfig, opts: WatchOptions = {}): Pr
     } catch (closeError) {
       throw new AggregateError([err, closeError], 'watch setup and claim cleanup both failed');
     }
+    if (canceledByCaller) return;
     throw err;
   } finally {
     requestShutdown = undefined;

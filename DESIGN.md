@@ -216,8 +216,14 @@ live ownership. Forced replacement transfers ownership immediately; it does not
 interrupt synchronous native reconciliation already in flight, which the
 replaced process drains before exiting.
 
+A caller-provided `AbortSignal` stops supported provider work, skips the final freshness pass, and resolves `runWatch` after active native work and cleanup finish. Cleanup failure still rejects. SIGINT and SIGTERM are graceful process stops: they drain active work and run one final freshness pass.
+
 Library handles use the same preparation boundary. Public `search`, `mapTree`,
-and `peek` calls serialize on one retained `Store`; raw SQL, explicit
-transactions, and close remain caller-owned. DuckDB and Turso retain native
-exclusive cache access for a handle, so Sense commands against one cache wait
-for that handle to close rather than promising native reader/writer coexistence.
+`peek`, `findPath`, and `relatedNotes` calls serialize on one retained `Store`; raw SQL, explicit
+transactions, and close remain caller-owned. DuckDB observational opens are
+read-only, so independent no-build readers may coexist across processes. A
+DuckDB read-write handle excludes every other process, and Turso's
+query-capable handles remain exclusive. Contenders wait within the bounded lock
+budget and then raise `STORE_BUSY`. This contract does not promise native
+writer/reader coexistence or independently configured native instances against
+one cache inside a process.

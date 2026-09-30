@@ -67,4 +67,20 @@ describe('cohere provider', () => {
     await assert.rejects(() => cohereProvider('embed-v4.0', badUrl, undefined), /\/v2\/embed -> HTTP 500/);
     badServer.close();
   });
+
+  it('invalid JSON is terminal and is not retried', async () => {
+    let calls = 0;
+    const malformed = createServer((_req, res) => {
+      calls++;
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end('{');
+    });
+    const malformedUrl = await listen(malformed);
+    try {
+      await assert.rejects(() => cohereProvider('embed-v4.0', malformedUrl, undefined), /\/v2\/embed returned invalid JSON/);
+      assert.equal(calls, 1);
+    } finally {
+      await new Promise<void>((resolve, reject) => malformed.close((err) => (err ? reject(err) : resolve())));
+    }
+  });
 });
