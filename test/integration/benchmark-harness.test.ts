@@ -14,9 +14,10 @@ import { startMeasuredWatcher } from '../../benchmark/lib/measured-watcher.mjs';
 import { nativeObserverAttemptBudgetMs, nativeObserverDeadlineMs, runNativeObserverAttempt, waitForNativeIndex } from '../../benchmark/lib/native-observer.mjs';
 import { buildQualityArtifactBase, evaluateVariant, queryFormFor } from '../../benchmark/lib/quality.mjs';
 import { describeLoad, parseTopProcesses, quietMachineCheck } from '../../benchmark/lib/quiet-machine.mjs';
+import { compactStep } from '../../benchmark/lib/report-compaction.mjs';
 import { INPROC_META_KEYS, ROW_BY_KEY, RUN_META_KEYS, RUN_METRIC_KEYS, rowValue } from '../../benchmark/lib/rows.mjs';
 import { buildStages } from '../../benchmark/lib/stages.mjs';
-import { captureIdentity, compareCaptureDirectories, structuredRows } from '../../benchmark/lib/store-dump-evidence.mjs';
+import { captureIdentity, compareCaptureDirectories, STORE_DUMP_REPRESENTATIVE_BYTES, STORE_DUMP_REPRESENTATIVE_LIMIT, structuredRows, validateStoreDumpArtifact } from '../../benchmark/lib/store-dump-evidence.mjs';
 import { treeFingerprint } from '../../benchmark/lib/tree-fingerprint.mjs';
 import { aggregateVerdict, classificationSeverity, classifyCompare, classifyCrossGroup, classifyEval, classifyWatchSanity, priorStepLookup, shouldRunReversedCompare, watchSanityGroup } from '../../benchmark/lib/verdict.mjs';
 import {
@@ -493,6 +494,57 @@ describe('native watcher readiness observer', () => {
     const observed = await runNativeObserverAttempt(payload, await nativeObserverDeadlineMs(packageRoot, tree));
     assert.deepEqual(observed.lexical, { state: 'ready', indexed_docs: 2, indexed_paths: ['a.md', 'b.md'], paths });
     await assert.rejects(runNativeObserverAttempt({ ...payload, lexical: { ...payload.lexical, expected_paths: ['wrong.md'] } }, 1000), /DuckDB lexical result omitted/);
+  });
+
+  it('exercises the real watcher, one observer attempt, and close without invoking measure-tree failure handling', async () => {
+    const tree = scratchDir('watcher-expired-wait-evidence');
+    const configPath = join(tree, 'sense.config.json');
+    writeFileSync(configPath, JSON.stringify({ version: 5, store: 'sqlite', presets: { default: { include: ['**/*.md'] } }, queries: {} }));
+    writeNote(tree, 'a.md', { body: 'Unchanged authored baseline.' });
+    const manifest = captureFileManifest(tree);
+    const opened = await openTreeForStore('sqlite', tree);
+    await opened.store.close();
+
+    const watcher = startMeasuredWatcher({ pkgRoot: packageRoot, configPath });
+    let bodyFailed = false;
+    let bodyError: unknown;
+    let closeFailed = false;
+    let closeError: unknown;
+    try {
+      const started = await watcher.waitFor('started', 0, 5_000);
+      const eventWaitMs = 250;
+      await assert.rejects(watcher.waitFor('reconciled', started.next, eventWaitMs), new RegExp(`produced no reconciled event before ${eventWaitMs}ms`));
+      assert.deepEqual(
+        watcher.events.map((event) => event.type),
+        ['started']
+      );
+      assert.equal(watcher.child.exitCode, null);
+      assert.equal(watcher.child.signalCode, null);
+      assert.equal(watcher.child.connected, true);
+
+      const observed = await runNativeObserverAttempt({ pkgRoot: packageRoot, store: 'sqlite', configPath, manifest, expectedContent: null }, 5_000);
+      assert.equal(observed.state, 'ready');
+      assert.deepEqual(
+        watcher.events.map((event) => event.type),
+        ['started'],
+        'the diagnostic observation did not manufacture a watcher event'
+      );
+    } catch (reason) {
+      bodyFailed = true;
+      bodyError = reason;
+    } finally {
+      try {
+        const closed = await watcher.close(5_000);
+        assert.deepEqual({ code: closed.code, signal: closed.signal }, { code: 0, signal: null });
+        assert.equal(typeof closed.stderr, 'string');
+      } catch (reason) {
+        closeFailed = true;
+        closeError = reason;
+      }
+    }
+    if (bodyFailed && closeFailed) throw new AggregateError([bodyError, closeError], 'watcher evidence body and cleanup both failed');
+    if (bodyFailed) throw bodyError;
+    if (closeFailed) throw closeError;
   });
 
   it('uses each real built watcher as a wake-up and verifies authored native state', async function () {
@@ -1039,6 +1091,12 @@ describe('store-dump evidence is recomputed from retained captures', () => {
     steps: { validate: { id: 'validate', status: 'ok' }, 'npm-test': { id: 'npm-test', status: 'ok' }, 'store-dump': { id: 'store-dump', status: 'ok' }, ...steps },
     failed_stage_reasons: [],
   });
+  const writeRows = (root: string, rows: string[], store = 'sqlite') => {
+    const dir = join(root, store);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'tables.txt'), `== embeddings (${rows.length} rows) ==\n${rows.join('\n')}\n`);
+    writeFileSync(join(dir, 'ranking.txt'), '== "query" (1 rows) ==\n{"path":"same.md","score":1}\n');
+  };
 
   it('retains an unparsable legacy row as hashed evidence instead of dropping it', () => {
     const [section] = structuredRows('== embeddings (1 rows) ==\n{"path":"a.md","vector":hex:00ff}\n');
@@ -1059,15 +1117,176 @@ describe('store-dump evidence is recomputed from retained captures', () => {
     assert.equal(artifact.ok, false);
     const changed = artifact.diff.changed_files[0].changed_entries;
     assert.deepEqual(
-      changed.map((entry: { identity: string }) => entry.identity),
+      changed.representatives.map((entry: { identity: string }) => entry.identity),
       ['["same.md",0]']
     );
-    assert.ok((artifact.diff.categories as { value: Array<{ identity: string }> }).value.some((entry) => entry.identity === '["same.md",0]'));
+    assert.ok(artifact.diff.categories.value.representatives.some((entry: { identity: string }) => entry.identity === '["same.md",0]'));
     writeFileSync(join(sitting, 'store-dump.json'), JSON.stringify(artifact));
     writeFileSync(join(sitting, 'sitting.json'), JSON.stringify(sittingJson()));
     const report = buildReport(sitting, { reportsDir: scratchDir('store-dump-recomputed-reports') });
     assert.equal(report.verdict, 'BLOCK');
     assert.ok(report.classifications.some((classification) => classification.id === 'store-dump/validity' && 'invalid' in classification && classification.invalid === true));
+  });
+
+  it('counts every category while bounding representatives at the cap', () => {
+    const before = scratchDir('store-dump-cap-before');
+    const after = scratchDir('store-dump-cap-after');
+    const paths = Array.from({ length: STORE_DUMP_REPRESENTATIVE_LIMIT + 1 }, (_, index) => `${String(index).padStart(2, '0')}.md`);
+    writeRows(
+      before,
+      paths.map((path, index) => JSON.stringify({ path, chunk: 0, score: index, snippet: `before ${index}` }))
+    );
+    writeRows(
+      after,
+      paths.map((path, index) => JSON.stringify({ path, chunk: 0, score: index + 1, snippet: `after ${index}`, added: true }))
+    );
+    const compared = compareCaptureDirectories(before, after);
+    assert.equal(compared.diff.version, 2);
+    const categoryCounts = Object.fromEntries(
+      Object.entries(compared.diff.categories).map(([category, summary]) => {
+        assert.ok(summary && typeof summary === 'object' && 'count' in summary);
+        return [category, summary.count];
+      })
+    );
+    assert.deepEqual(categoryCounts, { schema: paths.length, value: paths.length, score: paths.length, snippet: paths.length });
+    assert.equal(compared.diff.categories.value.representatives.length, STORE_DUMP_REPRESENTATIVE_LIMIT);
+    assert.equal(compared.diff.categories.value.omitted, 1);
+    assert.match(compared.diff.categories.value.sha256, /^[0-9a-f]{64}$/);
+
+    writeRows(before, [JSON.stringify({ path: 'a.md', chunk: 0 }), JSON.stringify({ path: 'b.md', chunk: 0 })]);
+    writeRows(after, [JSON.stringify({ path: 'b.md', chunk: 0 }), JSON.stringify({ path: 'c.md', chunk: 0 })]);
+    const membershipAndOrder = compareCaptureDirectories(before, after).diff.categories;
+    assert.equal(membershipAndOrder.membership.count, 2);
+    assert.equal(membershipAndOrder.order.count, 1);
+  });
+
+  it('changes the canonical digest when an omitted middle entry is tampered with', () => {
+    const sitting = scratchDir('store-dump-omitted-tamper');
+    const before = join(sitting, 'store-dump-captures', 'before');
+    const after = join(sitting, 'store-dump-captures', 'after');
+    const paths = Array.from({ length: STORE_DUMP_REPRESENTATIVE_LIMIT + 5 }, (_, index) => `${String(index).padStart(2, '0')}.md`);
+    const beforeRows = paths.map((path, index) => JSON.stringify({ path, chunk: 0, value: `before ${index}` }));
+    const afterRows = paths.map((path, index) => JSON.stringify({ path, chunk: 0, value: `after ${index}` }));
+    for (const store of stores) {
+      writeRows(before, beforeRows, store);
+      writeRows(after, afterRows, store);
+    }
+    const original = compareCaptureDirectories(before, after);
+    const artifact = {
+      baseline: '9.9.9',
+      ok: original.ok,
+      captures: { before: 'store-dump-captures/before', after: 'store-dump-captures/after' },
+      capture_identity: { before: captureIdentity(before), after: captureIdentity(after) },
+      stores: original.stores,
+      diff: original.diff,
+    };
+    const first = structuredClone(artifact.diff.categories.value);
+    const tamperedIndex = STORE_DUMP_REPRESENTATIVE_LIMIT + 2;
+    afterRows[tamperedIndex] = JSON.stringify({ path: paths[tamperedIndex], chunk: 0, value: 'tampered omitted middle' });
+    writeRows(after, afterRows, 'sqlite');
+    artifact.capture_identity.after = captureIdentity(after);
+    const second = compareCaptureDirectories(before, after).diff.categories.value;
+    assert.deepEqual(second.representatives, first.representatives);
+    assert.equal(second.count, first.count);
+    assert.equal(second.omitted, first.omitted);
+    assert.notEqual(second.sha256, first.sha256);
+    const errors = validateStoreDumpArtifact(artifact, sitting, '9.9.9', stores);
+    assert.equal(
+      errors.some((error: string) => error.includes('capture identity after does not match')),
+      false
+    );
+    assert.ok(errors.includes('per-store evidence does not match retained captures'));
+    assert.ok(errors.includes('structured diff does not match retained captures'));
+  });
+
+  it('bounds a long-line identity and compares malformed rows without retaining either body', () => {
+    const before = scratchDir('store-dump-long-before');
+    const after = scratchDir('store-dump-long-after');
+    const longPath = `${'x'.repeat(70_000)}.md`;
+    writeRows(before, [JSON.stringify({ path: longPath, chunk: 0, value: 'before' })]);
+    writeRows(after, [JSON.stringify({ path: longPath, chunk: 0, value: 'after' })]);
+    const longCompared = compareCaptureDirectories(before, after);
+    const representative = longCompared.diff.categories.value.representatives[0];
+    assert.equal(representative.identity.truncated_utf8, true);
+    assert.ok(Buffer.byteLength(JSON.stringify(representative)) < STORE_DUMP_REPRESENTATIVE_BYTES);
+    assert.ok(Buffer.byteLength(JSON.stringify(longCompared)) < STORE_DUMP_REPRESENTATIVE_BYTES * 4);
+
+    writeRows(before, ['{"path":"a.md","vector":hex:00ff}']);
+    writeRows(after, ['{"path":"a.md","vector":hex:01ff}']);
+    const malformed = compareCaptureDirectories(before, after);
+    assert.equal(malformed.diff.categories.value.count, 1);
+    assert.equal(malformed.diff.categories.value.representatives[0].identity, '[null,null]');
+  });
+
+  it('validates legacy array evidence explicitly and compacts it through bounded v2 summaries', () => {
+    const sitting = scratchDir('store-dump-legacy-evidence');
+    const before = join(sitting, 'store-dump-captures', 'before');
+    const after = join(sitting, 'store-dump-captures', 'after');
+    const beforeRow = JSON.stringify({ path: 'legacy.md', chunk: 0, value: 'before' });
+    const afterRow = JSON.stringify({ path: 'legacy.md', chunk: 0, value: 'after' });
+    const tableText = (row: string) => `== embeddings (1 rows) ==\n${row}\n`;
+    const rankingText = '== "query" (1 rows) ==\n{"path":"same.md","score":1}\n';
+    const sha256 = (value: string) => createHash('sha256').update(value).digest('hex');
+    const beforeRowSha256 = sha256(beforeRow);
+    const afterRowSha256 = sha256(afterRow);
+    const beforeTableSha256 = sha256(tableText(beforeRow));
+    const afterTableSha256 = sha256(tableText(afterRow));
+    const rankingSha256 = sha256(rankingText);
+    const identity = '["legacy.md",0]';
+    const orderedStores = [...stores].sort();
+    for (const store of orderedStores) {
+      writeRows(before, [beforeRow], store);
+      writeRows(after, [afterRow], store);
+    }
+    const changedEntry = (store: string) => ({ store, artifact: 'tables.txt', section: 'embeddings', identity, before_sha256: beforeRowSha256, after_sha256: afterRowSha256, categories: ['value'] });
+    const categoryEntry = (store: string) => ({ store, artifact: 'tables.txt', section: 'embeddings', identity, before_index: 0, after_index: 0, before_sha256: beforeRowSha256, after_sha256: afterRowSha256 });
+    const legacy = {
+      baseline: '9.9.9',
+      ok: false,
+      captures: { before: 'store-dump-captures/before', after: 'store-dump-captures/after' },
+      capture_identity: { before: captureIdentity(before), after: captureIdentity(after) },
+      stores: Object.fromEntries(
+        orderedStores.map((store) => [
+          store,
+          {
+            ok: false,
+            artifacts: ['tables.txt', 'ranking.txt'],
+            files: {
+              'tables.txt': {
+                before_exists: true,
+                after_exists: true,
+                before_sha256: beforeTableSha256,
+                after_sha256: afterTableSha256,
+                equal: false,
+                changed_entries: [changedEntry(store)],
+                categories: { value: [categoryEntry(store)] },
+              },
+              'ranking.txt': {
+                before_exists: true,
+                after_exists: true,
+                before_sha256: rankingSha256,
+                after_sha256: rankingSha256,
+                equal: true,
+                changed_entries: [],
+                categories: {},
+              },
+            },
+          },
+        ])
+      ),
+      diff: {
+        changed_files: orderedStores.map((store) => ({ store, artifact: 'tables.txt', before_sha256: beforeTableSha256, after_sha256: afterTableSha256, changed_entries: [changedEntry(store)] })),
+        categories: { value: orderedStores.map(categoryEntry) },
+      },
+    };
+    assert.deepEqual(validateStoreDumpArtifact(legacy, sitting, '9.9.9', stores), []);
+    const compact = compactStep('store-dump', legacy);
+    assert.equal(compact.diff.version, 2);
+    assert.equal(compact.diff.categories.value.count, stores.length);
+    assert.match(compact.diff.categories.value.sha256, /^[0-9a-f]{64}$/);
+    assert.equal(compact.omitted_evidence.fields[0].source_format, 'legacy-v1');
+    const persistedCompact = { diff: { categories: { value: stores.length } }, omitted_evidence: { retention: 'retained in sitting', fields: [] } };
+    assert.deepEqual(compactStep('store-dump', persistedCompact), persistedCompact);
   });
 
   it('blocks baseline, capture containment, and malformed category tampering', () => {
@@ -1092,6 +1311,12 @@ describe('store-dump evidence is recomputed from retained captures', () => {
     writeFileSync(join(sitting, 'store-dump.json'), JSON.stringify(malformed));
     report = buildReport(sitting, { reportsDir: scratchDir('store-dump-tamper-category-reports') });
     assert.ok((report.verdict_reasons as string[]).some((reason) => /category schema is malformed/.test(reason)));
+
+    const unsupported = structuredClone(artifact);
+    unsupported.diff.version = 99;
+    writeFileSync(join(sitting, 'store-dump.json'), JSON.stringify(unsupported));
+    report = buildReport(sitting, { reportsDir: scratchDir('store-dump-tamper-version-reports') });
+    assert.ok((report.verdict_reasons as string[]).some((reason) => /unsupported structured diff version: 99/.test(reason)));
   });
 
   it('renders malformed saved store evidence as a nonwaivable validity block', () => {
@@ -1474,6 +1699,20 @@ describe('catalog / run.mjs key agreement', () => {
       assert.equal(preparation.watcher_preparation.status, 0);
       assert.equal(preparation.watcher_preparation.signal, null);
       assert.ok(Number.isFinite(preparation.watcher_preparation.elapsed_ms));
+      assert.equal(preparation.failure, undefined);
+      assert.equal(preparation.started.event.type, 'started');
+      assert.ok(Number.isFinite(preparation.watcher_startup_ms));
+      assert.ok(Number.isFinite(preparation.reconcile_wait.elapsed_ms));
+      assert.equal(preparation.before_cleanup.child.exit_code, null);
+      assert.equal(preparation.before_cleanup.child.signal_code, null);
+      assert.equal(preparation.before_cleanup.child.connected, true);
+      assert.ok(preparation.before_cleanup.events.some((event: { type: string }) => event.type === 'reconciled'));
+      assert.equal(preparation.close.result.code, 0);
+      assert.equal(preparation.close.result.signal, null);
+      assert.equal(typeof preparation.close.result.stderr, 'string');
+      assert.equal(preparation.after_cleanup.child.exit_code, 0);
+      assert.equal(preparation.after_cleanup.child.signal_code, null);
+      assert.equal(preparation.after_cleanup.child.connected, false);
     }
     assert.deepEqual(Object.keys(row.inproc.repeat_state).sort(), ['canonical', 'cold_build', 'open_nochange', 'source', 'update_10_files', 'update_1_file']);
     assert.match(row.inproc.repeat_state.source.fingerprint, /^[0-9a-f]{64}$/);

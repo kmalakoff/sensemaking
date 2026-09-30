@@ -14,6 +14,16 @@ Subagents dispatched during a release are spawned with `model: sonnet`. Reviews 
    npm run benchmark -- --dry-run        # selected stages, reasons, and historical-cost estimate; no measurement
    ```
 
+   Scale/stress stages pass corpus names to the existing fetch-once builders, so an empty generated
+   cache is prepared on demand. To prepare those inputs before the gate, run from the checkout:
+
+   ```bash
+   node --input-type=module -e 'import { corpusPath } from "./benchmark/lib/corpus.mjs"; for (const name of ["obsidian-hub-x2", "obsidian-hub-x4", "stress"]) console.log(name, corpusPath(name));'
+   ```
+
+   The builders reuse the pinned Hub source and generate deterministic stress notes. Dry-run does
+   not build corpora.
+
    When the ordinary estimate reports an unknown live-suite cost, measure that focused stage once
    before the gate:
 

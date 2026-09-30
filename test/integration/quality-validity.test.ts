@@ -39,6 +39,7 @@ describe('quality metric validity', () => {
     const baseDir = scratchDir('quality-duplicate-ranking');
     writeNote(baseDir, 'doc.md', { body: 'query' });
     let calls = 0;
+    let progressCalls = 0;
     const result = await withTreeForStore('sqlite', baseDir, async ({ store }) =>
       evaluateVariant({
         qids: ['q1'],
@@ -49,9 +50,13 @@ describe('quality metric validity', () => {
           calls++;
           return (await (await store.prepare('SELECT "path" FROM frontmatter UNION ALL SELECT replace("path", \'.md\', \'\') AS "path" FROM frontmatter')).all()) as Array<{ path: string }>;
         },
+        onProgress: () => {
+          progressCalls++;
+        },
       })
     );
     assert.equal(calls, 1);
+    assert.equal(progressCalls, 0);
     assert.equal(result.perQuery.size, 0);
     assert.equal(result.incomplete, true);
     assert.match(result.errorDetails[0].error, /duplicate id/);
@@ -67,6 +72,76 @@ describe('quality metric validity', () => {
       const noQrels = await evaluateVariant({ qids: ['q1'], queries: new Map([['q1', 'query']]), qrels: new Map(), k: 1, search: searchRows });
       assert.equal(noQrels.errorDetails[0].error, 'missing qrels for query');
     });
+  });
+
+  it('reports bounded completed-query progress while retaining exact real rankings and metrics', async () => {
+    const baseDir = scratchDir('quality-progress');
+    writeNote(baseDir, 'doc.md', { body: 'query' });
+    const qids = Array.from({ length: 514 }, (_, index) => `q${index}`);
+    const progress: Array<{ completed: number; total: number; qid: string; query_elapsed_ms: number; search_ms: number }> = [];
+    let calls = 0;
+    const result = await withTreeForStore('sqlite', baseDir, async ({ store }) =>
+      evaluateVariant({
+        qids,
+        queries: new Map(qids.map((qid) => [qid, 'query'])),
+        qrels: new Map(qids.map((qid) => [qid, new Map([['doc', 1]])])),
+        k: 1,
+        search: async () => {
+          calls++;
+          return (await (await store.prepare('SELECT "path" FROM frontmatter')).all()) as Array<{ path: string }>;
+        },
+        onProgress: (record) => {
+          assert.equal(calls, record.completed);
+          progress.push(record);
+        },
+      })
+    );
+    assert.equal(calls, 514);
+    assert.deepEqual(
+      progress.map(({ completed, total, qid }) => ({ completed, total, qid })),
+      [
+        { completed: 256, total: 514, qid: 'q255' },
+        { completed: 512, total: 514, qid: 'q511' },
+        { completed: 514, total: 514, qid: 'q513' },
+      ]
+    );
+    for (const record of progress) {
+      assert.equal(Number.isFinite(record.query_elapsed_ms), true);
+      assert.equal(Number.isFinite(record.search_ms), true);
+    }
+    assert.equal(result.incomplete, false);
+    assert.deepEqual(result.errorDetails, []);
+    assert.equal(result.perQuery.size, 514);
+    for (const query of result.perQuery.values()) assert.deepEqual(query, { m: { ndcg: 1, rr: 1, hit: 1 }, rows: '[{"path":"doc.md"}]' });
+  });
+
+  it('keeps progress publication errors invalid and stops before the next real query', async () => {
+    const baseDir = scratchDir('quality-progress-failure');
+    writeNote(baseDir, 'doc.md', { body: 'query' });
+    let calls = 0;
+    const qids = Array.from({ length: 258 }, (_, index) => `q${index}`);
+    const result = await withTreeForStore('sqlite', baseDir, async ({ store }) =>
+      evaluateVariant({
+        qids,
+        queries: new Map(qids.map((qid) => [qid, 'query'])),
+        qrels: new Map(qids.map((qid) => [qid, new Map([['doc', 1]])])),
+        k: 1,
+        search: async () => {
+          calls++;
+          return (await (await store.prepare('SELECT "path" FROM frontmatter')).all()) as Array<{ path: string }>;
+        },
+        onProgress: () => {
+          throw new Error('progress sink failed');
+        },
+      })
+    );
+    assert.equal(calls, 256);
+    assert.equal(result.incomplete, true);
+    assert.equal(result.perQuery.size, 256);
+    assert.deepEqual(result.perQuery.get('q255'), { m: { ndcg: 1, rr: 1, hit: 1 }, rows: '[{"path":"doc.md"}]' });
+    assert.equal(result.perQuery.has('q256'), false);
+    assert.equal(result.errorDetails.length, 1);
+    assert.match(result.errorDetails[0].error, /progress:.*progress sink failed/);
   });
 
   it('reads valid labels with numeric query IDs and rejects strict label corruption', () => {

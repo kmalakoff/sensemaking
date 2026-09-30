@@ -3,12 +3,13 @@ import { cpSync, mkdirSync, readdirSync, readFileSync, statSync, symlinkSync, ut
 import { basename, join } from 'node:path';
 import assert from 'assert';
 import { signalProcessTree } from '../../benchmark/lib/native-observer.mjs';
+import { revalidateQualityArtifact } from '../../benchmark/lib/portable-quality.mjs';
 import { needsQualityModelDownload, observeQualityModel, prepareQualityWorkTree } from '../../benchmark/lib/quality-work-tree.mjs';
 import { buildStages } from '../../benchmark/lib/stages.mjs';
 import { buildReport, persist } from '../../benchmark/report.mjs';
 import { writeModel } from '../lib/model.ts';
 import { packageRoot, scratchDir } from '../lib/scratch.ts';
-import { forEachStore, openTreeForStore, type ParityStoreName } from '../lib/stores.ts';
+import { forEachStore, openTreeForStore, type ParityStoreName, STORE_NAMES } from '../lib/stores.ts';
 
 async function runQualityStep(root: string, store: ParityStoreName, model: string, out: string): Promise<string> {
   const child = spawn(process.execPath, [join(root, 'benchmark', 'steps', 'quality.mjs'), 'nfcorpus', '--queries', '1', '--k', '1', '--query-form', 'bare-and', '--store', store, '--model', model, '--out', out], { cwd: root, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -280,6 +281,15 @@ describe('quality cache work trees', () => {
     cpSync(join(packageRoot, 'package.json'), join(root, 'package.json'));
     cpSync(join(packageRoot, 'package-lock.json'), join(root, 'package-lock.json'));
     symlinkSync(join(packageRoot, 'node_modules'), join(root, 'node_modules'), 'junction');
+    // Record real atomic publications in the private measured root, including the file readback.
+    const atomicPath = join(root, 'dist', 'esm', 'lib', 'atomic-write.js');
+    const atomicSource = readFileSync(atomicPath, 'utf8');
+    assert.equal(atomicSource.split('export function writeFileAtomic(').length, 2);
+    const observedOutputs = STORE_NAMES.flatMap((store) => [join(root, `${store}-first.json`), join(root, `portable-eval-nfcorpus-${store}.json`)]);
+    writeFileSync(
+      atomicPath,
+      `import { appendFileSync, readFileSync } from 'node:fs';\n${atomicSource.replace('export function writeFileAtomic(', 'function publishAtomic(')}\nconst observedOutputs = new Set(${JSON.stringify(observedOutputs)});\nexport function writeFileAtomic(path, data) {\n  publishAtomic(path, data);\n  if (observedOutputs.has(path)) appendFileSync(path + '.publications.jsonl', JSON.stringify(JSON.parse(readFileSync(path, 'utf8'))) + '\\n');\n}\n`
+    );
     const corpus = join(root, '.tmp', 'cache', 'nfcorpus-beir-1');
     mkdirSync(join(corpus, 'tree'), { recursive: true });
     mkdirSync(join(corpus, 'labels'), { recursive: true });
@@ -297,6 +307,55 @@ describe('quality cache work trees', () => {
       const secondStdout = await runQualityStep(root, store, model, secondOut);
       const first = JSON.parse(readFileSync(firstOut, 'utf8'));
       const second = JSON.parse(readFileSync(secondOut, 'utf8'));
+      for (const [out, stdout] of [
+        [firstOut, firstStdout],
+        [secondOut, secondStdout],
+      ]) {
+        const publications = readFileSync(`${out}.publications.jsonl`, 'utf8')
+          .trim()
+          .split('\n')
+          .map((line) => JSON.parse(line));
+        assert.equal(publications.length, 5);
+        const passes = ['bm25-only', 'fused', 'fused-embed-configured', 'semantic'];
+        for (const [index, checkpoint] of publications.slice(0, 4).entries()) {
+          assert.equal(checkpoint.incomplete, true);
+          assert.equal(checkpoint.no_silent_change, undefined);
+          assert.deepEqual(checkpoint.completed_passes, passes.slice(0, index + 1));
+          assert.deepEqual(Object.keys(checkpoint.variants), passes.slice(0, index + 1));
+          assert.equal(checkpoint.queries, 1);
+          for (const result of Object.values(checkpoint.variants) as Array<{ errors: number; incomplete: boolean; workload_identity: unknown; per_query: Record<string, { paths: string[] }> }>) {
+            assert.equal(result.errors, 0);
+            assert.equal(result.incomplete, false);
+            assert.ok(result.workload_identity);
+            assert.deepEqual(result.per_query.q1.paths, ['a.md']);
+          }
+          const checked = revalidateQualityArtifact(checkpoint, { store });
+          assert.ok(!Array.isArray(checked));
+          assert.match(checked.errors.join('\n'), /artifact is incomplete/);
+        }
+        assert.deepEqual(publications[4], JSON.parse(readFileSync(out, 'utf8')));
+        assert.equal(publications[4].incomplete, false);
+        const progress = stdout
+          .split('\n')
+          .filter((line) => line.startsWith('quality-progress: '))
+          .map((line) => JSON.parse(line.slice('quality-progress: '.length)));
+        assert.equal(progress.length, 24);
+        for (const [index, name] of passes.entries()) {
+          const records = progress.slice(index * 6, (index + 1) * 6);
+          assert.deepEqual(
+            records.map((record) => record.phase),
+            ['open-start', 'open-end', 'queries', 'close-start', 'close-end', 'checkpoint']
+          );
+          for (const record of records) {
+            assert.equal(record.variant, name);
+            assert.equal(record.pass, index + 1);
+            assert.equal(record.passes, 4);
+            assert.equal(Number.isFinite(record.elapsed_ms), true);
+          }
+          assert.deepEqual({ completed: records[2].completed, total: records[2].total, qid: records[2].qid }, { completed: 1, total: 1, qid: 'q1' });
+          assert.equal(records[5].completed_passes, index + 1);
+        }
+      }
       assert.equal(first.incomplete, false);
       assert.equal(first.no_silent_change, true);
       assert.match(firstStdout, /no-silent-change: ok/);

@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { appendFileSync, cpSync, existsSync, mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import assert from 'assert';
 import { releaseChanges } from '../../benchmark/lib/changes.mjs';
 import { assertCompatibleSelection, profileReasons } from '../../benchmark/lib/gates.mjs';
@@ -53,6 +54,56 @@ describe('release assessment profiles', () => {
     const deep = profileReasons(['README.md'], 'v1', 'deep');
     assert.deepEqual([...deep.keys()], ['baseline', 'scale', 'quality-baseline', 'fever']);
     for (const gate of ['test-engines', 'live-suite', 'store-dump', 'oracle']) assert.equal(deep.has(gate), false, gate);
+  });
+
+  it('resolves selected scale inputs through the real corpus builders from an empty generated cache', () => {
+    const reasons = profileReasons(['README.md'], 'v1', 'deep');
+    const steps: { id: string; argv: string[]; owedBy: string }[] = [];
+    for (const stage of buildStages()) {
+      for (const step of stage.steps) {
+        if (step.owedBy === 'scale' && reasons.has(step.owedBy)) steps.push({ id: step.id, argv: step.argv, owedBy: step.owedBy });
+      }
+    }
+    const inputFor = (step: (typeof steps)[number]) => step.argv[step.argv[1] === 'benchmark/steps/measure-tree.mjs' ? 3 : 2];
+    const inputs = [...new Set(steps.map(inputFor))];
+    const root = scratchDir('gate-scale-corpora');
+    const lib = join(root, 'benchmark', 'lib');
+    mkdirSync(lib, { recursive: true });
+    for (const name of ['corpus.mjs', 'cache.mjs', 'canonical-json.mjs']) cpSync(join(packageRoot, 'benchmark', 'lib', name), join(lib, name));
+    symlinkSync(join(packageRoot, 'node_modules'), join(root, 'node_modules'), 'junction');
+    // A local source fixture exercises replication without fetching the pinned Hub repository.
+    const hub = join(root, '.tmp', 'cache', 'obsidian-hub-b11036f9');
+    mkdirSync(hub, { recursive: true });
+    writeFileSync(join(hub, 'fixture.md'), '# Fixture\n\nA corpus input.\n');
+    const result = spawnSync(
+      process.execPath,
+      [
+        '--input-type=module',
+        '-e',
+        `
+      import assert from 'node:assert';
+      import { readdirSync } from 'node:fs';
+      const { corpusPath, cachedCorpusPaths } = await import(process.argv[1]);
+      const { CACHE_DIR } = await import(new URL('./cache.mjs', process.argv[1]));
+      const results = [];
+      for (const input of process.argv.slice(2)) {
+        assert.equal(cachedCorpusPaths(input, CACHE_DIR).tree, null);
+        const tree = corpusPath(input);
+        assert.ok(tree, 'selected input must be handled as a corpus name: ' + input);
+        assert.equal(corpusPath(input), tree);
+        results.push({ input, markdownFiles: readdirSync(tree, { recursive: true }).filter(path => path.endsWith('.md')).length });
+      }
+      console.log(JSON.stringify(results));
+    `,
+        pathToFileURL(join(lib, 'corpus.mjs')).href,
+        ...inputs,
+      ],
+      { encoding: 'utf8', timeout: 20_000 }
+    );
+    assert.equal(result.status, 0, result.stderr);
+    const resolved = JSON.parse(result.stdout) as { input: string; markdownFiles: number }[];
+    assert.equal(steps.length, 10);
+    for (const step of steps) assert.equal(resolved.find((entry) => entry.input === inputFor(step))?.markdownFiles, step.id.endsWith('13k') ? 2 : step.id.endsWith('26k') ? 4 : 2000, step.id);
   });
 
   it('selects all deep stages for a new unclassified source area', () => {

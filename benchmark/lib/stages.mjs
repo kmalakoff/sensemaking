@@ -19,6 +19,9 @@ import { LIVE_SUITE_ARGV, LIVE_SUITE_ENV } from './gates.mjs';
 
 export const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 export const MINUTES = 60_000;
+// FEVER includes four full passes; native M1 evidence left no headroom in the 45-minute budget.
+// This timeout bounds execution, not acceptable performance or partial quality coverage.
+const FEVER_TIMEOUT = 60 * MINUTES;
 
 // Every store the built package offers, read from STORE_NAMES through the package's own exports
 // map rather than a dist path: a store the library accepts is a store this gate measures.
@@ -30,9 +33,9 @@ const run = (...args) => ['node', 'benchmark/steps/measure-tree.mjs', ...args];
 
 const CORPORA = {
   hub: 'obsidian-hub',
-  x2: '.tmp/cache/obsidian-hub-x2-x2-hub-1',
-  x4: '.tmp/cache/obsidian-hub-x4-x4-hub-1',
-  stress: '.tmp/cache/stress-stress-1',
+  x2: 'obsidian-hub-x2',
+  x4: 'obsidian-hub-x4',
+  stress: 'stress',
 };
 
 // hub for one non-default store, owed by the same gate as stage 2's default-store step (compare).
@@ -116,7 +119,7 @@ export function buildStages() {
         ...portableQualitySteps('nfcorpus', 'quality-baseline'),
         // Deep retains the SQLite OR-bag NFCorpus row for historical continuity alongside FEVER.
         { id: 'eval-nfcorpus', argv: ['node', 'benchmark/steps/quality.mjs', 'nfcorpus'], timeout: 20 * MINUTES, quiet: false, owedBy: 'fever', out: true },
-        { id: 'eval-fever', argv: ['node', 'benchmark/steps/quality.mjs', 'fever'], timeout: 45 * MINUTES, quiet: false, owedBy: 'fever', out: true },
+        { id: 'eval-fever', argv: ['node', 'benchmark/steps/quality.mjs', 'fever'], timeout: FEVER_TIMEOUT, quiet: false, owedBy: 'fever', out: true },
         ...portableQualitySteps('fever', 'fever'),
       ],
     },
@@ -125,7 +128,7 @@ export function buildStages() {
 
 function portableQualitySteps(corpus, owedBy) {
   return [
-    ...OFFERED.map((store) => ({ id: `portable-eval-${corpus}-${store}`, argv: ['node', 'benchmark/steps/quality.mjs', corpus, '--store', store, '--query-form', 'bare-and'], timeout: corpus === 'fever' ? 45 * MINUTES : 20 * MINUTES, quiet: false, owedBy, out: true })),
+    ...OFFERED.map((store) => ({ id: `portable-eval-${corpus}-${store}`, argv: ['node', 'benchmark/steps/quality.mjs', corpus, '--store', store, '--query-form', 'bare-and'], timeout: corpus === 'fever' ? FEVER_TIMEOUT : 20 * MINUTES, quiet: false, owedBy, out: true })),
     { id: `portable-eval-${corpus}-comparison`, argv: ['node', 'benchmark/tools/portable-quality-compare.mjs'], timeout: 5 * MINUTES, quiet: false, owedBy, out: true },
   ];
 }

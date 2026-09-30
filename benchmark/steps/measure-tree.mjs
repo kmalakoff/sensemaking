@@ -9,7 +9,7 @@ import { safeRmSync } from 'fs-remove-compat';
 import { CORPUS_NAMES, corpusPath, writeTreeConfig } from '../lib/corpus.mjs';
 import { MEASURE_VERSION, medianAsync, medianOf, stdoutEvidence, structuredSearchEvidence, timedCli, verbsFrom, walkMd, warmFileCache } from '../lib/measure.mjs';
 import { startMeasuredWatcher } from '../lib/measured-watcher.mjs';
-import { nativeObserverDeadlineMs, waitForNativeIndex } from '../lib/native-observer.mjs';
+import { nativeObserverDeadlineMs, runNativeObserverAttempt, waitForNativeIndex } from '../lib/native-observer.mjs';
 import { writeOut } from '../lib/out.mjs';
 import { applyDeterministicMutation, captureFileManifest, captureMutationFiles, copyTree, deterministicMutationMtime, ephemeralWorkTree, fileManifestFingerprint, openVerified, verifyContentTransition, verifyFileManifest, verifyManifestContents, verifyRepeatFingerprint } from '../lib/work-tree.mjs';
 import { executionEvidence, implementationProvenance, logicalWorkloadIdentity, manifestIdentity } from '../lib/workload-identity.mjs';
@@ -412,6 +412,24 @@ const bulkState = {
 };
 const observerPayload = (repTree, manifest, expectedContent = null) => ({ pkgRoot, store: store ?? 'sqlite', configPath: join(repTree, 'sense.config.json'), manifest, expectedContent });
 const compactObserver = ({ content: _content, ...observed }) => observed;
+const thrownEvidence = (reason) => {
+  if (reason === undefined) return { type: 'undefined' };
+  if (reason === null) return { type: 'null' };
+  if (reason instanceof Error) return { type: 'error', name: reason.name, message: reason.message, stack: reason.stack ?? null, code: reason.code ?? null };
+  return { type: typeof reason, value: String(reason) };
+};
+const thrownMessage = (reason) => (reason instanceof Error ? reason.message : String(reason));
+const isWatcherEventTimeout = (reason, type, deadlineMs) => reason instanceof Error && reason.message === `measured watcher produced no ${type} event before ${deadlineMs}ms`;
+const watcherSnapshot = (watcher) => ({
+  observed_at: new Date().toISOString(),
+  events: watcher.events.map((event) => ({ ...event })),
+  child: {
+    connected: watcher.child.connected,
+    exit_code: watcher.child.exitCode,
+    signal_code: watcher.child.signalCode,
+    killed: watcher.child.killed,
+  },
+});
 let bulkCanonicalFingerprint = null;
 let bulkMutatedFileFingerprint = null;
 
@@ -543,54 +561,104 @@ if (VERBS.has('watch')) {
         const watcher = startMeasuredWatcher({ pkgRoot, configPath: join(repTree, 'sense.config.json') });
         const watcherDeadlineMs = 5_000 + baseline.deadlineMs;
         const watcherStarted = process.hrtime.bigint();
+        const watcherEvidence = {
+          copy_ms: copyMs,
+          baseline_build_ms: baseline.buildMs,
+          watcher_preparation: watcherPreparation,
+          observer_deadline_ms: baseline.deadlineMs,
+          watcher_event_deadline_ms: watcherDeadlineMs,
+          baseline_observer: compactObserver(baseline.observed),
+        };
+        let phase = 'watcher-startup';
+        let expected = null;
+        let reconcileWaitStarted = null;
+        let operationFailed = false;
         let operationError;
+        let diagnosticFailed = false;
+        let diagnosticError;
+        let closeFailed = false;
         let closeError;
         try {
           const started = await watcher.waitFor('started', 0, watcherDeadlineMs);
           const startupMs = Number(process.hrtime.bigint() - watcherStarted) / 1e6;
-          const expected = mutateBulk(repTree);
-          const readyStarted = process.hrtime.bigint();
+          watcherEvidence.watcher_startup_ms = startupMs;
+          watcherEvidence.started = { event: { ...started.event }, next: started.next, observed: watcherSnapshot(watcher) };
+          phase = 'bulk-mutation';
+          expected = mutateBulk(repTree);
+          reconcileWaitStarted = process.hrtime.bigint();
+          watcherEvidence.reconcile_wait = { started_at: new Date().toISOString(), events_after: started.next };
+          phase = 'reconciled-event';
           await watcher.waitFor('reconciled', started.next, watcherDeadlineMs);
+          watcherEvidence.reconcile_wait.finished_at = new Date().toISOString();
+          watcherEvidence.reconcile_wait.elapsed_ms = Number(process.hrtime.bigint() - reconcileWaitStarted) / 1e6;
+          phase = 'readiness-observer';
           const observed = await waitForNativeIndex(observerPayload(repTree, expected, baseline.observed.content), baseline.deadlineMs);
           if (observed.fingerprint !== baseline.observed.fingerprint) throw new Error(`bulk-watch content fingerprint changed after an mtime-only mutation: expected ${baseline.observed.fingerprint}, got ${observed.fingerprint}`);
-          const readinessMs = Number(process.hrtime.bigint() - readyStarted) / 1e6;
+          const readinessMs = Number(process.hrtime.bigint() - reconcileWaitStarted) / 1e6;
+          watcherEvidence.readiness_ms = readinessMs;
+          watcherEvidence.readiness_observer = compactObserver(observed);
           watcher.assertRunning();
+          phase = 'timed-query';
           const result = requireTimed(timedAt(repTree, i + 1, 'bulk_watch_ms'), 'timed watcher query');
           recordTimedCount('bulk_watch_ms', validateCount(result, 'timed watcher query'));
+          phase = 'final-observer';
           const final = await waitForNativeIndex(observerPayload(repTree, expected, baseline.observed.content), baseline.deadlineMs);
           if (final.fingerprint !== observed.fingerprint) throw new Error(`bulk-watch final fingerprint changed after readiness: expected ${observed.fingerprint}, got ${final.fingerprint}`);
+          watcherEvidence.final_observer = compactObserver(final);
           bulkMutatedFileFingerprint = verifyRepeatFingerprint(bulkMutatedFileFingerprint, fileManifestFingerprint(expected), 'bulk mutated files');
           watcher.assertRunning();
           verifyFileManifest(repTree, expected, 'bulk-watch final filesystem');
           bulkWatchSamples.push(result.ms);
-          bulkState.watch.preparation.push({
-            copy_ms: copyMs,
-            baseline_build_ms: baseline.buildMs,
-            watcher_preparation: watcherPreparation,
-            observer_deadline_ms: baseline.deadlineMs,
-            watcher_event_deadline_ms: watcherDeadlineMs,
-            baseline_observer: compactObserver(baseline.observed),
-            watcher_startup_ms: startupMs,
-            readiness_ms: readinessMs,
-            readiness_observer: compactObserver(observed),
-            final_observer: compactObserver(final),
-          });
-        } catch (err) {
-          operationError = err;
-        } finally {
-          try {
-            await watcher.close(baseline.deadlineMs);
-          } catch (err) {
-            closeError = err;
+          phase = 'complete';
+        } catch (reason) {
+          operationFailed = true;
+          operationError = reason;
+          if (watcherEvidence.reconcile_wait && reconcileWaitStarted !== null && watcherEvidence.reconcile_wait.elapsed_ms === undefined) {
+            watcherEvidence.reconcile_wait.finished_at = new Date().toISOString();
+            watcherEvidence.reconcile_wait.elapsed_ms = Number(process.hrtime.bigint() - reconcileWaitStarted) / 1e6;
           }
+          watcherEvidence.failure = { phase, observed_at: new Date().toISOString(), reason: thrownEvidence(reason), before_diagnostic: watcherSnapshot(watcher) };
+          if (phase === 'reconciled-event' && expected !== null && isWatcherEventTimeout(reason, 'reconciled', watcherDeadlineMs)) {
+            const diagnosticStarted = process.hrtime.bigint();
+            watcherEvidence.failure.diagnostic = { started_at: new Date().toISOString() };
+            try {
+              watcherEvidence.failure.diagnostic.result = await runNativeObserverAttempt(observerPayload(repTree, expected, baseline.observed.content), baseline.deadlineMs);
+            } catch (diagnosticReason) {
+              diagnosticFailed = true;
+              diagnosticError = diagnosticReason;
+              watcherEvidence.failure.diagnostic.error = thrownEvidence(diagnosticReason);
+            } finally {
+              watcherEvidence.failure.diagnostic.finished_at = new Date().toISOString();
+              watcherEvidence.failure.diagnostic.elapsed_ms = Number(process.hrtime.bigint() - diagnosticStarted) / 1e6;
+              watcherEvidence.failure.diagnostic.after = watcherSnapshot(watcher);
+            }
+          }
+        } finally {
+          watcherEvidence.before_cleanup = watcherSnapshot(watcher);
+          const closeStartedAt = new Date().toISOString();
+          try {
+            watcherEvidence.close = { started_at: closeStartedAt, result: await watcher.close(baseline.deadlineMs), finished_at: new Date().toISOString() };
+          } catch (closeReason) {
+            closeFailed = true;
+            closeError = closeReason;
+            watcherEvidence.close = { started_at: closeStartedAt, error: thrownEvidence(closeReason), observed: watcherSnapshot(watcher), finished_at: new Date().toISOString() };
+          }
+          watcherEvidence.after_cleanup = watcherSnapshot(watcher);
+          bulkState.watch.preparation.push(watcherEvidence);
         }
-        if (operationError && closeError) {
-          const combined = new Error(`${operationError?.message ?? operationError}; watcher close: ${closeError?.message ?? closeError}`);
-          combined.repetitions = operationError.repetitions;
+        if (operationFailed || diagnosticFailed || closeFailed) {
+          const failures = [];
+          if (operationFailed) failures.push(operationError);
+          if (diagnosticFailed) failures.push(diagnosticError);
+          if (closeFailed) failures.push(closeError);
+          const messages = [];
+          if (operationFailed) messages.push(`operation: ${thrownMessage(operationError)}`);
+          if (diagnosticFailed) messages.push(`diagnostic: ${thrownMessage(diagnosticError)}`);
+          if (closeFailed) messages.push(`cleanup: ${thrownMessage(closeError)}`);
+          const combined = new AggregateError(failures, `bulk watcher ${phase} failed (${messages.join('; ')})`);
+          combined.repetitions = operationError?.repetitions;
           throw combined;
         }
-        if (operationError) throw operationError;
-        if (closeError) throw closeError;
       });
     } catch (err) {
       bulkWatchFailed = true;

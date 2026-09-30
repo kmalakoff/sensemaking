@@ -1,6 +1,8 @@
 import { bareAnd, orBag } from './labels.mjs';
 import { metrics } from './metrics.mjs';
 
+const PROGRESS_QUERY_INTERVAL = 256;
+
 export function queryFormFor(form = 'or-bag') {
   if (form === 'or-bag') return orBag;
   if (form === 'bare-and') return bareAnd;
@@ -38,9 +40,10 @@ export function qualityVariantEvidence(result) {
 
 // Runs one quality variant until its first invalid query. The caller owns the store lifetime;
 // this helper keeps query-level evidence separate from opening and closing the store.
-export async function evaluateVariant({ qids, queries, qrels, k, search, queryFor = (text) => text }) {
+export async function evaluateVariant({ qids, queries, qrels, k, search, queryFor = (text) => text, onProgress = /** @type {((record: { completed: number, total: number, qid: string, query_elapsed_ms: number, search_ms: number }) => void) | undefined} */ (undefined) }) {
   const perQuery = new Map();
   const errorDetails = [];
+  const started = process.hrtime.bigint();
   let ms = 0;
   for (const qid of qids) {
     const text = queries.get(qid);
@@ -76,6 +79,15 @@ export async function evaluateVariant({ qids, queries, qrels, k, search, queryFo
       });
       const m = metrics(ranked, qrels.get(qid), k);
       perQuery.set(qid, { m, rows: JSON.stringify(rows) });
+      // Progress runs after scoring, outside search timing, without adding scheduling yields.
+      if (onProgress && (perQuery.size % PROGRESS_QUERY_INTERVAL === 0 || perQuery.size === qids.length)) {
+        try {
+          onProgress({ completed: perQuery.size, total: qids.length, qid, query_elapsed_ms: Number(process.hrtime.bigint() - started) / 1e6, search_ms: ms });
+        } catch (err) {
+          errorDetails.push({ qid, error: `progress: ${err?.name ?? 'Error'}: ${err?.message ?? err}` });
+          break;
+        }
+      }
     } catch (err) {
       if (!searchMsRecorded) ms += Number(process.hrtime.bigint() - t0) / 1e6;
       errorDetails.push({ qid, error: `${err?.name ?? 'Error'}: ${err?.message ?? err}` });

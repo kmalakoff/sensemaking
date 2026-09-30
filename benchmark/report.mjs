@@ -52,6 +52,27 @@ export function reportBase(date, version) {
 
 const readJson = (p) => (existsSync(p) ? JSON.parse(readFileSync(p, 'utf8')) : null);
 
+const STORE_DUMP_REPORT_EXAMPLES = 8;
+function storeDumpEvidencePart(value) {
+  if (typeof value === 'string') return value.length <= 160 ? value : `${value.slice(0, 160)}…`;
+  if (value?.truncated_utf8 === true && typeof value.sha256 === 'string' && Number.isSafeInteger(value.bytes)) return `sha256:${value.sha256} (${value.bytes} bytes)`;
+  return '[malformed representative]';
+}
+
+function storeDumpCategoryEvidence(entries) {
+  if (Number.isSafeInteger(entries) && entries >= 0) return { count: entries, diagnostics: 'raw entries retained in sitting' };
+  if (Array.isArray(entries)) {
+    const examples = entries.slice(0, STORE_DUMP_REPORT_EXAMPLES).map((entry) => `${storeDumpEvidencePart(entry.store)}/${storeDumpEvidencePart(entry.artifact)}:${storeDumpEvidencePart(entry.identity)}`);
+    const omitted = entries.length - examples.length;
+    return { count: entries.length, diagnostics: [...(examples.length > 0 ? [examples.join(', ')] : []), ...(omitted > 0 ? [`${omitted} omitted`] : []), 'legacy evidence has no category digest'].join('; ') };
+  }
+  if (entries && Number.isSafeInteger(entries.count) && typeof entries.sha256 === 'string' && Array.isArray(entries.representatives) && Number.isSafeInteger(entries.omitted)) {
+    const examples = entries.representatives.map((entry) => `${storeDumpEvidencePart(entry.store)}/${storeDumpEvidencePart(entry.artifact)}:${storeDumpEvidencePart(entry.identity)}`);
+    return { count: entries.count, diagnostics: [...(examples.length > 0 ? [examples.join(', ')] : []), ...(entries.omitted > 0 ? [`${entries.omitted} omitted`] : []), `digest ${entries.sha256}`].join('; ') };
+  }
+  return { count: 'unsupported', diagnostics: 'unsupported store-dump evidence format' };
+}
+
 function evidenceValue(value) {
   if (!value || typeof value !== 'object') return value;
   if (Array.isArray(value)) return value.map(evidenceValue);
@@ -929,7 +950,10 @@ export function renderMarkdown(report) {
       lines.push('The capture is valid evidence of differences. Semantic review is required before any release severity can change.');
       lines.push('');
     }
-    const diffRows = Object.entries(storeDump.diff.categories).map(([category, entries]) => [category, String(Array.isArray(entries) ? entries.length : entries), Array.isArray(entries) ? entries.map((entry) => `${entry.store}/${entry.artifact}:${entry.identity}`).join(', ') : 'raw entries retained in sitting']);
+    const diffRows = Object.entries(storeDump.diff.categories).map(([category, entries]) => {
+      const evidence = storeDumpCategoryEvidence(entries);
+      return [category, String(evidence.count), evidence.diagnostics];
+    });
     if (diffRows.length > 0) lines.push(mdTable(['difference', 'count', 'identities'], diffRows), '');
     else lines.push('No structured differences recorded.', '');
   }

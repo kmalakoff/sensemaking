@@ -92,7 +92,7 @@ describe('fixed-work benchmark artifacts', () => {
     assert.equal(scale?.steps[1]?.id, 'scale-13k');
     assert.deepEqual(
       scale?.steps.filter(({ id }) => id.startsWith('result-sets-')),
-      [{ id: 'result-sets-stress', argv: ['node', 'benchmark/tools/result-sets.mjs', '.tmp/cache/stress-stress-1'], timeout: 15 * 60_000, quiet: false, owedBy: 'scale', out: true }]
+      [{ id: 'result-sets-stress', argv: ['node', 'benchmark/tools/result-sets.mjs', 'stress'], timeout: 15 * 60_000, quiet: false, owedBy: 'scale', out: true }]
     );
   });
 

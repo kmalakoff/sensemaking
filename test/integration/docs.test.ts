@@ -615,12 +615,14 @@ describe('benchmark store-dump: retained captures and structured differences', (
     writeFileSync(join(after, 'sqlite', 'ranking.txt'), '== "q" (1 rows) ==\n{"path":"a.md","score":2}\n');
     const run = spawnSync(process.execPath, ['benchmark/steps/store-dump.mjs', 'compare', before, after, '--out', output], { cwd: packageRoot, encoding: 'utf8' });
     assert.equal(run.status, 1, 'changed captures must fail the byte-parity comparator');
-    const artifact = JSON.parse(readFileSync(output, 'utf8')) as { capture_identity: { before: { sha256: string }; after: { sha256: string } }; diff: { changed_files: unknown[]; categories: Record<string, unknown[]> }; captures: { before: string; after: string } };
+    const artifact = JSON.parse(readFileSync(output, 'utf8')) as { capture_identity: { before: { sha256: string }; after: { sha256: string } }; diff: { version: number; changed_files: unknown[]; categories: Record<string, { count: number; sha256: string }> }; captures: { before: string; after: string } };
     assert.notEqual(artifact.capture_identity.before.sha256, artifact.capture_identity.after.sha256);
     assert.ok(artifact.diff.changed_files.length > 0);
-    assert.ok(artifact.diff.categories.membership.length > 0);
-    assert.ok(artifact.diff.categories.score.length > 0);
-    assert.ok(artifact.diff.categories.snippet.length > 0);
+    assert.equal(artifact.diff.version, 2);
+    assert.equal(artifact.diff.categories.membership.count, 1);
+    assert.equal(artifact.diff.categories.score.count, 2);
+    assert.equal(artifact.diff.categories.snippet.count, 1);
+    for (const summary of Object.values(artifact.diff.categories)) assert.match(summary.sha256, /^[0-9a-f]{64}$/);
     assert.equal(artifact.captures.before, 'before');
     assert.equal(artifact.captures.after, 'after');
   });

@@ -302,6 +302,11 @@ describe('portable quality release track', () => {
     const retrievalErrorResult = comparePortableQualityArtifacts([artifact('sqlite'), retrievalError, artifact('turso')]);
     assert.equal(retrievalErrorResult.valid, false);
     assert.match(retrievalErrorResult.errors.join('\n'), /semantic: retrieval is incomplete/);
+
+    const checkpoint = { ...artifact('duckdb'), incomplete: true, completed_passes: ['bm25-only', 'fused', 'fused-embed-configured', 'semantic'] };
+    const checkpointResult = comparePortableQualityArtifacts([artifact('sqlite'), checkpoint, artifact('turso')]);
+    assert.equal(checkpointResult.valid, false);
+    assert.match(checkpointResult.errors.join('\n'), /duckdb: artifact is incomplete/);
   });
 
   it('discovers sibling artifacts from the output path in the real comparator CLI', () => {
@@ -323,6 +328,8 @@ describe('portable quality release track', () => {
     );
     assert.deepEqual(quality.steps.find((step) => step.id === 'eval-nfcorpus')?.argv, ['node', 'benchmark/steps/quality.mjs', 'nfcorpus']);
     assert.deepEqual(quality.steps.find((step) => step.id === 'eval-fever')?.argv, ['node', 'benchmark/steps/quality.mjs', 'fever']);
+    for (const id of ['eval-fever', ...STORES.map((store) => `portable-eval-fever-${store}`)]) assert.equal(quality.steps.find((step) => step.id === id)?.timeout, 60 * 60_000);
+    for (const id of ['eval-nfcorpus', ...STORES.map((store) => `portable-eval-nfcorpus-${store}`)]) assert.equal(quality.steps.find((step) => step.id === id)?.timeout, 20 * 60_000);
     assert.equal(quality.steps.find((step) => step.id === 'eval-nfcorpus')?.owedBy, 'fever');
     assert.deepEqual(
       quality.steps.filter((step) => step.owedBy === 'quality-baseline').map((step) => step.id),

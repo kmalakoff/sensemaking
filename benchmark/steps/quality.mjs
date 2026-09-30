@@ -1,13 +1,14 @@
 // Retrieval quality in three passes (bm25-only, fused, semantic) plus a hidden guard pass: a vectors-free preset must be row-identical to `fused`. Paired deltas with a sign-test z.
 // usage: node benchmark/steps/quality.mjs [corpus] [--queries N] [--k N] [--split test|dev] [--store name] [--query-form or-bag|bare-and] [--out file]
-import { join } from 'node:path';
+import { mkdirSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
+import { writeFileAtomic } from '../../dist/esm/lib/atomic-write.js';
 import { corpusLabels, corpusPath } from '../lib/corpus.mjs';
 import { readLabels } from '../lib/labels.mjs';
 import { MEASURE_VERSION } from '../lib/measure.mjs';
 import { mean } from '../lib/metrics.mjs';
-import { writeOut } from '../lib/out.mjs';
 import { buildQualityArtifactBase, evaluateVariant, qualityVariantEvidence, queryFormFor } from '../lib/quality.mjs';
 import { qualityRetrievalIdentity } from '../lib/quality-retrieval-identity.mjs';
 import { observeQualityModel, prepareQualityModel, prepareQualityWorkTree } from '../lib/quality-work-tree.mjs';
@@ -54,6 +55,12 @@ if (queryFor === null) {
 // Omitted, this measures the default store, matching every recorded baseline in benchmark/reports.
 const STORE = flag('store', undefined);
 const outArg = flag('out', null);
+
+function writeOut(path, artifact) {
+  if (!path) return;
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileAtomic(path, `${JSON.stringify(artifact, null, 2)}\n`);
+}
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const source = corpusPath(corpus);
@@ -139,26 +146,38 @@ async function runQuality(work) {
   const results = [];
   const qualityArtifact = (extra = {}) => ({
     ...baseArtifact(),
+    incomplete: true,
     ...extra,
     variants: Object.fromEntries(results.map((r) => [r.name, qualityVariantEvidence(r)])),
   });
   try {
     for (const variant of VARIANTS) {
       const cfg = configFor(variant, tree);
+      const passStarted = process.hrtime.bigint();
+      const pass = results.length + 1;
+      const progress = (phase, extra = {}) => console.log(`quality-progress: ${JSON.stringify({ variant: variant.name, pass, passes: VARIANTS.length, phase, elapsed_ms: Number(process.hrtime.bigint() - passStarted) / 1e6, ...extra })}`);
       const errorDetails = [];
       let storeHandle = null;
       let measured = null;
       try {
+        progress('open-start');
         const opened = await lib.open(cfg);
         storeHandle = opened.store;
-        measured = await evaluateVariant({ qids, queries, qrels, k: K, search: (terms, options) => lib.search(storeHandle, cfg, terms, options), queryFor });
+        progress('open-end');
+        measured = await evaluateVariant({ qids, queries, qrels, k: K, search: (terms, options) => lib.search(storeHandle, cfg, terms, options), queryFor, onProgress: (counts) => progress('queries', counts) });
         errorDetails.push(...measured.errorDetails);
       } catch (err) {
         errorDetails.push({ qid: null, error: `open: ${err?.name ?? 'Error'}: ${err?.message ?? err}` });
       } finally {
         if (storeHandle) {
           try {
+            progress('close-start');
+          } catch (err) {
+            errorDetails.push({ qid: null, error: `progress: ${err?.name ?? 'Error'}: ${err?.message ?? err}` });
+          }
+          try {
             await storeHandle.close();
+            progress('close-end');
           } catch (err) {
             errorDetails.push({ qid: null, error: `close: ${err?.name ?? 'Error'}: ${err?.message ?? err}` });
           }
@@ -178,6 +197,11 @@ async function runQuality(work) {
         error_details: errorDetails,
       });
       if (errorDetails.length > 0 || results.at(-1).incomplete) break;
+      // A closed pass is useful evidence, but all four passes and final guards still own completion.
+      if (Number.isFinite(results.at(-1).ms)) {
+        writeOut(outArg, qualityArtifact({ incomplete: true, completed_passes: results.map((result) => result.name) }));
+        progress('checkpoint', { completed_passes: results.length });
+      }
     }
 
     const invalidResults = results.filter((r) => r.errors > 0 || r.incomplete || !Number.isFinite(r.ms));
