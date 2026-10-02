@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { join } from 'node:path';
 import assert from 'assert';
@@ -313,12 +313,15 @@ describe('public watcher freshness lifecycle', () => {
     this.timeout(30_000);
     const tree = scratchDir('watch-coordinated-contenders');
     const configPath = join(tree, 'sense.config.json');
-    writeFileSync(configPath, JSON.stringify({ version: 5, store: 'sqlite', presets: { default: { include: ['**/*.md'] } }, queries: {} }));
-    writeFileSync(join(tree, 'a.md'), 'coordinated claim.\n');
+    writeFileSync(configPath, JSON.stringify({ version: 5, store: 'sqlite', presets: { default: { include: ['**/*.md'] } }, queries: { claim: { search: 'coordinated' } } }));
+    const noteBytes = Buffer.from('coordinated claim.\n');
+    writeFileSync(join(tree, 'a.md'), noteBytes);
     const first = startMeasuredWatcher({ pkgRoot: packageRoot, configPath, deferred: true });
     const second = startMeasuredWatcher({ pkgRoot: packageRoot, configPath, deferred: true });
     let firstClose: ReturnType<typeof first.close> | null = null;
     let secondClose: ReturnType<typeof second.close> | null = null;
+    let bodyFailed = false;
+    let bodyError: unknown;
     try {
       await Promise.all([first.ready, second.ready]);
       await Promise.all([first.start(), second.start()]);
@@ -330,16 +333,25 @@ describe('public watcher freshness lifecycle', () => {
       assert.equal(rejection?.error?.code, 'WATCH_ACTIVE', JSON.stringify(rejection));
       firstClose = first.close(5_000, firstOutcome.event.type === 'run-watch-rejected' ? 'WATCH_ACTIVE' : null);
       secondClose = second.close(5_000, secondOutcome.event.type === 'run-watch-rejected' ? 'WATCH_ACTIVE' : null);
-      await Promise.all([firstClose, secondClose]);
-      // Read raw disk bytes, not loadConfig: loadConfig migrates in memory regardless of
-      // whether either contender's write actually landed, so it can't prove the disk moved.
-      const finalRaw = JSON.parse(readFileSync(configPath, 'utf8'));
-      assert.equal(finalRaw.version, SUPPORTED_CONFIG_VERSION, 'both contenders must leave the on-disk config migrated to the current version');
-      assert.equal(finalRaw.build, true, 'the v5 -> v6 step must have published build:true regardless of which contender lost the race');
-    } finally {
-      firstClose ??= first.close(5_000, first.events.find((event) => event.type === 'run-watch-rejected')?.error?.code ?? null);
-      secondClose ??= second.close(5_000, second.events.find((event) => event.type === 'run-watch-rejected')?.error?.code ?? null);
-      await Promise.all([firstClose, secondClose]);
+    } catch (err) {
+      bodyFailed = true;
+      bodyError = err;
     }
+    firstClose ??= first.close(5_000, first.events.find((event) => event.type === 'run-watch-rejected')?.error?.code ?? null);
+    secondClose ??= second.close(5_000, second.events.find((event) => event.type === 'run-watch-rejected')?.error?.code ?? null);
+    const closes = await Promise.allSettled([firstClose, secondClose]);
+    const cleanupErrors = closes.filter((result): result is PromiseRejectedResult => result.status === 'rejected').map((result) => result.reason);
+    if (bodyFailed && cleanupErrors.length > 0) throw new AggregateError([bodyError, ...cleanupErrors], 'watch contender body and cleanup failed');
+    if (bodyFailed) throw bodyError;
+    if (cleanupErrors.length > 0) throw new AggregateError(cleanupErrors, 'watch contender cleanup failed');
+
+    // Read disk directly: an in-memory migration cannot prove either publication landed.
+    assert.deepEqual(JSON.parse(readFileSync(configPath, 'utf8')), { version: SUPPORTED_CONFIG_VERSION, build: true, store: 'sqlite', presets: { default: { include: ['**/*.md'] } }, queries: { claim: { search: 'coordinated' } } });
+    assert.deepEqual(readFileSync(join(tree, 'a.md')), noteBytes, 'migration must preserve authored note bytes');
+    assert.deepEqual(
+      readdirSync(tree).filter((name) => name.startsWith('sense.config.json.') && name.endsWith('.part')),
+      [],
+      'migration must leave no staging siblings'
+    );
   });
 });

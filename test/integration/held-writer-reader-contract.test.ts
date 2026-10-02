@@ -1,7 +1,7 @@
 import { type ChildProcess, spawn } from 'node:child_process';
-import { existsSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import assert from 'assert';
 import { build, loadConfig, open, type ResolvedConfig, SUPPORTED_CONFIG_VERSION, search } from 'sensemaking';
 import { startMeasuredWatcher } from '../../benchmark/lib/measured-watcher.mjs';
@@ -124,7 +124,7 @@ async function pendingVectorCount(cfg: ResolvedConfig): Promise<number> {
 
 const CHILD = String.raw`
 import { channel } from 'node:diagnostics_channel';
-import { existsSync } from 'node:fs';
+import { existsSync, renameSync, writeFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -157,6 +157,18 @@ const onCandidatesRead = ({ paths }) => {
   }
 };
 if (role === 'search-reader') candidatesRead.subscribe(onCandidatesRead);
+const migrationReady = channel('sensemaking.config.migration-ready');
+const onMigrationReady = ({ configPath, from }) => {
+  const readyPath = releasePath + '.' + label + '.ready';
+  writeFileSync(readyPath + '.pending', JSON.stringify({ configPath, from }), { flag: 'wx' });
+  renameSync(readyPath + '.pending', readyPath);
+  const deadline = Date.now() + 30000;
+  while (!existsSync(releasePath)) {
+    if (Date.now() >= deadline) throw new Error('migration release file was not created');
+    Atomics.wait(pause, 0, 0, 25);
+  }
+};
+if (role === 'migrator') migrationReady.subscribe(onMigrationReady);
 const input = createInterface({ input: process.stdin });
 const command = () => new Promise((resolve, reject) => {
   const onLine = (line) => {
@@ -174,7 +186,10 @@ const command = () => new Promise((resolve, reject) => {
 
 try {
   const cfg = api.loadConfig(configPath);
-  if (role === 'builder') {
+  if (role === 'migrator') {
+    send({ type: 'migration-result', cfg });
+    send({ type: 'done' });
+  } else if (role === 'builder') {
     const result = await api.build(cfg);
     send({ type: 'built', parsed: result.parsed, label });
     send({ type: 'done' });
@@ -239,18 +254,21 @@ try {
     throw new Error('unknown child role');
   }
 } catch (err) {
-  send({ type: 'error', message: err?.stack ?? String(err) });
+  send({ type: 'error', message: err?.stack ?? String(err), ...(role === 'migrator' ? { errno: { code: err?.code, syscall: err?.syscall, path: err?.path, dest: err?.dest } } : {}) });
   process.exitCode = 1;
 } finally {
   lockWait.unsubscribe(onLockWait);
   buildPlan.unsubscribe(onBuildPlan);
   candidatesRead.unsubscribe(onCandidatesRead);
+  migrationReady.unsubscribe(onMigrationReady);
   input.close();
 }
 `;
 
 interface Message {
   type: string;
+  cfg?: ResolvedConfig;
+  errno?: { code?: string; syscall?: string; path?: string; dest?: string };
   store?: string;
   rows?: Array<{ path: string; text?: string; snippets?: string[] }>;
   paths?: string[];
@@ -283,7 +301,7 @@ async function waitForAny(process: ProtocolChild, types: string[]): Promise<Mess
   return Promise.race(types.map((type) => process.waitFor(type)));
 }
 
-function startChild(role: 'writer' | 'reader' | 'reader2' | 'builder' | 'search-reader', configPath: string, releasePath = '', label = ''): ProtocolChild {
+function startChild(role: 'writer' | 'reader' | 'reader2' | 'builder' | 'search-reader' | 'migrator', configPath: string, releasePath = '', label = ''): ProtocolChild {
   const child = spawn(process.execPath, ['--input-type=module', '-e', CHILD, role, configPath, packageRoot, releasePath, label], {
     cwd: packageRoot,
     detached: true,
@@ -443,6 +461,92 @@ async function finishChildren(children: Array<ProtocolChild | undefined>, bodyFa
   if (bodyFailed && cleanupErrors.length > 0) throw new AggregateError([bodyError, ...cleanupErrors], `${context} failed and cleanup also failed`);
   if (bodyFailed) throw bodyError;
   if (cleanupErrors.length > 0) throw cleanupErrors.length === 1 ? cleanupErrors[0] : new AggregateError(cleanupErrors, `${context} cleanup failed`);
+}
+
+async function runSameInputMigration(): Promise<void> {
+  const baseDir = scratchDir('config-same-input');
+  const configPath = join(baseDir, 'sense.config.json');
+  const releasePath = join(baseDir, 'release-migrators');
+  const labels = ['first', 'second'];
+  const legacy = { version: 5, store: 'sqlite', root: 'notes', presets: { default: { include: ['**/*.md'], exclude: ['private/**'], signals: { words: 1 } } }, queries: { saved: { search: 'authored migration', k: 7 } }, ownerTag: 'preserve this value' };
+  const legacyBytes = Buffer.from(`${JSON.stringify(legacy)}\n`);
+  const expected = { version: SUPPORTED_CONFIG_VERSION, store: 'sqlite', root: 'notes', presets: { default: { include: ['**/*.md'], exclude: ['private/**'], signals: { words: 1 } } }, queries: { saved: { search: 'authored migration', k: 7 } }, ownerTag: 'preserve this value', build: true };
+  const expectedBytes = Buffer.from(`${JSON.stringify(expected, null, 2)}\n`);
+  const expectedResolved = { ...expected, configDir: baseDir, rootDir: resolve(baseDir, 'notes'), baseDir: resolve(baseDir, 'notes'), configPath, migratedFrom: 5, unknownKeys: ['ownerTag'] };
+  writeFileSync(configPath, legacyBytes);
+  const children: ProtocolChild[] = [];
+  let bodyFailed = false;
+  let bodyError: unknown;
+  try {
+    for (const label of labels) children.push(startChild('migrator', configPath, releasePath, label));
+    const readiness = await Promise.all(
+      children.map(async (child, index) => {
+        const readyPath = `${releasePath}.${labels[index]}.ready`;
+        const deadline = Date.now() + DEADLINE_MS;
+        while (!existsSync(readyPath)) {
+          if (child.child.exitCode !== null || child.child.signalCode !== null || child.messages.some((message) => message.type === 'error')) throw new Error(`migrator exited before readiness: ${JSON.stringify(child.messages)}`);
+          if (Date.now() >= deadline) throw new Error('migrator did not reach the publication barrier');
+          await new Promise((resolve) => setTimeout(resolve, 25));
+        }
+        return JSON.parse(readFileSync(readyPath, 'utf8')) as { configPath: string; from: number };
+      })
+    );
+    assert.deepEqual(readiness, [
+      { configPath, from: 5 },
+      { configPath, from: 5 },
+    ]);
+    assert.deepEqual(readFileSync(configPath), legacyBytes, 'both legacy reads must precede either publication');
+    writeFileSync(releasePath, 'release', { flag: 'wx' });
+
+    const outcomes = await Promise.allSettled(
+      children.map(async (child) => {
+        let timer: NodeJS.Timeout | undefined;
+        try {
+          return await Promise.race([
+            (async () => {
+              const result = await child.waitFor('migration-result');
+              await child.waitFor('done');
+              await closeChild(child);
+              assert.deepEqual({ code: child.child.exitCode, signal: child.child.signalCode }, { code: 0, signal: null });
+              return result;
+            })(),
+            new Promise<Message>((_resolve, reject) => {
+              timer = setTimeout(() => reject(new Error('migrator did not finish and close')), DEADLINE_MS);
+            }),
+          ]);
+        } finally {
+          if (timer) clearTimeout(timer);
+        }
+      })
+    );
+    const failures = outcomes.filter((outcome): outcome is PromiseRejectedResult => outcome.status === 'rejected').map((outcome) => outcome.reason);
+    if (failures.length > 0) throw new AggregateError(failures, 'same-input migrator outcomes failed');
+    for (const outcome of outcomes) {
+      if (outcome.status === 'fulfilled') assert.deepEqual(outcome.value.cfg, expectedResolved);
+    }
+    assert.deepEqual(readFileSync(configPath), expectedBytes);
+    assert.deepEqual(
+      readdirSync(baseDir).filter((name) => name.startsWith('sense.config.json.') && name.endsWith('.part')),
+      [],
+      'both closed migrators must leave no staging residue'
+    );
+  } catch (err) {
+    bodyFailed = true;
+    bodyError = err;
+  }
+  try {
+    await finishChildren(children, bodyFailed, bodyError, 'same-input migration');
+  } catch (err) {
+    let target: unknown;
+    try {
+      target = readFileSync(configPath, 'utf8');
+    } catch (readError) {
+      const errno = readError as NodeJS.ErrnoException;
+      target = { error: errno.message, code: errno.code, syscall: errno.syscall, path: errno.path };
+    }
+    const outcomes = children.map((child) => ({ messages: child.messages, stderr: child.stderr, code: child.child.exitCode, signal: child.child.signalCode }));
+    throw new Error(`same-input migration failed; outcomes=${JSON.stringify(outcomes)}; finalTarget=${JSON.stringify(target)}`, { cause: err });
+  }
 }
 
 function writeSqliteConfig(configDir: string, filename: string, rootDir: string): { configPath: string; cfg: ResolvedConfig } {
@@ -1100,6 +1204,11 @@ describe('bounded core publication', () => {
 });
 
 describe('held writer and independent reader', () => {
+  it('publishes one authored config after both processes read the same legacy input', async function () {
+    this.timeout(90_000);
+    await runSameInputMigration();
+  });
+
   it('keeps lexical candidates and indexed snippet bytes in one committed generation', async function () {
     this.timeout(60_000);
     await runSearchSnapshotOverlap();

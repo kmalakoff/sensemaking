@@ -1,3 +1,4 @@
+import { channel } from 'node:diagnostics_channel';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { SenseError } from '../errors.ts';
@@ -9,6 +10,7 @@ import { unknownConfigKeys, validateConfig, validateLegacyScan } from './validat
 // v1 and v2 were `scan`/`find`-shaped; v3 introduced `presets`. Only the former need the
 // legacy shape check before migrating.
 const FIRST_PRESET_VERSION = 3;
+const migrationReady = channel('sensemaking.config.migration-ready');
 
 // v1 -> v2 migration only: the features v2 introduced as opt-out (embed was opt-in then).
 const V2_OPT_OUT_NAMES = ['links', 'sections', 'rank'] as const;
@@ -241,6 +243,7 @@ export function loadConfig(explicitPath?: string, options: LoadConfigOptions = {
     migratedFrom = result.from;
     if (options.writeMigration !== false) {
       const migrated = `${JSON.stringify(cfg, null, 2)}\n`;
+      if (migrationReady.hasSubscribers) migrationReady.publish({ configPath, from: migratedFrom });
       try {
         writeFileAtomic(configPath, migrated);
       } catch (err) {
