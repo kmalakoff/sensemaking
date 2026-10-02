@@ -9,6 +9,8 @@ Use sense to locate evidence in a markdown tree before reading files. With the c
 
 Setup, store selection, presets, and note design belong to the `sense-setup` skill. Translating an Obsidian Bases file belongs to `sense-bases`.
 
+Use the shared [Sense terminology](references/terminology.md) when explaining results or output controls. Read it when distinguishing a snippet, section, section description, outline, chunk or link type; those names are not interchangeable.
+
 ## Start with the tree
 
 Run these when the tree or its configuration is unfamiliar:
@@ -67,15 +69,19 @@ The tables, `?` placeholders, quoted identifiers, `has()`, `basename()`, and pre
 
 Combinations such as `match+link` mean that more than one signal produced the row. `score` ranks rows within that result only. Do not compare it across searches. `similarity` ranks vector evidence within the current result and model. Do not carry a fixed similarity cutoff between trees.
 
-The `lines` value points at the section that earned the row. Read that range when it is present. A null range means the whole note is the reference. A vector-only row has no lexical snippet and is a lead, not proof that the note contains the query terms.
+The `lines` value gives a line range in the indexed note. It can identify a section around a word match or an embedding chunk. Read that range when it is present. A null range means the whole note is the reference. A vector-only row has no lexical snippet and is a lead, not proof that the note contains the query terms.
 
 Read [search evidence and troubleshooting](references/search.md) when a search will support a factual claim, when absence matters, when results look noisy, or when tuning signal weights.
+
+`sense search --explain --format json` adds the actual ranking contributions for returned notes. It does not change ranking or explain every missing result. The search guide describes how contributions differ from the `via` evidence label.
 
 ## Scope and output
 
 Bare commands use the `default` preset. `--preset <name>` chooses another. For `search`, `map`, `peek`, `path`, and `related`, `--include`, `--exclude`, and `--no-exclude` change the query scope for one invocation, but cannot reach files that no preset indexes. `sense status` shows actual coverage. Scope selects results; presets are not a security boundary.
 
 `peek` rejects an exact path outside scope before trying a basename, resolves basenames within scope, and shows only scoped resolved links and backlinks; unresolved targets remain as written. `path` resolves its endpoints across the indexed tree and scopes intermediate notes. `related` resolves its seed across the indexed tree and scopes result candidates.
+
+`peek --section-count-limit n` bounds section descriptions. `--link-count-limit n` independently bounds each group of outbound links, backlinks and unresolved links. Both default to 20 and require positive safe integers. Request more when the outline or links you need are truncated, or fewer for triage. Totals still describe the full selected groups; the limits do not widen scope. Section descriptions identify where to read; they do not return section prose.
 
 `--where` filters search and graph commands against frontmatter alias `f`:
 

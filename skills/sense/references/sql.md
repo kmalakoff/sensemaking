@@ -94,7 +94,7 @@ SELECT DISTINCT path FROM hop WHERE d > 0;
 
 Use `sense path` for the shortest chain between two known notes. Use raw recursion when the task needs a set of neighbors to filter or join.
 
-## Dead links
+## Unresolved links
 
 `dst IS NULL` includes links to attachments that sense never indexes, such as images, PDFs, and `.base` files. Exclude the attachment extensions used by the tree before treating the remaining rows as broken links. Trees with dotted markdown titles need an explicit extension list instead of a blanket "contains a dot" filter.
 

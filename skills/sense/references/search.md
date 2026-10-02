@@ -2,6 +2,8 @@
 
 Read this guide when search results will support a factual claim, when absence matters, when results look noisy, or when changing signal weights.
 
+[Sense terminology](terminology.md) defines the result objects. In particular, snippets, sections and embedding chunks are different units.
+
 ## What each signal establishes
 
 `words` ranks literal occurrences after stemming. It is the right signal for identifiers, error strings, names, and quoted phrases. A `match` row is lexical evidence because its `snippets` show the occurrence.
@@ -22,11 +24,25 @@ Weights are corpus and model choices. Compare representative queries before chan
 
 - `via` names the evidence that produced the row.
 - `snippets` contains marked lexical passages. It is empty when no word matched.
-- `lines` names the best section to read. Null means the whole note is the reference.
+- `lines` is the selected section or embedding chunk's line range in the indexed note. Null means the whole note is the reference.
 - `score` orders the fused result. Its scale changes with the participating signals and ranks, so compare rows only inside one result.
 - `similarity` is cosine similarity against the best chunk. Compare it inside one result and one model. Small trees can give unrelated text a moderately close nearest neighbor.
 
 Relay the evidence label when reporting a result. "The note contains these words" and "the note is semantically related" support different claims.
+
+## Finite retrieval and paging
+
+`k` is the maximum number of notes returned by one finite retrieval. Changing `k` can change the candidate pools, link seeds and fused ranking, including the earlier rows. It starts a new retrieval rather than continuing a stable result set. When you need pages, retain one returned array or JSON result and page that locally.
+
+## Explain a ranking
+
+Add `--explain` to a direct `sense search` invocation when you need to inspect how the configured signals contributed. With `--format json`, each returned row adds an `explanation` array containing `signal`, `rank`, `weight` and `contribution`. Entries follow words, links, vectors order and include only signals that contributed to that candidate. Without the flag, ordinary output is unchanged.
+
+Ranks are one-based within each signal's candidate list. A contribution is `weight / (60 + rank - 1)`, using the actual unrounded value accumulated during ranking. The sum is the fused score before its public display rounding. These values are not native BM25 scores and do not make lexical rankings comparable across stores.
+
+An isolated word-match seed can receive link-signal restart mass while its `via` label remains `match`. The explanation reports the numeric contribution; `via` remains the evidence label, not an exhaustive score breakdown. An explanation does not establish that a claim is true or describe why an absent note failed to enter the candidate set.
+
+Table and CSV formats encode the explanation cell as JSON text. Table output follows the existing cell clipping rules; use JSON or CSV for the complete values. Explanation reuses the current search and does not make an additional embedding request. It is not a saved-query configuration field.
 
 ## When a search misses
 

@@ -223,10 +223,22 @@ describe('embed api type', () => {
 
   it('expands through an OpenAI-compatible endpoint', async () => {
     const { store: db, cfg } = await openSemantic(fruitTree(), { model: 'test-model', provider: 'openai', url });
-    const rows = (await search(db, cfg, 'pomme')) as Array<{ path: string; via: string }>;
-    await db.close();
-    assert.equal(rows[0].path, 'a.md', JSON.stringify(rows));
-    assert.equal(rows[0].via, 'vector');
+    try {
+      const before = requests;
+      const rows = await search(db, cfg, 'pomme');
+      assert.equal(requests, before + 1, 'ordinary search embeds its query once');
+      const explained = await search(db, cfg, 'pomme', { explain: true });
+      assert.equal(requests, before + 2, 'explanation must not add a provider request');
+      assert.deepEqual(
+        explained.map(({ explanation, ...row }) => row),
+        rows
+      );
+      assert.equal(rows[0].path, 'a.md', JSON.stringify(rows));
+      assert.equal(rows[0].via, 'vector');
+      assert.deepEqual(explained[0].explanation, [{ signal: 'vectors', rank: 1, weight: 1, contribution: 1 / 60 }]);
+    } finally {
+      await db.close();
+    }
   });
 
   it('does not call the query provider for an empty or vector-ineligible resolved scope', async () => {
@@ -235,93 +247,105 @@ describe('embed api type', () => {
     const { store: db, cfg } = await openSemantic(baseDir, { model: 'test-model', provider: 'openai', url });
     try {
       const before = requests;
-      await assert.rejects(search(db, cfg, 'pomme', { k: 0 }), /must be a positive finite integer/);
-      assert.equal(requests, before, 'invalid options must fail before remote query embedding');
-      assert.deepEqual(await search(db, cfg, 'pomme', { include: ['missing/**'] }), []);
-      assert.equal(requests, before, 'an empty scope must not start remote query embedding');
-      assert.deepEqual(await search(db, cfg, 'pomme', { include: ['stub.md'] }), []);
-      assert.equal(requests, before, 'a scope with no embedded chunks must not start remote query embedding');
+      for (const value of [null, 0, 'true', [], {}]) {
+        await assert.rejects(search(db, cfg, 'pomme', { explain: value as unknown as boolean }), (err: SenseError) => {
+          assert.equal(err.code, 'SEARCH_OPTION_INVALID');
+          assert.match(err.message, /explain.*must be a boolean/);
+          return true;
+        });
+        assert.equal(requests, before, 'invalid explain must fail before remote query embedding');
+      }
+      for (const explain of [false, true]) {
+        await assert.rejects(search(db, cfg, 'pomme', { k: 0, explain }), /must be a positive finite integer/);
+        assert.equal(requests, before, 'invalid options must fail before remote query embedding');
+        assert.deepEqual(await search(db, cfg, 'pomme', { include: ['missing/**'], explain }), []);
+        assert.equal(requests, before, 'an empty scope must not start remote query embedding');
+        assert.deepEqual(await search(db, cfg, 'pomme', { include: ['stub.md'], explain }), []);
+        assert.equal(requests, before, 'a scope with no embedded chunks must not start remote query embedding');
+      }
     } finally {
       await db.close();
     }
   });
 
-  it('cancels a public semantic search without stranding the same store handle', async () => {
-    let releaseQuery: (() => void) | undefined;
-    let markQueryStarted: (() => void) | undefined;
-    let held = false;
-    const queryReleased = new Promise<void>((resolve) => {
-      releaseQuery = resolve;
-    });
-    const queryStarted = new Promise<void>((resolve) => {
-      markQueryStarted = resolve;
-    });
-    const controlled = createServer((req, res) => {
-      let body = '';
-      req.on('data', (chunk) => {
-        body += chunk;
+  for (const explain of [false, true]) {
+    it(`cancels a public semantic search without stranding the same store handle with explain=${explain}`, async () => {
+      let releaseQuery: (() => void) | undefined;
+      let markQueryStarted: (() => void) | undefined;
+      let held = false;
+      const queryReleased = new Promise<void>((resolve) => {
+        releaseQuery = resolve;
       });
-      req.on('end', () => {
-        const parsed: unknown = JSON.parse(body);
-        if (parsed === null || typeof parsed !== 'object' || !('input' in parsed) || !Array.isArray(parsed.input) || !parsed.input.every((value) => typeof value === 'string')) {
-          res.writeHead(400).end();
-          return;
-        }
-        const input = parsed.input;
-        const respond = () => {
-          if (res.destroyed) return;
-          const data = input.map((text) => ({ embedding: /apple|pomme/i.test(text) ? [1, 0, 0, 0] : [0, 1, 0, 0] }));
-          res.setHeader('content-type', 'application/json');
-          res.end(JSON.stringify({ data }));
-        };
-        if (!held && input.length === 1 && input[0] === 'pomme') {
-          held = true;
-          markQueryStarted?.();
-          void queryReleased.then(respond);
-        } else {
-          respond();
-        }
+      const queryStarted = new Promise<void>((resolve) => {
+        markQueryStarted = resolve;
       });
-    });
-    const controlledUrl = `${await listen(controlled)}/v1`;
-    const controller = new AbortController();
-    const reason = { operation: 'cancelled-search' };
-    let opened: Awaited<ReturnType<typeof openSemantic>> | undefined;
-    let searchOutcome: Promise<PromiseSettledResult<unknown>> | undefined;
-    let bodyFailed = false;
-    let bodyFailure: unknown;
-    try {
-      opened = await openSemantic(fruitTree(), { model: `cancel-search-${Date.now()}`, provider: 'openai', url: controlledUrl });
-      const pending = search(opened.store, opened.cfg, 'pomme', { signal: controller.signal });
-      searchOutcome = settlementOf(pending);
-      const readiness = await Promise.race([queryStarted.then(() => 'query-started' as const), searchOutcome.then(() => 'search-settled' as const)]);
-      assert.equal(readiness, 'query-started', 'the provider request must be held before search settles');
+      const controlled = createServer((req, res) => {
+        let body = '';
+        req.on('data', (chunk) => {
+          body += chunk;
+        });
+        req.on('end', () => {
+          const parsed: unknown = JSON.parse(body);
+          if (parsed === null || typeof parsed !== 'object' || !('input' in parsed) || !Array.isArray(parsed.input) || !parsed.input.every((value) => typeof value === 'string')) {
+            res.writeHead(400).end();
+            return;
+          }
+          const input = parsed.input;
+          const respond = () => {
+            if (res.destroyed) return;
+            const data = input.map((text) => ({ embedding: /apple|pomme/i.test(text) ? [1, 0, 0, 0] : [0, 1, 0, 0] }));
+            res.setHeader('content-type', 'application/json');
+            res.end(JSON.stringify({ data }));
+          };
+          if (!held && input.length === 1 && input[0] === 'pomme') {
+            held = true;
+            markQueryStarted?.();
+            void queryReleased.then(respond);
+          } else {
+            respond();
+          }
+        });
+      });
+      const controlledUrl = `${await listen(controlled)}/v1`;
+      const controller = new AbortController();
+      const reason = { operation: 'cancelled-search' };
+      let opened: Awaited<ReturnType<typeof openSemantic>> | undefined;
+      let searchOutcome: Promise<PromiseSettledResult<unknown>> | undefined;
+      let bodyFailed = false;
+      let bodyFailure: unknown;
+      try {
+        opened = await openSemantic(fruitTree(), { model: `cancel-search-${Date.now()}`, provider: 'openai', url: controlledUrl });
+        const pending = search(opened.store, opened.cfg, 'pomme', { signal: controller.signal, explain });
+        searchOutcome = settlementOf(pending);
+        const readiness = await Promise.race([queryStarted.then(() => 'query-started' as const), searchOutcome.then(() => 'search-settled' as const)]);
+        assert.equal(readiness, 'query-started', 'the provider request must be held before search settles');
+        controller.abort(reason);
+        const cancelled = await searchOutcome;
+        assert.equal(cancelled.status, 'rejected');
+        if (cancelled.status === 'rejected') assert.strictEqual(cancelled.reason, reason);
+
+        const rows = await search(opened.store, opened.cfg, 'pomme', { explain });
+        assert.equal(rows[0]?.path, 'a.md', JSON.stringify(rows));
+      } catch (err) {
+        bodyFailed = true;
+        bodyFailure = err;
+      }
+
       controller.abort(reason);
-      const cancelled = await searchOutcome;
-      assert.equal(cancelled.status, 'rejected');
-      if (cancelled.status === 'rejected') assert.strictEqual(cancelled.reason, reason);
-
-      const rows = await search(opened.store, opened.cfg, 'pomme');
-      assert.equal(rows[0]?.path, 'a.md', JSON.stringify(rows));
-    } catch (err) {
-      bodyFailed = true;
-      bodyFailure = err;
-    }
-
-    controller.abort(reason);
-    releaseQuery?.();
-    const serverClose = new Promise<void>((resolve, reject) => {
-      controlled.close((err) => (err ? reject(err) : resolve()));
+      releaseQuery?.();
+      const serverClose = new Promise<void>((resolve, reject) => {
+        controlled.close((err) => (err ? reject(err) : resolve()));
+      });
+      const cleanupResults = await Promise.allSettled([searchOutcome ?? Promise.resolve(), Promise.resolve().then(() => opened?.store.close()), Promise.resolve().then(() => controlled.closeAllConnections()), serverClose]);
+      const cleanupFailures = cleanupResults.filter((result): result is PromiseRejectedResult => result.status === 'rejected').map((result) => result.reason);
+      if (bodyFailed) {
+        if (cleanupFailures.length > 0) throw new AggregateError([bodyFailure, ...cleanupFailures], 'public search cancellation and cleanup failed');
+        throw bodyFailure;
+      }
+      if (cleanupFailures.length === 1) throw cleanupFailures[0];
+      if (cleanupFailures.length > 1) throw new AggregateError(cleanupFailures, 'public search cancellation cleanup failed');
     });
-    const cleanupResults = await Promise.allSettled([searchOutcome ?? Promise.resolve(), Promise.resolve().then(() => opened?.store.close()), Promise.resolve().then(() => controlled.closeAllConnections()), serverClose]);
-    const cleanupFailures = cleanupResults.filter((result): result is PromiseRejectedResult => result.status === 'rejected').map((result) => result.reason);
-    if (bodyFailed) {
-      if (cleanupFailures.length > 0) throw new AggregateError([bodyFailure, ...cleanupFailures], 'public search cancellation and cleanup failed');
-      throw bodyFailure;
-    }
-    if (cleanupFailures.length === 1) throw cleanupFailures[0];
-    if (cleanupFailures.length > 1) throw new AggregateError(cleanupFailures, 'public search cancellation cleanup failed');
-  });
+  }
 });
 
 describe('semantic absence signal', () => {

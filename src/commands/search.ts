@@ -11,11 +11,11 @@ import { bareTermSyntaxError, searchError } from '../output/search-error.ts';
 import type { LexicalHit, Store } from '../store/types.ts';
 import { foldForSearch, hasUnspacedRun, searchTokens, unspacedRuns } from '../text/segment.ts';
 import { materializeScope, narrowByWhere, rawScope, scopeHasEmbeddings } from './scope.ts';
-import type { Candidates, SearchResultVia } from './signals.ts';
+import type { Candidates, SearchResultVia, SearchSignalContribution } from './signals.ts';
 import { linksCandidates, vectorsCandidates, wordsCandidates } from './signals.ts';
 import { assertQuerySnapshot } from './snapshot.ts';
 
-export type { SearchResultVia } from './signals.ts';
+export type { SearchResultVia, SearchSignalContribution } from './signals.ts';
 
 // Default budget behind --snippet-char-limit/--snippet-count-limit: the limit is whatever the
 // caller passes, these only say what happens when they pass nothing (DESIGN.md "Search snippets").
@@ -283,6 +283,8 @@ async function lineRangeFor(store: Store, path: string, line: number): Promise<s
 /** Options for the root {@link search} API. */
 export interface SearchOptions {
   k?: number;
+  /** Collects ranking contributions for returned candidates; omitted or false preserves ordinary output. */
+  explain?: boolean;
   where?: string; // SQL fragment against frontmatter alias `f`, e.g. "f.status = 'active'"
   preset?: string; // named preset; unknown name throws listing declared presets, undefined -> "default"
   include?: string[]; // ad hoc scope override (repeatable --include); independent of exclude
@@ -303,6 +305,8 @@ export type SearchResult = {
   score: number;
   lines: string | null;
   similarity?: number | null;
+  /** Present only with explain: true, in words/links/vectors order; contributions can differ from via labels. */
+  explanation?: SearchSignalContribution[];
 };
 
 export interface SearchHydrationRow {
@@ -312,6 +316,9 @@ export interface SearchHydrationRow {
 }
 
 function validateSearchOptions(opts: SearchOptions): void {
+  if (opts.explain !== undefined && typeof opts.explain !== 'boolean') {
+    throw new SenseError('SEARCH_OPTION_INVALID', `search option "explain" must be a boolean, got ${String(opts.explain)}`);
+  }
   for (const [name, value] of [
     ['k', opts.k],
     ['snippetCharLimit', opts.snippetCharLimit],
@@ -460,7 +467,7 @@ async function searchSnapshot(store: Store, cfg: ResolvedConfig, terms: string, 
     const syntaxError = bareTermSyntaxError(terms);
     if (syntaxError) throw syntaxError;
     try {
-      matchRows = await wordsCandidates(store, candidates, terms, whereJoin, whereCond, scopeCond, fetch, signals.words);
+      matchRows = await wordsCandidates(store, candidates, terms, whereJoin, whereCond, scopeCond, fetch, signals.words, opts.explain);
     } catch (err) {
       throw searchError(err as Error, terms, scope);
     }
@@ -469,12 +476,12 @@ async function searchSnapshot(store: Store, cfg: ResolvedConfig, terms: string, 
   // Distinguish from via='link' rows, which never appear in matchRows.
   const matchedPaths = new Set(matchRows.map((r) => r.path));
 
-  if (signals.links !== undefined) await linksCandidates(store, candidates, matchRows, allPaths, allowedPaths, fetch, signals.links);
+  if (signals.links !== undefined) await linksCandidates(store, candidates, matchRows, allPaths, allowedPaths, fetch, signals.links, opts.explain);
 
   let chunkLines = new Map<string, string>();
   let chunkSimilarity = new Map<string, number>();
   if (semanticEnabled && signals.vectors !== undefined && prepared !== undefined) {
-    ({ chunkLines, chunkSimilarity } = await vectorsCandidates(store, prepared, candidates, fetch, allowedPaths, allPaths.length, signals.vectors));
+    ({ chunkLines, chunkSimilarity } = await vectorsCandidates(store, prepared, candidates, fetch, allowedPaths, allPaths.length, signals.vectors, opts.explain));
   }
 
   await store.exec('DROP TABLE IF EXISTS _search');
@@ -506,6 +513,9 @@ async function searchSnapshot(store: Store, cfg: ResolvedConfig, terms: string, 
   for (const row of rows) row.snippets = [];
 
   await hydrateSearchRows(store, cfg, rows, matchedPaths, terms, opts);
+  if (opts.explain) {
+    for (const row of rows) row.explanation = candidates.get(row.path)?.explanation ?? [];
+  }
 
   return rows;
 }

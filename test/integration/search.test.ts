@@ -1,8 +1,13 @@
 import assert from 'node:assert';
 import { rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { open } from 'sensemaking';
+import type { SearchSignalContribution } from 'sensemaking';
+import { open, SUPPORTED_CONFIG_VERSION, search } from 'sensemaking';
+import { runCli } from '../lib/cli.ts';
+import { writeModel } from '../lib/model.ts';
 import { scratchDir } from '../lib/scratch.ts';
+import { forEachStore, withTreeForStore } from '../lib/stores.ts';
+import { writeNote } from '../lib/tree.ts';
 
 function tmpTree(): string {
   return scratchDir('search');
@@ -197,5 +202,198 @@ describe('search', () => {
     const second = await openTree(baseDir);
     assert.equal(second.parsed, 1);
     assert.equal(((await (await second.store.prepare('SELECT count(*) AS n FROM content WHERE content MATCH ?')).get('llama')) as { n: number }).n, 1);
+  });
+});
+
+describe('search explanation', () => {
+  it('reports exact first and second word contributions with unchanged default rows', async () => {
+    const baseDir = tmpTree();
+    writeNote(baseDir, 'a.md', { body: 'needle' });
+    writeNote(baseDir, 'b.md', { body: 'needle' });
+    await forEachStore(async (name) =>
+      withTreeForStore(
+        name,
+        baseDir,
+        async ({ store, cfg }) => {
+          const ordinary = await search(store, cfg, 'needle');
+          const disabled = await search(store, cfg, 'needle', { explain: false });
+          const explained = await search(store, cfg, 'needle', { explain: true });
+          assert.deepEqual(disabled, ordinary);
+          assert.equal(JSON.stringify(disabled), JSON.stringify(ordinary));
+          assert.deepEqual(
+            ordinary.map((row) => row.path),
+            ['a.md', 'b.md']
+          );
+          assert.deepEqual(
+            explained.map(({ explanation, ...row }) => row),
+            ordinary
+          );
+          assert.deepEqual(
+            explained.map((row) => row.explanation),
+            [[{ signal: 'words', rank: 1, weight: 2, contribution: 2 / 60 }], [{ signal: 'words', rank: 2, weight: 2, contribution: 2 / 61 }]]
+          );
+          assert.ok(ordinary.every((row) => !Object.hasOwn(row, 'explanation')));
+          assert.deepEqual(Object.keys(explained[0]), [...Object.keys(ordinary[0]), 'explanation']);
+          assert.deepEqual(await search(store, cfg, 'missing', { explain: true }), []);
+        },
+        { presets: { default: { include: ['**/*.md'], signals: { words: 2 } } } }
+      )
+    );
+  });
+
+  it('reports all fused contributions even when link restart mass leaves via without a link label', async () => {
+    const baseDir = tmpTree();
+    writeNote(baseDir, 'seed.md', { frontmatter: { status: 'active' }, body: 'apple' });
+    writeNote(baseDir, 'other.md', { body: 'stone [[leaf]]' });
+    writeNote(baseDir, 'leaf.md', { body: 'stone' });
+    const model = writeModel();
+    await forEachStore(async (name) =>
+      withTreeForStore(
+        name,
+        baseDir,
+        async ({ store, cfg }) => {
+          const options = { include: ['seed.md'], where: "f.status = 'active'", snippetCharLimit: 20, snippetCountLimit: 2 };
+          const ordinary = await search(store, cfg, 'apple', options);
+          const explained = await search(store, cfg, 'apple', { ...options, explain: true });
+          assert.deepEqual(
+            explained.map(({ explanation, ...row }) => row),
+            ordinary
+          );
+          assert.deepEqual(
+            explained.map((row) => row.path),
+            ['seed.md']
+          );
+          assert.equal(explained[0].via, 'match+vector');
+          assert.deepEqual(explained[0].explanation, [
+            { signal: 'words', rank: 1, weight: 2, contribution: 2 / 60 },
+            { signal: 'links', rank: 1, weight: 3, contribution: 3 / 60 },
+            { signal: 'vectors', rank: 1, weight: 4, contribution: 4 / 60 },
+          ]);
+          assert.equal(explained[0].score, 0.15);
+          assert.equal(explained[0].snippets.length, 1);
+          assert.ok(explained[0].snippets[0].includes('«apple»'));
+        },
+        { presets: { default: { include: ['**/*.md'], signals: { words: 2, links: 3, vectors: 4 } } }, embed: { provider: 'static', model } }
+      )
+    );
+  });
+
+  it('reports a link-only candidate and vector-only ranks from authored geometry', async () => {
+    const baseDir = tmpTree();
+    writeNote(baseDir, 'seed.md', { body: 'needle [[leaf]]' });
+    writeNote(baseDir, 'leaf.md', { body: 'bird' });
+    await forEachStore(async (name) =>
+      withTreeForStore(
+        name,
+        baseDir,
+        async ({ store, cfg }) => {
+          const ordinary = await search(store, cfg, 'needle');
+          const explained = await search(store, cfg, 'needle', { explain: true });
+          assert.deepEqual(
+            explained.map(({ explanation, ...row }) => row),
+            ordinary
+          );
+          assert.deepEqual(
+            explained.map((row) => row.path),
+            ['seed.md', 'leaf.md']
+          );
+          assert.equal(explained[1].via, 'link');
+          assert.deepEqual(explained[1].explanation, [{ signal: 'links', rank: 2, weight: 3, contribution: 3 / 61 }]);
+        },
+        { presets: { default: { include: ['**/*.md'], signals: { words: 2, links: 3 } } } }
+      )
+    );
+
+    const vectorDir = tmpTree();
+    writeNote(vectorDir, 'a.md', { body: 'apple' });
+    writeNote(vectorDir, 'b.md', { body: 'apple stone' });
+    const model = writeModel();
+    await forEachStore(async (name) =>
+      withTreeForStore(
+        name,
+        vectorDir,
+        async ({ store, cfg }) => {
+          const ordinary = await search(store, cfg, 'pomme');
+          const explained = await search(store, cfg, 'pomme', { explain: true });
+          assert.deepEqual(
+            explained.map(({ explanation, ...row }) => row),
+            ordinary
+          );
+          assert.deepEqual(
+            explained.map((row) => row.path),
+            ['a.md', 'b.md']
+          );
+          assert.deepEqual(
+            explained.map((row) => row.explanation),
+            [[{ signal: 'vectors', rank: 1, weight: 4, contribution: 4 / 60 }], [{ signal: 'vectors', rank: 2, weight: 4, contribution: 4 / 61 }]]
+          );
+        },
+        { presets: { default: { include: ['**/*.md'], signals: { vectors: 4 } } }, embed: { provider: 'static', model } }
+      )
+    );
+  });
+
+  it('explains the retained indexed generation after authored source changes', async () => {
+    await forEachStore(async (name) => {
+      const baseDir = tmpTree();
+      writeNote(baseDir, 'seed.md', { body: 'needle' });
+      await withTreeForStore(
+        name,
+        baseDir,
+        async ({ store, cfg }) => {
+          const ordinary = await search(store, cfg, 'needle');
+          writeNote(baseDir, 'seed.md', { body: 'new live source' });
+          const explained = await search(store, cfg, 'needle', { explain: true });
+          assert.deepEqual(
+            explained.map(({ explanation, ...row }) => row),
+            ordinary
+          );
+          assert.deepEqual(explained[0].explanation, [{ signal: 'words', rank: 1, weight: 2, contribution: 2 / 60 }]);
+          assert.equal(explained[0].snippets.length, 1);
+          assert.ok(explained[0].snippets[0].includes('«needle»'));
+          assert.ok(!explained[0].snippets[0].includes('new live source'));
+        },
+        { presets: { default: { include: ['**/*.md'], signals: { words: 2 } } } }
+      );
+    });
+  });
+
+  it('keeps JSON structured and renders JSON-text explanation cells through the existing CLI formats', async () => {
+    await forEachStore(async (name) => {
+      const baseDir = tmpTree();
+      writeNote(baseDir, 'seed.md', { body: 'needle' });
+      const configPath = join(baseDir, 'sense.config.json');
+      writeFileSync(configPath, JSON.stringify({ version: SUPPORTED_CONFIG_VERSION, store: name, presets: { default: { include: ['*.md'], signals: { words: 2 } } }, queries: {} }));
+      const run = (format: string, explain: boolean) => runCli(['search', 'needle', '--config', configPath, '--format', format, ...(explain ? ['--explain'] : [])]);
+      const expected: SearchSignalContribution[] = [{ signal: 'words', rank: 1, weight: 2, contribution: 2 / 60 }];
+      const ordinary = run('json', false);
+      const explained = run('json', true);
+      assert.equal(ordinary.status, 0, ordinary.stderr);
+      assert.equal(explained.status, 0, explained.stderr);
+      const rows = JSON.parse(explained.stdout);
+      assert.deepEqual(rows[0].explanation, expected);
+      assert.deepEqual(
+        rows.map(({ explanation, ...row }: { explanation: unknown; [key: string]: unknown }) => row),
+        JSON.parse(ordinary.stdout)
+      );
+      for (const format of ['table', 'csv']) {
+        const first = run(format, false);
+        const repeat = run(format, false);
+        const result = run(format, true);
+        assert.equal(first.status, 0, first.stderr);
+        assert.equal(repeat.status, 0, repeat.stderr);
+        assert.equal(result.status, 0, result.stderr);
+        assert.equal(repeat.stdout, first.stdout);
+        assert.doesNotMatch(first.stdout, /explanation/);
+        assert.match(result.stdout, /explanation/);
+        assert.ok(result.stdout.includes(format === 'csv' ? JSON.stringify(expected).replace(/"/g, '""') : JSON.stringify(expected)), result.stdout);
+        assert.doesNotMatch(result.stdout, /\[object Object\]/);
+      }
+      const help = runCli(['search', '--help']);
+      assert.equal(help.status, 0, help.stderr);
+      assert.match(help.stdout, /--explain/);
+      const foreign = runCli(['sql', '--explain', '--config', configPath]);
+      assert.equal(foreign.status, 2, foreign.stderr);
+    });
   });
 });

@@ -2,6 +2,17 @@
 
 All notable changes to sensemaking are documented here.
 
+## [0.27.0] - 2026-10-03
+
+### Added
+
+- `search --explain` and the library's `explain: true` option show each returned note's
+  ranking contributions from words, links, and vectors. Ordinary search output is unchanged.
+- `peek --section-count-limit` and `--link-count-limit` independently control the number of
+  section descriptions and entries in each link group. The library exposes the same controls
+  through `PeekOptions.sectionCountLimit` and `linkCountLimit`. Both default to 20; totals
+  still describe the full scoped lists.
+
 ## [0.26.0] - 2026-10-01
 
 ### Added

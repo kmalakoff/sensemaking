@@ -113,6 +113,7 @@ describe('shared search tie order', () => {
       const paths = ['seed.md', utf16First, byteFirst];
       await linksCandidates(store, candidates, [{ path: 'seed.md' }], paths, new Set(paths), 2, 1);
       assert.deepEqual([...candidates.keys()], ['seed.md', byteFirst], 'the UTF-8-byte-first tied leaf must survive the fetch boundary despite reversed node insertion');
+      assert.ok([...candidates.values()].every((candidate) => !Object.hasOwn(candidate, 'explanation')));
     } finally {
       await store.close();
     }
@@ -131,13 +132,31 @@ describe('shared search tie order', () => {
         ['z-word-first.md', 'a-link-first.md'],
         'this SQLite fixture supplies distinct precursor ranks; it is not a native-ranking equivalence claim'
       );
-      const rows = await search(store, cfg, 'needle', { k: 2 });
+      const ordinary = await search(store, cfg, 'needle', { k: 2 });
+      const rows = await search(store, cfg, 'needle', { k: 2, explain: true });
+      assert.deepEqual(
+        rows.map(({ explanation, ...row }) => row),
+        ordinary
+      );
       const raw = (await (await store.prepare('SELECT "path", score FROM _search WHERE "path" IN (?, ?) ORDER BY "path"')).all('a-link-first.md', 'z-word-first.md')) as Array<{ path: string; score: number }>;
       const crossedScore = 1 / 60 + 1 / 61;
       assert.deepEqual(raw, [
         { path: 'a-link-first.md', score: crossedScore },
         { path: 'z-word-first.md', score: crossedScore },
       ]);
+      assert.deepEqual(
+        rows.map((row) => row.explanation),
+        [
+          [
+            { signal: 'words', rank: 2, weight: 1, contribution: 1 / 61 },
+            { signal: 'links', rank: 1, weight: 1, contribution: 1 / 60 },
+          ],
+          [
+            { signal: 'words', rank: 1, weight: 1, contribution: 1 / 60 },
+            { signal: 'links', rank: 2, weight: 1, contribution: 1 / 61 },
+          ],
+        ]
+      );
       assert.equal(rows[0].score, rows[1].score, 'the rounded public scores retain the tied shape');
       assert.deepEqual(
         rows.map((row) => row.path),

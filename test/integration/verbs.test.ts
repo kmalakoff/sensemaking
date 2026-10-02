@@ -912,6 +912,94 @@ describe('peek stays bounded (sections)', () => {
     assert.match(renderPeek(result), /\(\+10 more sections -- sections table has all of them\)/);
   });
 
+  it('renders caller-limited outlines and link lists with the remaining counts', async () => {
+    const baseDir = headingsTree(30);
+    write(baseDir, 'linked.md', '[[wide]]');
+    write(baseDir, 'other.md', '[[wide]]');
+    const widePath = join(baseDir, 'wide.md');
+    writeFileSync(widePath, `${readFileSync(widePath, 'utf8')}\n[[linked]] [[other]] [[missing]] [[unwritten]]`);
+    const { store: db, cfg } = await openTree(baseDir);
+    try {
+      const result = await peek(db, cfg, 'wide', { sectionCountLimit: 7, linkCountLimit: 1 });
+      const rendered = renderPeek(result);
+      assert.match(rendered, /\(\+23 more sections -- sections table has all of them\)/);
+      assert.match(rendered, /links out \(2\): linked\.md, \+1 more/);
+      assert.match(rendered, /backlinks \(2\): linked\.md, \+1 more/);
+      assert.match(rendered, /unresolved \(2\): missing, \+1 more/);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it('the CLI accepts independent smaller and larger counts and defaults each to 20', () => {
+    const baseDir = headingsTree(30);
+    const links: string[] = [];
+    const outbound: string[] = [];
+    const unresolved: string[] = [];
+    for (let i = 0; i < 30; i++) {
+      const suffix = String(i).padStart(2, '0');
+      write(baseDir, `t${suffix}.md`, '[[wide]]');
+      outbound.push(`t${suffix}.md`);
+      unresolved.push(`u${suffix}`);
+      links.push(`[[t${suffix}]] [[u${suffix}]]`);
+    }
+    const widePath = join(baseDir, 'wide.md');
+    writeFileSync(widePath, `${readFileSync(widePath, 'utf8')}\n${links.join('\n')}`);
+    writeFileSync(join(baseDir, 'sense.config.json'), JSON.stringify({ version: SUPPORTED_CONFIG_VERSION, presets: { default: { include: ['**/*.md'] } }, queries: {} }));
+    for (const [args, sectionCount, linkCount] of [
+      [[], 20, 20],
+      [['--section-count-limit', '7'], 7, 20],
+      [['--link-count-limit=25'], 20, 25],
+      [['--section-count-limit=25', '--link-count-limit', '7'], 25, 7],
+      [['--section-count-limit', '7', '--link-count-limit=25'], 7, 25],
+    ] as const) {
+      const result = runCli(['peek', 'wide', '--format', 'json', ...args], { cwd: baseDir });
+      assert.equal(result.status, 0, result.stderr);
+      const parsed = JSON.parse(result.stdout);
+      assert.equal(parsed.sections.length, sectionCount);
+      assert.equal(parsed.sectionsTotal, 30);
+      assert.equal(parsed.sections[0].heading, 'Heading 0');
+      assert.equal(parsed.sections[sectionCount - 1].heading, `Heading ${sectionCount - 1}`);
+      assert.deepEqual(parsed.outbound, outbound.slice(0, linkCount));
+      assert.deepEqual(parsed.backlinks, outbound.slice(0, linkCount));
+      assert.deepEqual(parsed.unresolved, unresolved.slice(0, linkCount));
+      assert.deepEqual([parsed.outboundTotal, parsed.backlinksTotal, parsed.unresolvedTotal], [30, 30, 30]);
+    }
+    const table = runCli(['peek', 'wide', '--section-count-limit', '7', '--link-count-limit', '25'], { cwd: baseDir });
+    assert.equal(table.status, 0, table.stderr);
+    assert.match(table.stdout, /\+23 more sections/);
+    assert.match(table.stdout, /\+5 more/);
+  });
+
+  it('the CLI rejects invalid limits before opening a config or building an index', () => {
+    const baseDir = tmpTree();
+    for (const flag of ['--section-count-limit', '--link-count-limit']) {
+      for (const value of ['0', '-1', '1.5', 'NaN', 'Infinity', '-Infinity', '9007199254740992', 'invalid']) {
+        const result = runCli(['peek', 'missing', `${flag}=${value}`], { cwd: baseDir });
+        assert.equal(result.status, 2, result.stderr);
+        assert.ok(result.stderr.includes(`${flag} expects a positive safe integer`), result.stderr);
+        assert.doesNotMatch(result.stderr, /no sense\.config\.json/);
+      }
+      for (const args of [[flag], [flag, '-1']]) {
+        const result = runCli(['peek', 'missing', ...args], { cwd: baseDir });
+        assert.equal(result.status, 2, result.stderr);
+      }
+    }
+  });
+
+  it('the CLI advertises both counts and rejects the old limit and search k', () => {
+    const help = runCli(['peek', '--help']);
+    assert.equal(help.status, 0, help.stderr);
+    assert.match(help.stdout, /\[--section-count-limit n\]/);
+    assert.match(help.stdout, /\[--link-count-limit n\]/);
+    assert.doesNotMatch(help.stdout, /--list-limit/);
+    for (const flag of ['--list-limit', '--k']) {
+      const foreign = runCli(['peek', 'wide', flag, '7']);
+      assert.equal(foreign.status, 2, foreign.stderr);
+      assert.ok(foreign.stderr.includes(`Unknown option '${flag}'`), foreign.stderr);
+    }
+  });
+
   it('outbound links are capped with a correct total alongside the outline cap', async () => {
     const baseDir = tmpTree();
     let body = '';

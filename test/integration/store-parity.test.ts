@@ -1,7 +1,7 @@
 import assert from 'node:assert';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { PathOptions, RelatedOptions, RelatedResult, SearchOptions, SenseError } from 'sensemaking';
+import type { PathOptions, PeekOptions, RelatedOptions, RelatedResult, SearchOptions, SenseError } from 'sensemaking';
 import { findPath as findScopedPath, mapTree, peek, relatedNotes, search } from 'sensemaking';
 import { SenseError as StoreSenseError } from '../../src/errors.ts';
 import { findPath } from '../../src/graph/traverse.ts';
@@ -957,6 +957,128 @@ describe('store parity: lexical search (authored fixtures, D1)', () => {
       assert.deepEqual(await searchPaths(store, baseDir, 'weather "天气"'), ['zh-weather.md'], `${store}: bare term plus quoted substring`);
       assert.deepEqual(await searchPaths(store, baseDir, 'missing "天气"'), [], `${store}: missing bare term`);
     });
+  });
+});
+
+describe('store parity: caller-controlled peek lists (every store)', () => {
+  it('limits each authored list independently with exact order, totals and unchanged scope', async () => {
+    const baseDir = tmpTree();
+    const headings: string[] = [];
+    const outbound: string[] = [];
+    const unresolved: string[] = ['u00', 'u00'];
+    const body: string[] = [];
+    for (let i = 0; i < 30; i++) {
+      const suffix = String(i).padStart(2, '0');
+      const path = `visible/slot${String(29 - i).padStart(2, '0')}/t${suffix}.md`;
+      headings.push(`Heading ${suffix}`);
+      outbound.push(path);
+      writeNote(baseDir, path, { body: '[[hub]] ![[hub]] [[hub]]' });
+      body.push(`## Heading ${suffix}\n\n[[t${suffix}]]`);
+      if (i < 29) {
+        body.push(`[[u${suffix}]]`);
+        if (i > 0) unresolved.push(`u${suffix}`);
+      }
+    }
+    body.push('![[u00]] [[u00]] [[t00]] ![[t00]] [[visible/slot29/t00]] [[hub]] [[hidden/outside]]');
+    writeNote(baseDir, 'visible/hub.md', { body: body.join('\n\n'), frontmatter: { title: 'Hub' } });
+    writeNote(baseDir, 'visible/empty.md');
+    writeNote(baseDir, 'hidden/outside.md', { body: '[[hub]]' });
+    const backlinks = [...outbound].reverse();
+
+    await forEachStore(async (name) =>
+      withTreeForStore(name, baseDir, async ({ store, cfg }) => {
+        const scope: PeekOptions = { include: ['visible/**'], k: 0 };
+        const defaultResult = await peek(store, cfg, 'hub', scope);
+        assert.deepEqual(defaultResult, await peek(store, cfg, 'hub', { ...scope, sectionCountLimit: 20, linkCountLimit: 20 }), name);
+        assert.deepEqual(
+          defaultResult.sections.map((section) => section.heading),
+          headings.slice(0, 20),
+          name
+        );
+        assert.deepEqual(defaultResult.outbound, outbound.slice(0, 20), name);
+        assert.deepEqual(defaultResult.backlinks, backlinks.slice(0, 20), name);
+        assert.deepEqual(defaultResult.unresolved, unresolved.slice(0, 20), name);
+        const limits: PeekOptions[] = [{ sectionCountLimit: 7 }, { linkCountLimit: 25 }, { sectionCountLimit: 7, linkCountLimit: 25 }, { sectionCountLimit: 25, linkCountLimit: 7 }];
+        for (const limit of [1, 19, 20, 21, 25, 30, 31, Number.MAX_SAFE_INTEGER]) {
+          limits.push({ sectionCountLimit: limit, linkCountLimit: limit });
+        }
+        for (const options of limits) {
+          const sectionCount = options.sectionCountLimit ?? 20;
+          const linkCount = options.linkCountLimit ?? 20;
+          const result = await peek(store, cfg, 'hub', { ...scope, ...options });
+          assert.deepEqual(
+            result.sections.map((section) => section.heading),
+            headings.slice(0, sectionCount),
+            `${name}: sections at ${sectionCount}`
+          );
+          assert.deepEqual(result.outbound, outbound.slice(0, linkCount), `${name}: outbound at ${linkCount}`);
+          assert.deepEqual(result.backlinks, backlinks.slice(0, linkCount), `${name}: backlinks at ${linkCount}`);
+          assert.deepEqual(result.unresolved, unresolved.slice(0, linkCount), `${name}: unresolved at ${linkCount}`);
+          assert.deepEqual([result.sectionsTotal, result.outboundTotal, result.backlinksTotal, result.unresolvedTotal], [30, 30, 30, 30], name);
+          assert.equal(result.path, 'visible/hub.md', name);
+          assert.equal(result.tokens, defaultResult.tokens, name);
+          assert.deepEqual(result.frontmatter, defaultResult.frontmatter, name);
+          assert.deepEqual(result.off, [], name);
+        }
+        const empty = await peek(store, cfg, 'visible/empty.md', { ...scope, sectionCountLimit: 1, linkCountLimit: 7 });
+        assert.deepEqual([empty.sections, empty.outbound, empty.backlinks, empty.unresolved], [[], [], [], []], name);
+        assert.deepEqual([empty.sectionsTotal, empty.outboundTotal, empty.backlinksTotal, empty.unresolvedTotal], [0, 0, 0, 0], name);
+        await assert.rejects(peek(store, cfg, 'hidden/outside.md', { ...scope, sectionCountLimit: 31, linkCountLimit: 7 }), /outside the current scope/, name);
+      })
+    );
+  });
+
+  it('handles exact small boundaries and disabled features without changing totals', async () => {
+    const baseDir = tmpTree();
+    writeNote(baseDir, 'one.md', { body: '# One\n\n[[two]] [[missing]]' });
+    writeNote(baseDir, 'two.md', { body: '[[one]]' });
+    await forEachStore(async (name) => {
+      await withTreeForStore(name, baseDir, async ({ store, cfg }) => {
+        const result = await peek(store, cfg, 'one', { sectionCountLimit: 1, linkCountLimit: 2 });
+        assert.deepEqual(
+          result.sections.map((section) => section.heading),
+          ['One'],
+          name
+        );
+        assert.deepEqual([result.outbound, result.backlinks, result.unresolved], [['two.md'], ['two.md'], ['missing']], name);
+        assert.deepEqual([result.sectionsTotal, result.outboundTotal, result.backlinksTotal, result.unresolvedTotal], [1, 1, 1, 1], name);
+        assert.deepEqual(result, await peek(store, cfg, 'one', { sectionCountLimit: 2, linkCountLimit: 1 }), name);
+      });
+      await withTreeForStore(
+        name,
+        baseDir,
+        async ({ store, cfg }) => {
+          const result = await peek(store, cfg, 'one', { sectionCountLimit: 1, linkCountLimit: 2 });
+          assert.deepEqual([result.sections, result.outbound, result.backlinks, result.unresolved], [[], [], [], []], name);
+          assert.deepEqual([result.sectionsTotal, result.outboundTotal, result.backlinksTotal, result.unresolvedTotal], [0, 0, 0, 0], name);
+          assert.deepEqual(result.off, ['sections', 'links'], name);
+        },
+        { features: { sections: false, links: false } }
+      );
+    });
+  });
+
+  it('rejects invalid limits before note resolution, including when lists are disabled', async () => {
+    const baseDir = tmpTree();
+    writeNote(baseDir, 'one.md');
+    await forEachStore(async (name) =>
+      withTreeForStore(
+        name,
+        baseDir,
+        async ({ store, cfg }) => {
+          for (const option of ['sectionCountLimit', 'linkCountLimit'] as const) {
+            for (const value of [0, -1, 1.5, Number.NaN, Infinity, -Infinity, Number.MAX_SAFE_INTEGER + 1]) {
+              await assert.rejects(peek(store, cfg, 'missing', { [option]: value }), (err: SenseError) => {
+                assert.equal(err.code, 'SEARCH_OPTION_INVALID', name);
+                assert.equal(err.message, `peek option "${option}" must be a positive safe integer, got ${String(value)}`, name);
+                return true;
+              });
+            }
+          }
+        },
+        { features: { sections: false, links: false } }
+      )
+    );
   });
 });
 

@@ -17,7 +17,7 @@ sense search "pricing OR billing OR invoicing" --k 10 --format json
 ]
 ```
 
-Tens of tokens per row; often the `summary` answers the question with no read at all. A row with `via: "link"` never contained the terms. It is linked from notes that did. `lines`, when set, is the section that earned the row, a direct `Read` range.
+Tens of tokens per row; often the `summary` answers the question with no read at all. A row with `via: "link"` has link evidence rather than a word match. `lines`, when set, is a section or embedding chunk's line range, a direct `Read` range. See [Sense terminology](references/terminology.md) for these distinctions.
 
 ## B. Known-field filtering (no search)
 
@@ -56,7 +56,7 @@ The note is ~4,400 tokens; the peek is ~500. If only one section matters, `Read`
 
 ```
 sense sql "SELECT src FROM links WHERE dst = ?" notes/pricing-model.md    # who cites this
-sense sql "SELECT src, target FROM links WHERE dst IS NULL"               # dead links
+sense sql "SELECT src, target FROM links WHERE dst IS NULL"               # unresolved links
 sense sql "SELECT path, round(_rank*100,2) r FROM frontmatter ORDER BY _rank DESC LIMIT 5"  # load-bearing notes
 ```
 
@@ -83,7 +83,7 @@ sense search "children dying from poor nutrition" --k 3 --format json
 ]
 ```
 
-A `via: "vector"` row never contained the terms. It is semantically near them; `similarity` is the cosine against the chunk `lines` names, a direct `Read` range. Vector rows appear whenever the config names an `embed` model and it is downloaded; a result of only vector rows means the words themselves are nowhere in the scope.
+A `via: "vector"` row has vector evidence rather than a word match. `similarity` is the cosine against the chunk identified by `lines`, a direct `Read` range. Vector search requires a configured model, enabled vector signal and prepared embeddings. Vector-only results do not prove the query words are absent; use the word-search guidance when absence matters.
 
 ## Consequences
 

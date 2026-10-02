@@ -41,6 +41,7 @@ export interface Peek {
   off: FeatureName[];
 }
 
+/** A section description, with an inclusive source line range and token estimate, not section prose. */
 export interface PeekSection {
   level: number;
   heading: string;
@@ -49,17 +50,33 @@ export interface PeekSection {
   tokens: number;
 }
 
-const PEEK_LIST_LIMIT = 20;
+/** Options for the root {@link peek} API. */
+export interface PeekOptions extends SearchOverrides {
+  /** Maximum section descriptions. Defaults to 20; must be a positive safe integer. */
+  sectionCountLimit?: number;
+  /** Maximum entries in each link group independently. Defaults to 20; must be a positive safe integer. */
+  linkCountLimit?: number;
+}
+
+const PEEK_COUNT_LIMIT = 20;
 
 /**
  * Returns indexed metadata for a note in scope. Exact excluded paths fail before scoped basename
  * resolution; resolved neighbors stay in scope, while unresolved written targets remain visible.
  */
-export function peek(store: Store, cfg: ResolvedConfig, pathArg: string, overrides: SearchOverrides = {}): Promise<Peek> {
+export function peek(store: Store, cfg: ResolvedConfig, pathArg: string, overrides: PeekOptions = {}): Promise<Peek> {
   return serialQuery(store, () => peekIndexed(store, cfg, pathArg, overrides));
 }
 
-async function peekIndexed(store: Store, cfg: ResolvedConfig, pathArg: string, overrides: SearchOverrides): Promise<Peek> {
+async function peekIndexed(store: Store, cfg: ResolvedConfig, pathArg: string, overrides: PeekOptions): Promise<Peek> {
+  for (const name of ['sectionCountLimit', 'linkCountLimit'] as const) {
+    const value = overrides[name];
+    if (value !== undefined && (!Number.isSafeInteger(value) || value <= 0)) {
+      throw new SenseError('SEARCH_OPTION_INVALID', `peek option "${name}" must be a positive safe integer, got ${String(value)}`);
+    }
+  }
+  const sectionCountLimit = overrides.sectionCountLimit ?? PEEK_COUNT_LIMIT;
+  const linkCountLimit = overrides.linkCountLimit ?? PEEK_COUNT_LIMIT;
   return store.transaction(async () => {
     await assertQuerySnapshot(store, cfg);
     const pathsStmt = await store.prepare('SELECT "path" FROM frontmatter');
@@ -99,20 +116,24 @@ async function peekIndexed(store: Store, cfg: ResolvedConfig, pathArg: string, o
     let sections: PeekSection[] = [];
     if (featureEnabled(cfg, 'sections')) {
       sectionsTotal = ((await (await store.prepare('SELECT COUNT(*) AS n FROM sections WHERE "path" = ?')).get(path)) as { n: number }).n;
-      sections = (await (await store.prepare('SELECT level, heading, start_line, end_line, tokens FROM sections WHERE "path" = ? ORDER BY idx LIMIT ?')).all(path, PEEK_LIST_LIMIT)) as PeekSection[];
+      sections = (await (await store.prepare('SELECT level, heading, start_line, end_line, tokens FROM sections WHERE "path" = ? ORDER BY idx LIMIT ?')).all(path, sectionCountLimit)) as PeekSection[];
     }
 
     let outbound: string[] = [];
     let backlinks: string[] = [];
     let unresolved: string[] = [];
+    let outboundTotal = 0;
     let backlinksTotal = 0;
+    let unresolvedTotal = 0;
     if (featureEnabled(cfg, 'links')) {
       await materializeScope(store, '_peek_scope', allowed);
-      const out = (await (await store.prepare('SELECT target, dst FROM links WHERE src = ? AND (dst IS NULL OR (dst != src AND dst IN (SELECT "path" FROM _peek_scope))) ORDER BY target')).all(path)) as Array<{ target: string; dst: string | null }>;
-      outbound = [...new Set(out.filter((l): l is { target: string; dst: string } => l.dst !== null).map((l) => l.dst))];
-      unresolved = out.filter((l) => l.dst === null).map((l) => l.target);
+      outboundTotal = ((await (await store.prepare('SELECT COUNT(DISTINCT dst) AS n FROM links WHERE src = ? AND dst != src AND dst IN (SELECT "path" FROM _peek_scope)')).get(path)) as { n: number }).n;
+      // The first written target determines each resolved destination's position.
+      outbound = ((await (await store.prepare('SELECT dst FROM links WHERE src = ? AND dst != src AND dst IN (SELECT "path" FROM _peek_scope) GROUP BY dst ORDER BY MIN(target) LIMIT ?')).all(path, linkCountLimit)) as Array<{ dst: string }>).map((r) => r.dst);
+      unresolvedTotal = ((await (await store.prepare('SELECT COUNT(*) AS n FROM links WHERE src = ? AND dst IS NULL')).get(path)) as { n: number }).n;
+      unresolved = ((await (await store.prepare('SELECT target FROM links WHERE src = ? AND dst IS NULL ORDER BY target LIMIT ?')).all(path, linkCountLimit)) as Array<{ target: string }>).map((r) => r.target);
       backlinksTotal = ((await (await store.prepare('SELECT COUNT(DISTINCT src) AS n FROM links WHERE dst = ? AND src != dst AND src IN (SELECT "path" FROM _peek_scope)')).get(path)) as { n: number }).n;
-      backlinks = ((await (await store.prepare('SELECT DISTINCT src FROM links WHERE dst = ? AND src != dst AND src IN (SELECT "path" FROM _peek_scope) ORDER BY src LIMIT ?')).all(path, PEEK_LIST_LIMIT)) as Array<{ src: string }>).map((r) => r.src);
+      backlinks = ((await (await store.prepare('SELECT DISTINCT src FROM links WHERE dst = ? AND src != dst AND src IN (SELECT "path" FROM _peek_scope) ORDER BY src LIMIT ?')).all(path, linkCountLimit)) as Array<{ src: string }>).map((r) => r.src);
     }
 
     // content.text is the stripped body already computed at reconcile time (no extra file read),
@@ -127,13 +148,13 @@ async function peekIndexed(store: Store, cfg: ResolvedConfig, pathArg: string, o
       frontmatter,
       parseError,
       sections,
-      outbound: outbound.slice(0, PEEK_LIST_LIMIT),
+      outbound,
       backlinks,
-      unresolved: unresolved.slice(0, PEEK_LIST_LIMIT),
+      unresolved,
       sectionsTotal,
-      outboundTotal: outbound.length,
+      outboundTotal,
       backlinksTotal,
-      unresolvedTotal: unresolved.length,
+      unresolvedTotal,
       off: (['sections', 'links'] as FeatureName[]).filter((name) => !featureEnabled(cfg, name)),
     };
   });

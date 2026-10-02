@@ -9,14 +9,14 @@ import type { Command } from './types.ts';
 
 const searchCmd: Command = async (ctx) => {
   const usage = `usage: ${ctx.name} ${USAGE.search}`;
-  const { values, positionals } = parse(ctx.argv, usage, { ...SEARCH_FLAGS, ...NO_BUILD, ...FORMAT, ...CONFIG });
+  const { values, positionals } = parse(ctx.argv, usage, { ...SEARCH_FLAGS, ...NO_BUILD, ...FORMAT, ...CONFIG, explain: { type: 'boolean' } });
   const [terms] = positionals;
   if (!terms) ctx.usageError(usage);
   const k = parseK(values.k as string | undefined, ctx.usageError);
   const snippetCharLimit = parseSnippetCharLimit(values['snippet-char-limit'] as string | undefined, ctx.usageError);
   const snippetCountLimit = parseSnippetCountLimit(values['snippet-count-limit'] as string | undefined, ctx.usageError);
   const format = rowFormatOf(values);
-  const overrides = { k, snippetCharLimit, snippetCountLimit, ...scopeOf(values) };
+  const overrides = { k, explain: values.explain === true, snippetCharLimit, snippetCountLimit, ...scopeOf(values) };
   const noBuild = values['no-build'] === true;
   await withDb(
     ctx,
@@ -34,7 +34,10 @@ const searchCmd: Command = async (ctx) => {
       if (build && resolveSearch(cfg, overrides).signals.vectors !== undefined) {
         await prepareDocumentEmbeddings(store, cfg, await scopedPaths(store, cfg, overrides));
       }
-      printRows(await search(store, cfg, terms, overrides), format);
+      const rows = await search(store, cfg, terms, overrides);
+      // Table cells use the shared renderer's width clipping; JSON retains the complete explanation.
+      const rendered = overrides.explain && format !== 'json' ? rows.map((row) => ({ ...row, explanation: JSON.stringify(row.explanation) })) : rows;
+      printRows(rendered, format);
     }
   );
 };

@@ -36,7 +36,37 @@ pricing-decision.md  …«pricing» decision … renewal «price»…    match  
 
 The row is illustrative. Actual paths, snippets and scores depend on the notes and configured search signals.
 
+## Library usage
+
+Install the package locally in your Node.js project for imports; the global CLI installation above does not provide a project dependency:
+
+```bash
+npm install sensemaking
+```
+
+Start with an existing `your-notes/sense.config.json` pointing at your Markdown tree, created with `sense init` or written as shown under [Config](#config). `build` prepares every configured capability. Your embedding configuration governs model downloads and provider requests, including any service costs; see [Providers](#providers).
+
+Save this as `search-notes.mjs` in your project and run `node search-notes.mjs`. Adjust the config path and search terms for your notes:
+
+```js
+import { loadConfig, build, open, search } from 'sensemaking';
+
+const config = loadConfig('./your-notes/sense.config.json');
+await build(config);
+const { store, cfg } = await open(config, { build: false });
+try {
+  const results = await search(store, cfg, 'pricing', { k: 5 });
+  console.log(JSON.stringify(results, null, 2));
+} finally {
+  await store.close();
+}
+```
+
+The handle uses the completed index prepared by `build`; the example awaits the search before closing it.
+
 ## What sense indexes
+
+The [Sense terminology reference](skills/sense/references/terminology.md) defines notes, snippets, sections, chunks and links. A section is a span of the note; `peek` returns its description, not its prose. The ordered section descriptions form the outline.
 
 Every file becomes rows in these tables, plus whatever an enabled feature adds of its own:
 
@@ -44,7 +74,7 @@ Every file becomes rows in these tables, plus whatever an enabled feature adds o
 |---|---|---|
 | `frontmatter` | one column per key, plus `path`, `_mtime`, `_size`, `_rank`, `_parse_error` | filtering |
 | `content` | `title`, `summary`, `text`, `path` | text search and ranking |
-| `links` | `src`, `target` as written, `dst` resolved (`NULL` = dead link, but see the skill: a link to an attachment can never resolve) | graph |
+| `links` | `src`, `target` as written, `dst` resolved (`NULL` = unresolved link, including attachments and targets outside the index) | graph |
 | `tags` | `path`, `tag`; frontmatter and inline `#tags` merged and deduplicated, nested tags stored full | tag filters |
 | `sections` | heading, `level`, `start_line`, `end_line`, `tokens` estimate | structure |
 | `preset_files` | `path`, `preset` | which presets cover which files; `sql --preset` binds these as a `scope` table to join, since `sql` is otherwise index-wide |
@@ -67,8 +97,8 @@ ORDER BY bm25(content, 10.0, 5.0, 1.0) LIMIT 10
 |---|---|
 | `build [--force]` | incrementally update the derived index and prepare every configured search capability; `--force` recreates only `.sense/` |
 | `map [--preset name] [--include glob] [--exclude glob] [--no-exclude] [--where "<sql>"]` | doc count, frontmatter field coverage, top hubs by link rank, recent changes; hub/recent limits use bytewise path order on ties |
-| `search "<text>" [--preset name] [--include glob] [--exclude glob] [--no-exclude] [--where "<sql>"] [--k n] [--snippet-char-limit n] [--snippet-count-limit n]` | words + links + vectors, one fused ranked list; `via` labels each row's evidence. `--k` bounds notes returned, `--snippet-char-limit` (default 80) each passage, `--snippet-count-limit` (default 1) passages per note |
-| `peek <path> [--preset name] [--include glob] [--exclude glob] [--no-exclude] [--where "<sql>"]` | frontmatter + heading outline (`[L143-162, ~380t]`) + links both ways (first 20 per list, each with its total) |
+| `search "<text>" [--preset name] [--include glob] [--exclude glob] [--no-exclude] [--where "<sql>"] [--k n] [--snippet-char-limit n] [--snippet-count-limit n] [--explain]` | words + links + vectors, one fused ranked list; `via` labels each row's evidence. `--k` bounds notes returned, `--snippet-char-limit` (default 80) each passage, `--snippet-count-limit` (default 1) passages per note. `--explain` adds each participating signal's ranking contribution |
+| `peek <path> [--preset name] [--include glob] [--exclude glob] [--no-exclude] [--where "<sql>"] [--section-count-limit n] [--link-count-limit n]` | frontmatter, section descriptions (`[L143-162, ~380t]`), outbound links, backlinks and unresolved links; `--section-count-limit` bounds section descriptions, and `--link-count-limit` bounds each link group independently (both default 20), with totals before truncation |
 | `path <a> <b> [--max-depth n] [--preset name] [--include glob] [--exclude glob] [--no-exclude] [--where "<sql>"]` | shortest link chain between two notes, or none within the bound |
 | `related <note> [--k n] [--preset name] [--include glob] [--exclude glob] [--no-exclude] [--where "<sql>"]` | notes similar in meaning that `<note>` does not yet link to; reads vectors, so semantic-search cost |
 | `sql "<statement>" [params...] [--preset name]` | ad-hoc SQL over all the tables; `?` binds positional args. Index-wide by default; `--preset` binds the preset's paths as a `scope` table the statement joins |
@@ -88,9 +118,11 @@ Explicit `sense build` and `sense watch` prepare the index regardless of the con
 
 The root `search(store, config, terms, { signal })`, `open(config, { signal })`, and `build(config, { signal })` APIs accept an `AbortSignal`. Cancellation stops supported provider I/O and is checked between phases; synchronous native SQL or CPU work and resource cleanup finish before the promise settles. Cancellation checks preserve `signal.reason`, but a cleanup failure can surface instead or be combined with it in an `AggregateError`.
 
-`search` runs one text through every engine its scope has: FTS5 word match (BM25-ranked, bare words AND-join, operators are yours on `sqlite`; on `duckdb` and `turso` the FTS5 operators are a named error, see Config), a personalized-PageRank walk over the link graph, and vector similarity, fused into one list. `via` labels each row's evidence (`match`, `link`, `vector`, combinations). Within the vector signal, candidates rank by the true cosine against the best-matching canonical chunk before `similarity` is rounded to three decimals for display; a zero-direction vector has similarity `0`, exact cosine ties use bytewise path order, and equal-scoring chunks choose the earliest authored chunk. The public search list ranks the combined word, link, and vector candidates by fused reciprocal-rank score. `lines` points at the section that earned the row (a direct read range). A `vector`-only row means the search words don't appear in that note; it showed up because the model judged it semantically related. `--preset` picks a named settings bundle from the config, `--where` filters on frontmatter. `--format json` on any reporting command returns structured output, and `--format csv` writes the row-returning commands one row per line, for redirecting a large result to a file instead of into context; `--version` and `--help` do what they say.
+`search` runs one text through every engine its scope has: FTS5 word match (BM25-ranked, bare words AND-join, operators are yours on `sqlite`; on `duckdb` and `turso` the FTS5 operators are a named error, see Config), a personalized-PageRank walk over the link graph, and vector similarity, fused into one list. `via` labels each row's evidence (`match`, `link`, `vector`, combinations). Within the vector signal, candidates rank by the true cosine against the best-matching canonical chunk before `similarity` is rounded to three decimals for display; a zero-direction vector has similarity `0`, exact cosine ties use bytewise path order, and equal-scoring chunks choose the earliest authored chunk. The public search list ranks the combined word, link, and vector candidates by fused reciprocal-rank score. `lines` identifies a section or embedding chunk's line range in the indexed note. A `vector`-only row has vector evidence rather than a word match; it is not proof that the query words are absent. `--preset` picks a named settings bundle from the config, `--where` filters on frontmatter. `--format json` on any reporting command returns structured output, and `--format csv` writes the row-returning commands one row per line, for redirecting a large result to a file instead of into context; `--version` and `--help` do what they say.
 
 Search rows carry `snippets: string[]`. Each passage is generated around the matched words, marked with `«»`, and normally limited to 80 characters by default. A whole matched word is preserved, so a passage can exceed that limit when the word is longer. `--snippet-count-limit` returns more non-overlapping passages from a note, in document order. Link- and vector-only rows have `snippets: []`.
+
+Use `search --explain --format json` to inspect the returned notes' word, link and vector contributions without changing their ranking. Each `explanation` entry contains the signal, its one-based rank, configured weight and unrounded contribution. This explains the returned candidates, not why an absent note was excluded. Library callers use `search(store, cfg, terms, { explain: true })`. For longer or shorter note outlines and link lists, use `peek(store, cfg, path, { sectionCountLimit: 40, linkCountLimit: 10 })` or the CLI's `--section-count-limit` and `--link-count-limit`. Each limit defaults to 20, must be a positive safe integer and does not change scope.
 
 Lexical words are case- and accent-insensitive. SQLite and DuckDB use their native English stem tokenizers; Turso's native Tantivy index has no stem tokenizer in the supported release, so it applies the shared Porter normalization to a derived field before native indexing. In every store, `run`, `running`, and `runs` match the same authored notes, while authored bytes are never rewritten. Quoted phrases require adjacent words, with punctuation treated as a separator, and punctuation-only input returns no lexical rows. SQLite's native caret and `NEAR(...)` expressions over unspaced text use original FTS5 tokens rather than sidecar substring semantics; use an ordinary quoted search when substring findability matters, at the cost of positional filtering.
 
