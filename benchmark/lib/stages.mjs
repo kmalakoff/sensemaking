@@ -23,6 +23,13 @@ export const MINUTES = 60_000;
 // This timeout bounds execution, not acceptable performance or partial quality coverage.
 const FEVER_TIMEOUT = 60 * MINUTES;
 
+// Unmarked sittings owe these definitions when FEVER was selected; new assessments collect
+// SQLite OR-bag relevance only through an explicit standalone investigation.
+export const LEGACY_QUALITY_STEPS = [
+  { id: 'eval-nfcorpus', argv: ['node', 'benchmark/steps/quality.mjs', 'nfcorpus'], timeout: 20 * MINUTES, quiet: false, owedBy: 'fever', out: true },
+  { id: 'eval-fever', argv: ['node', 'benchmark/steps/quality.mjs', 'fever'], timeout: FEVER_TIMEOUT, quiet: false, owedBy: 'fever', out: true },
+];
+
 // Every store the built package offers, read from STORE_NAMES through the package's own exports
 // map rather than a dist path: a store the library accepts is a store this gate measures.
 export const OFFERED = [...STORE_NAMES];
@@ -117,9 +124,6 @@ export function buildStages() {
         // Portable NFCorpus is ordinary's all-store relevance view. The comparator checks its
         // identity and full coverage before classification.
         ...portableQualitySteps('nfcorpus', 'quality-baseline'),
-        // Deep retains the SQLite OR-bag NFCorpus row for historical continuity alongside FEVER.
-        { id: 'eval-nfcorpus', argv: ['node', 'benchmark/steps/quality.mjs', 'nfcorpus'], timeout: 20 * MINUTES, quiet: false, owedBy: 'fever', out: true },
-        { id: 'eval-fever', argv: ['node', 'benchmark/steps/quality.mjs', 'fever'], timeout: FEVER_TIMEOUT, quiet: false, owedBy: 'fever', out: true },
         ...portableQualitySteps('fever', 'fever'),
       ],
     },

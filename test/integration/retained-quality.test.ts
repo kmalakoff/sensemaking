@@ -1,9 +1,10 @@
-import { cpSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { cpSync, existsSync, mkdirSync, readFileSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import assert from 'assert';
 import { cachedCorpusPaths } from '../../benchmark/lib/corpus.mjs';
 import { runStageSteps } from '../../benchmark/lib/gate-runner.mjs';
-import { assertCompatibleSelection, profileReasons, resolveRetainedQualityRequirement, retainedQualityForSitting } from '../../benchmark/lib/gates.mjs';
+import { assertCompatibleSelection, profileReasons, remainingCost, resolveRetainedQualityRequirement, retainedQualityForSitting } from '../../benchmark/lib/gates.mjs';
 import { MEASURE_VERSION } from '../../benchmark/lib/measure.mjs';
 import { comparePortableQualityArtifacts, PORTABLE_QUALITY_STORES } from '../../benchmark/lib/portable-quality.mjs';
 import { qualityRetrievalIdentity } from '../../benchmark/lib/quality-retrieval-identity.mjs';
@@ -12,7 +13,7 @@ import { inspectRetainedQuality, RETAINED_QUALITY_SCHEMA, RETAINED_QUALITY_SCOPE
 import { buildStages } from '../../benchmark/lib/stages.mjs';
 import { captureFileManifest } from '../../benchmark/lib/work-tree.mjs';
 import { identityHash, logicalWorkloadIdentity, manifestIdentity } from '../../benchmark/lib/workload-identity.mjs';
-import { buildReport, compactReleaseRecord, doneOnResume, persist } from '../../benchmark/report.mjs';
+import { buildReport, compactReleaseRecord, doneOnResume, persist, renderMarkdown } from '../../benchmark/report.mjs';
 import { packageRoot, scratchDir } from '../lib/scratch.ts';
 
 const PACKAGE_VERSION = '0.24.1';
@@ -157,35 +158,85 @@ async function fixture() {
 }
 
 describe('retained quality report integration', () => {
-  it('falls back only for pending unknown-cost revalidation and reuses a compatible completed step', () => {
-    const base = new Map([['quality-revalidation', ['ordinary baseline requires a current quality view']]]);
-    const evidence = { valid: true, status: 'revalidated', source: { report: 'release-gate.json', sitting: '2099-01-01-source' } };
-    const selectedQualitySteps = (reasons: Map<string, string[]>) =>
-      buildStages()
-        .find((stage) => stage.id === 'quality')
-        ?.steps.filter((step) => step.owedBy === 'always' || reasons.has(step.owedBy))
-        .map((step) => step.id);
+  it('keeps valid retained revalidation independent of execution estimates', () => {
+    const base = new Map([['quality-revalidation', ['report evaluator changed']]]);
+    const evidence = { valid: true, status: 'revalidated' };
+    assert.deepEqual([...resolveRetainedQualityRequirement(base, evidence)], [...base]);
+    const invalid = resolveRetainedQualityRequirement(base, { valid: false, errors: ['missing raw output'] });
+    assert.equal(invalid.has('quality-revalidation'), false);
+    assert.equal(invalid.has('quality-baseline'), true);
+    assert.equal(invalid.has('fever'), false);
+  });
 
-    const unknown = resolveRetainedQualityRequirement(base, evidence, { estimatedMs: null });
-    assert.equal(unknown.has('quality-revalidation'), false);
-    assert.equal(unknown.has('fever'), false);
-    assert.deepEqual(selectedQualitySteps(unknown), [...PORTABLE_QUALITY_STORES.map((store) => `portable-eval-nfcorpus-${store}`), 'portable-eval-nfcorpus-comparison']);
-    assert.match(unknown.get('quality-baseline')?.join('\n') ?? '', /no historical execution estimate/);
-
-    const known = resolveRetainedQualityRequirement(base, evidence, { estimatedMs: 1 });
-    assert.deepEqual(selectedQualitySteps(known), ['retained-quality']);
-
-    const prior = {
-      last_tag: 'v0.24.1',
-      changed_paths: ['src/output/output.ts'],
-      effective_requirements: Object.fromEntries(base),
-      retained_quality: { source: evidence.source },
-      steps: { 'retained-quality': { id: 'retained-quality', status: 'ok' } },
-    };
-    const reusable = doneOnResume('retained-quality', prior.steps['retained-quality']);
-    const resumed = resolveRetainedQualityRequirement(base, evidence, { estimatedMs: null, reusable });
-    assert.doesNotThrow(() => assertCompatibleSelection(prior, { lastTag: 'v0.24.1', paths: ['src/output/output.ts'], reasons: resumed, profile: 'ordinary', retainedQuality: evidence }));
-    assert.deepEqual(selectedQualitySteps(resumed), ['retained-quality']);
+  it('schedules actual retained evaluation for report-only edits without fresh producer calls at unknown or large cost', async () => {
+    for (const [path, estimatedMs] of [
+      ['benchmark/report.mjs', null],
+      ['benchmark/lib/portable-quality.mjs', 21 * 60_000],
+    ] as const) {
+      const f = await fixture();
+      cpSync(join(packageRoot, 'benchmark', 'lib'), join(f.root, 'benchmark', 'lib'), { recursive: true });
+      cpSync(join(packageRoot, 'benchmark', 'steps', 'retained-quality.mjs'), join(f.root, 'benchmark', 'steps', 'retained-quality.mjs'));
+      symlinkSync(join(packageRoot, 'node_modules'), join(f.root, 'node_modules'), 'junction');
+      cpSync(join(packageRoot, 'benchmark', 'report.mjs'), join(f.root, 'benchmark', 'report.mjs'));
+      writeFileSync(join(f.root, path), `${readFileSync(join(f.root, path), 'utf8')}\n// evaluator wording changed\n`);
+      const sittingsDir = join(f.root, '.tmp', 'sittings');
+      const sourceDir = join(sittingsDir, f.retained.source.sitting);
+      const targetDir = join(sittingsDir, '2099-01-02-target');
+      cpSync(f.sourceDir, sourceDir, { recursive: true });
+      cpSync(f.targetDir, targetDir, { recursive: true });
+      const sittingPath = join(targetDir, 'sitting.json');
+      const sitting = JSON.parse(readFileSync(sittingPath, 'utf8'));
+      const evidence = await inspectRetainedQuality({ reportsDir: f.reportsDir, sittingsDir, baselineVersion: PACKAGE_VERSION, currentRoot: f.root });
+      assert.equal(evidence.valid, true, evidence.errors.join('\n'));
+      const reasons = resolveRetainedQualityRequirement(profileReasons([path], 'v0.24.1', 'ordinary'), evidence);
+      sitting.changed_paths = [path];
+      sitting.owed = Object.fromEntries(reasons);
+      sitting.effective_requirements = sitting.owed;
+      // The fixture supplies completed static/functional proof; the pending evaluator must run.
+      delete sitting.steps['retained-quality'];
+      const stages = buildStages();
+      const selected = stages.flatMap((stage) => stage.steps as StageStep[]).filter((step) => step.owedBy === 'always' || reasons.has(step.owedBy));
+      sitting.estimated_cost = remainingCost(selected, { 'retained-quality': estimatedMs }, (step: { id: string }) => doneOnResume(step.id, sitting.steps[step.id]));
+      assert.equal(sitting.estimated_cost.known_ms, estimatedMs ?? 0);
+      assert.deepEqual(sitting.estimated_cost.unknown_steps, estimatedMs === null ? ['retained-quality'] : []);
+      const executed: string[] = [];
+      for (const stage of stages) {
+        await runStageSteps(stage.steps, {
+          collectIndependent: true,
+          isOwed: (step: StageStep) => step.owedBy === 'always' || reasons.has(step.owedBy),
+          resume: (step: StageStep) => (doneOnResume(step.id, sitting.steps[step.id]) ? sitting.steps[step.id] : null),
+          run: (step: StageStep) => {
+            executed.push(step.id);
+            assert.equal(step.id, 'retained-quality', 'report/evaluator work must not call a fresh producer');
+            const out = join(targetDir, `${step.id}.json`);
+            const child = spawnSync(process.execPath, [...step.argv.slice(1), '--out', out], { cwd: f.root, encoding: 'utf8', timeout: 20_000 });
+            assert.equal(child.error, undefined, child.stderr);
+            assert.equal(child.status, 0, child.stderr || child.stdout);
+            return { status: 'ok' };
+          },
+          recordNotOwed: (step: StageStep) => {
+            sitting.steps[step.id] = { id: step.id, status: 'not-owed', owed: false };
+          },
+          recordResume: () => {},
+          recordResult: (step: StageStep, result: { status: string }) => {
+            sitting.steps[step.id] = { id: step.id, status: result.status, owed: true };
+            return result.status;
+          },
+        });
+      }
+      assert.deepEqual(executed, ['retained-quality']);
+      writeFileSync(sittingPath, JSON.stringify(sitting));
+      const report = buildReport(targetDir, { reportsDir: f.reportsDir, sittingsDir, currentRoot: f.root });
+      assert.equal(report.verdict, 'PASS', report.verdict_reasons.join('\n'));
+      assert.equal(report.retained_quality.source.sitting, f.retained.source.sitting);
+      const markdown = renderMarkdown(report);
+      assert.match(markdown, /retained measurements: package 0\.24\.1, nfcorpus\/bare-and, split test, k=10, on sqlite, duckdb, turso/);
+      assert.match(markdown, /Quality metrics were recomputed from the original rankings; this retained-quality step did not rerun search or measure timing/);
+      unlinkSync(join(sourceDir, 'portable-eval-nfcorpus-sqlite.json'));
+      const missing = buildReport(targetDir, { reportsDir: f.reportsDir, sittingsDir, currentRoot: f.root });
+      assert.equal(missing.verdict, 'BLOCK');
+      assert.equal(missing.retained_quality.valid, false);
+    }
   });
 
   it('revalidates NFCorpus from a historical superset after FEVER raw evidence is removed', async () => {

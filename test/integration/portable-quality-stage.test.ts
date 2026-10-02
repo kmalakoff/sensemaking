@@ -1,10 +1,11 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import assert from 'assert';
+import { QUALITY_SCOPE } from '../../benchmark/lib/gates.mjs';
 import { MEASURE_VERSION } from '../../benchmark/lib/measure.mjs';
 import { comparePortableQualityArtifacts, PORTABLE_QUALITY_STORES, revalidateQualityArtifact } from '../../benchmark/lib/portable-quality.mjs';
-import { buildStages } from '../../benchmark/lib/stages.mjs';
+import { buildStages, LEGACY_QUALITY_STEPS } from '../../benchmark/lib/stages.mjs';
 import { aggregateVerdict } from '../../benchmark/lib/verdict.mjs';
 import { logicalWorkloadIdentity } from '../../benchmark/lib/workload-identity.mjs';
 import { buildReport, renderMarkdown } from '../../benchmark/report.mjs';
@@ -16,13 +17,14 @@ type PersistedQualityVariant = { ndcg: number; rr: number; hit: number; per_quer
 
 function artifact(store: string, overrides: Record<string, unknown> = {}) {
   const corpus = typeof overrides.corpus === 'string' ? overrides.corpus : 'fixture';
-  const queryEvidence = { q1: { text: 'alpha beta', canonical: 'alpha beta' }, q2: { text: 'gamma delta', canonical: 'gamma delta' } };
+  const queryForm = overrides.query_form === 'or-bag' ? 'or-bag' : 'bare-and';
+  const queryEvidence = { q1: { text: 'alpha beta', canonical: queryForm === 'or-bag' ? 'alpha OR beta' : 'alpha beta' }, q2: { text: 'gamma delta', canonical: queryForm === 'or-bag' ? 'gamma OR delta' : 'gamma delta' } };
   const qrels = { q1: { alpha: 1 }, q2: { gamma: 1 } };
   const variants = Object.fromEntries(
     ['bm25-only', 'fused', 'semantic'].map((name) => [
       name,
       {
-        workload_identity: logicalWorkloadIdentity({ corpus: { fingerprint: corpus }, operation: { kind: 'quality', corpus, split: 'test', k: 2, query_form: 'bare-and', query_evidence: queryEvidence, qrels }, requested: { variant: name, config: { signals: { words: 1 } }, model: { status: 'not-applicable' } } }),
+        workload_identity: logicalWorkloadIdentity({ corpus: { fingerprint: corpus }, operation: { kind: 'quality', corpus, split: 'test', k: 2, query_form: queryForm, query_evidence: queryEvidence, qrels }, requested: { variant: name, config: { signals: { words: 1 } }, model: { status: 'not-applicable' } } }),
         execution: { config: { signals: { words: 1 } } },
         errors: 0,
         incomplete: false,
@@ -33,7 +35,44 @@ function artifact(store: string, overrides: Record<string, unknown> = {}) {
       },
     ])
   );
-  return { corpus, split: 'test', queries: 2, k: 2, store, measure_version: MEASURE_VERSION, query_form: 'bare-and', query_evidence: queryEvidence, qrels, variants, ...overrides };
+  return { corpus, split: 'test', queries: 2, k: 2, store, measure_version: MEASURE_VERSION, query_form: queryForm, query_evidence: queryEvidence, qrels, variants, ...overrides };
+}
+
+function qualitySitting(qualityScope?: unknown) {
+  const sitting = scratchDir('portable-quality-scope');
+  const steps: Record<string, { status: string }> = { validate: { status: 'ok' }, 'npm-test': { status: 'ok' } };
+  for (const corpus of ['nfcorpus', 'fever']) {
+    const artifacts = STORES.map((store) => artifact(store, { corpus }));
+    for (const current of artifacts) {
+      const id = `portable-eval-${corpus}-${current.store}`;
+      steps[id] = { status: 'ok' };
+      writeFileSync(join(sitting, `${id}.json`), JSON.stringify(current));
+    }
+    const id = `portable-eval-${corpus}-comparison`;
+    steps[id] = { status: 'ok' };
+    writeFileSync(join(sitting, `${id}.json`), JSON.stringify(comparePortableQualityArtifacts(artifacts)));
+  }
+  if (qualityScope === undefined) {
+    for (const { id } of LEGACY_QUALITY_STEPS) {
+      steps[id] = { status: 'ok' };
+      writeFileSync(join(sitting, `${id}.json`), JSON.stringify(artifact('sqlite', { corpus: id.slice('eval-'.length), query_form: 'or-bag' })));
+    }
+  }
+  const state = {
+    date: '2099-01-01',
+    baseline_version: '0.23.0',
+    machine: {},
+    node: process.version,
+    changed_paths: ['src/commands/search.ts', 'test/unit/commands/search.test.ts'],
+    quality_scope: qualityScope,
+    owed: { 'quality-baseline': ['src/commands/search.ts'], fever: ['src/commands/search.ts'] },
+    steps,
+    failed_stage_reasons: [],
+  };
+  const save = () => writeFileSync(join(sitting, 'sitting.json'), JSON.stringify(state));
+  save();
+  const report = () => buildReport(sitting, { reportsDir: scratchDir('portable-quality-scope-priors') });
+  return { sitting, state, save, report };
 }
 
 function authoredFractionArtifact(store: string, reverseKeys = false) {
@@ -319,18 +358,22 @@ describe('portable quality release track', () => {
     assert.equal(existsSync(join(dir, 'portable-quality-comparison.json')), true);
   });
 
-  it('keeps ordinary on portable NFCorpus and moves FEVER plus historical continuity to deep', () => {
+  it('keeps ordinary on portable NFCorpus and deep on portable FEVER with standalone legacy definitions', () => {
     const quality = buildStages().find((stage) => stage.id === 'quality');
     assert.ok(quality);
     assert.deepEqual(
       quality.steps.map((step) => step.id),
-      ['retained-quality', ...STORES.map((store) => `portable-eval-nfcorpus-${store}`), 'portable-eval-nfcorpus-comparison', 'eval-nfcorpus', 'eval-fever', ...STORES.map((store) => `portable-eval-fever-${store}`), 'portable-eval-fever-comparison']
+      ['retained-quality', ...STORES.map((store) => `portable-eval-nfcorpus-${store}`), 'portable-eval-nfcorpus-comparison', ...STORES.map((store) => `portable-eval-fever-${store}`), 'portable-eval-fever-comparison']
     );
-    assert.deepEqual(quality.steps.find((step) => step.id === 'eval-nfcorpus')?.argv, ['node', 'benchmark/steps/quality.mjs', 'nfcorpus']);
-    assert.deepEqual(quality.steps.find((step) => step.id === 'eval-fever')?.argv, ['node', 'benchmark/steps/quality.mjs', 'fever']);
-    for (const id of ['eval-fever', ...STORES.map((store) => `portable-eval-fever-${store}`)]) assert.equal(quality.steps.find((step) => step.id === id)?.timeout, 60 * 60_000);
-    for (const id of ['eval-nfcorpus', ...STORES.map((store) => `portable-eval-nfcorpus-${store}`)]) assert.equal(quality.steps.find((step) => step.id === id)?.timeout, 20 * 60_000);
-    assert.equal(quality.steps.find((step) => step.id === 'eval-nfcorpus')?.owedBy, 'fever');
+    assert.deepEqual(
+      LEGACY_QUALITY_STEPS.map((step) => step.argv),
+      [
+        ['node', 'benchmark/steps/quality.mjs', 'nfcorpus'],
+        ['node', 'benchmark/steps/quality.mjs', 'fever'],
+      ]
+    );
+    for (const id of STORES.map((store) => `portable-eval-fever-${store}`)) assert.equal(quality.steps.find((step) => step.id === id)?.timeout, 60 * 60_000);
+    for (const id of STORES.map((store) => `portable-eval-nfcorpus-${store}`)) assert.equal(quality.steps.find((step) => step.id === id)?.timeout, 20 * 60_000);
     assert.deepEqual(
       quality.steps.filter((step) => step.owedBy === 'quality-baseline').map((step) => step.id),
       [...STORES.map((store) => `portable-eval-nfcorpus-${store}`), 'portable-eval-nfcorpus-comparison']
@@ -354,30 +397,136 @@ describe('portable quality release track', () => {
     assert.deepEqual(result, { verdict: 'PASS', reasons: [] });
   });
 
-  it('shows a new portable workload as no-compatible-prior while invalid retrieval blocks', () => {
-    const sitting = scratchDir('portable-quality-new-workload');
-    const steps: Record<string, { status: string }> = {};
-    for (const corpus of ['nfcorpus', 'fever']) {
-      for (const store of STORES) {
-        const id = `portable-eval-${corpus}-${store}`;
-        steps[id] = { status: 'ok' };
-        writeFileSync(join(sitting, `${id}.json`), JSON.stringify(artifact(store, { corpus })));
-      }
-      const comparison = comparePortableQualityArtifacts(STORES.map((store) => artifact(store, { corpus })));
-      const comparisonId = `portable-eval-${corpus}-comparison`;
-      steps[comparisonId] = { status: 'ok' };
-      writeFileSync(join(sitting, `${comparisonId}.json`), JSON.stringify(comparison));
-    }
-    for (const id of ['validate', 'npm-test']) steps[id] = { status: 'ok' };
+  it('passes complete portable quality without legacy scores and rejects every missing required artifact', () => {
+    const complete = qualitySitting(QUALITY_SCOPE);
+    const report = complete.report();
+    assert.equal(report.verdict, 'PASS', report.verdict_reasons.join('; '));
+    assert.equal(report.quality_scope, QUALITY_SCOPE);
+    assert.equal(report.classifications.filter((row) => row.id.startsWith('portable-eval-') && row.key === 'ndcg').length, 18);
     for (const id of ['eval-nfcorpus', 'eval-fever']) {
-      steps[id] = { status: 'ok' };
-      writeFileSync(join(sitting, `${id}.json`), JSON.stringify(artifact('sqlite', { corpus: id })));
+      assert.equal(Object.hasOwn(report.steps, id), false);
+      assert.equal(report.steps_status[id], undefined);
+      assert.ok(!report.classifications.some((row) => row.id.startsWith(`${id}/`)));
     }
-    writeFileSync(
-      join(sitting, 'sitting.json'),
-      JSON.stringify({ date: '2099-01-01', baseline_version: '0.23.0', machine: {}, node: process.version, changed_paths: ['src/commands/search.ts'], owed: { 'quality-baseline': ['src/commands/search.ts'], fever: ['src/commands/search.ts'] }, steps, failed_stage_reasons: [] })
-    );
-    const report = buildReport(sitting, { reportsDir: scratchDir('portable-quality-no-prior-reports') });
+    assert.match(renderMarkdown(report), /SQLite OR-bag relevance is not required by this assessment/);
+    for (const corpus of ['nfcorpus', 'fever']) {
+      for (const id of [...STORES.map((store) => `portable-eval-${corpus}-${store}`), `portable-eval-${corpus}-comparison`]) {
+        const missing = qualitySitting(QUALITY_SCOPE);
+        assert.equal(missing.report().verdict, 'PASS');
+        unlinkSync(join(missing.sitting, `${id}.json`));
+        const blocked = missing.report();
+        assert.equal(blocked.verdict, 'BLOCK', id);
+        assert.ok(
+          blocked.verdict_reasons.some((reason) => reason.includes(id)),
+          id
+        );
+      }
+    }
+  });
+
+  it('blocks malformed portable quality and unknown scope through the final report', () => {
+    for (const corpus of ['nfcorpus', 'fever']) {
+      const id = `portable-eval-${corpus}-duckdb`;
+      for (const kind of ['json', 'query', 'variant', 'retrieval', 'not-owed']) {
+        const current = qualitySitting(QUALITY_SCOPE);
+        assert.equal(current.report().verdict, 'PASS');
+        const value = artifact('duckdb', { corpus });
+        if (kind === 'query') delete (value.variants.semantic.per_query as Record<string, PersistedQualityResult>).q2;
+        if (kind === 'variant') delete value.variants.semantic;
+        if (kind === 'retrieval') value.variants.semantic.errors = 1;
+        if (kind === 'not-owed') {
+          current.state.steps[id].status = 'not-owed';
+          current.save();
+        }
+        writeFileSync(join(current.sitting, `${id}.json`), kind === 'json' ? '{' : JSON.stringify(value));
+        const report = current.report();
+        assert.equal(report.verdict, 'BLOCK', `${id} ${kind}`);
+        if (kind === 'not-owed') {
+          assert.ok(
+            report.verdict_reasons.some((reason) => reason.includes(id)),
+            `${id} ${kind}`
+          );
+        } else if (kind === 'query' || kind === 'variant') {
+          const reason = kind === 'query' ? /semantic\/q2: returned paths are missing/ : /semantic: variant is missing/;
+          assert.ok(
+            report.classifications.some((row) => row.id === `portable-eval-${corpus}-comparison/validity` && 'invalid' in row && row.invalid === true && 'severity' in row && row.severity === 'BLOCK' && row.reason.includes('duckdb:') && reason.test(row.reason)),
+            `${id} ${kind}`
+          );
+        } else {
+          const reason = kind === 'json' ? /JSON is malformed/ : /semantic:.*retrieval/;
+          assert.ok(
+            report.classifications.some((row) => row.id.startsWith(`${id}/`) && 'invalid' in row && row.invalid === true && 'severity' in row && row.severity === 'BLOCK' && reason.test(row.reason)),
+            `${id} ${kind}`
+          );
+        }
+      }
+    }
+    for (const scope of ['unknown', null, false]) {
+      const current = qualitySitting(scope);
+      const report = current.report();
+      assert.equal(report.verdict, 'BLOCK');
+      assert.ok(report.verdict_reasons.some((reason) => /unknown quality scope/.test(reason)));
+    }
+  });
+
+  it('enforces historical legacy coverage and validates separately collected legacy evidence', () => {
+    const complete = qualitySitting();
+    const historical = complete.report();
+    assert.equal(historical.verdict, 'PASS', historical.verdict_reasons.join('; '));
+    assert.equal(historical.quality_scope, undefined);
+    assert.doesNotMatch(renderMarkdown(historical), /SQLite OR-bag relevance is not required/);
+    for (const { id } of LEGACY_QUALITY_STEPS) {
+      assert.ok(historical.classifications.some((row) => row.id.startsWith(`${id}/`)));
+      for (const kind of ['status', 'artifact', 'not-owed', 'malformed']) {
+        const current = qualitySitting();
+        assert.equal(current.report().verdict, 'PASS');
+        if (kind === 'status') delete current.state.steps[id];
+        if (kind === 'not-owed') current.state.steps[id].status = 'not-owed';
+        if (kind === 'artifact') unlinkSync(join(current.sitting, `${id}.json`));
+        if (kind === 'malformed') writeFileSync(join(current.sitting, `${id}.json`), '{');
+        current.save();
+        const blocked = current.report();
+        assert.equal(blocked.verdict, 'BLOCK', `${id} ${kind}`);
+        if (kind === 'malformed') {
+          assert.ok(
+            blocked.classifications.some((row) => row.id.startsWith(`${id}/`) && 'invalid' in row && row.invalid === true && 'severity' in row && row.severity === 'BLOCK' && /JSON is malformed/.test(row.reason)),
+            `${id} ${kind}`
+          );
+        } else {
+          assert.ok(
+            blocked.verdict_reasons.some((reason) => reason.includes(id)),
+            `${id} ${kind}`
+          );
+        }
+      }
+      for (const kind of ['valid', 'missing', 'malformed', 'retrieval']) {
+        const current = qualitySitting(QUALITY_SCOPE);
+        current.state.steps[id] = { status: 'ok' };
+        const value = artifact('sqlite', { corpus: id.slice('eval-'.length), query_form: 'or-bag' });
+        if (kind === 'retrieval') value.variants.semantic.errors = 1;
+        if (kind !== 'missing') writeFileSync(join(current.sitting, `${id}.json`), kind === 'malformed' ? '{' : JSON.stringify(value));
+        current.save();
+        const report = current.report();
+        assert.equal(report.verdict, kind === 'valid' ? 'PASS' : 'BLOCK', `${id} ${kind}`);
+        if (kind === 'valid') assert.ok(report.classifications.some((row) => row.id.startsWith(`${id}/`)));
+        else if (kind === 'missing')
+          assert.ok(
+            report.verdict_reasons.some((reason) => reason.includes(id)),
+            `${id} ${kind}`
+          );
+        else {
+          const reason = kind === 'malformed' ? /JSON is malformed/ : /semantic:.*retrieval/;
+          assert.ok(
+            report.classifications.some((row) => row.id.startsWith(`${id}/`) && 'invalid' in row && row.invalid === true && 'severity' in row && row.severity === 'BLOCK' && reason.test(row.reason)),
+            `${id} ${kind}`
+          );
+        }
+      }
+    }
+  });
+
+  it('shows a new portable workload as no-compatible-prior while invalid retrieval blocks', () => {
+    const report = qualitySitting(QUALITY_SCOPE).report();
     assert.equal(report.verdict, 'PASS', report.verdict_reasons.join('; '));
     const portable = report.classifications.filter((row) => row.id.startsWith('portable-eval-') && row.key === 'ndcg');
     assert.equal(portable.length, 18);

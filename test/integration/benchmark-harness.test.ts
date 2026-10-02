@@ -16,7 +16,7 @@ import { buildQualityArtifactBase, evaluateVariant, queryFormFor } from '../../b
 import { describeLoad, parseTopProcesses, quietMachineCheck } from '../../benchmark/lib/quiet-machine.mjs';
 import { compactStep } from '../../benchmark/lib/report-compaction.mjs';
 import { INPROC_META_KEYS, ROW_BY_KEY, RUN_META_KEYS, RUN_METRIC_KEYS, rowValue } from '../../benchmark/lib/rows.mjs';
-import { buildStages } from '../../benchmark/lib/stages.mjs';
+import { buildStages, LEGACY_QUALITY_STEPS } from '../../benchmark/lib/stages.mjs';
 import { captureIdentity, compareCaptureDirectories, STORE_DUMP_REPRESENTATIVE_BYTES, STORE_DUMP_REPRESENTATIVE_LIMIT, structuredRows, validateStoreDumpArtifact } from '../../benchmark/lib/store-dump-evidence.mjs';
 import { treeFingerprint } from '../../benchmark/lib/tree-fingerprint.mjs';
 import { aggregateVerdict, classificationSeverity, classifyCompare, classifyCrossGroup, classifyEval, classifyWatchSanity, priorStepLookup, shouldRunReversedCompare, watchSanityGroup } from '../../benchmark/lib/verdict.mjs';
@@ -496,7 +496,7 @@ describe('native watcher readiness observer', () => {
     await assert.rejects(runNativeObserverAttempt({ ...payload, lexical: { ...payload.lexical, expected_paths: ['wrong.md'] } }, 1000), /DuckDB lexical result omitted/);
   });
 
-  it('exercises the real watcher, one observer attempt, and close without invoking measure-tree failure handling', async () => {
+  it('covers watcher wait expiry, one observer and clean close as components without exercising measure-tree failure handling', async () => {
     const tree = scratchDir('watcher-expired-wait-evidence');
     const configPath = join(tree, 'sense.config.json');
     writeFileSync(configPath, JSON.stringify({ version: 5, store: 'sqlite', presets: { default: { include: ['**/*.md'] } }, queries: {} }));
@@ -506,29 +506,35 @@ describe('native watcher readiness observer', () => {
     await opened.store.close();
 
     const watcher = startMeasuredWatcher({ pkgRoot: packageRoot, configPath });
+    const assertHealthyWatcher = () => {
+      const diagnostics = JSON.stringify(watcher.events);
+      assert.equal(watcher.events.filter((event) => event.type === 'started').length, 1, diagnostics);
+      assert.ok(
+        watcher.events.every((event) => event.type === 'started' || event.type === 'reconciled'),
+        diagnostics
+      );
+      assert.equal(watcher.child.exitCode, null, diagnostics);
+      assert.equal(watcher.child.signalCode, null, diagnostics);
+      assert.equal(watcher.child.connected, true, diagnostics);
+    };
     let bodyFailed = false;
     let bodyError: unknown;
     let closeFailed = false;
     let closeError: unknown;
     try {
       const started = await watcher.waitFor('started', 0, 5_000);
+      const noteBytes = readFileSync(join(tree, 'a.md'));
+      const configBytes = readFileSync(configPath);
+      verifyFileManifest(tree, manifest, 'watcher startup preserves the authored manifest');
       const eventWaitMs = 250;
-      await assert.rejects(watcher.waitFor('reconciled', started.next, eventWaitMs), new RegExp(`produced no reconciled event before ${eventWaitMs}ms`));
-      assert.deepEqual(
-        watcher.events.map((event) => event.type),
-        ['started']
-      );
-      assert.equal(watcher.child.exitCode, null);
-      assert.equal(watcher.child.signalCode, null);
-      assert.equal(watcher.child.connected, true);
+      await assert.rejects(watcher.waitFor('run-watch-rejected', started.next, eventWaitMs), { name: 'Error', message: `measured watcher produced no run-watch-rejected event before ${eventWaitMs}ms` });
+      assertHealthyWatcher();
 
       const observed = await runNativeObserverAttempt({ pkgRoot: packageRoot, store: 'sqlite', configPath, manifest, expectedContent: null }, 5_000);
-      assert.equal(observed.state, 'ready');
-      assert.deepEqual(
-        watcher.events.map((event) => event.type),
-        ['started'],
-        'the diagnostic observation did not manufacture a watcher event'
-      );
+      assert.equal(observed.state, 'ready', JSON.stringify(observed));
+      assertHealthyWatcher();
+      assert.deepEqual(readFileSync(join(tree, 'a.md')), noteBytes, 'the observer must preserve the observed note bytes');
+      assert.deepEqual(readFileSync(configPath), configBytes, 'the observer must preserve the observed migrated config bytes');
     } catch (reason) {
       bodyFailed = true;
       bodyError = reason;
@@ -1548,6 +1554,7 @@ describe('buildReport: present current artifacts must carry the current harness 
         if ('out' in step && step.out) outIds.add(step.id);
       }
     }
+    for (const step of LEGACY_QUALITY_STEPS) if (step.out) outIds.add(step.id);
     for (const id of outIds) {
       const sitting = scratchDir(`missing-successful-${id}`);
       writeFileSync(join(sitting, 'sitting.json'), JSON.stringify({ ...sittingJson, steps: { [id]: { id, status: 'ok' } } }));
@@ -1565,7 +1572,7 @@ describe('buildReport: present current artifacts must carry the current harness 
       assert.equal((report.steps as Record<string, { error?: string }>)[id]?.error, `${id}: recorded successful step has no current artifact`);
     }
     for (const id of ['compare', 'eval-nfcorpus', 'battery-duckdb-hub', 'store-dump', 'oracle']) {
-      assert.ok(outIds.has(id), `${id} must remain an out:true stage step`);
+      assert.ok(outIds.has(id), `${id} must retain successful-artifact validation`);
     }
 
     for (const id of ['store-dump', 'oracle']) {

@@ -79,7 +79,7 @@ export function readLiveSuiteCost(root, packageVersion) {
 
 export const DEFAULT_PROFILE = 'ordinary';
 export const PROFILES = [DEFAULT_PROFILE, 'deep'];
-export const ORDINARY_COST_LIMIT_MS = 20 * 60_000;
+export const QUALITY_SCOPE = 'portable-only-v1';
 const DEEP_PROFILE_GATES = ['baseline', 'scale', 'quality-baseline', 'fever'];
 const DEEP_ONLY_GATES = ['scale', 'fever'];
 const KNOWN_SOURCE_ROOTS = [
@@ -88,11 +88,13 @@ const KNOWN_SOURCE_ROOTS = [
   'src/cli/',
   'src/commands/index.ts',
   'src/commands/map.ts',
+  'src/commands/path.ts',
   'src/commands/peek.ts',
   'src/commands/related.ts',
   'src/commands/scope.ts',
   'src/commands/search.ts',
   'src/commands/signals.ts',
+  'src/commands/snapshot.ts',
   'src/commands/status.ts',
   'src/config/',
   'src/embed/',
@@ -113,21 +115,11 @@ const KNOWN_SOURCE_ROOTS = [
 
 const QUALITY_COLLECTION_PATHS = [...QUALITY_RETRIEVAL_PATHS.map((path) => (path.endsWith('.ts') ? path : `${path}/`)), 'benchmark/lib/corpus.mjs', 'benchmark/lib/labels.mjs', 'benchmark/lib/quality.mjs', 'benchmark/lib/quality-work-tree.mjs', 'benchmark/steps/quality.mjs'];
 
-const QUALITY_EVALUATOR_PATHS = [
-  'benchmark/gate.mjs',
-  'benchmark/report.mjs',
-  'benchmark/lib/changes.mjs',
-  'benchmark/lib/gates.mjs',
-  'benchmark/lib/metrics.mjs',
-  'benchmark/lib/portable-quality.mjs',
-  'benchmark/lib/retained-quality.mjs',
-  'benchmark/lib/rows.mjs',
-  'benchmark/lib/stages.mjs',
-  'benchmark/lib/verdict.mjs',
-  'benchmark/lib/workload-identity.mjs',
-  'benchmark/steps/retained-quality.mjs',
-  'benchmark/tools/portable-quality-compare.mjs',
-];
+// These files evaluate retained artifacts and do not supply measurement inputs or producers.
+// Mixed producer/evaluator modules and unknown benchmark paths still owe baseline collection.
+const REPORT_EVALUATOR_ONLY_PATHS = ['benchmark/report.mjs', 'benchmark/lib/portable-quality.mjs', 'benchmark/lib/retained-quality.mjs', 'benchmark/lib/verdict.mjs', 'benchmark/steps/retained-quality.mjs', 'benchmark/tools/portable-quality-compare.mjs'];
+
+const QUALITY_EVALUATOR_PATHS = [...REPORT_EVALUATOR_ONLY_PATHS, 'benchmark/gate.mjs', 'benchmark/lib/changes.mjs', 'benchmark/lib/gates.mjs', 'benchmark/lib/metrics.mjs', 'benchmark/lib/rows.mjs', 'benchmark/lib/stages.mjs', 'benchmark/lib/workload-identity.mjs'];
 
 const DIFF_MAP = [
   { gate: 'test-engines', when: ['src/store/sqlite/', 'src/watch-claim.ts', 'src/watch.ts', 'src/scan/', 'src/workers/', 'package.json'] },
@@ -164,7 +156,7 @@ export function owedReasons(paths, lastTag) {
   if (paths.length === 0) return new Map(GATE_NAMES.map((gate) => [gate, [`no diff since ${lastTag}: this tree is the release`]]));
   const reasons = new Map();
   for (const { gate, when } of DIFF_MAP) {
-    const matched = paths.filter((p) => pathOwesRow(p, when));
+    const matched = paths.filter((p) => pathOwesRow(p, when) && !(gate === 'baseline' && REPORT_EVALUATOR_ONLY_PATHS.includes(p)));
     if (matched.length > 0) reasons.set(gate, matched);
   }
   return reasons;
@@ -229,17 +221,6 @@ export function remainingCost(selected, stepEstimates, reusable = () => false) {
   };
 }
 
-export function ordinaryCostRefusal(profile, estimate, limitMs = ORDINARY_COST_LIMIT_MS) {
-  if (profile === 'deep') return null;
-  const overBudget = estimate.known_ms > limitMs;
-  if (!overBudget && estimate.unknown_steps.length === 0) return null;
-  const causes = [];
-  if (overBudget) causes.push(`~${(estimate.known_ms / 60_000).toFixed(1)} minutes of known work exceeds the ${(limitMs / 60_000).toFixed(1)} minute limit`);
-  if (estimate.unknown_steps.length > 0) causes.push(`cost is unknown for ${estimate.unknown_steps.join(', ')}`);
-  const work = estimate.remaining_steps.map(({ id, estimated_ms }) => `${id} (${estimated_ms === null ? 'unknown' : `~${(estimated_ms / 60_000).toFixed(1)} min`})`).join(', ');
-  return `ordinary assessment stopped before execution because ${causes.join(' and ')}. Remaining work: ${work}. Run with --profile deep to approve this costly assessment.`;
-}
-
 export function requireFreshQuality(reasons, detail) {
   const next = new Map(reasons);
   next.delete('quality-revalidation');
@@ -251,13 +232,11 @@ export function requireFreshQuality(reasons, detail) {
 /**
  * @param {Map<string, string[]>} reasons
  * @param {{ valid?: boolean, errors?: string[], status?: string } | null} evidence
- * @param {{ estimatedMs?: number | null, reusable?: boolean }} [options]
  */
-export function resolveRetainedQualityRequirement(reasons, evidence, { estimatedMs = null, reusable = false } = {}) {
+export function resolveRetainedQualityRequirement(reasons, evidence) {
   if (!reasons.has('quality-revalidation')) return new Map(reasons);
   if (evidence?.valid !== true) return requireFreshQuality(reasons, `retained raw quality unavailable: ${evidence?.errors?.[0] ?? evidence?.status ?? 'unknown'}`);
-  if (reusable || (Number.isFinite(estimatedMs) && estimatedMs >= 0)) return new Map(reasons);
-  return requireFreshQuality(reasons, 'retained quality revalidation has no historical execution estimate; bounded ordinary fallback is fresh portable NFCorpus');
+  return new Map(reasons);
 }
 
 export function retainedQualityForSitting(prior, selected, reasons) {
@@ -274,9 +253,14 @@ export function retainedQualityForSitting(prior, selected, reasons) {
   };
 }
 
-/** @param {Record<string, unknown> | null} priorSitting @param {{ lastTag: string, paths: string[], reasons: Map<string, string[]>, profile: string, retainedQuality?: { source?: unknown } | null }} selection */
-export function assertCompatibleSelection(priorSitting, { lastTag, paths, reasons, profile, retainedQuality = null }) {
+// An omitted scope identifies an unmarked historical selection. New gate execution always
+// supplies QUALITY_SCOPE and cannot adopt the historical coverage boundary on resume.
+/** @param {Record<string, unknown> | null} priorSitting @param {{ lastTag: string, paths: string[], reasons: Map<string, string[]>, profile: string, qualityScope?: string, retainedQuality?: { source?: unknown } | null }} selection */
+export function assertCompatibleSelection(priorSitting, { lastTag, paths, reasons, profile, qualityScope, retainedQuality = null }) {
+  if (qualityScope !== undefined && qualityScope !== QUALITY_SCOPE) throw new Error(`quality scope must be ${QUALITY_SCOPE}`);
   if (!priorSitting) return;
+  if (priorSitting.quality_scope !== undefined && priorSitting.quality_scope !== QUALITY_SCOPE) throw new Error(`the existing sitting has an unknown quality scope; expected ${QUALITY_SCOPE}`);
+  if (priorSitting.quality_scope !== qualityScope) throw new Error('the existing sitting has an incompatible quality scope; start a clean sitting');
   if (priorSitting.last_tag !== lastTag || JSON.stringify(priorSitting.changed_paths) !== JSON.stringify(paths)) throw new Error('the existing sitting has an incompatible changed-path selection; start a clean sitting');
   if (priorSitting.profile === 'deep' && profile !== 'deep') throw new Error('the existing sitting used the deep profile; resume with --profile deep');
   const priorRequired = new Set(Object.keys(priorSitting.effective_requirements ?? priorSitting.owed ?? {}));

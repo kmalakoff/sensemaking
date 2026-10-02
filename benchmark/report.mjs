@@ -18,7 +18,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:pat
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { stringify } from 'yaml';
-import { PROFILES } from './lib/gates.mjs';
+import { PROFILES, QUALITY_SCOPE } from './lib/gates.mjs';
 import { MEASURE_VERSION } from './lib/measure.mjs';
 import { compareNativeCapabilityArtifacts } from './lib/native-capability-compare.mjs';
 import { compareNativeHydrationArtifacts } from './lib/native-hydration-compare.mjs';
@@ -30,7 +30,7 @@ import { validateResultSetArtifact } from './lib/result-sets.mjs';
 import { validateRetainedQualityRecord } from './lib/retained-quality.mjs';
 import { COMPARISON_CLASSES, ROW_BY_KEY, ROWS } from './lib/rows.mjs';
 import { validateSharedSnippetArtifact } from './lib/shared-snippet-contract.mjs';
-import { DEFAULT_STORE, OFFERED, ROOT, STAGES } from './lib/stages.mjs';
+import { DEFAULT_STORE, LEGACY_QUALITY_STEPS, OFFERED, ROOT, STAGES } from './lib/stages.mjs';
 import { captureIdentity, resolveCaptureDirectory, validateStoreDumpArtifact as validateRetainedStoreDumpArtifact } from './lib/store-dump-evidence.mjs';
 import { aggregateVerdict, classificationSeverity, classifyCompare, classifyCrossGroup, classifyEval, compareVersions, findPriorReports, priorStepLookup, shouldRunReversedCompare, watchSanityGroup, withSeverity } from './lib/verdict.mjs';
 import { identityHash } from './lib/workload-identity.mjs';
@@ -205,12 +205,15 @@ const STEP_STATUSES = new Set(['ok', 'failed', 'timeout', 'blocked', 'owed-unmet
 
 function owedStepMap(sitting) {
   const owed = sitting.owed ?? {};
-  return new Map(STAGES.flatMap((stage) => stage.steps).map((step) => [step.id, { step, owed: step.owedBy === 'always' || Object.hasOwn(owed, step.owedBy) }]));
+  const known = new Map(STAGES.flatMap((stage) => stage.steps).map((step) => [step.id, { step, owed: step.owedBy === 'always' || Object.hasOwn(owed, step.owedBy) }]));
+  for (const step of LEGACY_QUALITY_STEPS) known.set(step.id, { step, owed: sitting.quality_scope !== QUALITY_SCOPE && Object.hasOwn(owed, step.owedBy) });
+  return known;
 }
 
 function coverageErrors(sitting) {
   const known = owedStepMap(sitting);
   const errors = [];
+  if (sitting.quality_scope !== undefined && sitting.quality_scope !== QUALITY_SCOPE) errors.push(`coverage: unknown quality scope; expected ${QUALITY_SCOPE}`);
   if (sitting.profile !== undefined || sitting.effective_requirements !== undefined) {
     if (!PROFILES.includes(sitting.profile)) errors.push(`coverage: profile must be ${PROFILES.join(' or ')}`);
     if (!sitting.effective_requirements || identityHash(sitting.effective_requirements) !== identityHash(sitting.owed ?? {})) errors.push('coverage: effective_requirements must match owed selection');
@@ -293,11 +296,7 @@ function classifySitting(sittingDir, sitting, priorLookup, { reportsDir = REPORT
   const invalidArtifact = (id, reason) => {
     classifications.push({ id: `${id}/validity`, context: id, key: 'validity', verdict: 'failed', invalid: true, reason, prior: null, current: null });
   };
-  const expectedArtifacts = new Set(
-    STAGES.flatMap((stage) => stage.steps)
-      .filter((step) => step.out)
-      .map((step) => step.id)
-  );
+  const expectedArtifacts = new Set([...STAGES.flatMap((stage) => stage.steps), ...LEGACY_QUALITY_STEPS].filter((step) => step.out).map((step) => step.id));
   expectedArtifacts.add('compare-reversed');
   const loadCurrent = (id, { compareWrapper = false } = {}) => {
     const path = join(sittingDir, `${id}.json`);
@@ -818,8 +817,15 @@ export function renderMarkdown(report) {
   lines.push('');
   lines.push(`- provenance: last tag \`${report.last_tag ?? 'unknown'}\`, package version ${report.package_version ?? 'unknown'}, ${report.changed_paths?.length ?? 0} changed path(s) read to decide what was owed (no commit hash: RELEASING.md's rule, since a rebase or squash can orphan one)`);
   if (report.profile != null) lines.push(`- profile: ${report.profile}`);
+  if (report.quality_scope === QUALITY_SCOPE) lines.push('- quality scope: portable corpora; SQLite OR-bag relevance is not required by this assessment. Any separately collected OR-bag evidence is validated.');
   lines.push(`- owed: ${Object.keys(report.owed ?? {}).length > 0 ? Object.keys(report.owed).join(', ') : 'nothing beyond the always-owed stages'}`);
   if (report.retained_quality) lines.push(`- retained quality: ${report.retained_quality.status}${report.retained_quality.source ? ` from ${report.retained_quality.source.report} (${report.retained_quality.source.sitting})` : ''}`);
+  if (report.retained_quality?.valid === true) {
+    const { source, scope } = report.retained_quality;
+    lines.push(
+      `- retained measurements: package ${source?.package_version ?? 'unknown'}, ${scope?.corpus ?? 'unknown corpus'}/${scope?.query_form ?? 'unknown query form'}, split ${scope?.split ?? 'unknown'}, k=${scope?.k ?? 'unknown'}, on ${(scope?.stores ?? []).join(', ')}. Quality metrics were recomputed from the original rankings; this retained-quality step did not rerun search or measure timing.`
+    );
+  }
   lines.push(
     `- ran: ${Object.values(report.steps_status ?? {}).filter((s) => s?.status === 'ok').length} step(s) ok, ${Object.values(report.steps_status ?? {}).filter((s) => s?.status === 'not-owed').length} not owed, ${Object.values(report.steps_status ?? {}).filter((s) => s?.status === 'owed-unmet').length} owed-unmet`
   );
@@ -1110,6 +1116,7 @@ export function buildReport(sittingDir, { reportsDir = REPORTS_DIR, sittingsDir 
     changed_paths: sitting.changed_paths ?? [],
     untracked_paths: sitting.untracked_paths ?? [],
     profile: sitting.profile ?? null,
+    ...(sitting.quality_scope !== undefined ? { quality_scope: sitting.quality_scope } : {}),
     effective_requirements: sitting.effective_requirements ?? sitting.owed ?? {},
     estimated_cost: sitting.estimated_cost ?? null,
     retained_quality: retainedQuality

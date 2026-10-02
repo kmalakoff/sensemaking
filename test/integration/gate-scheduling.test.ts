@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 import assert from 'assert';
 import { missingPrerequisites } from '../../benchmark/lib/gate-dependencies.mjs';
 import { runStageSteps, stepOutputEvidence } from '../../benchmark/lib/gate-runner.mjs';
-import { LIVE_SUITE_ARGV, LIVE_SUITE_COST_ARTIFACT, LIVE_SUITE_ENV, liveSuiteMachine, liveSuiteProvenance, liveSuiteRuntime, ORDINARY_COST_LIMIT_MS, ordinaryCostRefusal, readLiveSuiteCost, remainingCost } from '../../benchmark/lib/gates.mjs';
+import { LIVE_SUITE_ARGV, LIVE_SUITE_COST_ARTIFACT, LIVE_SUITE_ENV, liveSuiteMachine, liveSuiteProvenance, liveSuiteRuntime, profileReasons, readLiveSuiteCost, remainingCost } from '../../benchmark/lib/gates.mjs';
 import { buildStages } from '../../benchmark/lib/stages.mjs';
 import { buildReport, doneOnResume, failedStageReasons, renderMarkdown } from '../../benchmark/report.mjs';
 import { scratchDir } from '../lib/scratch.ts';
@@ -46,27 +46,102 @@ function liveCostFixture() {
 }
 
 describe('release gate independent failure collection', () => {
-  it('refuses costly or unknown ordinary work and subtracts only applicable resume work', () => {
-    const steps = [{ id: 'costly' }, { id: 'small' }];
+  it('schedules complete portable quality argv and every other obligation without legacy producers', async () => {
+    const stages = buildStages();
+    const steps: { id: string; argv: string[]; owedBy: string }[] = [];
+    for (const stage of stages) {
+      for (const step of stage.steps) steps.push(step);
+    }
+    assert.deepEqual(
+      stages.filter((stage) => stage.id !== 'quality').flatMap((stage) => stage.steps.map((step) => step.id)),
+      [
+        'validate',
+        'npm-test',
+        'test-engines',
+        'live-suite',
+        'store-dump',
+        'oracle',
+        'shared-snippet',
+        'native-hydration-sqlite',
+        'native-hydration-duckdb',
+        'native-hydration-turso',
+        'native-hydration-comparison',
+        'result-sets-hub',
+        'compare',
+        'battery-duckdb-hub',
+        'battery-turso-hub',
+        'result-sets-stress',
+        'scale-13k',
+        'scale-26k',
+        'stress',
+        'battery-duckdb-13k',
+        'battery-duckdb-26k',
+        'battery-duckdb-stress',
+        'battery-turso-13k',
+        'battery-turso-26k',
+        'battery-turso-stress',
+      ]
+    );
+    for (const [paths, profile, corpora] of [
+      [['src/commands/search.ts', 'test/unit/commands/search.test.ts'], 'ordinary', ['nfcorpus']],
+      [['src/commands/search.ts', 'test/unit/commands/search.test.ts'], 'deep', ['nfcorpus', 'fever']],
+      [['src/store/duckdb/lexical.ts', 'test/unit/store/duckdb/lexical.test.ts'], 'deep', ['nfcorpus', 'fever']],
+      [['src/graph/graph.ts', 'test/unit/graph/graph.test.ts'], 'deep', ['nfcorpus', 'fever']],
+      [['src/new-owner.ts', 'test/unit/new-owner.test.ts'], 'ordinary', ['nfcorpus', 'fever']],
+      [['package-lock.json', 'test/integration/store-parity.test.ts'], 'ordinary', ['nfcorpus', 'fever']],
+    ] as const) {
+      const reasons = profileReasons([...paths], 'v1', profile);
+      const invoked: Array<{ id: string; argv: string[] }> = [];
+      const recorded = new Map<string, string>();
+      const expected = steps.filter((step) => step.owedBy === 'always' || reasons.has(step.owedBy));
+      await runStageSteps(steps, {
+        isOwed: (step: { owedBy: string }) => step.owedBy === 'always' || reasons.has(step.owedBy),
+        resume: () => null,
+        recordNotOwed: (step: { id: string }) => recorded.set(step.id, 'not-owed'),
+        recordResume: () => assert.fail('a new selection must not resume work'),
+        run: (step: { id: string; argv: string[] }) => {
+          invoked.push({ id: step.id, argv: step.argv });
+          return { status: 'ok' };
+        },
+        recordResult: (step: { id: string }, result: { status: string }) => {
+          recorded.set(step.id, result.status);
+          return result.status;
+        },
+      });
+      assert.deepEqual(
+        invoked.map((step) => step.id),
+        expected.map((step) => step.id)
+      );
+      assert.ok(!invoked.some((step) => ['eval-nfcorpus', 'eval-fever'].includes(step.id)));
+      assert.deepEqual(
+        invoked.filter((step) => step.id.startsWith('portable-eval-')),
+        corpora.flatMap((corpus) => [
+          ...['sqlite', 'duckdb', 'turso'].map((store) => ({ id: `portable-eval-${corpus}-${store}`, argv: ['node', 'benchmark/steps/quality.mjs', corpus, '--store', store, '--query-form', 'bare-and'] })),
+          { id: `portable-eval-${corpus}-comparison`, argv: ['node', 'benchmark/tools/portable-quality-compare.mjs'] },
+        ])
+      );
+      for (const step of steps) assert.equal(recorded.get(step.id), expected.includes(step) ? 'ok' : 'not-owed');
+    }
+  });
+
+  it('reports large and unknown remaining costs and subtracts only applicable resume work', () => {
+    const steps = [{ id: 'costly' }, { id: 'small' }, { id: 'unknown' }];
     const estimates = { costly: 19 * 60_000, small: 2 * 60_000 };
     const recorded = { costly: { status: 'ok' } };
     const fresh = remainingCost(steps, estimates);
     assert.equal(fresh.known_ms, 21 * 60_000);
+    assert.deepEqual(fresh.unknown_steps, ['unknown']);
     assert.deepEqual(fresh.reused_steps, []);
-    assert.match(ordinaryCostRefusal('ordinary', fresh) ?? '', /Remaining work: costly .*small /);
+    assert.deepEqual(fresh.remaining_steps, [
+      { id: 'costly', estimated_ms: 19 * 60_000 },
+      { id: 'small', estimated_ms: 2 * 60_000 },
+      { id: 'unknown', estimated_ms: null },
+    ]);
 
     const applicableResume = remainingCost(steps, estimates, (step: { id: string }) => doneOnResume(step.id, recorded[step.id as keyof typeof recorded]));
     assert.equal(applicableResume.known_ms, 2 * 60_000);
     assert.deepEqual(applicableResume.reused_steps, ['costly']);
-    assert.equal(ordinaryCostRefusal('ordinary', applicableResume), null);
-
-    const boundary = remainingCost([{ id: 'boundary' }], { boundary: ORDINARY_COST_LIMIT_MS });
-    assert.equal(ordinaryCostRefusal('ordinary', boundary), null);
-    assert.match(ordinaryCostRefusal('ordinary', remainingCost([{ id: 'over' }], { over: ORDINARY_COST_LIMIT_MS + 1 })) ?? '', /exceeds the 20\.0 minute limit/);
-
-    const unknown = remainingCost([{ id: 'unknown-collection' }], {});
-    assert.match(ordinaryCostRefusal('ordinary', unknown) ?? '', /cost is unknown for unknown-collection/);
-    assert.equal(ordinaryCostRefusal('deep', unknown), null);
+    assert.deepEqual(applicableResume.unknown_steps, ['unknown']);
   });
 
   it('uses a valid live-suite measurement for cost only, never as completed work', () => {

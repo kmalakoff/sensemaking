@@ -4,7 +4,7 @@ import assert from 'assert';
 import { qualityRetrievalIdentity } from '../../benchmark/lib/quality-retrieval-identity.mjs';
 import { scratchDir } from '../lib/scratch.ts';
 
-const SOURCE_FILES = ['src/commands/scope.ts', 'src/commands/search.ts', 'src/commands/signals.ts', 'src/errors.ts', 'src/index.ts', 'src/output/search-error.ts'];
+const SOURCE_FILES = ['src/commands/scope.ts', 'src/commands/search.ts', 'src/commands/signals.ts', 'src/commands/snapshot.ts', 'src/errors.ts', 'src/index.ts', 'src/output/search-error.ts'];
 const COLLECTION_FILES = ['benchmark/steps/quality.mjs', 'benchmark/lib/corpus.mjs', 'benchmark/lib/labels.mjs', 'benchmark/lib/quality.mjs', 'benchmark/lib/quality-work-tree.mjs'];
 
 function write(root: string, path: string, text: string): void {
@@ -52,6 +52,21 @@ describe('quality retrieval identity', () => {
 
   it('invalidates source and both emitted retrieval counterparts', () => {
     for (const path of ['src/output/search-error.ts', builtPath('cjs', 'src/output/search-error.ts'), builtPath('esm', 'src/output/search-error.ts')]) assertInvalidates(fixture(), path);
+  });
+
+  for (const path of ['src/commands/snapshot.ts', 'dist/cjs/commands/snapshot.js', 'dist/esm/commands/snapshot.js']) {
+    it(`invalidates changed query readiness in ${path}`, () => {
+      assertInvalidates(fixture(), path);
+    });
+  }
+
+  it('preserves retrieval identity through prose and graph-path command changes', () => {
+    const root = fixture();
+    const before = qualityRetrievalIdentity(root);
+    for (const path of ['README.md', 'src/commands/path.ts', 'dist/cjs/commands/path.js', 'dist/esm/commands/path.js']) {
+      write(root, path, 'changed unrelated content\n');
+      assert.deepEqual(qualityRetrievalIdentity(root), before, path);
+    }
   });
 
   it('ignores a root lock version but invalidates a dependency change', () => {

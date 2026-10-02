@@ -2,7 +2,25 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { directoryIdentity, identityHash, installedPackageVersion, pathSetIdentity } from './workload-identity.mjs';
 
-export const QUALITY_RETRIEVAL_PATHS = ['src/chunk', 'src/commands/scope.ts', 'src/commands/search.ts', 'src/commands/signals.ts', 'src/config', 'src/embed', 'src/errors.ts', 'src/features', 'src/graph', 'src/index.ts', 'src/lib', 'src/output/search-error.ts', 'src/scan', 'src/store', 'src/text', 'src/workers'];
+export const QUALITY_RETRIEVAL_PATHS = [
+  'src/chunk',
+  'src/commands/scope.ts',
+  'src/commands/search.ts',
+  'src/commands/signals.ts',
+  'src/commands/snapshot.ts',
+  'src/config',
+  'src/embed',
+  'src/errors.ts',
+  'src/features',
+  'src/graph',
+  'src/index.ts',
+  'src/lib',
+  'src/output/search-error.ts',
+  'src/scan',
+  'src/store',
+  'src/text',
+  'src/workers',
+];
 
 const SOURCE_FILES = QUALITY_RETRIEVAL_PATHS.filter((path) => path.endsWith('.ts'));
 const SOURCE_DIRECTORIES = QUALITY_RETRIEVAL_PATHS.filter((path) => !path.endsWith('.ts'));

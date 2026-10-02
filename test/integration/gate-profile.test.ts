@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import assert from 'assert';
 import { releaseChanges } from '../../benchmark/lib/changes.mjs';
-import { assertCompatibleSelection, profileReasons } from '../../benchmark/lib/gates.mjs';
+import { assertCompatibleSelection, profileReasons, QUALITY_SCOPE } from '../../benchmark/lib/gates.mjs';
 import { buildStages } from '../../benchmark/lib/stages.mjs';
 import { packageRoot, scratchDir } from '../lib/scratch.ts';
 
@@ -54,6 +54,25 @@ describe('release assessment profiles', () => {
     const deep = profileReasons(['README.md'], 'v1', 'deep');
     assert.deepEqual([...deep.keys()], ['baseline', 'scale', 'quality-baseline', 'fever']);
     for (const gate of ['test-engines', 'live-suite', 'store-dump', 'oracle']) assert.equal(deep.has(gate), false, gate);
+  });
+
+  it('classifies graph-path changes without the unknown-source deep fallback', () => {
+    const reasons = profileReasons(['src/commands/path.ts'], 'v1', 'ordinary');
+    assert.deepEqual([...reasons.keys()], ['baseline', 'quality-revalidation']);
+    assert.deepEqual(reasons.get('baseline'), ['src/commands/path.ts']);
+  });
+
+  it('classifies snapshot readiness as retrieval work without the unknown-source deep fallback', () => {
+    const reasons = profileReasons(['src/commands/snapshot.ts'], 'v1', 'ordinary');
+    assert.deepEqual([...reasons.keys()], ['baseline', 'quality-baseline']);
+    assert.deepEqual(reasons.get('quality-baseline'), ['src/commands/snapshot.ts']);
+    const selected: string[] = [];
+    for (const stage of buildStages()) {
+      for (const step of stage.steps) {
+        if (step.owedBy === 'quality-baseline' && reasons.has(step.owedBy)) selected.push(step.id);
+      }
+    }
+    assert.deepEqual(selected, ['portable-eval-nfcorpus-sqlite', 'portable-eval-nfcorpus-duckdb', 'portable-eval-nfcorpus-turso', 'portable-eval-nfcorpus-comparison']);
   });
 
   it('resolves selected scale inputs through the real corpus builders from an empty generated cache', () => {
@@ -115,9 +134,9 @@ describe('release assessment profiles', () => {
   });
 
   it('revalidates evaluator changes without scheduling fresh retrieval or scale', () => {
-    for (const path of ['benchmark/report.mjs', 'benchmark/lib/metrics.mjs', 'benchmark/lib/portable-quality.mjs']) {
+    for (const path of ['benchmark/report.mjs', 'benchmark/lib/portable-quality.mjs', 'benchmark/lib/retained-quality.mjs', 'benchmark/lib/verdict.mjs', 'benchmark/steps/retained-quality.mjs', 'benchmark/tools/portable-quality-compare.mjs']) {
       const reasons = profileReasons([path], 'v1', 'ordinary');
-      assert.equal(reasons.has('baseline'), true, path);
+      assert.equal(reasons.has('baseline'), false, path);
       assert.equal(reasons.has('quality-revalidation'), true, path);
       for (const gate of ['scale', 'quality-baseline', 'fever']) assert.equal(reasons.has(gate), false, `${path}: ${gate}`);
     }
@@ -254,11 +273,25 @@ describe('release assessment profiles', () => {
   });
 
   it('allows requirement expansion on resume and rejects narrowing or changed inputs', () => {
-    const prior = { last_tag: 'v1', changed_paths: ['src/output/output.ts'], effective_requirements: { baseline: ['src/output/output.ts'] } };
+    const prior = { last_tag: 'v1', changed_paths: ['src/output/output.ts'], quality_scope: QUALITY_SCOPE, effective_requirements: { baseline: ['src/output/output.ts'] } };
     const expanded = profileReasons(['src/output/output.ts'], 'v1', 'deep');
-    assert.doesNotThrow(() => assertCompatibleSelection(prior, { lastTag: 'v1', paths: ['src/output/output.ts'], reasons: expanded, profile: 'deep' }));
-    assert.throws(() => assertCompatibleSelection({ ...prior, effective_requirements: { ...prior.effective_requirements, scale: ['deep profile'] } }, { lastTag: 'v1', paths: ['src/output/output.ts'], reasons: profileReasons(['src/output/output.ts'], 'v1', 'ordinary'), profile: 'ordinary' }), /requires scale/);
-    assert.throws(() => assertCompatibleSelection(prior, { lastTag: 'v2', paths: ['src/output/output.ts'], reasons: expanded, profile: 'deep' }), /incompatible changed-path/);
+    assert.doesNotThrow(() => assertCompatibleSelection(prior, { lastTag: 'v1', paths: ['src/output/output.ts'], reasons: expanded, profile: 'deep', qualityScope: QUALITY_SCOPE }));
+    assert.throws(
+      () => assertCompatibleSelection({ ...prior, effective_requirements: { ...prior.effective_requirements, scale: ['deep profile'] } }, { lastTag: 'v1', paths: ['src/output/output.ts'], reasons: profileReasons(['src/output/output.ts'], 'v1', 'ordinary'), profile: 'ordinary', qualityScope: QUALITY_SCOPE }),
+      /requires scale/
+    );
+    assert.throws(() => assertCompatibleSelection(prior, { lastTag: 'v2', paths: ['src/output/output.ts'], reasons: expanded, profile: 'deep', qualityScope: QUALITY_SCOPE }), /incompatible changed-path/);
+  });
+
+  it('preserves quality scope on resume and rejects unknown or unmarked scope adoption', () => {
+    const selection = { lastTag: 'v1', paths: ['src/commands/search.ts', 'test/unit/commands/search.test.ts'], reasons: profileReasons(['src/commands/search.ts', 'test/unit/commands/search.test.ts'], 'v1', 'deep'), profile: 'deep', qualityScope: QUALITY_SCOPE };
+    const prior = { last_tag: selection.lastTag, changed_paths: selection.paths, profile: 'deep', owed: Object.fromEntries(selection.reasons), quality_scope: QUALITY_SCOPE };
+    assert.doesNotThrow(() => assertCompatibleSelection(prior, selection));
+    assert.throws(() => assertCompatibleSelection({ ...prior, quality_scope: undefined }, selection), /incompatible quality scope/);
+    assert.throws(() => assertCompatibleSelection({ ...prior, quality_scope: 'unknown' }, selection), /unknown quality scope/);
+    assert.throws(() => assertCompatibleSelection(prior, { ...selection, qualityScope: 'unknown' }), /quality scope must be/);
+    assert.throws(() => assertCompatibleSelection(null, { ...selection, qualityScope: 'unknown' }), /quality scope must be/);
+    assert.throws(() => assertCompatibleSelection(prior, { ...selection, qualityScope: undefined }), /incompatible quality scope/);
   });
 
   it('prints an actual dry-run with the effective profile, reasons, and estimate', () => {
@@ -275,20 +308,17 @@ describe('release assessment profiles', () => {
     assert.equal(existsSync(sittingsDir), false);
   });
 
-  it('refuses an ordinary gate with unknown cost before creating a sitting', function () {
-    this.timeout(30_000);
-    const root = realGateFixture('gate-cost-refusal');
-    mkdirSync(join(root, 'src', 'embed'), { recursive: true });
-    writeFileSync(join(root, 'src', 'embed', 'changed.ts'), 'export const changed = true;\n');
-    const sittingsDir = join(root, '.tmp', 'sittings');
-    assert.equal(existsSync(sittingsDir), false);
-
-    const result = spawnSync(process.execPath, [join(root, 'benchmark', 'gate.mjs'), '--profile', 'ordinary'], { cwd: root, encoding: 'utf8', timeout: 20_000 });
-    assert.equal(result.status, 2, result.stderr);
-    assert.match(result.stdout, /^ {2}live-suite: OWED \(cost unknown\)$/m);
-    assert.match(result.stderr, /ordinary assessment stopped before execution/);
-    assert.match(result.stderr, /Run with --profile deep/);
-    assert.equal(existsSync(sittingsDir), false);
+  it('keeps collection for mixed producer/evaluator modules, unknown benchmark paths, and mixed edits', () => {
+    for (const path of ['benchmark/lib/stages.mjs', 'benchmark/lib/workload-identity.mjs', 'benchmark/lib/render.mjs', 'benchmark/lib/rows.mjs', 'benchmark/lib/metrics.mjs', 'benchmark/lib/new-instrument.mjs']) {
+      const reasons = profileReasons([path], 'v1', 'ordinary');
+      assert.equal(reasons.has('baseline'), true, path);
+      assert.equal(reasons.has('quality-revalidation'), true, path);
+    }
+    const mixed = profileReasons(['benchmark/report.mjs', 'benchmark/steps/quality.mjs'], 'v1', 'ordinary');
+    assert.equal(mixed.has('baseline'), true);
+    assert.equal(mixed.has('quality-baseline'), true);
+    assert.equal(mixed.has('quality-revalidation'), false);
+    assert.equal(mixed.has('fever'), false);
   });
 
   it('documents profile behavior in CLI help', () => {
@@ -296,7 +326,10 @@ describe('release assessment profiles', () => {
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stdout, /--profile ordinary\|deep/);
     assert.match(result.stdout, /ordinary uses portable NFCorpus/);
-    assert.match(result.stdout, /deep adds FEVER, scale\/stress, and legacy OR-bag continuity/);
+    assert.match(result.stdout, /deep adds portable FEVER and scale\/stress/);
+    assert.match(result.stdout, /SQLite OR-bag relevance is an explicit standalone investigation/);
     assert.match(result.stdout, /dry-run resolves retained-quality availability/);
+    assert.match(result.stdout, /execution estimates are informational/);
+    assert.doesNotMatch(result.stdout, /stops before execution|approve this costly assessment/);
   });
 });

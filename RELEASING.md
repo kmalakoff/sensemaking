@@ -24,36 +24,15 @@ Subagents dispatched during a release are spawned with `model: sonnet`. Reviews 
    The builders reuse the pinned Hub source and generate deterministic stress notes. Dry-run does
    not build corpora.
 
-   When the ordinary estimate reports an unknown live-suite cost, measure that focused stage once
-   before the gate:
+   `ordinary` is the default assessment. It runs the selected common correctness and matched-input current-store work plus a fresh or retained full portable NFCorpus view on every offered store. `deep` explicitly adds portable FEVER on every store and the large scale/stress workloads. New assessments omit the SQLite OR-bag relevance runs for both corpora, including conservative unknown-input selections. The dry run exposes selected requirements, reasons, and historical execution estimates. Unknown or large estimated durations do not stop ordinary work, select fresh measurement, or expand it to deep. Estimates exclude setup and quiet waits and are not a duration promise.
 
-   ```bash
-   node benchmark/tools/live-suite-cost.ts
-   ```
+   SQLite grammar remains functional coverage. Portable full-corpus relevance does not replace OR-specific scores. Run `node benchmark/steps/quality.mjs <nfcorpus|fever> --query-form or-bag --store sqlite --out <artifact.json>` for an explicit SQLite FTS/query-transform change or reported OR-ranking investigation. Full linked portable FEVER remains required when its relevance decision is owed; NFCorpus has no links and cannot replace it. New sittings record `quality_scope: portable-only-v1`. Old unmarked sittings keep their original legacy coverage when rendered and cannot resume into the new scope; start a clean sitting. Unknown scope is invalid, and separately collected OR-bag evidence still undergoes artifact validation.
 
-   The tool records a provenance-bound cost under `.tmp/live-suite-cost/`. The artifact contributes
-   an estimate only; the ordinary gate still runs the owed live suite and never treats the bootstrap
-   as completed or reusable coverage. A failed, stale, or mismatched artifact leaves the cost
-   unknown and ordinary refuses before execution.
-
-   `ordinary` is the default assessment. It runs the selected common correctness and matched-input
-   current-store work plus full portable NFCorpus on every offered store. `deep` explicitly adds
-   portable FEVER on every store, the large scale/stress workloads, and the legacy SQLite OR-bag
-   continuity rows. The dry run exposes the profile, selected requirements, reasons, and a
-   historical execution estimate before work begins. The ordinary 10–20 minute target is an
-   estimate, not a measured promise for this machine or diff.
+   `node benchmark/tools/live-suite-cost.ts` optionally records a provenance-bound estimate under `.tmp/live-suite-cost/`. It is not a prerequisite. Its artifact never marks the owed live suite as completed or reusable coverage. A missing, failed, stale, or mismatched artifact leaves the estimate unknown.
 
    The gate already enforces per-stage process-tree timeouts. Use those for hang protection; do not add a whole-run kill timer derived from the historical estimate or target duration, which can interrupt healthy later stages. When elapsed time exceeds the estimate, inspect stage progress. Any additional overall deadline must come from an explicit execution budget, and expiry means an incomplete assessment, not a performance regression.
 
-   **Changed capabilities expand the common gate before it runs.** Common work owed by the diff
-   cannot be skipped by a profile or flag. When an ordinary run owes a baseline assessment but no
-   changed capability requires fresh retrieval collection, it revalidates retained raw portable
-   NFCorpus quality against the current retrieval, model, corpus, query, judgment, and all-store
-   identities. Missing or incompatible raw evidence selects fresh portable NFCorpus before work
-   starts; a compact report cannot revalidate quality it omitted. A sitting and its report retain
-   the profile and effective requirements, and resume refuses an incompatible selection. Native
-   diagnostic matrices and historical sweeps are omitted unless explicitly requested; neither
-   profile selects them automatically.
+   **Changed capabilities expand the common gate before it runs.** Common work owed by the diff cannot be skipped by a profile or flag. When an ordinary run owes a baseline assessment but no changed capability requires fresh retrieval collection, it revalidates retained raw portable NFCorpus quality against the current retrieval, model, corpus, query, judgment, and all-store identities. Missing or incompatible raw evidence selects fresh portable NFCorpus before work starts; a compact report cannot revalidate quality it omitted. A missing duration estimate leaves valid retained revalidation selected. Report/evaluator-only paths named in `benchmark/lib/gates.mjs` require evaluation without baseline collection. Mixed producer/evaluator files, unknown benchmark paths, and edits that also change a producer still select collection. The rendered report names the original measured package and workload and distinguishes recomputed metrics from new search or timing. A sitting and its report retain the profile and effective requirements, and resume refuses an incompatible selection. Native diagnostic matrices and historical sweeps are omitted unless explicitly requested; neither profile selects them automatically.
 
    Stages run in order: static checks, functional suites, hub baseline, scale and stress when
    selected, then retrieval quality when selected. Independent benchmark and evidence failures
