@@ -13,6 +13,8 @@ describe('test scratch cleanup', () => {
       (err: unknown) => {
         assert.ok(err instanceof AggregateError);
         assert.equal(err.errors.length, 1);
+        assert.ok(err.message.includes(invalidPath), 'the existing reporter must expose the failed owned path');
+        assert.ok(err.message.includes((err.errors[0] as Error).message), 'the recorded filesystem failure must survive reporting');
         assert.equal(existsSync(laterDir), false);
         return true;
       }

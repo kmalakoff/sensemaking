@@ -3,7 +3,7 @@
 import { identityHash } from './workload-identity.mjs';
 
 export const DUCKDB_LEXICAL_COST_SCHEMA = 'duckdb-lexical-cost-v1';
-export const DUCKDB_LEXICAL_COST_METHOD_VERSION = 'duckdb-lexical-cost-method-v2-readiness-boundary-counted';
+export const DUCKDB_LEXICAL_COST_METHOD_VERSION = 'duckdb-lexical-cost-method-v3-native-token-boundary-counted';
 export const DUCKDB_LEXICAL_COST_NOTES = [6, 500];
 export const DUCKDB_LEXICAL_COST_REPETITIONS = 3;
 
@@ -115,7 +115,7 @@ function observeConnection(conn) {
           execute_read_convert_ms: executeReadConvertMs,
           outside_connection_ms: outsideConnectionMs,
           limitation:
-            'timings include the durable FTS readiness catalog query and lexical query; prepare_ms and execute_read_convert_ms sum every observed @duckdb/node-api prepare and run/read/JavaScript-conversion boundary, not pure native execution; outside_connection_ms includes query construction and, for phrases, JavaScript phrase verification.',
+            'timings include the durable FTS readiness catalog query, native query tokenization, and lexical query; prepare_ms and execute_read_convert_ms sum every observed @duckdb/node-api prepare and run/read/JavaScript-conversion boundary, not pure native execution; outside_connection_ms includes query construction and, for phrases, JavaScript phrase verification.',
         },
       };
     },
@@ -243,7 +243,7 @@ export async function runDuckdbLexicalCost({ DuckDBInstance, createConnection, c
     valid: errors.length === 0,
     errors,
     method_version: DUCKDB_LEXICAL_COST_METHOD_VERSION,
-    method: 'actual prepareFts followed by createLexicalIndex/queryLexical with temporary observation of every real Connection.prepare and Statement.all method boundary, including FTS readiness verification',
+    method: 'actual prepareFts followed by createLexicalIndex/queryLexical with temporary observation of every real Connection.prepare and Statement.all method boundary, including FTS readiness verification and native query tokenization',
     timing_evidence: 'timer-only diagnostic; callers need separate machine-readiness evidence before treating samples as clean performance evidence',
     fixture: { ...fixture, fingerprint: identityHash(fixture) },
     samples,

@@ -167,6 +167,32 @@ The shared Porter component prepares Turso's query and index fields; it is not a
 translated adapter query. Marking a fragment inside a longer word is a bug: a
 search for `the` must not mark inside `them`.
 
+### DuckDB lexical scoring
+
+DuckDB lexical ranking composes the FTS extension's native single-term
+`match_bm25` scores. Each query tokenizes with the native index `tokenize`
+function and groups tokens by the same explicit Porter stemmer used to build
+the index. Authored `UNION ALL` branches bind each original token to a native
+scorer, then add contributions in ascending score order. Original tokens let
+stemming happen once inside the native scorer. Fixed parameters avoid the large
+document-by-term intermediate relation produced by nested variable-term calls. Title,
+summary, and text retain weights 10, 5, and 1. Full-query native
+`match_bm25(..., conjunctive := true) IS NOT NULL` controls word membership;
+quoted phrases also pass shared phrase verification.
+
+This composition avoids inspecting or modifying generated extension SQL.
+Floating-point addition still needs a specified order; DuckDB documents that
+[`sum` is affected by ordering](https://duckdb.org/docs/current/sql/functions/aggregates).
+The callable FTS surface was checked against shipped DuckDB 1.5.6 FTS extension
+revision `6814ec9`, including its
+[`tokenize` and `match_bm25` definitions](https://github.com/duckdb/duckdb-fts/blob/6814ec9/extension/fts/fts_indexing.cpp).
+Later extension releases require behavior validation; current main documentation
+is not evidence of their compatibility with this adapter. Query SQL and bind
+counts grow with distinct native terms (three scoring calls per term). Focused
+coverage includes a 64-term query; this is coverage, not a supported maximum.
+The extra native token query and per-term calls have a measured cost compared
+with the former generated-SQL adapter; this design does not promise equal speed.
+
 ### What marking in JS costs
 
 Search computes snippets in shared JavaScript above the store adapters. Release

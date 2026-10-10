@@ -78,8 +78,9 @@ describe('duckdb lexical cost diagnostic', () => {
       assert.equal(typeof sample.native.version, 'string');
       for (const query of sample.queries) {
         assert.deepEqual([...query.actual_paths].sort(), [...query.expected_paths].sort(), query.id);
-        assert.equal(query.prepare_count, 2);
-        assert.equal(query.execute_read_convert_count, 2);
+        // Readiness catalog, native token/stem deduplication, then the scored lexical query.
+        assert.equal(query.prepare_count, 3);
+        assert.equal(query.execute_read_convert_count, 3);
         for (const timing of [query.total_ms, query.prepare_ms, query.execute_read_convert_ms, query.outside_connection_ms]) {
           assert.equal(Number.isFinite(timing), true);
           assert.ok(timing >= 0);

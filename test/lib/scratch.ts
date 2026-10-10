@@ -18,7 +18,10 @@ export function cleanupScratchDirs(paths: readonly string[] = dirs): void {
       errors.push(new Error(`scratch cleanup failed for ${d}: ${(err as Error).message}`, { cause: err }));
     }
   }
-  if (errors.length > 0) throw new AggregateError(errors, `scratch cleanup failed for ${errors.length} path(s)`);
+  if (errors.length > 0) {
+    const details = errors.map((error) => (error instanceof Error ? error.message : String(error))).join('\n');
+    throw new AggregateError(errors, `scratch cleanup failed for ${errors.length} path(s)\n${details}`);
+  }
 }
 
 after(() => cleanupScratchDirs());

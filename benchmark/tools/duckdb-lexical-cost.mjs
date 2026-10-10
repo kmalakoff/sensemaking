@@ -4,7 +4,7 @@ import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
-import { runDuckdbLexicalCost } from '../lib/duckdb-lexical-cost.mjs';
+import { DUCKDB_LEXICAL_COST_METHOD_VERSION, runDuckdbLexicalCost } from '../lib/duckdb-lexical-cost.mjs';
 import { fixedWorkProvenance, fixedWorkReadiness, readinessObservation, stableFixedWorkIdentity } from '../lib/fixed-work-measurement.mjs';
 import { writeOut } from '../lib/out.mjs';
 import { assertBuilt } from '../lib/require-build.mjs';
@@ -84,7 +84,7 @@ try {
 } catch (error) {
   artifact = {
     schema: 'duckdb-lexical-cost-v1',
-    method_version: 'duckdb-lexical-cost-method-v2-readiness-boundary-counted',
+    method_version: DUCKDB_LEXICAL_COST_METHOD_VERSION,
     status: entry.passed ? 'invalid-measurement' : 'refused-preflight',
     valid: false,
     errors: errorMessages(error),

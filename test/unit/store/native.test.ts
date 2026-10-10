@@ -106,15 +106,9 @@ describe('loadOrInstall', () => {
     }
   });
 
-  it('loads an already-installed exact-version native package without invoking the installer', async () => {
-    const { DUCKDB_INSTALL_SPEC, DUCKDB_PACKAGE, DUCKDB_VERSION } = await import('../../../src/store/duckdb/native.ts');
-    assert.equal(DUCKDB_INSTALL_SPEC, `${DUCKDB_PACKAGE}@${DUCKDB_VERSION}`);
-    const declared = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8')) as { devDependencies?: Record<string, string> };
-    const installed = JSON.parse(readFileSync(join(packageRoot, 'node_modules', ...DUCKDB_PACKAGE.split('/'), 'package.json'), 'utf8')) as { version?: string };
-    assert.equal(declared.devDependencies?.[DUCKDB_PACKAGE], DUCKDB_VERSION);
-    assert.equal(installed.version, DUCKDB_VERSION);
-    const loaded = await loadOrInstall({ store: 'duckdb', pkg: DUCKDB_PACKAGE, sizeHint: '~110MB', version: DUCKDB_VERSION, installSpec: DUCKDB_INSTALL_SPEC }, join(packageRoot, 'node_modules'));
-    assert.equal(typeof (loaded as { DuckDBInstance?: unknown }).DuckDBInstance, 'function');
+  it('loads the installed DuckDB native API without an exact installed-version restriction', async () => {
+    const { duckdbApi } = await import('../../../src/store/duckdb/native.ts');
+    assert.equal(typeof (await duckdbApi()).DuckDBInstance, 'function');
   });
 
   it('fails closed before installation for incompatible, missing, malformed, and versionless manifests', async () => {

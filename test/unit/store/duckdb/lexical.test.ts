@@ -1,42 +1,75 @@
 import assert from 'node:assert';
 import { rmSync, statSync, utimesSync } from 'node:fs';
 import { join } from 'node:path';
-import { DuckDBInstance } from '@duckdb/node-api';
+import { type DuckDBConnection, DuckDBInstance } from '@duckdb/node-api';
 import type { SenseError } from '../../../../src/errors.ts';
 import { listFiles, parseFile } from '../../../../src/scan/index.ts';
 import { createConnection } from '../../../../src/store/duckdb/connection.ts';
 import { assertFtsReady, createLexicalIndex, markContentStale, prepareFts } from '../../../../src/store/duckdb/lexical.ts';
-import { ORDERED_BM25_MACRO, validateNativeMacroContract } from '../../../../src/store/duckdb/ordered-bm25.ts';
+import { nativeQueryTerms, orderedBm25Sql } from '../../../../src/store/duckdb/ordered-bm25.ts';
 import { duckdbDialect } from '../../../../src/store/duckdb/reconcile.ts';
 import { getMeta } from '../../../../src/store/shared.ts';
 import { withTransaction } from '../../../../src/store/transaction.ts';
 import type { Connection } from '../../../../src/store/types.ts';
 import { tmpTree, writeNote } from '../../../lib/tree.ts';
 
-async function makeConn(): Promise<Connection> {
-  const instance = await DuckDBInstance.create(':memory:');
-  const duckdb = await instance.connect();
-  const conn = createConnection(duckdb);
-  await conn.exec(`CREATE TABLE content ("path" TEXT PRIMARY KEY, title TEXT, summary TEXT, text TEXT)`);
-  await conn.exec('CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)');
-  return conn;
+const nativeClosers: Array<() => void> = [];
+afterEach(() => {
+  const errors: unknown[] = [];
+  for (const close of nativeClosers.splice(0)) {
+    try {
+      close();
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  if (errors.length > 0) throw new AggregateError(errors, 'DuckDB test cleanup failed');
+});
+
+function closeNative(instance: DuckDBInstance, duckdb?: DuckDBConnection): void {
+  const errors: unknown[] = [];
+  try {
+    duckdb?.disconnectSync();
+  } catch (error) {
+    errors.push(error);
+  }
+  try {
+    instance.closeSync();
+  } catch (error) {
+    errors.push(error);
+  }
+  if (errors.length > 0) throw new AggregateError(errors, 'DuckDB test resource cleanup failed');
 }
 
-// File-backed (not :memory:), so a second connection can reopen the same on-disk state after the
-// first closes -- what a fresh CLI process actually does, per PLAN 3.60.
+async function makeConn(): Promise<Connection> {
+  return (await openFileConn(':memory:')).conn;
+}
+
+// File-backed connections let another connection reopen the durable index and readiness marker.
 async function openFileConn(dbPath: string): Promise<{ conn: Connection; close: () => void }> {
   const instance = await DuckDBInstance.create(dbPath);
-  const duckdb = await instance.connect();
-  const conn = createConnection(duckdb);
-  await conn.exec(`CREATE TABLE IF NOT EXISTS content ("path" TEXT PRIMARY KEY, title TEXT, summary TEXT, text TEXT)`);
-  await conn.exec('CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)');
-  return {
-    conn,
-    close: () => {
-      duckdb.disconnectSync();
-      instance.closeSync();
-    },
-  };
+  let duckdb: DuckDBConnection | undefined;
+  try {
+    duckdb = await instance.connect();
+    const conn = createConnection(duckdb);
+    await conn.exec(`CREATE TABLE IF NOT EXISTS content ("path" TEXT PRIMARY KEY, title TEXT, summary TEXT, text TEXT)`);
+    await conn.exec('CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)');
+    let closed = false;
+    const close = () => {
+      if (closed) return;
+      closed = true;
+      closeNative(instance, duckdb);
+    };
+    nativeClosers.push(close);
+    return { conn, close };
+  } catch (error) {
+    try {
+      closeNative(instance, duckdb);
+    } catch (cleanupError) {
+      throw new AggregateError([error, cleanupError], 'DuckDB test connection initialization and cleanup failed');
+    }
+    throw error;
+  }
 }
 
 // Spies on the real exec() to count PRAGMA create_fts_index calls -- a discrete fact, not a
@@ -64,65 +97,107 @@ async function preparedIndex(conn: Connection): Promise<ReturnType<typeof create
 }
 
 describe('queryLexical (duckdb)', () => {
-  it('uses the generated native BM25 formula with deterministic subscore accumulation', async () => {
+  it('orders unequal native contributions exactly across repeated, reordered and parallel queries', async () => {
     const conn = await makeConn();
-    await insertDoc(conn, 'a.md', '', '', 'alpha beta gamma');
-    await insertDoc(conn, 'b.md', '', '', 'alpha beta gamma');
-    await insertDoc(conn, 'frequency.md', '', '', 'alpha alpha alpha');
+    await conn.exec('SET threads = 4');
+    for (const path of ['b.md', 'a.md']) await insertDoc(conn, path, 'alpha beta', 'beta gamma', `alpha alpha alpha beta gamma ${'padding '.repeat(19)}`);
+    for (let i = 0; i < 300; i++) await insertDoc(conn, `filler-${i}.md`, '', '', `${i % 5 < 2 ? 'alpha alpha beta' : i % 5 < 4 ? 'alpha' : 'gamma'} ${'padding '.repeat(i % 11)}`);
     const { query } = await preparedIndex(conn);
-    const expected = ['a.md', 'b.md'];
-    for (let i = 0; i < 12; i++)
-      assert.deepEqual(
-        (await query('alpha beta gamma', { ...BASE, limit: 10 })).map((hit) => hit.path),
-        expected
-      );
-    const macro = (await (await conn.prepare(`SELECT macro_definition FROM duckdb_functions() WHERE function_name = '${ORDERED_BM25_MACRO}'`)).get()) as { macro_definition: string };
-    assert.match(macro.macro_definition, /sum\(subscore ORDER BY subscore\)/);
-    assert.doesNotMatch(macro.macro_definition, /sum\(subscore\)(?! ORDER BY)/);
-
-    const combined = ((await (await conn.prepare(`SELECT ${ORDERED_BM25_MACRO}('a.md', ?, fields := 'text', conjunctive := false) AS score`)).get('alpha beta gamma')) as { score: number }).score;
-    const nativeIndividual = [];
-    const orderedIndividual = [];
-    for (const term of ['alpha', 'beta', 'gamma']) {
-      const scores = (await (await conn.prepare(`SELECT fts_main_content.match_bm25('a.md', ?, fields := 'text', conjunctive := false) AS native_score, ${ORDERED_BM25_MACRO}('a.md', ?, fields := 'text', conjunctive := false) AS ordered_score`)).get(term, term)) as { native_score: number; ordered_score: number };
-      assert.strictEqual(scores.ordered_score, scores.native_score);
-      nativeIndividual.push(scores.native_score);
-      orderedIndividual.push(scores.ordered_score);
+    await query('alpha', { ...BASE, limit: 10 });
+    const expectedByField: number[] = [];
+    for (const field of ['title', 'summary', 'text']) {
+      const contributions: number[] = [];
+      for (const term of ['alpha', 'beta', 'gamma']) {
+        const score = (await (await conn.prepare(`SELECT fts_main_content.match_bm25('a.md', ?, fields := '${field}') AS score`)).get(term)) as { score: number | null };
+        if (score.score !== null) contributions.push(score.score);
+      }
+      if (field === 'text') assert.equal(new Set(contributions).size, 3, 'the fixture must exercise unequal floating-point contributions');
+      expectedByField.push(contributions.sort((a, b) => a - b).reduce((sum, score) => sum + score, 0));
     }
-    assert.deepEqual(orderedIndividual, nativeIndividual);
-    assert.strictEqual(
-      combined,
-      nativeIndividual.sort((a, b) => a - b).reduce((sum, score) => sum + score, 0)
+    const queries = ['alpha beta gamma', 'gamma alpha beta', 'beta gamma alpha alpha'];
+    for (let repetition = 0; repetition < 8; repetition++) {
+      const results = await Promise.all(queries.map((terms) => query(terms, { ...BASE, limit: 10 })));
+      for (const hits of results)
+        assert.deepEqual(
+          hits.map((hit) => hit.path),
+          ['a.md', 'b.md']
+        );
+      for (const terms of queries) {
+        const tokens = await nativeQueryTerms(conn, terms);
+        const rows = (await (
+          await conn.prepare(`SELECT path, ${orderedBm25Sql('title', tokens.length)} AS title, ${orderedBm25Sql('summary', tokens.length)} AS summary, ${orderedBm25Sql('text', tokens.length)} AS text FROM content WHERE path IN ('a.md', 'b.md') ORDER BY path`)
+        ).all(...tokens, ...tokens, ...tokens)) as Array<{ path: string; title: number; summary: number; text: number }>;
+        assert.deepEqual(
+          rows.map(({ path }) => path),
+          ['a.md', 'b.md']
+        );
+        for (const row of rows) assert.deepEqual([row.title, row.summary, row.text], expectedByField);
+      }
+    }
+  });
+
+  it('deduplicates stem collisions and uses native accent/digit tokenization with bound input', async () => {
+    const conn = await makeConn();
+    await insertDoc(conn, 'hit.md', '', '', 'running generously café alpha beta');
+    await insertDoc(conn, 'other.md', '', '', 'unrelated');
+    await insertDoc(conn, 'digits.md', '', '', '123');
+    const { query } = await preparedIndex(conn);
+    assert.deepEqual(
+      (await query('running runs run', { ...BASE, limit: 10 })).map((hit) => hit.path),
+      ['hit.md']
+    );
+    assert.deepEqual(
+      (await query('generously', { ...BASE, limit: 10 })).map((hit) => hit.path),
+      ['hit.md']
+    );
+    assert.deepEqual(
+      (await query('"123"', { ...BASE, limit: 10 })).map((hit) => hit.path),
+      ['digits.md']
+    );
+    const getScore = async (terms: string) => {
+      const tokens = await nativeQueryTerms(conn, terms);
+      return (await conn.prepare(`SELECT ${orderedBm25Sql('text', tokens.length)} AS score FROM content WHERE path = 'hit.md'`)).get(...tokens);
+    };
+    const single = (await (await conn.prepare("SELECT fts_main_content.match_bm25('hit.md', 'run', fields := 'text') AS score")).get()) as { score: number };
+    assert.deepEqual(await getScore('running runs run'), single);
+    assert.deepEqual(await getScore('run run'), single);
+    for (const terms of ['CAFÉ', 'alpha123beta'])
+      assert.deepEqual(
+        (await query(terms, { ...BASE, limit: 10 })).map((hit) => hit.path),
+        ['hit.md']
+      );
+    for (const terms of ['', '123', 'absent', 'alpha absent']) assert.deepEqual(await getScore(terms), terms === 'alpha absent' ? await getScore('alpha') : { score: null });
+    for (const terms of ['123', 'absent', 'alpha absent']) assert.deepEqual(await query(terms, { ...BASE, limit: 10 }), []);
+    await getScore("alpha'; DROP TABLE content; --");
+    assert.equal(((await (await conn.prepare('SELECT count(*) AS count FROM content')).get()) as { count: bigint }).count, BigInt(3));
+  });
+
+  it('binds native terms, substring gates and phrase parameters in their authored order', async () => {
+    const conn = await makeConn();
+    await insertDoc(conn, 'hit.md', 'alpha', 'beta', 'gamma 天气 delta');
+    await insertDoc(conn, 'missing.md', 'alpha', '', 'gamma 天气 delta');
+    await insertDoc(conn, 'apart.md', 'alpha', 'beta', 'gamma delta 天气');
+    const { query } = await preparedIndex(conn);
+    assert.deepEqual(
+      (await query('alpha beta "gamma 天气"', { ...BASE, limit: 10 })).map((hit) => hit.path),
+      ['hit.md']
     );
   });
 
-  it('rejects a changed native version or macro contract', async () => {
+  it('handles a representative longer query without imposing a term limit', async () => {
     const conn = await makeConn();
-    await insertDoc(conn, 'a.md', '', '', 'alpha beta');
-    await (await preparedIndex(conn)).query('alpha', { ...BASE, limit: 10 });
-    const native = (await (
-      await conn.prepare(`
-      SELECT version() AS version, function_type, parameters, parameter_types, macro_definition
-      FROM duckdb_functions() WHERE schema_name = 'fts_main_content' AND function_name = 'match_bm25'
-    `)
-    ).get()) as { version: string; function_type: string; parameters: unknown; parameter_types: unknown; macro_definition: string };
-    assert.doesNotThrow(() => validateNativeMacroContract({ version: native.version, macro: native }));
-    assert.throws(
-      () => validateNativeMacroContract({ version: 'v1.5.6', macro: native }),
-      (error: unknown) => {
-        assert.equal((error as SenseError).code, 'STORE_CAPABILITY_MISSING');
-        assert.match((error as Error).message, /DuckDB v1\.5\.6 is unsupported/);
-        return true;
-      }
-    );
-    assert.throws(
-      () => validateNativeMacroContract({ version: native.version, macro: { ...native, macro_definition: native.macro_definition.replace('sum(subscore)', 'sum(other)') } }),
-      (error: unknown) => {
-        assert.equal((error as SenseError).code, 'STORE_CAPABILITY_MISSING');
-        assert.match((error as Error).message, /definition or reviewed parameter-default contract changed/);
-        return true;
-      }
-    );
+    const terms = Array.from({ length: 64 }, (_value, i) => `word${String.fromCharCode(97 + Math.floor(i / 26), 97 + (i % 26))}z`);
+    await insertDoc(conn, 'b.md', '', '', terms.join(' '));
+    await insertDoc(conn, 'a.md', '', '', terms.join(' '));
+    await insertDoc(conn, 'missing.md', '', '', terms.slice(1).join(' '));
+    const { query } = await preparedIndex(conn);
+    const tokens = await nativeQueryTerms(conn, terms.join(' '));
+    assert.equal(tokens.length, 64, 'the fixture must produce 64 distinct native stems');
+    for (const text of [terms.join(' '), terms.slice().reverse().join(' ')])
+      assert.deepEqual(
+        (await query(text, { ...BASE, limit: 10 })).map((hit) => hit.path),
+        ['a.md', 'b.md']
+      );
   });
 
   it('a matching term returns the expected path (bm25 branch)', async () => {
@@ -147,6 +222,18 @@ describe('queryLexical (duckdb)', () => {
     assert.deepEqual(
       hits.map((h) => h.path),
       ['title-hit.md', 'body-hit.md']
+    );
+  });
+
+  it('ranks otherwise identical native field scores by title, summary, then text weights', async () => {
+    const conn = await makeConn();
+    await insertDoc(conn, 'body.md', '', '', 'needle');
+    await insertDoc(conn, 'summary.md', '', 'needle', '');
+    await insertDoc(conn, 'title.md', 'needle', '', '');
+    const { query } = await preparedIndex(conn);
+    assert.deepEqual(
+      (await query('needle', { ...BASE, limit: 10 })).map((hit) => hit.path),
+      ['title.md', 'summary.md', 'body.md']
     );
   });
 
@@ -482,8 +569,6 @@ describe('queryLexical (duckdb): fts staleness persists across connections (PLAN
       (await secondIndex.query('first', { ...BASE, limit: 10 })).map((hit) => hit.path),
       ['a.md']
     );
-    const macro = (await (await second.conn.prepare(`SELECT macro_definition FROM duckdb_functions() WHERE function_name = '${ORDERED_BM25_MACRO}'`)).get()) as { macro_definition: string };
-    assert.match(macro.macro_definition, /sum\(subscore ORDER BY subscore\)/);
     second.close();
   });
 
@@ -510,12 +595,11 @@ describe('queryLexical (duckdb): fts staleness persists across connections (PLAN
     second.close();
   });
 
-  it('recreates the connection-local adapter at the rebuild boundary', async () => {
+  it('uses the rebuilt native index through the same lexical handle', async () => {
     const conn = await makeConn();
     await insertDoc(conn, 'a.md', 'first', '', 'first body');
     const index = await preparedIndex(conn);
     await index.query('first', { ...BASE, limit: 10 });
-    await conn.exec(`CREATE OR REPLACE TEMP MACRO ${ORDERED_BM25_MACRO}(docname, query_string, fields := NULL, k := 1.2, b := 0.75, conjunctive := false) AS NULL`);
     await insertDoc(conn, 'b.md', 'second', '', 'second body');
     await markContentStale(conn);
     await prepareFts(conn);
@@ -523,7 +607,5 @@ describe('queryLexical (duckdb): fts staleness persists across connections (PLAN
       (await index.query('second', { ...BASE, limit: 10 })).map((hit) => hit.path),
       ['b.md']
     );
-    const macro = (await (await conn.prepare(`SELECT macro_definition FROM duckdb_functions() WHERE function_name = '${ORDERED_BM25_MACRO}'`)).get()) as { macro_definition: string };
-    assert.match(macro.macro_definition, /sum\(subscore ORDER BY subscore\)/);
   });
 });
