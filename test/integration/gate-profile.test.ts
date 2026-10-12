@@ -3,10 +3,10 @@ import { appendFileSync, cpSync, existsSync, mkdirSync, symlinkSync, writeFileSy
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import assert from 'assert';
-import { releaseChanges } from '../../benchmark/lib/changes.mjs';
-import { assertCompatibleSelection, profileReasons, QUALITY_SCOPE } from '../../benchmark/lib/gates.mjs';
-import { buildStages } from '../../benchmark/lib/stages.mjs';
-import { packageRoot, scratchDir } from '../lib/scratch.ts';
+import { releaseChanges } from '../../benchmark/lib/changes.ts';
+import { assertCompatibleSelection, profileReasons, QUALITY_SCOPE } from '../../benchmark/lib/gates.ts';
+import { buildStages } from '../../benchmark/lib/stages.ts';
+import { packageRoot, scratchDir } from '../lib/tree.ts';
 
 function git(root: string, ...argv: string[]) {
   const result = spawnSync('git', argv, { cwd: root, encoding: 'utf8', timeout: 10_000 });
@@ -83,12 +83,12 @@ describe('release assessment profiles', () => {
         if (step.owedBy === 'scale' && reasons.has(step.owedBy)) steps.push({ id: step.id, argv: step.argv, owedBy: step.owedBy });
       }
     }
-    const inputFor = (step: (typeof steps)[number]) => step.argv[step.argv[1] === 'benchmark/steps/measure-tree.mjs' ? 3 : 2];
+    const inputFor = (step: (typeof steps)[number]) => step.argv[step.argv[1] === 'benchmark/steps/measure-tree.ts' ? 3 : 2];
     const inputs = [...new Set(steps.map(inputFor))];
     const root = scratchDir('gate-scale-corpora');
     const lib = join(root, 'benchmark', 'lib');
     mkdirSync(lib, { recursive: true });
-    for (const name of ['corpus.mjs', 'cache.mjs', 'canonical-json.mjs']) cpSync(join(packageRoot, 'benchmark', 'lib', name), join(lib, name));
+    for (const name of ['corpus.ts', 'cache.ts', 'canonical-json.ts']) cpSync(join(packageRoot, 'benchmark', 'lib', name), join(lib, name));
     symlinkSync(join(packageRoot, 'node_modules'), join(root, 'node_modules'), 'junction');
     // A local source fixture exercises replication without fetching the pinned Hub repository.
     const hub = join(root, '.tmp', 'cache', 'obsidian-hub-b11036f9');
@@ -103,7 +103,7 @@ describe('release assessment profiles', () => {
       import assert from 'node:assert';
       import { readdirSync } from 'node:fs';
       const { corpusPath, cachedCorpusPaths } = await import(process.argv[1]);
-      const { CACHE_DIR } = await import(new URL('./cache.mjs', process.argv[1]));
+      const { CACHE_DIR } = await import(new URL('./cache.ts', process.argv[1]));
       const results = [];
       for (const input of process.argv.slice(2)) {
         assert.equal(cachedCorpusPaths(input, CACHE_DIR).tree, null);
@@ -114,7 +114,7 @@ describe('release assessment profiles', () => {
       }
       console.log(JSON.stringify(results));
     `,
-        pathToFileURL(join(lib, 'corpus.mjs')).href,
+        pathToFileURL(join(lib, 'corpus.ts')).href,
         ...inputs,
       ],
       { encoding: 'utf8', timeout: 20_000 }
@@ -134,7 +134,7 @@ describe('release assessment profiles', () => {
   });
 
   it('revalidates evaluator changes without scheduling fresh retrieval or scale', () => {
-    for (const path of ['benchmark/report.mjs', 'benchmark/lib/portable-quality.mjs', 'benchmark/lib/retained-quality.mjs', 'benchmark/lib/verdict.mjs', 'benchmark/steps/retained-quality.mjs', 'benchmark/tools/portable-quality-compare.mjs']) {
+    for (const path of ['benchmark/report.ts', 'benchmark/lib/portable-quality.ts', 'benchmark/lib/retained-quality.ts', 'benchmark/lib/verdict.ts', 'benchmark/steps/retained-quality.ts', 'benchmark/tools/portable-quality-compare.ts']) {
       const reasons = profileReasons([path], 'v1', 'ordinary');
       assert.equal(reasons.has('baseline'), false, path);
       assert.equal(reasons.has('quality-revalidation'), true, path);
@@ -298,7 +298,7 @@ describe('release assessment profiles', () => {
     const root = realGateFixture('gate-dry-run');
     const sittingsDir = join(root, '.tmp', 'sittings');
     assert.equal(existsSync(sittingsDir), false);
-    const result = spawnSync(process.execPath, [join(root, 'benchmark', 'gate.mjs'), '--dry-run', '--profile', 'ordinary'], { cwd: root, encoding: 'utf8', timeout: 20_000 });
+    const result = spawnSync(process.execPath, [join(root, 'benchmark', 'gate.ts'), '--dry-run', '--profile', 'ordinary'], { cwd: root, encoding: 'utf8', timeout: 20_000 });
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stdout, /^profile: ordinary/m);
     assert.match(result.stdout, /^diff since \S+: \d+ path\(s\) changed$/m);
@@ -309,12 +309,12 @@ describe('release assessment profiles', () => {
   });
 
   it('keeps collection for mixed producer/evaluator modules, unknown benchmark paths, and mixed edits', () => {
-    for (const path of ['benchmark/lib/stages.mjs', 'benchmark/lib/workload-identity.mjs', 'benchmark/lib/render.mjs', 'benchmark/lib/rows.mjs', 'benchmark/lib/metrics.mjs', 'benchmark/lib/new-instrument.mjs']) {
+    for (const path of ['benchmark/lib/stages.ts', 'benchmark/lib/workload-identity.ts', 'benchmark/lib/render.ts', 'benchmark/lib/rows.ts', 'benchmark/lib/metrics.ts', 'benchmark/lib/new-instrument.mjs']) {
       const reasons = profileReasons([path], 'v1', 'ordinary');
       assert.equal(reasons.has('baseline'), true, path);
       assert.equal(reasons.has('quality-revalidation'), true, path);
     }
-    const mixed = profileReasons(['benchmark/report.mjs', 'benchmark/steps/quality.mjs'], 'v1', 'ordinary');
+    const mixed = profileReasons(['benchmark/report.ts', 'benchmark/steps/quality.ts'], 'v1', 'ordinary');
     assert.equal(mixed.has('baseline'), true);
     assert.equal(mixed.has('quality-baseline'), true);
     assert.equal(mixed.has('quality-revalidation'), false);
@@ -322,7 +322,7 @@ describe('release assessment profiles', () => {
   });
 
   it('documents profile behavior in CLI help', () => {
-    const result = spawnSync(process.execPath, ['benchmark/gate.mjs', '--help'], { cwd: packageRoot, encoding: 'utf8', timeout: 20_000 });
+    const result = spawnSync(process.execPath, ['benchmark/gate.ts', '--help'], { cwd: packageRoot, encoding: 'utf8', timeout: 20_000 });
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stdout, /--profile ordinary\|deep/);
     assert.match(result.stdout, /ordinary uses portable NFCorpus/);

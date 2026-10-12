@@ -1,9 +1,12 @@
 import assert from 'node:assert';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { search } from 'sensemaking';
 import { STORE_DIMS } from '../../../../src/embed/types.ts';
+import { duckdbOpenDialect } from '../../../../src/store/duckdb/open.ts';
 import { writeModel } from '../../../lib/model.ts';
-import { openConfig, tmpTree, writeNote } from '../../../lib/tree.ts';
+import { NOT_LOCKED_MESSAGES } from '../../../lib/stores.ts';
+import { openConfig, packageRoot, tmpTree, writeNote } from '../../../lib/tree.ts';
 
 function duckdbTree(baseDir: string, presets?: Record<string, unknown>) {
   return openConfig({ store: 'duckdb', presets: presets ?? { default: { include: ['**/*.md'] } }, queries: {}, baseDir, configPath: null } as Parameters<typeof openConfig>[0]);
@@ -102,5 +105,35 @@ describe('openDuckdb', () => {
     const second = await openConfig({ store: 'duckdb', presets: { default: { include: ['**/*.md'] } }, features: { tags: false }, queries: {}, baseDir, configPath: null } as Parameters<typeof openConfig>[0]);
     assert.equal(second.parsed, 0);
     await second.store.close();
+  });
+});
+
+// isLocked decides whether connectUnlocked retries or gives up. The Windows phrasing is absent from every
+// posix run, so a posix-only matcher passes locally and fails on Windows CI. Verbatim engine messages.
+describe('duckdb isLocked', () => {
+  const LOCKED = [
+    ['posix', 'IO Error: Could not set lock on file "/tmp/t/.sense/cache.duckdb": Conflicting lock is held in /usr/bin/node (PID 4242)'],
+    ['windows', 'IO Error: Cannot open file "C:\\t\\.sense\\cache.duckdb": The process cannot access the file because it is being used by another process. File is already open in C:\\hostedtoolcache\\windows\\node\\26.8.1\\x64\\node.exe (PID 8792)'],
+  ] as const;
+  for (const [platform, message] of LOCKED) {
+    it(`recognises its ${platform} lock message`, () => {
+      assert.ok(duckdbOpenDialect.isLocked?.(new Error(message)), `duckdb must retry on: ${message}`);
+    });
+  }
+  for (const message of NOT_LOCKED_MESSAGES) {
+    it(`does not read "${message.slice(0, 40)}..." as a lock`, () => {
+      assert.equal(duckdbOpenDialect.isLocked?.(new Error(message)), false, `duckdb must fail fast on: ${message}`);
+    });
+  }
+});
+
+describe('duckdb engine', () => {
+  it('records the installed package as its engine identity', async () => {
+    const installed = (JSON.parse(readFileSync(join(packageRoot, 'node_modules', '@duckdb/node-api', 'package.json'), 'utf8')) as { version: string }).version;
+    assert.equal(await duckdbOpenDialect.engineIdentity?.(), `@duckdb/node-api@${installed}`);
+  });
+
+  it('passes the shared behaviour check on the installed engine', async () => {
+    await duckdbOpenDialect.checkEngine?.();
   });
 });

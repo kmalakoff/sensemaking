@@ -1,13 +1,13 @@
-import { type ChildProcess, spawn } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import assert from 'assert';
-import { nativeObserverDeadlineMs, signalProcessTree } from '../../benchmark/lib/native-observer.mjs';
+import { jobProblems, type OwnedJob, spawnOwned } from '../../benchmark/lib/step-process.ts';
 import { SUPPORTED_CONFIG_VERSION } from '../../src/config/types.ts';
+import { lockWaitBudgetMs } from '../../src/store/lock-wait.ts';
 import { runCli } from '../lib/cli.ts';
-import { packageRoot } from '../lib/scratch.ts';
 import { forEachStore } from '../lib/stores.ts';
-import { tmpTree, writeNote } from '../lib/tree.ts';
+import { packageRoot, tmpTree, writeNote } from '../lib/tree.ts';
 
 // duckdb and turso hold the cache file for their connection's whole life, so two commands on one
 // tree collide at open() rather than at a transaction; every failure returns inside 200 ms, which
@@ -37,28 +37,24 @@ describe('concurrent commands on one tree', () => {
     });
 
   interface PreparedSearchRun {
-    child: ChildProcess;
+    job: OwnedJob;
     result: Promise<{ code: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string; spawnError?: string }>;
   }
 
+  // Each client is an owned job, so a stopped client takes its whole tree (an npm install of a
+  // native peer included) with it, and a killed test runner releases it too.
   function startPreparedSearch(baseDir: string, terms: string): PreparedSearchRun {
-    const child = spawn(process.execPath, [cli, 'search', terms, '--no-build', '--format', 'json', '--config', join(baseDir, 'sense.config.json')], {
-      cwd: packageRoot,
-      detached: true,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
+    const job = spawnOwned([process.execPath, cli, 'search', terms, '--no-build', '--format', 'json', '--config', join(baseDir, 'sense.config.json')], { cwd: packageRoot });
     let stdout = '';
     let stderr = '';
-    let spawnError: string | undefined;
-    child.once('error', (err) => {
-      spawnError = err.message;
+    job.stdout.on('data', (data: Buffer) => (stdout += data.toString()));
+    job.stderr.on('data', (data: Buffer) => (stderr += data.toString()));
+    const result = job.result.then((outcome) => {
+      const command = typeof outcome.command === 'object' ? outcome.command : { code: null, signal: null };
+      const problem = jobProblems(outcome).join('; ');
+      return { code: command.code, signal: command.signal, stdout, stderr, ...(problem ? { spawnError: problem } : {}) };
     });
-    child.stdout?.on('data', (data: Buffer) => (stdout += data.toString()));
-    child.stderr?.on('data', (data: Buffer) => (stderr += data.toString()));
-    const result = new Promise<{ code: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string; spawnError?: string }>((resolve) => {
-      child.once('close', (code, signal) => resolve({ code, signal, stdout, stderr, ...(spawnError ? { spawnError } : {}) }));
-    });
-    return { child, result };
+    return { job, result };
   }
 
   async function settlePreparedSearches(runs: PreparedSearchRun[], deadlineMs: number, store: string, lockBudgetMs: number, launchFailure?: { error: unknown }) {
@@ -82,8 +78,8 @@ describe('concurrent commands on one tree', () => {
     }
 
     const cleanup = await Promise.allSettled(
-      runs.map(async ({ child, result }) => {
-        if (child.pid !== undefined && child.exitCode === null && child.signalCode === null) signalProcessTree(child, 'SIGKILL');
+      runs.map(async ({ job, result }) => {
+        if (job.exited === null) job.fail('test watchdog stopped the client');
         await result;
       })
     );
@@ -158,7 +154,7 @@ describe('concurrent commands on one tree', () => {
 
       const built = runCli(['build'], { cwd: baseDir });
       assert.equal(built.status, 0, `${store}: explicit build failed: ${built.stderr}`);
-      const lockBudgetMs = await nativeObserverDeadlineMs(packageRoot, baseDir);
+      const lockBudgetMs = lockWaitBudgetMs(baseDir);
       const requests = [
         { terms: 'authoredalpha', paths: ['alpha.md'] },
         { terms: 'authoredbravo', paths: ['bravo.md'] },

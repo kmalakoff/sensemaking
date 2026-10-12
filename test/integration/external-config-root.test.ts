@@ -4,9 +4,8 @@ import { dirname, join } from 'node:path';
 import { loadConfig, open, runWatch, search } from 'sensemaking';
 import { WATCH_CLAIM_FILENAME, WATCH_HEARTBEAT_INTERVAL_MS } from '../../src/watch-claim.ts';
 import { runCli } from '../lib/cli.ts';
-import { scratchDir } from '../lib/scratch.ts';
 import { forEachStore, type ParityStoreName } from '../lib/stores.ts';
-import { writeNote } from '../lib/tree.ts';
+import { scratchDir, writeNote } from '../lib/tree.ts';
 
 function fixture(root = '../tree'): { base: string; configDir: string; treeDir: string; configPath: string } {
   const base = scratchDir('external-config-root');

@@ -2,8 +2,8 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import assert from 'assert';
-import { NATIVE_UPDATE_MTIME_MS as INITIAL_MTIME, NATIVE_UPDATE_NOTES as NOTES, nativeUpdateInputs, nativeUpdatePaths, nativeUpdatePath as pathFor, nativeUpdateText as textFor, NATIVE_UPDATE_NEXT_MTIME_MS as UPDATED_MTIME } from '../../benchmark/lib/native-update-contract.mjs';
-import { cleanupTemporaryTree, closeForCleanup, combinedError } from '../../benchmark/lib/turso-update-cleanup.mjs';
+import { NATIVE_UPDATE_MTIME_MS as INITIAL_MTIME, NATIVE_UPDATE_NOTES as NOTES, nativeUpdateInputs, nativeUpdatePaths, nativeUpdatePath as pathFor, nativeUpdateText as textFor, NATIVE_UPDATE_NEXT_MTIME_MS as UPDATED_MTIME } from '../../benchmark/lib/native-update-contract.ts';
+import { cleanupTemporaryTree, closeForCleanup, combinedError } from '../../benchmark/lib/turso-update-cleanup.ts';
 import type { ResolvedConfig } from '../../src/config/index.ts';
 import type { ReconcileDelta } from '../../src/features/types.ts';
 import { listFiles, type ParsedDoc, parseFile } from '../../src/scan/index.ts';
@@ -13,8 +13,7 @@ import { queryLexical } from '../../src/store/turso/lexical.ts';
 import { CONNECT_OPTS, tursoApi } from '../../src/store/turso/native.ts';
 import { reconcileTursoContentWithStrategy, type TursoFtsStrategy, tursoDialect } from '../../src/store/turso/reconcile.ts';
 import type { Connection } from '../../src/store/types.ts';
-import { packageRoot, scratchDir } from '../lib/scratch.ts';
-import { openConfig } from '../lib/tree.ts';
+import { openConfig, packageRoot, scratchDir } from '../lib/tree.ts';
 
 const CHANGED = 250;
 const INPUTS = nativeUpdateInputs(CHANGED);
@@ -124,10 +123,10 @@ describe('turso update cost strategies', () => {
   });
 
   it('diagnostic help is available without starting a native operation', () => {
-    const tool = join(packageRoot, 'benchmark', 'tools', 'turso-update-cost.mjs');
+    const tool = join(packageRoot, 'benchmark', 'tools', 'turso-update-cost.ts');
     const result = spawnSync(process.execPath, [tool, '--help'], { encoding: 'utf8' });
     assert.equal(result.status, 0, result.stderr);
-    assert.match(result.stderr, /usage: node benchmark\/tools\/turso-update-cost\.mjs/);
+    assert.match(result.stderr, /usage: node benchmark\/tools\/turso-update-cost\.ts/);
   });
 
   for (const [changed, wantsRebuild] of [

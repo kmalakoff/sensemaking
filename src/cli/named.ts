@@ -3,6 +3,7 @@ import { search } from '../commands/search.ts';
 import { resolveSearch } from '../config/index.ts';
 import { printRows } from '../output/output.ts';
 import { type BuildRequirement, prepareDocumentEmbeddings } from '../store/open.ts';
+import { USAGE_CODE } from './constants.ts';
 import { CONFIG, FORMAT, NO_BUILD, parse, parseK, parseSnippetCharLimit, parseSnippetCountLimit, rowFormatOf, runSql, SEARCH_FLAGS, withResolvedDb } from './shared.ts';
 import type { Ctx } from './types.ts';
 
@@ -20,7 +21,7 @@ export default async function named(ctx: Ctx, queryName: string): Promise<void> 
   if (entry === undefined) {
     console.error(`unknown command or saved entry: "${queryName}"`);
     console.error(`saved queries: ${Object.keys(cfg.queries).sort().join(', ')}`);
-    process.exit(2);
+    process.exit(USAGE_CODE);
   }
 
   if ('sql' in entry) {

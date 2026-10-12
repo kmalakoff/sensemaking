@@ -2,14 +2,14 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import assert from 'assert';
-import { QUALITY_SCOPE } from '../../benchmark/lib/gates.mjs';
-import { MEASURE_VERSION } from '../../benchmark/lib/measure.mjs';
-import { comparePortableQualityArtifacts, PORTABLE_QUALITY_STORES, revalidateQualityArtifact } from '../../benchmark/lib/portable-quality.mjs';
-import { buildStages, LEGACY_QUALITY_STEPS } from '../../benchmark/lib/stages.mjs';
-import { aggregateVerdict } from '../../benchmark/lib/verdict.mjs';
-import { logicalWorkloadIdentity } from '../../benchmark/lib/workload-identity.mjs';
-import { buildReport, renderMarkdown } from '../../benchmark/report.mjs';
-import { packageRoot, scratchDir } from '../lib/scratch.ts';
+import { QUALITY_SCOPE } from '../../benchmark/lib/gates.ts';
+import { MEASURE_VERSION } from '../../benchmark/lib/measure.ts';
+import { comparePortableQualityArtifacts, PORTABLE_QUALITY_STORES, revalidateQualityArtifact } from '../../benchmark/lib/portable-quality.ts';
+import { buildStages, LEGACY_QUALITY_STEPS } from '../../benchmark/lib/stages.ts';
+import { aggregateVerdict } from '../../benchmark/lib/verdict.ts';
+import { logicalWorkloadIdentity } from '../../benchmark/lib/workload-identity.ts';
+import { buildReport, renderMarkdown } from '../../benchmark/report.ts';
+import { packageRoot, scratchDir } from '../lib/tree.ts';
 
 const STORES = PORTABLE_QUALITY_STORES;
 type PersistedQualityResult = { paths: unknown[]; ndcg: number; rr: number; hit: number };
@@ -184,7 +184,7 @@ describe('portable quality release track', () => {
     const revalidated = revalidateQualityArtifact(physicalPathsDiffer[0], { store: 'sqlite' });
     if (Array.isArray(revalidated)) assert.fail('revalidation must return the normalized artifact');
     assert.deepEqual(revalidated.errors, []);
-    assert.deepEqual(revalidated.artifact.variants.semantic.workload_identity.inputs.requested.config, { signals: { words: 1 } });
+    assert.deepEqual((revalidated.artifact as { variants: { semantic: { workload_identity: { inputs: { requested: { config: unknown } } } } } }).variants.semantic.workload_identity.inputs.requested.config, { signals: { words: 1 } });
 
     const logicalConfigDiffers = comparePortableQualityArtifacts([withConfig('sqlite'), withConfig('duckdb'), withConfig('turso', 2)]);
     assert.equal(logicalConfigDiffers.valid, false);
@@ -352,7 +352,7 @@ describe('portable quality release track', () => {
     const dir = scratchDir('portable-quality-comparator-cli');
     for (const store of STORES) writeFileSync(join(dir, `portable-quality-${store}.json`), JSON.stringify(artifact(store)));
     const out = join(dir, 'portable-quality-comparison.json');
-    const result = spawnSync(process.execPath, [join(packageRoot, 'benchmark/tools/portable-quality-compare.mjs'), '--out', out], { cwd: packageRoot, encoding: 'utf8', timeout: 30_000, maxBuffer: 4 * 1024 * 1024 });
+    const result = spawnSync(process.execPath, [join(packageRoot, 'benchmark/tools/portable-quality-compare.ts'), '--out', out], { cwd: packageRoot, encoding: 'utf8', timeout: 30_000, maxBuffer: 4 * 1024 * 1024 });
     assert.equal(result.status, 0, result.stderr);
     assert.equal(JSON.parse(readFileSync(out, 'utf8')).valid, true);
     assert.equal(existsSync(join(dir, 'portable-quality-comparison.json')), true);
@@ -368,12 +368,15 @@ describe('portable quality release track', () => {
     assert.deepEqual(
       LEGACY_QUALITY_STEPS.map((step) => step.argv),
       [
-        ['node', 'benchmark/steps/quality.mjs', 'nfcorpus'],
-        ['node', 'benchmark/steps/quality.mjs', 'fever'],
+        ['node', 'benchmark/steps/quality.ts', 'nfcorpus'],
+        ['node', 'benchmark/steps/quality.ts', 'fever'],
       ]
     );
-    for (const id of STORES.map((store) => `portable-eval-fever-${store}`)) assert.equal(quality.steps.find((step) => step.id === id)?.timeout, 60 * 60_000);
-    for (const id of STORES.map((store) => `portable-eval-nfcorpus-${store}`)) assert.equal(quality.steps.find((step) => step.id === id)?.timeout, 20 * 60_000);
+    assert.deepEqual(
+      [...buildStages().flatMap((stage) => stage.steps), ...LEGACY_QUALITY_STEPS].filter((step) => 'timeout' in step).map((step) => step.id),
+      [],
+      'the gate imposes no execution time limit on any step'
+    );
     assert.deepEqual(
       quality.steps.filter((step) => step.owedBy === 'quality-baseline').map((step) => step.id),
       [...STORES.map((store) => `portable-eval-nfcorpus-${store}`), 'portable-eval-nfcorpus-comparison']
@@ -383,7 +386,7 @@ describe('portable quality release track', () => {
       [...['nfcorpus', 'fever'].flatMap((corpus) => [...STORES.map((store) => `portable-eval-${corpus}-${store}`), `portable-eval-${corpus}-comparison`])]
     );
     const portable = quality.steps.find((step) => step.id === 'portable-eval-nfcorpus-duckdb');
-    assert.deepEqual(portable?.argv, ['node', 'benchmark/steps/quality.mjs', 'nfcorpus', '--store', 'duckdb', '--query-form', 'bare-and']);
+    assert.deepEqual(portable?.argv, ['node', 'benchmark/steps/quality.ts', 'nfcorpus', '--store', 'duckdb', '--query-form', 'bare-and']);
   });
 
   it('keeps portable relevance and timing movements visible without blocking', () => {
@@ -417,7 +420,7 @@ describe('portable quality release track', () => {
         const blocked = missing.report();
         assert.equal(blocked.verdict, 'BLOCK', id);
         assert.ok(
-          blocked.verdict_reasons.some((reason) => reason.includes(id)),
+          blocked.verdict_reasons.some((reason) => (reason as string).includes(id)),
           id
         );
       }
@@ -443,19 +446,19 @@ describe('portable quality release track', () => {
         assert.equal(report.verdict, 'BLOCK', `${id} ${kind}`);
         if (kind === 'not-owed') {
           assert.ok(
-            report.verdict_reasons.some((reason) => reason.includes(id)),
+            report.verdict_reasons.some((reason) => (reason as string).includes(id)),
             `${id} ${kind}`
           );
         } else if (kind === 'query' || kind === 'variant') {
           const reason = kind === 'query' ? /semantic\/q2: returned paths are missing/ : /semantic: variant is missing/;
           assert.ok(
-            report.classifications.some((row) => row.id === `portable-eval-${corpus}-comparison/validity` && 'invalid' in row && row.invalid === true && 'severity' in row && row.severity === 'BLOCK' && row.reason.includes('duckdb:') && reason.test(row.reason)),
+            report.classifications.some((row) => row.id === `portable-eval-${corpus}-comparison/validity` && 'invalid' in row && row.invalid === true && 'severity' in row && row.severity === 'BLOCK' && (row.reason as string).includes('duckdb:') && reason.test(row.reason as string)),
             `${id} ${kind}`
           );
         } else {
           const reason = kind === 'json' ? /JSON is malformed/ : /semantic:.*retrieval/;
           assert.ok(
-            report.classifications.some((row) => row.id.startsWith(`${id}/`) && 'invalid' in row && row.invalid === true && 'severity' in row && row.severity === 'BLOCK' && reason.test(row.reason)),
+            report.classifications.some((row) => row.id.startsWith(`${id}/`) && 'invalid' in row && row.invalid === true && 'severity' in row && row.severity === 'BLOCK' && reason.test(row.reason as string)),
             `${id} ${kind}`
           );
         }
@@ -465,7 +468,7 @@ describe('portable quality release track', () => {
       const current = qualitySitting(scope);
       const report = current.report();
       assert.equal(report.verdict, 'BLOCK');
-      assert.ok(report.verdict_reasons.some((reason) => /unknown quality scope/.test(reason)));
+      assert.ok(report.verdict_reasons.some((reason) => /unknown quality scope/.test(reason as string)));
     }
   });
 
@@ -489,12 +492,12 @@ describe('portable quality release track', () => {
         assert.equal(blocked.verdict, 'BLOCK', `${id} ${kind}`);
         if (kind === 'malformed') {
           assert.ok(
-            blocked.classifications.some((row) => row.id.startsWith(`${id}/`) && 'invalid' in row && row.invalid === true && 'severity' in row && row.severity === 'BLOCK' && /JSON is malformed/.test(row.reason)),
+            blocked.classifications.some((row) => row.id.startsWith(`${id}/`) && 'invalid' in row && row.invalid === true && 'severity' in row && row.severity === 'BLOCK' && /JSON is malformed/.test(row.reason as string)),
             `${id} ${kind}`
           );
         } else {
           assert.ok(
-            blocked.verdict_reasons.some((reason) => reason.includes(id)),
+            blocked.verdict_reasons.some((reason) => (reason as string).includes(id)),
             `${id} ${kind}`
           );
         }
@@ -511,13 +514,13 @@ describe('portable quality release track', () => {
         if (kind === 'valid') assert.ok(report.classifications.some((row) => row.id.startsWith(`${id}/`)));
         else if (kind === 'missing')
           assert.ok(
-            report.verdict_reasons.some((reason) => reason.includes(id)),
+            report.verdict_reasons.some((reason) => (reason as string).includes(id)),
             `${id} ${kind}`
           );
         else {
           const reason = kind === 'malformed' ? /JSON is malformed/ : /semantic:.*retrieval/;
           assert.ok(
-            report.classifications.some((row) => row.id.startsWith(`${id}/`) && 'invalid' in row && row.invalid === true && 'severity' in row && row.severity === 'BLOCK' && reason.test(row.reason)),
+            report.classifications.some((row) => row.id.startsWith(`${id}/`) && 'invalid' in row && row.invalid === true && 'severity' in row && row.severity === 'BLOCK' && reason.test(row.reason as string)),
             `${id} ${kind}`
           );
         }
@@ -540,7 +543,7 @@ describe('portable quality release track', () => {
     writeFileSync(join(invalidSitting, 'portable-eval-nfcorpus-sqlite.json'), JSON.stringify(artifact('sqlite', { error: 'retrieval failed', incomplete: true })));
     const invalid = buildReport(invalidSitting, { reportsDir: scratchDir('portable-quality-invalid-reports') });
     assert.equal(invalid.verdict, 'BLOCK');
-    assert.ok(invalid.verdict_reasons.some((reason) => reason.includes('retrieval failed')));
+    assert.ok(invalid.verdict_reasons.some((reason) => (reason as string).includes('retrieval failed')));
   });
 
   it('blocks malformed persisted quality evidence through the final report and renderer', () => {

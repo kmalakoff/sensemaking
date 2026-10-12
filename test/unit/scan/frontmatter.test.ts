@@ -6,8 +6,7 @@ import { open, peek } from 'sensemaking';
 import { splitFrontmatter } from '../../../src/scan/frontmatter.ts';
 import type { Store } from '../../../src/store/types.ts';
 import { runCli } from '../../lib/cli.ts';
-import { scratchDir } from '../../lib/scratch.ts';
-import { openTree, tmpTree, writeNote } from '../../lib/tree.ts';
+import { openTree, scratchDir, tmpTree, writeNote } from '../../lib/tree.ts';
 
 const fixturesDir = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'fixtures');
 

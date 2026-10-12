@@ -3,8 +3,9 @@ import { join } from 'node:path';
 import assert from 'assert';
 import { CONFIG_FILENAME, initConfig, loadConfig, SenseError, SUPPORTED_CONFIG_VERSION } from 'sensemaking';
 import { COMMANDS } from '../../../dist/esm/cli/index.js';
+import { ERROR_CODE } from '../../../src/cli/constants.ts';
 import { runCli } from '../../lib/cli.ts';
-import { scratchDir } from '../../lib/scratch.ts';
+import { scratchDir } from '../../lib/tree.ts';
 
 describe('init', () => {
   it('writes the exact v6 starter, model named explicitly, and it round-trips loadConfig cleanly', () => {
@@ -75,7 +76,7 @@ describe('init flags', () => {
   it("an invalid --provider is rejected with validateConfig's own error, and writes nothing", () => {
     const dir = scratchDir('init');
     const result = runCli(['init', '--provider', 'bogus'], { cwd: dir });
-    assert.equal(result.status, 1);
+    assert.equal(result.status, ERROR_CODE);
     assert.match(result.stderr, /embed\.provider must be "static", "openai", or "cohere"/);
     assert.equal(existsSync(join(dir, CONFIG_FILENAME)), false, 'a rejected --provider wrote a config anyway');
   });

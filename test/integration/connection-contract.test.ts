@@ -2,8 +2,8 @@ import assert from 'node:assert';
 import { join } from 'node:path';
 import { withTransaction } from '../../src/store/transaction.ts';
 import { withNativeConnection } from '../lib/native-connection.ts';
-import { scratchDir } from '../lib/scratch.ts';
 import { forEachStore } from '../lib/stores.ts';
+import { scratchDir } from '../lib/tree.ts';
 
 const ROWS = [
   { id: 'a', label: 'Alpha', note: 'first' },

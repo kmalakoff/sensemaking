@@ -1,10 +1,10 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import assert from 'assert';
-import { canonicalJson } from '../../benchmark/lib/canonical-json.mjs';
-import { syntheticSpecKey } from '../../benchmark/lib/corpus.mjs';
-import { executionEvidence, identityHash, implementationProvenance, logicalWorkloadIdentity, manifestIdentity } from '../../benchmark/lib/workload-identity.mjs';
-import { packageRoot, scratchDir } from '../lib/scratch.ts';
+import { canonicalJson } from '../../benchmark/lib/canonical-json.ts';
+import { syntheticSpecKey } from '../../benchmark/lib/corpus.ts';
+import { executionEvidence, identityHash, implementationProvenance, logicalWorkloadIdentity, manifestIdentity } from '../../benchmark/lib/workload-identity.ts';
+import { packageRoot, scratchDir } from '../lib/tree.ts';
 
 describe('benchmark workload identity', () => {
   it('preserves the canonical encoding and existing synthetic cache key', () => {
@@ -54,9 +54,10 @@ describe('benchmark workload identity', () => {
     const evidence = executionEvidence({ argv: ['search', 'the'], config: { embed: { url: 'https://user:secret@example.test', apiKey: 'top-secret', model: 'named' } } });
     const encoded = JSON.stringify(evidence);
     assert.doesNotMatch(encoded, /user:secret|top-secret/);
-    assert.match(evidence.config.embed.url.redacted_sha256, /^[0-9a-f]{64}$/);
-    assert.match(evidence.config.embed.apiKey.redacted_sha256, /^[0-9a-f]{64}$/);
-    assert.equal(evidence.config.embed.model, 'named');
+    const config = evidence.config as { embed: { url: { redacted_sha256: string }; apiKey: { redacted_sha256: string }; model: string } };
+    assert.match(config.embed.url.redacted_sha256, /^[0-9a-f]{64}$/);
+    assert.match(config.embed.apiKey.redacted_sha256, /^[0-9a-f]{64}$/);
+    assert.equal(config.embed.model, 'named');
   });
 
   it('records an absent source tree without conflating it with the built distribution', () => {
@@ -64,7 +65,7 @@ describe('benchmark workload identity', () => {
     mkdirSync(join(published, 'dist'));
     writeFileSync(join(published, 'package.json'), JSON.stringify({ name: 'published-fixture', version: '1.2.3' }));
     writeFileSync(join(published, 'dist', 'index.js'), 'export const built = true;\n');
-    const provenance = implementationProvenance({ packageRoot: published, harnessRoot: packageRoot, harnessFiles: ['benchmark/lib/workload-identity.mjs'], store: 'sqlite', nativeObservation: { function: 'sqlite_version()', value: 'fixture' }, modelObservation: { revision: 'unknown' } });
+    const provenance = implementationProvenance({ packageRoot: published, harnessRoot: packageRoot, harnessFiles: ['benchmark/lib/workload-identity.ts'], store: 'sqlite', nativeObservation: { function: 'sqlite_version()', value: 'fixture' }, modelObservation: { revision: 'unknown' } });
     assert.deepEqual(provenance.measured_package.source, { status: 'absent' });
     const dist = provenance.measured_package.dist;
     if (!('fingerprint' in dist)) assert.fail('expected the built distribution to be recorded');

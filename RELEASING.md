@@ -18,7 +18,7 @@ Subagents dispatched during a release are spawned with `model: sonnet`. Reviews 
    cache is prepared on demand. To prepare those inputs before the gate, run from the checkout:
 
    ```bash
-   node --input-type=module -e 'import { corpusPath } from "./benchmark/lib/corpus.mjs"; for (const name of ["obsidian-hub-x2", "obsidian-hub-x4", "stress"]) console.log(name, corpusPath(name));'
+   node --input-type=module -e 'import { corpusPath } from "./benchmark/lib/corpus.ts"; for (const name of ["obsidian-hub-x2", "obsidian-hub-x4", "stress"]) console.log(name, corpusPath(name));'
    ```
 
    The builders reuse the pinned Hub source and generate deterministic stress notes. Dry-run does
@@ -26,13 +26,13 @@ Subagents dispatched during a release are spawned with `model: sonnet`. Reviews 
 
    `ordinary` is the default assessment. It runs the selected common correctness and matched-input current-store work plus a fresh or retained full portable NFCorpus view on every offered store. `deep` explicitly adds portable FEVER on every store and the large scale/stress workloads. New assessments omit the SQLite OR-bag relevance runs for both corpora, including conservative unknown-input selections. The dry run exposes selected requirements, reasons, and historical execution estimates. Unknown or large estimated durations do not stop ordinary work, select fresh measurement, or expand it to deep. Estimates exclude setup and quiet waits and are not a duration promise.
 
-   SQLite grammar remains functional coverage. Portable full-corpus relevance does not replace OR-specific scores. Run `node benchmark/steps/quality.mjs <nfcorpus|fever> --query-form or-bag --store sqlite --out <artifact.json>` for an explicit SQLite FTS/query-transform change or reported OR-ranking investigation. Full linked portable FEVER remains required when its relevance decision is owed; NFCorpus has no links and cannot replace it. New sittings record `quality_scope: portable-only-v1`. Old unmarked sittings keep their original legacy coverage when rendered and cannot resume into the new scope; start a clean sitting. Unknown scope is invalid, and separately collected OR-bag evidence still undergoes artifact validation.
+   SQLite grammar remains functional coverage. Portable full-corpus relevance does not replace OR-specific scores. Run `node benchmark/steps/quality.ts <nfcorpus|fever> --query-form or-bag --store sqlite --out <artifact.json>` for an explicit SQLite FTS/query-transform change or reported OR-ranking investigation. Full linked portable FEVER remains required when its relevance decision is owed; NFCorpus has no links and cannot replace it. New sittings record `quality_scope: portable-only-v1`. Old unmarked sittings keep their original legacy coverage when rendered and cannot resume into the new scope; start a clean sitting. Unknown scope is invalid, and separately collected OR-bag evidence still undergoes artifact validation.
 
    `node benchmark/tools/live-suite-cost.ts` optionally records a provenance-bound estimate under `.tmp/live-suite-cost/`. It is not a prerequisite. Its artifact never marks the owed live suite as completed or reusable coverage. A missing, failed, stale, or mismatched artifact leaves the estimate unknown.
 
-   The gate already enforces per-stage process-tree timeouts. Use those for hang protection; do not add a whole-run kill timer derived from the historical estimate or target duration, which can interrupt healthy later stages. When elapsed time exceeds the estimate, inspect stage progress. Any additional overall deadline must come from an explicit execution budget, and expiry means an incomplete assessment, not a performance regression.
+   The gate has no execution time limit: no step, stage, quiet wait or whole run is killed or blocked for taking long. When elapsed time exceeds the estimate, inspect the running step's log in the sitting. Each step runs as an owned job (`benchmark/lib/step-process.ts`): its whole process tree, npm installs and test runners included, sits in one process group that the job's leader releases when the command exits. A step that leaves processes running fails. Stop a run with SIGINT or SIGTERM to the gate (Ctrl-C only reaches it from an interactive terminal): the running step is recorded `cancelled`, which is never accepted and re-runs on resume, and the gate exits 130. A re-run first moves the step's earlier output and log to `attempts/<id>/<n>/`. Run a single benchmark tool with the same ownership through `node benchmark/lib/step-process.ts -- <command>`. On Windows the cleanup of descendants is not verifiable (no process groups) and is recorded as such. Indefinite waiting avoids failing a slow but correct run; it cannot promise that an unattended run finishes by morning.
 
-   **Changed capabilities expand the common gate before it runs.** Common work owed by the diff cannot be skipped by a profile or flag. When an ordinary run owes a baseline assessment but no changed capability requires fresh retrieval collection, it revalidates retained raw portable NFCorpus quality against the current retrieval, model, corpus, query, judgment, and all-store identities. Missing or incompatible raw evidence selects fresh portable NFCorpus before work starts; a compact report cannot revalidate quality it omitted. A missing duration estimate leaves valid retained revalidation selected. Report/evaluator-only paths named in `benchmark/lib/gates.mjs` require evaluation without baseline collection. Mixed producer/evaluator files, unknown benchmark paths, and edits that also change a producer still select collection. The rendered report names the original measured package and workload and distinguishes recomputed metrics from new search or timing. A sitting and its report retain the profile and effective requirements, and resume refuses an incompatible selection. Native diagnostic matrices and historical sweeps are omitted unless explicitly requested; neither profile selects them automatically.
+   **Changed capabilities expand the common gate before it runs.** Common work owed by the diff cannot be skipped by a profile or flag. When an ordinary run owes a baseline assessment but no changed capability requires fresh retrieval collection, it revalidates retained raw portable NFCorpus quality against the current retrieval, model, corpus, query, judgment, and all-store identities. Missing or incompatible raw evidence selects fresh portable NFCorpus before work starts; a compact report cannot revalidate quality it omitted. A missing duration estimate leaves valid retained revalidation selected. Report/evaluator-only paths named in `benchmark/lib/gates.ts` require evaluation without baseline collection. Mixed producer/evaluator files, unknown benchmark paths, and edits that also change a producer still select collection. The rendered report names the original measured package and workload and distinguishes recomputed metrics from new search or timing. A sitting and its report retain the profile and effective requirements, and resume refuses an incompatible selection. Native diagnostic matrices and historical sweeps are omitted unless explicitly requested; neither profile selects them automatically.
 
    Stages run in order: static checks, functional suites, hub baseline, scale and stress when
    selected, then retrieval quality when selected. Independent benchmark and evidence failures
@@ -46,7 +46,7 @@ Subagents dispatched during a release are spawned with `model: sonnet`. Reviews 
    evidence. No failure disappears merely because later steps ran.
 
    **The diff picks the common gates; the profile picks the bounded breadth.**
-   `benchmark/lib/gates.mjs` maps changed paths to the gates they owe. A change under `src/embed/`
+   `benchmark/lib/gates.ts` maps changed paths to the gates they owe. A change under `src/embed/`
    owes the live endpoint suite and ordinary baseline relevance obligations, not FEVER; a change
    under `src/chunk/` owes the common Obsidian parity and store checks, while deep adds scale. A
    docs-only change owes the tests and nothing else. Known common gates cannot be skipped by a flag,
@@ -83,7 +83,7 @@ Subagents dispatched during a release are spawned with `model: sonnet`. Reviews 
 3. **On BLOCK, fix it or accept it.** Fixing it and running again is the ordinary path. An owner may record a decision against an eligible blocking finding in the owner's own words. This never makes invalid evidence comparable or turns missing required coverage into a pass:
 
    ```bash
-   node benchmark/report.mjs --accept <row id | stage reason> --reason "<why this ships>"
+   node benchmark/report.ts --accept <row id | stage reason> --reason "<why this ships>"
    ```
 
    The reason is required and cannot be blank: an override with nothing written in it records no decision. It appears in the report beside the row, and `npm test` fails on a report carrying an accepted row without one. An agent never runs this. The version is the maintainer's call and so is this.
@@ -148,8 +148,10 @@ Subagents dispatched during a release are spawned with `model: sonnet`. Reviews 
    node -p "JSON.stringify({ node: process.version, sqlite: process.versions.sqlite ?? null })"
    ```
 
-   A newer upstream version starts a review; it is not an automatic dependency update or a new
-   performance claim. Read the official release notes and current docs, then test the APIs and
+   A newer upstream version starts a review; it is not a new performance claim. For DuckDB and
+   Turso, `ncu -u -m` moves `devDependencies`, and the optional-peer contract test fails until
+   `peerDependencies` matches it after the store suites pass. A version whose behaviour differs
+   gets a patch entry in its store's `engine.ts`, never a pin. Read the official release notes and current docs, then test the APIs and
    experimental features Sense uses. For Turso this includes index methods, Tantivy behavior,
    transactions, connection lifetime, sync, encryption, and concurrent-write support. For DuckDB
    it includes the Node binding, database-format compatibility, FTS extension behavior, connection
@@ -179,7 +181,7 @@ Subagents dispatched during a release are spawned with `model: sonnet`. Reviews 
 6. With the version named, name the sitting's report for it. This copies it to `benchmark/reports/<date>-<version>-release-gate.{md,json}`, updates BENCHMARKING.md, and generates the shipped store summary from the same data. It measures nothing:
 
    ```bash
-   node benchmark/report.mjs --release <chosen>
+   node benchmark/report.ts --release <chosen>
    ```
 
    Then the maintainer's own step, and an agent's part has ended before it: `tsds publish <chosen>`, which reinstalls from the lockfile, runs the tests, bumps the version and publishes in one command. Then `git push --follow-tags`, and confirm the tag reached the remote (`git ls-remote --tags origin`): a skipped push leaves a version on npm with no commit or tag behind it, and nothing downstream notices.

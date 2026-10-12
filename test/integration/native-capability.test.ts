@@ -4,13 +4,13 @@ import { appendFileSync, cpSync, mkdirSync } from 'node:fs';
 import { cpus } from 'node:os';
 import { dirname, join } from 'node:path';
 import { STORE_NAMES } from 'sensemaking';
-import { NATIVE_CAPABILITY_HARNESS_FILES, runNativeCapability } from '../../benchmark/lib/native-capability.mjs';
-import { quietMachineCheck } from '../../benchmark/lib/quiet-machine.mjs';
-import { identityHash } from '../../benchmark/lib/workload-identity.mjs';
+import { NATIVE_CAPABILITY_HARNESS_FILES, runNativeCapability } from '../../benchmark/lib/native-capability.ts';
+import { quietMachineCheck } from '../../benchmark/lib/quiet-machine.ts';
+import { identityHash } from '../../benchmark/lib/workload-identity.ts';
 import { STORE_DIMS } from '../../src/embed/types.ts';
 import { openStoreFor } from '../../src/store/index.ts';
 import type { BuildRequirement } from '../../src/store/open.ts';
-import { packageRoot, scratchDir } from '../lib/scratch.ts';
+import { packageRoot, scratchDir } from '../lib/tree.ts';
 
 type NativeArtifact = Awaited<ReturnType<typeof runNativeCapability>>;
 
@@ -220,7 +220,7 @@ describe('native capability diagnostic', () => {
     const openAndChangeCopiedHarness: typeof openDiagnosticStore = async (cfg) => {
       const opened = await openDiagnosticStore(cfg);
       if (!changed) {
-        appendFileSync(join(sandbox, 'benchmark/lib/native-capability.mjs'), '\n// copied fixture drift\n');
+        appendFileSync(join(sandbox, 'benchmark/lib/native-capability.ts'), '\n// copied fixture drift\n');
         changed = true;
       }
       return opened;
@@ -242,7 +242,7 @@ describe('native capability diagnostic', () => {
   });
 
   it('prints the full artifact when no output path is supplied', () => {
-    const result = spawnSync(process.execPath, [join(packageRoot, 'benchmark/tools/native-capability.mjs'), '--store', 'sqlite'], { cwd: packageRoot, encoding: 'utf8', timeout: 60_000, maxBuffer: 4 * 1024 * 1024 });
+    const result = spawnSync(process.execPath, [join(packageRoot, 'benchmark/tools/native-capability.ts'), '--store', 'sqlite'], { cwd: packageRoot, encoding: 'utf8', timeout: 60_000, maxBuffer: 4 * 1024 * 1024 });
     assert.equal(result.error, undefined, result.error?.message ?? 'native CLI spawn failed');
     assert.equal(result.signal, null, `CLI was signaled: ${result.signal}`);
     assert.ok(result.status === 0 || result.status === 1, `unexpected CLI status ${result.status}: ${result.stderr}`);
@@ -257,24 +257,22 @@ describe('native capability diagnostic', () => {
       assert.ok(artifact.workload);
       assert.equal(artifact.workload.inputs.requested.case_id, 'baseline');
       assert.equal(artifact.readiness.entry.passed, true);
-      assert.equal(artifact.readiness.exit.passed, true);
+      assert.equal(artifact.readiness.exit.above_admission_limit, quietMachineCheck(artifact.readiness.exit.load1, cpus().length).blocked, 'the exit reading is recorded, not gated');
       assert.deepEqual(artifact.readiness.environment.entry, artifact.implementation_stability.before.environment);
       assert.deepEqual(artifact.readiness.environment.exit, artifact.implementation_stability.after.environment);
       assert.match(artifact.environment.machine.hostname_sha256, /^[0-9a-f]{64}$/);
       assert.equal('hostname' in artifact.environment.machine, false);
     } else {
+      // An elevated exit reading no longer fails the run, so the only accepted failure is a refused
+      // entry; a correctness or any other failure fails this test.
+      assert.equal(artifact.status, 'refused-preflight', `unexpected native capability failure: ${JSON.stringify(artifact.errors)}`);
       assert.equal(artifact.timing.valid, false);
       assert.equal(typeof artifact.timing.error, 'string');
-      if (artifact.status === 'refused-preflight') {
-        assert.equal(artifact.valid, false);
-        assert.equal(artifact.timing.exit, null);
-        assert.equal(artifact.readiness.entry.passed, false);
-        assert.equal(artifact.readiness.exit, null);
-        if (artifact.readiness.entry.supported) assert.equal(quietMachineCheck(artifact.timing.entry.load1, cpus().length).blocked, true);
-      } else {
-        assert.equal(artifact.valid, true, `unexpected correctness failure: ${JSON.stringify(artifact.errors)}`);
-        assert.equal(quietMachineCheck(artifact.timing.exit.load1, cpus().length).blocked, true);
-      }
+      assert.equal(artifact.valid, false);
+      assert.equal(artifact.timing.exit, null);
+      assert.equal(artifact.readiness.entry.passed, false);
+      assert.equal(artifact.readiness.exit, null);
+      if (artifact.readiness.entry.supported) assert.equal(quietMachineCheck(artifact.timing.entry.load1, cpus().length).blocked, true);
     }
   });
 });

@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { refsMainPath, snapshotDir, writeLanguages, writeRef } from '../../src/embed/store.ts';
-import { scratchDir } from './scratch.ts';
+import { scratchDir } from './tree.ts';
 
 const DIMS = 8;
 

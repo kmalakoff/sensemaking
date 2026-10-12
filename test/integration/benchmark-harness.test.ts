@@ -5,21 +5,23 @@ import { join } from 'node:path';
 import assert from 'assert';
 import { safeRmSync } from 'fs-remove-compat';
 import { search } from 'sensemaking';
-import { classify } from '../../benchmark/lib/classify.mjs';
-import { syntheticPath } from '../../benchmark/lib/corpus.mjs';
-import { runStageSteps } from '../../benchmark/lib/gate-runner.mjs';
-import { DIFF_MAP_PATHS, GATE_NAMES, owedReasons, reversedCompareAction, stepStatus } from '../../benchmark/lib/gates.mjs';
-import { MEASURE_VERSION, structuredSearchEvidence, timedCli, verbsFrom, warmFileCache } from '../../benchmark/lib/measure.mjs';
-import { startMeasuredWatcher } from '../../benchmark/lib/measured-watcher.mjs';
-import { nativeObserverAttemptBudgetMs, nativeObserverDeadlineMs, runNativeObserverAttempt, waitForNativeIndex } from '../../benchmark/lib/native-observer.mjs';
-import { buildQualityArtifactBase, evaluateVariant, queryFormFor } from '../../benchmark/lib/quality.mjs';
-import { describeLoad, parseTopProcesses, quietMachineCheck } from '../../benchmark/lib/quiet-machine.mjs';
-import { compactStep } from '../../benchmark/lib/report-compaction.mjs';
-import { INPROC_META_KEYS, ROW_BY_KEY, RUN_META_KEYS, RUN_METRIC_KEYS, rowValue } from '../../benchmark/lib/rows.mjs';
-import { buildStages, LEGACY_QUALITY_STEPS } from '../../benchmark/lib/stages.mjs';
-import { captureIdentity, compareCaptureDirectories, STORE_DUMP_REPRESENTATIVE_BYTES, STORE_DUMP_REPRESENTATIVE_LIMIT, structuredRows, validateStoreDumpArtifact } from '../../benchmark/lib/store-dump-evidence.mjs';
-import { treeFingerprint } from '../../benchmark/lib/tree-fingerprint.mjs';
-import { aggregateVerdict, classificationSeverity, classifyCompare, classifyCrossGroup, classifyEval, classifyWatchSanity, priorStepLookup, shouldRunReversedCompare, watchSanityGroup } from '../../benchmark/lib/verdict.mjs';
+import type { ClassificationRow } from '../../benchmark/lib/classify.ts';
+import { classify } from '../../benchmark/lib/classify.ts';
+import { syntheticPath } from '../../benchmark/lib/corpus.ts';
+import { runStageSteps } from '../../benchmark/lib/gate-runner.ts';
+import { DIFF_MAP_PATHS, GATE_NAMES, owedReasons, reversedCompareAction, stepStatus } from '../../benchmark/lib/gates.ts';
+import { MEASURE_VERSION, structuredSearchEvidence, timedCli, verbsFrom, warmFileCache } from '../../benchmark/lib/measure.ts';
+import { startMeasuredWatcher } from '../../benchmark/lib/measured-watcher.ts';
+import { runNativeObserverAttempt, waitForNativeIndex } from '../../benchmark/lib/native-observer.ts';
+import { buildQualityArtifactBase, evaluateVariant, queryFormFor } from '../../benchmark/lib/quality.ts';
+import { describeLoad, parseTopProcesses, quietMachineCheck } from '../../benchmark/lib/quiet-machine.ts';
+import { compactStep } from '../../benchmark/lib/report-compaction.ts';
+import { INPROC_META_KEYS, ROW_BY_KEY, RUN_META_KEYS, RUN_METRIC_KEYS, rowValue } from '../../benchmark/lib/rows.ts';
+import { buildStages, LEGACY_QUALITY_STEPS } from '../../benchmark/lib/stages.ts';
+import { jobProblems, spawnOwned } from '../../benchmark/lib/step-process.ts';
+import { captureIdentity, compareCaptureDirectories, STORE_DUMP_REPRESENTATIVE_BYTES, STORE_DUMP_REPRESENTATIVE_LIMIT, structuredRows, validateStoreDumpArtifact } from '../../benchmark/lib/store-dump-evidence.ts';
+import { treeFingerprint } from '../../benchmark/lib/tree-fingerprint.ts';
+import { aggregateVerdict, classificationSeverity, classifyCompare, classifyCrossGroup, classifyEval, classifyWatchSanity, priorStepLookup, shouldRunReversedCompare, watchSanityGroup } from '../../benchmark/lib/verdict.ts';
 import {
   applyDeterministicMutation,
   captureFileManifest,
@@ -34,21 +36,22 @@ import {
   verifyFileManifest,
   verifyIndexSnapshot,
   verifyRepeatFingerprint,
-} from '../../benchmark/lib/work-tree.mjs';
-import { identityHash } from '../../benchmark/lib/workload-identity.mjs';
-import { acceptanceFingerprint, acceptedIds, buildReport, classificationEvidence, doneOnResume, renderMarkdown } from '../../benchmark/report.mjs';
+} from '../../benchmark/lib/work-tree.ts';
+import { identityHash } from '../../benchmark/lib/workload-identity.ts';
+import { acceptanceFingerprint, acceptedIds, buildReport, classificationEvidence, doneOnResume, renderMarkdown } from '../../benchmark/report.ts';
+import { lockWaitBudgetMs } from '../../src/store/lock-wait.ts';
 import { WATCH_HEARTBEAT_INTERVAL_MS } from '../../src/watch-claim.ts';
-import { packageRoot, scratchDir } from '../lib/scratch.ts';
 import { forEachStore, openTreeForStore } from '../lib/stores.ts';
-import { openConfig, writeNote } from '../lib/tree.ts';
+import { openConfig, packageRoot, scratchDir, writeNote } from '../lib/tree.ts';
+import { abortableWithin, withinTest } from '../lib/watchdog.ts';
 
 // benchmark-harness.test.ts: the release-gate instrument's own behavior (classification,
 // the diff map, the catalog/run.mjs contract), not sensemaking's product behavior -- see
 // testing-standards on why this spans modules and lives here rather than in test/unit/.
 
-const WALL_ROW = { key: 'cold_crawl_ms', label: 'cold crawl (wall)', kind: 'wall', band: 0.2, cross: 0.2 };
-const TOKENS_ROW = { key: 'map_tokens', label: '`map` token count', kind: 'tokens' };
-const QUALITY_ROW = { key: 'ndcg', label: 'nDCG@10', kind: 'quality' };
+const WALL_ROW = { key: 'cold_crawl_ms', label: 'cold crawl (wall)', kind: 'wall', band: 0.2, cross: 0.2 } satisfies ClassificationRow;
+const TOKENS_ROW = { key: 'map_tokens', label: '`map` token count', kind: 'tokens' } satisfies ClassificationRow;
+const QUALITY_ROW = { key: 'ndcg', label: 'nDCG@10', kind: 'quality' } satisfies ClassificationRow;
 type SearchTerms = Parameters<typeof search>[2];
 type SearchOptions = NonNullable<Parameters<typeof search>[3]>;
 
@@ -190,8 +193,19 @@ describe('classify: faster verdict', () => {
   });
 });
 
-describe('quiet machine: the gate names what is keeping it busy', () => {
-  const PS = ['%CPU COMM', ' 73.0 /System/Library/PrivateFrameworks/Ecosystem.framework/Support/ecosystemd', ' 40.0 /Users/x/.nvm/versions/node/bin/node', '  2.0 /usr/sbin/cupsd'].join('\n');
+describe('quiet machine: policy result and factual process diagnostics', () => {
+  const PS = [
+    '%CPU COMM',
+    ' 10.0 /Applications/Worker.app/Contents/MacOS/Worker',
+    ' 73.0 /System/Library/PrivateFrameworks/Ecosystem.framework/Support/ecosystemd',
+    '  5.0 /usr/libexec/helper',
+    ' 30.0 /Applications/Code.app/Contents/MacOS/Code Helper',
+    ' 20.0 /usr/sbin/daemon',
+    ' 40.0 /Users/x/.nvm/versions/node/bin/node',
+    '  2.0 /usr/sbin/cupsd',
+    '120.5 /Library/Apple/System/Library/CoreServices/XProtect.app/Contents/MacOS/XProtectRemediatorSheepSwap',
+  ].join('\n');
+  const sample = { processes: parseTopProcesses(PS), error: null, limit: 6, minPercent: 5 };
 
   it('blocks above half the cores and passes at the limit', () => {
     assert.equal(quietMachineCheck(7, 14).blocked, false, 'exactly at the limit is quiet');
@@ -200,28 +214,61 @@ describe('quiet machine: the gate names what is keeping it busy', () => {
     assert.equal(quietMachineCheck(1.01, 2).blocked, true);
   });
 
-  it('reports the busiest processes and drops the quiet ones', () => {
-    const top = parseTopProcesses(PS);
+  it('sorts numeric CPU readings before limiting and retains the reporting floor', () => {
+    assert.deepEqual(parseTopProcesses(PS), [
+      { percent: 120.5, command: '/Library/Apple/System/Library/CoreServices/XProtect.app/Contents/MacOS/XProtectRemediatorSheepSwap' },
+      { percent: 73, command: '/System/Library/PrivateFrameworks/Ecosystem.framework/Support/ecosystemd' },
+      { percent: 40, command: '/Users/x/.nvm/versions/node/bin/node' },
+      { percent: 30, command: '/Applications/Code.app/Contents/MacOS/Code Helper' },
+      { percent: 20, command: '/usr/sbin/daemon' },
+      { percent: 10, command: '/Applications/Worker.app/Contents/MacOS/Worker' },
+    ]);
     assert.deepEqual(
-      top.map((p) => p.percent),
-      [73, 40],
-      'cupsd at 2% is below the reporting floor'
+      parseTopProcesses(PS, { limit: 8 }).map((p) => p.percent),
+      [120.5, 73, 40, 30, 20, 10, 5]
     );
-    assert.equal(top[0].system, true, "a /System/ path is not the reader's to stop");
-    assert.equal(top[1].system, false, 'a node process under /Users is');
+    assert.deepEqual(
+      parseTopProcesses(PS, { limit: 2, minPercent: 50 }).map((p) => p.percent),
+      [120.5, 73]
+    );
   });
 
-  it('tells a blocked reader what to stop, and says so when nothing is theirs', () => {
-    const mine = describeLoad(12, 14, parseTopProcesses(PS));
-    assert.equal(mine.blocked, true);
-    assert.match(mine.text, /stop these and run again: node/);
-    const systemOnly = describeLoad(
-      12,
-      14,
-      parseTopProcesses(PS).filter((p) => p.system)
-    );
-    assert.match(systemOnly.text, /nothing here is yours to stop/, 'a machine busy with its own daemons needs waiting, not a hunt');
-    assert.doesNotMatch(describeLoad(2, 14, []).text, /exceeds/, 'a quiet machine says so plainly');
+  it('reports paths and sample limits without ownership, stop advice or baseline claims', () => {
+    const mixed = describeLoad(12, 14, sample);
+    assert.equal(mixed.blocked, true);
+    assert.match(mixed.text, /reported process CPU \(up to 6 entries at or above 5%\):/);
+    assert.match(mixed.text, /120\.5% {2}\/Library\/Apple\/System\/Library\/CoreServices\/XProtect\.app/);
+    assert.match(mixed.text, /40\.0% {2}\/Users\/x/);
+    const systemOnly = describeLoad(12, 14, { ...sample, processes: [{ percent: 73, command: '/System/Library/daemon' }] });
+    assert.match(systemOnly.text, /73\.0% {2}\/System\/Library\/daemon/);
+    for (const text of [mixed.text, systemOnly.text]) assert.doesNotMatch(text, /yours|stop|baseline|keeping.*busy/);
+  });
+
+  it('reports a successful empty sample without claiming a baseline', () => {
+    assert.deepEqual(parseTopProcesses('%CPU COMM\n 2.0 /usr/sbin/cupsd\n'), []);
+    const empty = { ...sample, processes: [] };
+    const blocked = describeLoad(12, 14, empty);
+    assert.equal(blocked.blocked, true);
+    assert.match(blocked.text, /no processes are listed in this sample/);
+    assert.doesNotMatch(blocked.text, /unavailable|yours|stop|baseline/);
+    const quiet = describeLoad(2, 14, empty);
+    assert.equal(quiet.blocked, false);
+    assert.doesNotMatch(quiet.text, /exceeds/);
+  });
+
+  it('reports sampling errors separately from an empty sample without changing the policy result', () => {
+    for (const error of ['spawn ps ENOENT', 'ps exited with status 1: unsupported option', 'ps terminated by signal SIGTERM']) {
+      const failed = { ...sample, processes: [], error };
+      for (const [load, blocked] of [
+        [2, false],
+        [12, true],
+      ] as const) {
+        const result = describeLoad(load, 14, failed);
+        assert.equal(result.blocked, blocked);
+        assert.ok(result.text.includes(`process CPU sample unavailable: ${error}`));
+        assert.doesNotMatch(result.text, /no processes are listed|reported process CPU|yours|stop|baseline/);
+      }
+    }
   });
 });
 
@@ -319,8 +366,8 @@ describe('in-process benchmark repetitions: canonical filesystem and index state
 
     const parentLink = join(tree, 'parent-link');
     symlinkSync(target, parentLink, 'junction');
-    const parentManifest = targetManifest.map((entry: { rel: string }) => ({ ...entry, rel: `parent-link/${entry.rel}` }));
-    const parentMutation = targetMutation.map((entry: { rel: string }) => ({ ...entry, rel: `parent-link/${entry.rel}` }));
+    const parentManifest = targetManifest.map((entry) => ({ ...entry, rel: `parent-link/${entry.rel}` }));
+    const parentMutation = targetMutation.map((entry) => ({ ...entry, rel: `parent-link/${entry.rel}` }));
     assert.throws(() => applyDeterministicMutation(tree, parentManifest, parentMutation, { append: null, mtimeMs: deterministicMutationMtime(parentManifest) }), /contains a symlink/);
   });
 
@@ -453,25 +500,56 @@ describe('native watcher readiness observer', () => {
     assert.match(indexSnapshotMismatch(snapshot, manifest) ?? '', /missing path: a\.md/);
   });
 
-  it('reaps an actual native observer on its hard process timeout', async () => {
-    const tree = scratchDir('observer-timeout-tree');
+  it('cancels an actual native observer job after its supervised startup and releases its group', async () => {
+    const tree = scratchDir('observer-cancel-tree');
     const configPath = join(tree, 'sense.config.json');
     writeFileSync(configPath, JSON.stringify({ version: 5, store: 'sqlite', presets: { default: { include: ['**/*.md'] } }, queries: {} }));
-    writeNote(tree, 'a.md', { body: 'Actual observer timeout.' });
-    const manifest = captureFileManifest(tree);
+    writeNote(tree, 'a.md', { body: 'Actual observer cancellation.' });
     const opened = await openTreeForStore('sqlite', tree);
     await opened.store.close();
-    await assert.rejects(runNativeObserverAttempt({ pkgRoot: packageRoot, store: 'sqlite', configPath, manifest, expectedContent: null }, 0), /timed out after 0ms; reaped/);
-  });
-
-  it('keeps the machine-derived attempt bound at the readiness-window edge', () => {
-    assert.equal(nativeObserverAttemptBudgetMs(5_000, 87), 5_000);
-    assert.equal(nativeObserverAttemptBudgetMs(5_000, 0), 0);
+    // The observer child exactly as runNativeObserverAttempt starts it, cancelled once supervised.
+    const job = spawnOwned([process.execPath, join(packageRoot, 'benchmark', 'lib', 'native-observer.ts'), '--child'], { ipc: true });
+    job.stdout.resume();
+    job.stderr.resume();
+    // Readiness settles on the supervised message, or on the job ending first (a startup failure).
+    let awaitingSupervised = true;
+    const supervised = new Promise<void>((resolve, reject) => {
+      job.onMessage((message) => {
+        if (!awaitingSupervised || (message as { type?: unknown })?.type !== 'supervised') return;
+        awaitingSupervised = false;
+        resolve();
+      });
+      void job.result.then((ended) => {
+        if (!awaitingSupervised) return;
+        awaitingSupervised = false;
+        reject(new Error(`observer job ended before supervised startup: ${JSON.stringify(ended)}`));
+      });
+    });
+    let result: Awaited<typeof job.result>;
+    let observerPid: number | null = null;
+    try {
+      await withinTest('observer supervised startup', 10_000, supervised, () => job.fail('observer startup exceeded the test watchdog'));
+      observerPid = job.commandPid;
+      assert.ok(observerPid, 'the observer command started');
+      job.cancel('SIGTERM');
+      result = await withinTest('observer cancellation', 10_000, job.result, () => job.fail('observer cancellation exceeded the test watchdog'));
+    } finally {
+      job.fail('test cleanup');
+      await withinTest('observer cleanup', 10_000, job.result, () => undefined);
+    }
+    assert.equal(result.status, 'cancelled');
+    assert.equal(result.cancel_signal, 'SIGTERM');
+    assert.equal(result.cleanup, process.platform === 'win32' ? 'not-verified' : 'released');
+    assert.deepEqual(jobProblems(result), []);
+    assert.throws(() => process.kill(observerPid as number, 0), { code: 'ESRCH' }, 'the cancelled observer process is gone');
   });
 
   it('fails explicitly when a measured package has no internal native observer seam', async () => {
     const pkgRoot = scratchDir('observer-missing-seam-package');
-    await assert.rejects(runNativeObserverAttempt({ pkgRoot, store: 'sqlite', configPath: join(pkgRoot, 'sense.config.json'), manifest: [], expectedContent: [] }, 1000), /could not import .*store\/sqlite\/open\.js/);
+    await assert.rejects(
+      abortableWithin('runNativeObserverAttempt', 30_000, (signal) => runNativeObserverAttempt({ pkgRoot, store: 'sqlite', configPath: join(pkgRoot, 'sense.config.json'), manifest: [], expectedContent: [] }, { signal })),
+      /could not import .*store\/sqlite\/open\.js/
+    );
   });
 
   it('proves DuckDB lexical readiness with its native index and result paths', async function () {
@@ -491,12 +569,15 @@ describe('native watcher readiness observer', () => {
       await opened.store.close();
     }
     const payload = { pkgRoot: packageRoot, store: 'duckdb' as const, configPath, manifest, lexical: { terms: 'needle', limit: 10, expected_paths: paths } };
-    const observed = await runNativeObserverAttempt(payload, await nativeObserverDeadlineMs(packageRoot, tree));
+    const observed = await abortableWithin('runNativeObserverAttempt', 30_000, (signal) => runNativeObserverAttempt(payload, { signal }));
     assert.deepEqual(observed.lexical, { state: 'ready', indexed_docs: 2, indexed_paths: ['a.md', 'b.md'], paths });
-    await assert.rejects(runNativeObserverAttempt({ ...payload, lexical: { ...payload.lexical, expected_paths: ['wrong.md'] } }, 1000), /DuckDB lexical result omitted/);
+    await assert.rejects(
+      abortableWithin('runNativeObserverAttempt', 30_000, (signal) => runNativeObserverAttempt({ ...payload, lexical: { ...payload.lexical, expected_paths: ['wrong.md'] } }, { signal })),
+      /DuckDB lexical result omitted/
+    );
   });
 
-  it('covers watcher wait expiry, one observer and clean close as components without exercising measure-tree failure handling', async () => {
+  it('covers a quiet watcher, one observer and clean close as components without exercising measure-tree failure handling', async () => {
     const tree = scratchDir('watcher-expired-wait-evidence');
     const configPath = join(tree, 'sense.config.json');
     writeFileSync(configPath, JSON.stringify({ version: 5, store: 'sqlite', presets: { default: { include: ['**/*.md'] } }, queries: {} }));
@@ -513,24 +594,28 @@ describe('native watcher readiness observer', () => {
         watcher.events.every((event) => event.type === 'started' || event.type === 'reconciled'),
         diagnostics
       );
-      assert.equal(watcher.child.exitCode, null, diagnostics);
-      assert.equal(watcher.child.signalCode, null, diagnostics);
-      assert.equal(watcher.child.connected, true, diagnostics);
+      assert.equal(watcher.job.exited, null, diagnostics);
+      assert.equal(watcher.job.running, true, diagnostics);
     };
     let bodyFailed = false;
     let bodyError: unknown;
     let closeFailed = false;
     let closeError: unknown;
     try {
-      const started = await watcher.waitFor('started', 0, 5_000);
+      const started = await withinTest('watcher started', 5_000, watcher.waitFor('started', 0), () => watcher.kill('watcher startup exceeded the test watchdog'));
       const noteBytes = readFileSync(join(tree, 'a.md'));
       const configBytes = readFileSync(configPath);
       verifyFileManifest(tree, manifest, 'watcher startup preserves the authored manifest');
-      const eventWaitMs = 250;
-      await assert.rejects(watcher.waitFor('run-watch-rejected', started.next, eventWaitMs), { name: 'Error', message: `measured watcher produced no run-watch-rejected event before ${eventWaitMs}ms` });
+      // The test's own quiet window: nothing rejects the healthy watcher within it.
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      assert.equal(
+        watcher.events.slice(started.next).some((event) => event.type === 'run-watch-rejected'),
+        false,
+        JSON.stringify(watcher.events)
+      );
       assertHealthyWatcher();
 
-      const observed = await runNativeObserverAttempt({ pkgRoot: packageRoot, store: 'sqlite', configPath, manifest, expectedContent: null }, 5_000);
+      const observed = await abortableWithin('runNativeObserverAttempt', 30_000, (signal) => runNativeObserverAttempt({ pkgRoot: packageRoot, store: 'sqlite', configPath, manifest, expectedContent: null }, { signal }));
       assert.equal(observed.state, 'ready', JSON.stringify(observed));
       assertHealthyWatcher();
       assert.deepEqual(readFileSync(join(tree, 'a.md')), noteBytes, 'the observer must preserve the observed note bytes');
@@ -540,7 +625,7 @@ describe('native watcher readiness observer', () => {
       bodyError = reason;
     } finally {
       try {
-        const closed = await watcher.close(5_000);
+        const closed = await withinTest('watcher close', 5_000, watcher.close(), () => watcher.kill('watcher close exceeded the test watchdog'));
         assert.deepEqual({ code: closed.code, signal: closed.signal }, { code: 0, signal: null });
         assert.equal(typeof closed.stderr, 'string');
       } catch (reason) {
@@ -570,18 +655,19 @@ describe('native watcher readiness observer', () => {
         await opened.store.close();
       }
 
-      const deadlineMs = await nativeObserverDeadlineMs(packageRoot, tree);
+      const deadlineMs = lockWaitBudgetMs(tree);
       const watcherDeadlineMs = WATCH_HEARTBEAT_INTERVAL_MS + deadlineMs;
       writeNote(tree, 'a.md', { frontmatter: { title: 'Before watcher', summary: 'Readiness', private: 'excluded' }, body: 'First mutation.' });
       const beforeManifest = captureFileManifest(tree);
       const beforeRow = { title: 'Before watcher', summary: 'Readiness', text: 'First mutation.' };
-      const stale = await runNativeObserverAttempt({ pkgRoot: packageRoot, store, configPath, manifest: beforeManifest, expectedContent: [['a.md', rowHash(beforeRow)]] }, deadlineMs);
+      const stale = await abortableWithin('runNativeObserverAttempt', 30_000, (signal) => runNativeObserverAttempt({ pkgRoot: packageRoot, store, configPath, manifest: beforeManifest, expectedContent: [['a.md', rowHash(beforeRow)]] }, { signal }));
       assert.equal(stale.state, 'stale');
 
       const watcher = startMeasuredWatcher({ pkgRoot: packageRoot, configPath });
       try {
-        const started = await watcher.waitFor('started', 0, watcherDeadlineMs);
-        const initial = await watcher.waitFor('reconciled', started.next, watcherDeadlineMs);
+        const stop = (label: string) => () => watcher.kill(`${label} exceeded the test watchdog`);
+        const started = await withinTest('watcher started', watcherDeadlineMs, watcher.waitFor('started', 0), stop('watcher startup'));
+        const initial = await withinTest('watcher initial reconcile', watcherDeadlineMs, watcher.waitFor('reconciled', started.next), stop('watcher initial reconcile'));
         assert.deepEqual({ parsed: initial.event.parsed, total: initial.event.total }, { parsed: 1, total: 1 });
         const mutationDeadline = Date.now() + watcherDeadlineMs;
         writeNote(tree, 'a.md', { frontmatter: { title: 'After watcher', summary: 'Readiness', private: 'excluded' }, body: 'Watcher mutation.' });
@@ -591,7 +677,7 @@ describe('native watcher readiness observer', () => {
         for (;;) {
           const remainingMs = mutationDeadline - Date.now();
           if (remainingMs <= 0) throw new Error(`${store} watcher produced no authored reconciliation within ${watcherDeadlineMs}ms`);
-          const reconciled = await watcher.waitFor('reconciled', next, remainingMs);
+          const reconciled = await withinTest('watcher authored reconcile', remainingMs, watcher.waitFor('reconciled', next), stop('watcher authored reconcile'));
           next = reconciled.next;
           assert.equal(reconciled.event.total, 1);
           if (reconciled.event.parsed === 0) continue;
@@ -600,12 +686,12 @@ describe('native watcher readiness observer', () => {
         }
         const remainingMs = mutationDeadline - Date.now();
         if (remainingMs <= 0) throw new Error(`${store} native observer has no remaining lifecycle budget after authored reconciliation`);
-        const observed = await waitForNativeIndex({ pkgRoot: packageRoot, store, configPath, manifest: expectedManifest, expectedContent: [['a.md', rowHash(expectedRow)]], authoredContent: [['a.md', expectedRow]] }, remainingMs);
+        const observed = await abortableWithin('waitForNativeIndex', 30_000, (signal) => waitForNativeIndex({ pkgRoot: packageRoot, store, configPath, manifest: expectedManifest, expectedContent: [['a.md', rowHash(expectedRow)]], authoredContent: [['a.md', expectedRow]] }, { signal }));
         assert.equal(observed.state, 'ready');
         assert.equal(observed.paths, 1);
         watcher.assertRunning();
       } finally {
-        await watcher.close(deadlineMs);
+        await withinTest('watcher close', deadlineMs, watcher.close(), () => watcher.kill('watcher close exceeded the test watchdog'));
       }
     });
   });
@@ -695,9 +781,9 @@ describe('classify: tokens', () => {
 });
 
 describe('classify: bulk_change_ms and bulk_watch_ms gate on their own band (PLAN.md 3.51)', () => {
-  const bulkChange = ROW_BY_KEY.get('bulk_change_ms');
-  const bulkWatch = ROW_BY_KEY.get('bulk_watch_ms');
-  const unaccounted = ROW_BY_KEY.get('inproc.unaccounted_ms');
+  const bulkChange = ROW_BY_KEY.get('bulk_change_ms') as ClassificationRow;
+  const bulkWatch = ROW_BY_KEY.get('bulk_watch_ms') as ClassificationRow;
+  const unaccounted = ROW_BY_KEY.get('inproc.unaccounted_ms') as ClassificationRow;
 
   it('bulk_change_ms doubled exceeds the measured band and BLOCKs', () => {
     assert.equal(classify(bulkChange, 500, 1000).verdict, 'moved');
@@ -745,7 +831,7 @@ describe('classifyWatchSanity: bulk_watch_ms must read below bulk_change_ms on i
     writeFileSync(join(sitting, 'stress.json'), JSON.stringify({ bulk_change_ms: 400, bulk_watch_ms: 400, measure_version: MEASURE_VERSION }));
     writeFileSync(join(sitting, 'sitting.json'), JSON.stringify({ date: '2099-01-03', baseline_version: '9.9.9', last_tag: 'v9.9.8', machine: { cpu_model: 'Fixture' }, node: 'v99', changed_paths: [], owed: {}, steps: { stress: { id: 'stress', status: 'ok' } }, failed_stage_reasons: [] }));
 
-    const { buildReport } = await import('../../benchmark/report.mjs');
+    const { buildReport } = await import('../../benchmark/report.ts');
     const report = buildReport(sitting, { reportsDir });
     assert.ok(report.classifications.some((row) => row.id.endsWith('bulk_watch_ms-sanity') && classificationSeverity(row) === 'WARN'));
     assert.ok(!(report.verdict_reasons as string[]).some((r) => /400ms is 100\.0% of bulk_change_ms's 400ms/.test(r)));
@@ -989,7 +1075,7 @@ describe('classifyEval: invalid quality artifacts block before metric comparison
     const invalid = out[0];
     assert.ok('invalid' in invalid);
     assert.equal(invalid.invalid, true);
-    assert.match(invalid.reason ?? '', /q1/);
+    assert.match((invalid.reason ?? '') as string, /q1/);
     assert.equal(aggregateVerdict(out, []).verdict, 'BLOCK');
   });
 
@@ -998,7 +1084,7 @@ describe('classifyEval: invalid quality artifacts block before metric comparison
     const invalid = out[0];
     assert.ok('invalid' in invalid);
     assert.equal(invalid.invalid, true);
-    assert.match(invalid.reason ?? '', /prior artifact is non-finite/);
+    assert.match((invalid.reason ?? '') as string, /prior artifact is non-finite/);
     assert.equal(aggregateVerdict(out, []).verdict, 'BLOCK');
   });
 
@@ -1123,10 +1209,10 @@ describe('store-dump evidence is recomputed from retained captures', () => {
     assert.equal(artifact.ok, false);
     const changed = artifact.diff.changed_files[0].changed_entries;
     assert.deepEqual(
-      changed.representatives.map((entry: { identity: string }) => entry.identity),
+      changed.representatives.map((entry) => (entry as { identity: unknown }).identity),
       ['["same.md",0]']
     );
-    assert.ok(artifact.diff.categories.value.representatives.some((entry: { identity: string }) => entry.identity === '["same.md",0]'));
+    assert.ok(artifact.diff.categories.value.representatives.some((entry) => (entry as { identity: unknown }).identity === '["same.md",0]'));
     writeFileSync(join(sitting, 'store-dump.json'), JSON.stringify(artifact));
     writeFileSync(join(sitting, 'sitting.json'), JSON.stringify(sittingJson()));
     const report = buildReport(sitting, { reportsDir: scratchDir('store-dump-recomputed-reports') });
@@ -1213,7 +1299,7 @@ describe('store-dump evidence is recomputed from retained captures', () => {
     writeRows(after, [JSON.stringify({ path: longPath, chunk: 0, value: 'after' })]);
     const longCompared = compareCaptureDirectories(before, after);
     const representative = longCompared.diff.categories.value.representatives[0];
-    assert.equal(representative.identity.truncated_utf8, true);
+    assert.equal((representative as { identity: { truncated_utf8: unknown } }).identity.truncated_utf8, true);
     assert.ok(Buffer.byteLength(JSON.stringify(representative)) < STORE_DUMP_REPRESENTATIVE_BYTES);
     assert.ok(Buffer.byteLength(JSON.stringify(longCompared)) < STORE_DUMP_REPRESENTATIVE_BYTES * 4);
 
@@ -1221,7 +1307,7 @@ describe('store-dump evidence is recomputed from retained captures', () => {
     writeRows(after, ['{"path":"a.md","vector":hex:01ff}']);
     const malformed = compareCaptureDirectories(before, after);
     assert.equal(malformed.diff.categories.value.count, 1);
-    assert.equal(malformed.diff.categories.value.representatives[0].identity, '[null,null]');
+    assert.equal((malformed.diff.categories.value.representatives[0] as { identity: unknown }).identity, '[null,null]');
   });
 
   it('validates legacy array evidence explicitly and compacts it through bounded v2 summaries', () => {
@@ -1287,10 +1373,10 @@ describe('store-dump evidence is recomputed from retained captures', () => {
     };
     assert.deepEqual(validateStoreDumpArtifact(legacy, sitting, '9.9.9', stores), []);
     const compact = compactStep('store-dump', legacy);
-    assert.equal(compact.diff.version, 2);
-    assert.equal(compact.diff.categories.value.count, stores.length);
-    assert.match(compact.diff.categories.value.sha256, /^[0-9a-f]{64}$/);
-    assert.equal(compact.omitted_evidence.fields[0].source_format, 'legacy-v1');
+    assert.equal((compact as { diff: { version: unknown } }).diff.version, 2);
+    assert.equal((compact as { diff: { categories: { value: { count: unknown } } } }).diff.categories.value.count, stores.length);
+    assert.match((compact as { diff: { categories: { value: { sha256: string } } } }).diff.categories.value.sha256, /^[0-9a-f]{64}$/);
+    assert.equal((compact as { omitted_evidence: { fields: { source_format: unknown }[] } }).omitted_evidence.fields[0].source_format, 'legacy-v1');
     const persistedCompact = { diff: { categories: { value: stores.length } }, omitted_evidence: { retention: 'retained in sitting', fields: [] } };
     assert.deepEqual(compactStep('store-dump', persistedCompact), persistedCompact);
   });
@@ -1313,7 +1399,7 @@ describe('store-dump evidence is recomputed from retained captures', () => {
     assert.ok((report.verdict_reasons as string[]).some((reason) => /capture before is invalid/.test(reason)));
 
     const malformed = structuredClone(artifact);
-    (malformed.stores as Record<string, { files: Record<string, { categories: { schema: unknown } }> }>).sqlite.files['tables.txt'].categories.schema = 'not-an-array';
+    (malformed.stores.sqlite.files['tables.txt'].categories as Record<string, unknown>).schema = 'not-an-array';
     writeFileSync(join(sitting, 'store-dump.json'), JSON.stringify(malformed));
     report = buildReport(sitting, { reportsDir: scratchDir('store-dump-tamper-category-reports') });
     assert.ok((report.verdict_reasons as string[]).some((reason) => /category schema is malformed/.test(reason)));
@@ -1337,7 +1423,7 @@ describe('store-dump evidence is recomputed from retained captures', () => {
       const report = buildReport(sitting, { reportsDir: scratchDir('store-dump-malformed-artifacts-reports') });
       const markdown = renderMarkdown(report);
       assert.equal(report.verdict, 'BLOCK');
-      assert.ok(report.verdict_reasons.some((reason: string) => reason.includes('store-dump: sqlite comparison has malformed per-store evidence')));
+      assert.ok(report.verdict_reasons.some((reason: unknown) => (reason as string).includes('store-dump: sqlite comparison has malformed per-store evidence')));
       assert.match(markdown, /store-dump: sqlite comparison has malformed per-store evidence/);
       assert.ok(report.classifications.some((classification) => classification.id === 'store-dump/validity' && 'invalid' in classification && classification.invalid === true));
     }
@@ -1351,7 +1437,7 @@ describe('store-dump evidence is recomputed from retained captures', () => {
       const report = buildReport(sitting, { reportsDir: scratchDir('malformed-saved-step-reports') });
       const markdown = renderMarkdown(report);
       assert.equal(report.verdict, 'BLOCK');
-      assert.ok(report.verdict_reasons.some((reason: string) => reason === 'coverage: step "validate" has an invalid status'));
+      assert.ok(report.verdict_reasons.some((reason: unknown) => reason === 'coverage: step "validate" has an invalid status'));
       assert.match(markdown, /coverage: step "validate" has an invalid status/);
       assert.ok(report.classifications.some((classification) => classification.id.startsWith('coverage/') && 'invalid' in classification && classification.invalid === true));
     }
@@ -1364,7 +1450,7 @@ describe('store-dump evidence is recomputed from retained captures', () => {
       writeFileSync(join(sitting, 'sitting.json'), JSON.stringify(json));
       const report = buildReport(sitting, { reportsDir: scratchDir('malformed-saved-stage-reasons-reports') });
       assert.equal(report.verdict, 'BLOCK');
-      assert.ok(report.verdict_reasons.some((reason: string) => reason === 'coverage: recorded failed_stage_reasons is not an array'));
+      assert.ok(report.verdict_reasons.some((reason: unknown) => reason === 'coverage: recorded failed_stage_reasons is not an array'));
       assert.match(renderMarkdown(report), /coverage: recorded failed_stage_reasons is not an array/);
     }
   });
@@ -1463,7 +1549,7 @@ describe('buildReport: present current artifacts must carry the current harness 
 
   it('keeps a valid current compare wrapper numeric while incomplete baseline coverage still blocks the synthetic fixture', async () => {
     const sitting = writeSitting(compareArtifact());
-    const { buildReport } = await import('../../benchmark/report.mjs');
+    const { buildReport } = await import('../../benchmark/report.ts');
     const report = buildReport(sitting, { reportsDir: scratchDir('current-artifact-reports') });
     assert.equal(report.verdict, 'BLOCK');
     assert.ok(report.classifications.length > 0);
@@ -1479,7 +1565,7 @@ describe('buildReport: present current artifacts must carry the current harness 
       { name: 'wrapper-missing', artifact: { ...compareArtifact(), measure_version: undefined }, compare: true, text: /compare: current artifact has no measure_version stamp/ },
       { name: 'inner-stale', artifact: compareArtifact(MEASURE_VERSION, staleVersion), compare: true, text: new RegExp(`compare: inner result .* measure_version ${staleVersion} does not match current ${MEASURE_VERSION}`) },
     ];
-    const { buildReport } = await import('../../benchmark/report.mjs');
+    const { buildReport } = await import('../../benchmark/report.ts');
     for (const testCase of cases) {
       const sitting = writeSitting(testCase.artifact, testCase.compare);
       const report = buildReport(sitting, { reportsDir: scratchDir(`${testCase.name}-reports`) });
@@ -1492,7 +1578,7 @@ describe('buildReport: present current artifacts must carry the current harness 
   });
 
   it('blocks a missing current inner stamp, present null/shape artifacts, reverse artifacts, and quality stamps', async () => {
-    const { buildReport } = await import('../../benchmark/report.mjs');
+    const { buildReport } = await import('../../benchmark/report.ts');
     const complete = compareArtifact();
     const missingInner = { ...complete, results: { ...complete.results, local: { map_ms: 100 } } };
     const cases: Array<{ name: string; files: Record<string, unknown>; text: RegExp }> = [
@@ -1538,7 +1624,7 @@ describe('buildReport: present current artifacts must carry the current harness 
     writeFileSync(join(sitting, 'sitting.json'), JSON.stringify(sittingJson));
     writeFileSync(join(sitting, 'compare.json'), '{not json');
     writeFileSync(join(sitting, 'release-gate.json'), JSON.stringify({ accepted: { 'compare/validity': { reason: 'old performance decision' } } }));
-    const { buildReport } = await import('../../benchmark/report.mjs');
+    const { buildReport } = await import('../../benchmark/report.ts');
     const report = buildReport(sitting, { reportsDir: scratchDir('malformed-current-compare-reports') });
     assert.equal(report.verdict, 'BLOCK');
     assert.ok(
@@ -1636,7 +1722,7 @@ describe('owedReasons: a tree with no diff since its tag owes everything', () =>
 describe('verbsFrom: a verb the CLI lacks reads as unmeasured, not a failure', () => {
   const HELP = execFileSync(process.execPath, [join(packageRoot, 'bin', 'cli.js'), '--help'], { encoding: 'utf8' });
 
-  it('the current --help text carries every verb measure-tree.mjs routes through it', () => {
+  it('the current --help text carries every verb measure-tree.ts routes through it', () => {
     const verbs = verbsFrom(HELP);
     for (const v of ['map', 'peek', 'related', 'path', 'watch', 'sql', 'search']) assert.ok(verbs.has(v), `--help must list ${v}`);
   });
@@ -1660,7 +1746,7 @@ describe('diff map: every path exists in the tree', () => {
   it('every prefix or file the diff map names is a real path under this tree', () => {
     for (const p of DIFF_MAP_PATHS) {
       const full = join(packageRoot, p.endsWith('/') ? p.slice(0, -1) : p);
-      assert.ok(existsSync(full), `benchmark/lib/gates.mjs names "${p}", which does not exist`);
+      assert.ok(existsSync(full), `benchmark/lib/gates.ts names "${p}", which does not exist`);
     }
   });
 });
@@ -1687,7 +1773,7 @@ describe('catalog / run.mjs key agreement', () => {
     this.timeout(120_000);
     const corpus = syntheticPath({ notes: 20, noteTokens: 500, headingsPerNote: 8, linksPerNote: 5, distinctFields: 30, fieldsPerNote: 8, seed: 1 });
     const outPath = join(scratchDir('benchmark-harness-run'), 'row.json');
-    execFileSync(process.execPath, [join(packageRoot, 'benchmark', 'steps', 'measure-tree.mjs'), packageRoot, corpus, '--out', outPath], { cwd: packageRoot, encoding: 'utf8' });
+    execFileSync(process.execPath, [join(packageRoot, 'benchmark', 'steps', 'measure-tree.ts'), packageRoot, corpus, '--out', outPath], { cwd: packageRoot, encoding: 'utf8' });
     const row = JSON.parse(readFileSync(outPath, 'utf8'));
     assert.equal(row.measure_version, MEASURE_VERSION);
     assert.equal(row.inproc.error, undefined);
@@ -1701,7 +1787,8 @@ describe('catalog / run.mjs key agreement', () => {
     assert.equal(row.bulk_state.change.preparation.length, 3);
     assert.equal(row.bulk_state.watch.preparation.length, 3);
     for (const preparation of row.bulk_state.watch.preparation) {
-      assert.equal(preparation.watcher_event_deadline_ms, 5_000 + preparation.observer_deadline_ms);
+      assert.equal(preparation.watcher_event_deadline_ms, undefined, 'watcher events are awaited without a deadline');
+      assert.equal(preparation.observer_deadline_ms, undefined, 'readiness and close are awaited without a deadline');
       assert.deepEqual(preparation.watcher_preparation.argv, ['build']);
       assert.equal(preparation.watcher_preparation.status, 0);
       assert.equal(preparation.watcher_preparation.signal, null);
@@ -1872,7 +1959,7 @@ describe('prior resolution: per step, never per report', () => {
       JSON.stringify({ date: '2099-01-03', baseline_version: '9.9.9', last_tag: 'v9.9.8', machine: { cpu_model: 'Fixture' }, node: 'v99', changed_paths: ['src/x.ts'], owed: { baseline: ['src/x.ts'] }, steps: { stress: { id: 'stress', status: 'ok' } }, failed_stage_reasons: [] })
     );
 
-    const { buildReport } = await import('../../benchmark/report.mjs');
+    const { buildReport } = await import('../../benchmark/report.ts');
     const report = buildReport(sitting, { reportsDir });
     const stress = report.classifications.filter((c: { context: string }) => c.context === 'stress');
     assert.ok(stress.length > 0, 'the stress step must produce classifications');
@@ -1898,7 +1985,7 @@ describe('prior resolution: per step, never per report', () => {
       JSON.stringify({ date: '2099-01-01', baseline_version: '9.9.8', last_tag: 'v9.9.8', machine: { cpu_model: 'Fixture' }, node: 'v99', changed_paths: ['src/x.ts'], owed: { baseline: ['src/x.ts'] }, steps: { stress: { id: 'stress', status: 'ok' } }, failed_stage_reasons: [] })
     );
 
-    const { buildReport } = await import('../../benchmark/report.mjs');
+    const { buildReport } = await import('../../benchmark/report.ts');
     const report = buildReport(sitting, { reportsDir });
     assert.equal((report.prior_from as Record<string, string>).stress, '2099-01-01-9.9.8-release-gate.json', 'same-day priors resolve by version, and 9.9.10 is not a prior of a 9.9.8 baseline');
     const stress = report.classifications.filter((c: { context: string }) => c.context === 'stress');
@@ -1912,7 +1999,7 @@ describe('prior resolution: per step, never per report', () => {
     writeFileSync(join(sitting, 'stress.json'), JSON.stringify({ ...metricRow(101), measure_version: MEASURE_VERSION }));
     writeFileSync(join(sitting, 'sitting.json'), JSON.stringify({ date: '2099-01-03', baseline_version: '9.9.9', last_tag: 'v9.9.8', machine: { cpu_model: 'Fixture' }, node: 'v99', changed_paths: [], owed: {}, steps: { stress: { id: 'stress', status: 'ok' } }, failed_stage_reasons: [] }));
 
-    const { buildReport } = await import('../../benchmark/report.mjs');
+    const { buildReport } = await import('../../benchmark/report.ts');
     const report = buildReport(sitting, { reportsDir });
     const stress = report.classifications.filter((c: { context: string }) => c.context === 'stress');
     assert.ok(
@@ -1964,7 +2051,7 @@ describe('priorStepLookup: measure_version, the absent-stamp trap and a real mis
     writeFileSync(join(sitting, 'battery-turso-hub.log'), 'partial output, then the kill\n'); // the log exists, the status never got written
     writeFileSync(join(sitting, 'sitting.json'), JSON.stringify({ date: '2099-01-03', baseline_version: '9.9.9', last_tag: 'v9.9.8', machine: { cpu_model: 'Fixture' }, node: 'v99', changed_paths: [], owed: {}, steps: { stress: { status: 'ok' } }, failed_stage_reasons: [] }));
 
-    const { buildReport } = await import('../../benchmark/report.mjs');
+    const { buildReport } = await import('../../benchmark/report.ts');
     const report = buildReport(sitting, { reportsDir });
     assert.equal(report.verdict, 'BLOCK', 'an interrupted sitting measured nothing past the kill and must not pass');
     assert.ok(
@@ -1980,7 +2067,7 @@ describe('priorStepLookup: measure_version, the absent-stamp trap and a real mis
     writeFileSync(join(sitting, 'stress.json'), JSON.stringify({ ...metricRow(101), measure_version: MEASURE_VERSION }));
     writeFileSync(join(sitting, 'sitting.json'), JSON.stringify({ date: '2099-01-03', baseline_version: '9.9.9', last_tag: 'v9.9.8', machine: { cpu_model: 'Fixture' }, node: 'v99', changed_paths: [], owed: {}, steps: { stress: { id: 'stress', status: 'ok' } }, failed_stage_reasons: [] }));
 
-    const { buildReport } = await import('../../benchmark/report.mjs');
+    const { buildReport } = await import('../../benchmark/report.ts');
     const report = buildReport(sitting, { reportsDir });
     const stress = report.classifications.filter((c: { context: string }) => c.context === 'stress');
     assert.ok(
@@ -2009,7 +2096,7 @@ describe('gate resume: a stage failure never disappears from the report', () => 
   const failed = { id: 'store-dump', status: 'failed' };
 
   it("a failed step's out file does not read as done on resume", async () => {
-    const { doneOnResume, failedStageReasons } = await import('../../benchmark/report.mjs');
+    const { doneOnResume, failedStageReasons } = await import('../../benchmark/report.ts');
     const sitting = scratchDir('resume-failed-out');
     writeFileSync(join(sitting, 'store-dump.json'), JSON.stringify({ baseline: '9.9.8', ok: false, output: '' })); // a failed step's own out file
     assert.ok(existsSync(join(sitting, 'store-dump.json')), 'sanity: the failed step wrote an out file');
@@ -2018,7 +2105,7 @@ describe('gate resume: a stage failure never disappears from the report', () => 
   });
 
   it('a step recorded ok is done; an accepted failure stays failed rather than re-running', async () => {
-    const { doneOnResume } = await import('../../benchmark/report.mjs');
+    const { doneOnResume } = await import('../../benchmark/report.ts');
     assert.equal(doneOnResume('store-dump', { id: 'store-dump', status: 'ok' }), true);
     assert.equal(doneOnResume('store-dump', failed, new Set(['store-dump: failed'])), true, "an accepted failure is the owner's decision to keep it");
     assert.equal(doneOnResume('store-dump', failed, new Set(['store-dump: timeout'])), false, 'accepting one failure does not accept a different one');
@@ -2027,16 +2114,16 @@ describe('gate resume: a stage failure never disappears from the report', () => 
   });
 
   it('names the prerequisites that blocked an unmeasured step', async () => {
-    const { unmeasuredSteps } = await import('../../benchmark/report.mjs');
+    const { unmeasuredSteps } = await import('../../benchmark/report.ts');
     assert.deepEqual(unmeasuredSteps({ steps: { compare: { id: 'compare', status: 'not-run', blocked_by: ['validate', 'npm-test'] } } }), ['compare: not run (blocked by validate, npm-test); run the gate again to resume it']);
     assert.deepEqual(unmeasuredSteps({ steps: { compare: { id: 'compare', status: 'not-run' } } }), ['compare: not run (the gate stopped at an earlier failure); run the gate again to resume it']);
   });
 
   it("a failed stage's reason survives a resume into the report", async () => {
-    const { buildReport, failedStageReasons } = await import('../../benchmark/report.mjs');
+    const { buildReport, failedStageReasons } = await import('../../benchmark/report.ts');
     const reportsDir = scratchDir('resume-failed-reports');
     const sitting = scratchDir('resume-failed-sitting');
-    // What gate.mjs carries across a resume: the recorded status untouched, the reasons recomputed.
+    // What gate.ts carries across a resume: the recorded status untouched, the reasons recomputed.
     mkdirSync(join(sitting, 'store-dump-captures', 'before'), { recursive: true });
     mkdirSync(join(sitting, 'store-dump-captures', 'after'), { recursive: true });
     writeFileSync(join(sitting, 'store-dump-captures', 'before', 'fixture.txt'), 'fixture\n');
@@ -2064,7 +2151,7 @@ describe('gate resume: a stage failure never disappears from the report', () => 
 
     const report = buildReport(sitting, { reportsDir });
     assert.equal(report.verdict, 'BLOCK', 'a failure the owner has not accepted still blocks after a resume');
-    assert.ok(report.verdict_reasons.some((reason: string) => reason === 'store-dump: failed'));
+    assert.ok(report.verdict_reasons.some((reason: unknown) => reason === 'store-dump: failed'));
     assert.deepEqual(report.stage_reasons, ['store-dump: failed']);
   });
 });
@@ -2129,7 +2216,7 @@ describe('gate step orchestration', () => {
     assert.deepEqual(await execute(), { failed: true, step: transitionSteps[0], status: 'failed' });
     assert.deepEqual(childRuns, ['validate']);
     writeFileSync(sittingPath, JSON.stringify({ date: '2099-03-01', baseline_version: '9.9.9', last_tag: 'v9.9.8', machine: { cpu_model: 'Fixture' }, node: 'v99', changed_paths: [], owed: {}, steps, failed_stage_reasons: ['validate: failed'] }));
-    const reportCli = join(packageRoot, 'benchmark', 'report.mjs');
+    const reportCli = join(packageRoot, 'benchmark', 'report.ts');
     let rendered = spawnSync(process.execPath, [reportCli, '--sitting', sitting], { cwd: packageRoot, encoding: 'utf8', timeout: 10_000 });
     assert.equal(rendered.status, 0, rendered.stderr);
     const reportPath = join(sitting, 'release-gate.json');
@@ -2239,7 +2326,7 @@ describe('capability assessment report evidence boundaries', () => {
       writeFileSync(join(dir, 'stress.json'), JSON.stringify({ bulk_change_ms: 400, bulk_watch_ms: 100, measure_version: MEASURE_VERSION }));
       sitting(dir, status === undefined ? {} : { stress: { id: 'stress', status } });
       const report = buildReport(dir, { reportsDir: scratchDir('report-status-reports') });
-      assert.ok(report.verdict_reasons.some((reason: string) => reason.includes(`stress: recorded step status ${status ?? 'missing'}`)));
+      assert.ok(report.verdict_reasons.some((reason: unknown) => (reason as string).includes(`stress: recorded step status ${status ?? 'missing'}`)));
       assert.ok(!report.classifications.some((row) => row.context === 'stress' && Number.isFinite(row.current)), 'raw finite values must not enter a comparison');
       assert.ok(!renderMarkdown(report).includes('| stress |'), 'raw finite values must not enter rendered tables');
     }
@@ -2251,7 +2338,7 @@ describe('capability assessment report evidence boundaries', () => {
     sitting(dir, {});
     writeFileSync(matrix, JSON.stringify({ schema: 'native-evidence-matrix-v1', status: 'success', valid: true, second_baseline_notes: 6, records: [] }));
     const report = buildReport(dir, { reportsDir: scratchDir('report-invalid-matrix-reports'), nativeMatrixPath: matrix });
-    assert.match(report.assessment.current_native_capabilities.error, /coverage differs/);
+    assert.match(report.assessment.current_native_capabilities.error as string, /coverage differs/);
     assert.match(renderMarkdown(report), /No validated native matrix was used/);
   });
 
@@ -2261,7 +2348,7 @@ describe('capability assessment report evidence boundaries', () => {
     sitting(dir, {});
     const source = join(dir, 'release-gate.json');
     writeFileSync(source, '{"preserve":"source"}\n');
-    const run = (args: string[]) => spawnSync(process.execPath, ['benchmark/report.mjs', '--sitting', dir, ...args], { cwd: packageRoot, encoding: 'utf8' });
+    const run = (args: string[]) => spawnSync(process.execPath, ['benchmark/report.ts', '--sitting', dir, ...args], { cwd: packageRoot, encoding: 'utf8' });
     const isolated = run(['--out', out]);
     assert.equal(isolated.status, 0, isolated.stderr);
     assert.equal(readFileSync(source, 'utf8'), '{"preserve":"source"}\n');

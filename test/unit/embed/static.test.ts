@@ -9,6 +9,8 @@ import type { EmbedProvider } from '../../../src/embed/types.ts';
 import { gate } from '../../lib/gate.ts';
 import { writeModel } from '../../lib/model.ts';
 
+// Reaches the network: a machine without the pinned model downloads it from Hugging Face (hf-network gate).
+
 // Oracle diff: fixtures are Python model2vec + tokenizers output, run once offline and
 // committed (test/fixtures/parity/generate.py); this suite reproduces them via JS with no Python in CI.
 const MODEL_ID = 'minishlab/potion-retrieval-32M';

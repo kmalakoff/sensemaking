@@ -3,13 +3,15 @@ import type { Config, ResolvedConfig } from '../../config/index.ts';
 import { STORE_DIMS } from '../../embed/types.ts';
 import { SenseError } from '../../errors.ts';
 import { activeFeatures } from '../../features/index.ts';
+import { ENGINE_CHECK_DOCS, engineIdentity, npmRemedy, checkEngine as runEngineCheck } from '../engine.ts';
+import { peerRange } from '../native.ts';
 import type { InternalOpenOptions, OpenResult } from '../open.ts';
 import { openWithDialect } from '../open.ts';
 import { getMeta, setMeta } from '../shared.ts';
 import type { Connection, OpenDialect } from '../types.ts';
 import { createConnection } from './connection.ts';
-import { assertFtsReady, prepareFts } from './lexical.ts';
-import { DUCKDB_PACKAGE, duckdbApi } from './native.ts';
+import { assertFtsReady, prepareFts, queryLexical } from './lexical.ts';
+import { DUCKDB_PACKAGE, duckdbApi, duckdbNative } from './native.ts';
 import { duckdbDialect } from './reconcile.ts';
 import { registerFunctions } from './sql-functions.ts';
 import { createStore } from './store.ts';
@@ -97,6 +99,32 @@ async function connect(dbPath: string, _cfg: ResolvedConfig, options: { existing
   }
 }
 
+async function duckdbEngineIdentity(): Promise<string> {
+  return engineIdentity(DUCKDB_PACKAGE, (await duckdbNative()).version);
+}
+
+// The real schema, index build and lexical query over store/engine.ts's fixture, in memory.
+async function checkDuckdbEngine(): Promise<void> {
+  const { api, version } = await duckdbNative();
+  const instance = await api.DuckDBInstance.create(':memory:');
+  const handle = { instance, duckdb: await instance.connect() };
+  try {
+    const conn = createConnection(handle.duckdb);
+    await conn.exec('CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)');
+    await ensureCoreSchema(handle, conn);
+    await conn.runBatch(
+      'INSERT INTO content ("path", title, summary, text) VALUES (?, ?, ?, ?)',
+      ENGINE_CHECK_DOCS.map((doc) => [doc.path, doc.title, doc.summary, doc.text])
+    );
+    await runEngineCheck('duckdb', engineIdentity(DUCKDB_PACKAGE, version), npmRemedy(DUCKDB_PACKAGE, peerRange(DUCKDB_PACKAGE)), async (terms) => {
+      await prepareFts(conn);
+      return (await queryLexical(conn, terms, { whereJoin: '', whereCond: '', scopeCond: '', limit: 10 })).map((hit) => hit.path);
+    });
+  } finally {
+    await close(handle);
+  }
+}
+
 // This store's dialect (types.ts's OpenDialect) for the shared orchestration in store/open.ts.
 export const duckdbOpenDialect: OpenDialect<DuckdbHandle> = {
   filename: DB_FILENAME,
@@ -108,6 +136,8 @@ export const duckdbOpenDialect: OpenDialect<DuckdbHandle> = {
   // way: posix "Could not set lock on file ... Conflicting lock is held in <exe> (PID n)", Windows
   // "Cannot open file ... being used by another process". Both are the same condition.
   isLocked: (err) => /Could not set lock on file|being used by another process/.test(err.message),
+  engineIdentity: duckdbEngineIdentity,
+  checkEngine: checkDuckdbEngine,
   ensureCoreSchema,
   ensureFeatureSchema,
   prepareConnection,

@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { scratchDir } from './scratch.ts';
+import { scratchDir } from './tree.ts';
 
 // Spawn the built CLI the way agents invoke it.
 

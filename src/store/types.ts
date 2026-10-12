@@ -98,6 +98,10 @@ export interface OpenDialect<Handle> {
   // Installs the derived busy_timeout PRAGMA right before reconcile (sqlite/turso); absent for
   // duckdb, which has no such PRAGMA.
   setDerivedBusyTimeout?(handle: Handle, conn: Connection, ms: number): Promise<void>;
+  // The engine that builds this store's derived index (store/engine.ts): the npm package for duckdb/turso, Node's
+  // bundled SQLite for sqlite. A recorded identity that differs rebuilds the cache; checkEngine runs before any build under a new one.
+  engineIdentity?(): Promise<string>;
+  checkEngine?(): Promise<void>;
   // Persistent lexical preparation belongs to build, while no-build calls only the readiness
   // check. SQLite and Turso maintain lexical state during reconcile and omit both hooks.
   prepareLexical?(conn: Connection): Promise<void>;

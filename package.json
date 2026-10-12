@@ -72,7 +72,7 @@
     "schema.json"
   ],
   "scripts": {
-    "benchmark": "tsds build && node benchmark/gate.mjs",
+    "benchmark": "tsds build && node benchmark/gate.ts",
     "build": "tsds build",
     "format": "tsds format",
     "prepublishOnly": "tsds validate",
@@ -84,25 +84,40 @@
   "dependencies": {
     "@huggingface/tokenizers": "^0.2.0",
     "franc-min": "^6.2.0",
-    "install-module-linked": "^2.0.0",
+    "install-module-linked": "^2.1.0",
     "markdown-it": "^15.0.1",
     "markdown-it-footnote": "^4.0.0",
     "markdown-it-task-lists": "^2.1.1",
+    "semver": "^7.0.0",
     "stemmer": "^2.0.1",
     "tinypool": "^2.1.2",
     "yaml": "^2.9.0"
   },
   "devDependencies": {
-    "@duckdb/node-api": "*",
-    "@tursodatabase/database": "*",
+    "@duckdb/node-api": "^1.5.6-r.1",
+    "@tursodatabase/database": "^0.8.2",
     "@types/markdown-it-footnote": "^3.0.4",
     "@types/mocha": "*",
-    "@types/node": "*",
+    "@types/node": "^22",
+    "@types/semver": "^7.8.0",
     "cr": "^0.1.0",
     "fs-remove-compat": "^1.0.4",
     "node-version-use": "*",
+    "portable-env": "^1.4.0",
     "ts-dev-stack": "*",
     "tsds-config": "*"
+  },
+  "peerDependencies": {
+    "@duckdb/node-api": "^1.5.6-r.1",
+    "@tursodatabase/database": "^0.8.2"
+  },
+  "peerDependenciesMeta": {
+    "@duckdb/node-api": {
+      "optional": true
+    },
+    "@tursodatabase/database": {
+      "optional": true
+    }
   },
   "engines": {
     "node": ">=22.20"

@@ -3,11 +3,11 @@ import { rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { SearchSignalContribution } from 'sensemaking';
 import { open, SUPPORTED_CONFIG_VERSION, search } from 'sensemaking';
+import { USAGE_CODE } from '../../src/cli/constants.ts';
 import { runCli } from '../lib/cli.ts';
 import { writeModel } from '../lib/model.ts';
-import { scratchDir } from '../lib/scratch.ts';
 import { forEachStore, withTreeForStore } from '../lib/stores.ts';
-import { writeNote } from '../lib/tree.ts';
+import { scratchDir, writeNote } from '../lib/tree.ts';
 
 function tmpTree(): string {
   return scratchDir('search');
@@ -393,7 +393,7 @@ describe('search explanation', () => {
       assert.equal(help.status, 0, help.stderr);
       assert.match(help.stdout, /--explain/);
       const foreign = runCli(['sql', '--explain', '--config', configPath]);
-      assert.equal(foreign.status, 2, foreign.stderr);
+      assert.equal(foreign.status, USAGE_CODE, foreign.stderr);
     });
   });
 });

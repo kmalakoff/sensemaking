@@ -3,8 +3,8 @@ import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { DuckDBInstance } from '@duckdb/node-api';
-import { DUCKDB_LEXICAL_COST_METHOD_VERSION, runDuckdbLexicalCost } from '../../benchmark/lib/duckdb-lexical-cost.mjs';
-import { identityHash } from '../../benchmark/lib/workload-identity.mjs';
+import { DUCKDB_LEXICAL_COST_METHOD_VERSION, runDuckdbLexicalCost } from '../../benchmark/lib/duckdb-lexical-cost.ts';
+import { identityHash } from '../../benchmark/lib/workload-identity.ts';
 import { createConnection } from '../../src/store/duckdb/connection.ts';
 import { createLexicalIndex, prepareFts } from '../../src/store/duckdb/lexical.ts';
 import { registerFunctions } from '../../src/store/duckdb/sql-functions.ts';
@@ -12,11 +12,11 @@ import { registerFunctions } from '../../src/store/duckdb/sql-functions.ts';
 describe('duckdb lexical cost diagnostic', () => {
   it('prints help and rejects unknown arguments before running the diagnostic', () => {
     const root = join(import.meta.dirname, '..', '..');
-    const tool = join(root, 'benchmark', 'tools', 'duckdb-lexical-cost.mjs');
+    const tool = join(root, 'benchmark', 'tools', 'duckdb-lexical-cost.ts');
     const help = spawnSync(process.execPath, [tool, '--help'], { cwd: root, encoding: 'utf8' });
     assert.equal(help.error, undefined, help.error?.message ?? 'help spawn failed');
     assert.equal(help.status, 0, help.stderr);
-    assert.match(help.stderr, /usage: node benchmark\/tools\/duckdb-lexical-cost\.mjs/);
+    assert.match(help.stderr, /usage: node benchmark\/tools\/duckdb-lexical-cost\.ts/);
     const unknown = spawnSync(process.execPath, [tool, '--unknown'], { cwd: root, encoding: 'utf8' });
     assert.equal(unknown.error, undefined, unknown.error?.message ?? 'unknown-argument spawn failed');
     assert.equal(unknown.status, 2, unknown.stderr);
@@ -66,7 +66,7 @@ describe('duckdb lexical cost diagnostic', () => {
       assert.ok(sample.native);
       assert.deepEqual(sample.state, { database: 'fresh', index: 'warm', query_shapes: 'warm' });
       assert.deepEqual(sample.warmup_query_order, ['bare', 'phrase', 'scoped_phrase']);
-      assert.deepEqual(sample.measured_query_order, artifact.fixture.procedure.measured_query_orders[sample.repetition]);
+      assert.deepEqual(sample.measured_query_order, artifact.fixture.procedure.measured_query_orders[sample.repetition as number]);
       assert.deepEqual(
         sample.queries.map(({ id }) => id),
         sample.measured_query_order

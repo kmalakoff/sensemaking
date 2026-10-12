@@ -5,6 +5,7 @@ import { type DuckDBConnection, DuckDBInstance } from '@duckdb/node-api';
 import type { SenseError } from '../../../../src/errors.ts';
 import { listFiles, parseFile } from '../../../../src/scan/index.ts';
 import { createConnection } from '../../../../src/store/duckdb/connection.ts';
+import { DUCKDB_FTS_BUILDERS as FTS } from '../../../../src/store/duckdb/engine.ts';
 import { assertFtsReady, createLexicalIndex, markContentStale, prepareFts } from '../../../../src/store/duckdb/lexical.ts';
 import { nativeQueryTerms, orderedBm25Sql } from '../../../../src/store/duckdb/ordered-bm25.ts';
 import { duckdbDialect } from '../../../../src/store/duckdb/reconcile.ts';
@@ -123,9 +124,9 @@ describe('queryLexical (duckdb)', () => {
           ['a.md', 'b.md']
         );
       for (const terms of queries) {
-        const tokens = await nativeQueryTerms(conn, terms);
+        const tokens = await nativeQueryTerms(conn, FTS, terms);
         const rows = (await (
-          await conn.prepare(`SELECT path, ${orderedBm25Sql('title', tokens.length)} AS title, ${orderedBm25Sql('summary', tokens.length)} AS summary, ${orderedBm25Sql('text', tokens.length)} AS text FROM content WHERE path IN ('a.md', 'b.md') ORDER BY path`)
+          await conn.prepare(`SELECT path, ${orderedBm25Sql(FTS, 'title', tokens.length)} AS title, ${orderedBm25Sql(FTS, 'summary', tokens.length)} AS summary, ${orderedBm25Sql(FTS, 'text', tokens.length)} AS text FROM content WHERE path IN ('a.md', 'b.md') ORDER BY path`)
         ).all(...tokens, ...tokens, ...tokens)) as Array<{ path: string; title: number; summary: number; text: number }>;
         assert.deepEqual(
           rows.map(({ path }) => path),
@@ -155,8 +156,8 @@ describe('queryLexical (duckdb)', () => {
       ['digits.md']
     );
     const getScore = async (terms: string) => {
-      const tokens = await nativeQueryTerms(conn, terms);
-      return (await conn.prepare(`SELECT ${orderedBm25Sql('text', tokens.length)} AS score FROM content WHERE path = 'hit.md'`)).get(...tokens);
+      const tokens = await nativeQueryTerms(conn, FTS, terms);
+      return (await conn.prepare(`SELECT ${orderedBm25Sql(FTS, 'text', tokens.length)} AS score FROM content WHERE path = 'hit.md'`)).get(...tokens);
     };
     const single = (await (await conn.prepare("SELECT fts_main_content.match_bm25('hit.md', 'run', fields := 'text') AS score")).get()) as { score: number };
     assert.deepEqual(await getScore('running runs run'), single);
@@ -191,7 +192,7 @@ describe('queryLexical (duckdb)', () => {
     await insertDoc(conn, 'a.md', '', '', terms.join(' '));
     await insertDoc(conn, 'missing.md', '', '', terms.slice(1).join(' '));
     const { query } = await preparedIndex(conn);
-    const tokens = await nativeQueryTerms(conn, terms.join(' '));
+    const tokens = await nativeQueryTerms(conn, FTS, terms.join(' '));
     assert.equal(tokens.length, 64, 'the fixture must produce 64 distinct native stems');
     for (const text of [terms.join(' '), terms.slice().reverse().join(' ')])
       assert.deepEqual(

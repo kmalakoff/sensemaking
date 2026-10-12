@@ -1,7 +1,9 @@
 import assert from 'node:assert';
-import { statSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { openConfig, tmpTree, writeNote } from '../../../lib/tree.ts';
+import { tursoOpenDialect } from '../../../../src/store/turso/open.ts';
+import { NOT_LOCKED_MESSAGES } from '../../../lib/stores.ts';
+import { openConfig, packageRoot, tmpTree, writeNote } from '../../../lib/tree.ts';
 
 function tursoTree(baseDir: string, presets?: Record<string, unknown>) {
   return openConfig({ store: 'turso', presets: presets ?? { default: { include: ['**/*.md'] } }, queries: {}, baseDir, configPath: null } as Parameters<typeof openConfig>[0]);
@@ -203,5 +205,35 @@ describe('cache bloat reclaim', () => {
     assert.ok(base > 0, 'the cold close must have recorded a baseline');
     const built = dbSize(baseDir);
     assert.ok(built >= base && built - base <= 16384, 'only the baseline row itself may follow the recorded size');
+  });
+});
+
+// isLocked decides whether connectUnlocked retries or gives up. The Windows phrasing is absent from every
+// posix run, so a posix-only matcher passes locally and fails on Windows CI. Verbatim engine messages.
+describe('turso isLocked', () => {
+  const LOCKED = [
+    ['posix', 'Locking error: Failed locking file, File is locked by another process'],
+    ['windows', 'Locking error: Failed locking file, The process cannot access the file because another process has locked a portion of the file. (os error 33)'],
+  ] as const;
+  for (const [platform, message] of LOCKED) {
+    it(`recognises its ${platform} lock message`, () => {
+      assert.ok(tursoOpenDialect.isLocked?.(new Error(message)), `turso must retry on: ${message}`);
+    });
+  }
+  for (const message of NOT_LOCKED_MESSAGES) {
+    it(`does not read "${message.slice(0, 40)}..." as a lock`, () => {
+      assert.equal(tursoOpenDialect.isLocked?.(new Error(message)), false, `turso must fail fast on: ${message}`);
+    });
+  }
+});
+
+describe('turso engine', () => {
+  it('records the installed package as its engine identity', async () => {
+    const installed = (JSON.parse(readFileSync(join(packageRoot, 'node_modules', '@tursodatabase/database', 'package.json'), 'utf8')) as { version: string }).version;
+    assert.equal(await tursoOpenDialect.engineIdentity?.(), `@tursodatabase/database@${installed}`);
+  });
+
+  it('passes the shared behaviour check on the installed engine', async () => {
+    await tursoOpenDialect.checkEngine?.();
   });
 });

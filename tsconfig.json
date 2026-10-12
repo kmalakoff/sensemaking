@@ -5,6 +5,6 @@
     "types": ["mocha", "node"],
     "lib": ["es2022"]
   },
-  "include": ["src", "test"],
+  "include": ["src", "test", "benchmark"],
   "exclude": ["node_modules", "dist"]
 }

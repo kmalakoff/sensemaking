@@ -3,13 +3,18 @@ import type { Config, ResolvedConfig } from '../../config/index.ts';
 import { STORE_DIMS } from '../../embed/types.ts';
 import { SenseError } from '../../errors.ts';
 import { activeFeatures } from '../../features/index.ts';
+import type { ParsedDoc } from '../../scan/index.ts';
+import { ENGINE_CHECK_DOCS, engineIdentity, npmRemedy, checkEngine as runEngineCheck } from '../engine.ts';
+import { peerRange } from '../native.ts';
 import type { InternalOpenOptions, OpenResult } from '../open.ts';
 import { openWithDialect } from '../open.ts';
 import { getMeta, setMeta } from '../shared.ts';
 import type { Connection, OpenDialect } from '../types.ts';
 import { checkpointWal, createConnection } from './connection.ts';
-import { CONNECT_OPTS, TURSO_PACKAGE, tursoApi } from './native.ts';
-import { CONTENT_FTS_DDL, tursoDialect } from './reconcile.ts';
+import { tursoFts } from './engine.ts';
+import { queryLexical } from './lexical.ts';
+import { CONNECT_OPTS, TURSO_PACKAGE, tursoApi, tursoNative } from './native.ts';
+import { reconcileTursoContentWithStrategy, tursoDialect } from './reconcile.ts';
 import { createStore } from './store.ts';
 
 export const DB_FILENAME = 'cache.turso.db';
@@ -25,7 +30,7 @@ async function ensureCoreSchema(_handle: Database, conn: Connection): Promise<vo
   await conn.exec(`CREATE TABLE IF NOT EXISTS frontmatter ("path" TEXT PRIMARY KEY, "_mtime" REAL, "_ctime" REAL, "_size" INTEGER, "_parse_error" TEXT)`);
   await conn.exec(`CREATE TABLE IF NOT EXISTS content ("path" TEXT PRIMARY KEY, title TEXT, summary TEXT, text TEXT, title_stem TEXT, summary_stem TEXT, text_stem TEXT, title_ngram TEXT, summary_ngram TEXT, text_ngram TEXT)`);
   await conn.exec(`CREATE TABLE IF NOT EXISTS indexed_sources ("path" TEXT PRIMARY KEY, text TEXT NOT NULL)`);
-  for (const ddl of CONTENT_FTS_DDL) await conn.exec(ddl);
+  for (const ddl of (await tursoFts()).indexDdl()) await conn.exec(ddl);
   await conn.exec(`CREATE TABLE IF NOT EXISTS preset_files ("path" TEXT, preset TEXT, PRIMARY KEY ("path", preset))`);
   await conn.exec('CREATE INDEX IF NOT EXISTS preset_files_preset ON preset_files(preset)');
   if ((await getMeta(conn, 'schema_version')) === null) await setMeta(conn, 'schema_version', SCHEMA_VERSION);
@@ -74,6 +79,26 @@ async function connect(dbPath: string, _cfg: ResolvedConfig, options: { existing
   return { handle: db, conn: createConnection(db) };
 }
 
+async function tursoEngineIdentity(): Promise<string> {
+  return engineIdentity(TURSO_PACKAGE, (await tursoNative()).version);
+}
+
+// The real schema, content write and lexical query over store/engine.ts's fixture, in memory.
+async function checkTursoEngine(): Promise<void> {
+  const { api, version } = await tursoNative();
+  const db = await api.connect(':memory:', { ...CONNECT_OPTS, experimental: [...CONNECT_OPTS.experimental] });
+  try {
+    const conn = createConnection(db);
+    await conn.exec('CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)');
+    await ensureCoreSchema(db, conn);
+    const docs = ENGINE_CHECK_DOCS.map((doc) => ({ relPath: doc.path, search: { title: doc.title, summary: doc.summary, text: doc.text } }) as ParsedDoc);
+    await reconcileTursoContentWithStrategy(conn, [], docs, 'incremental');
+    await runEngineCheck('turso', engineIdentity(TURSO_PACKAGE, version), npmRemedy(TURSO_PACKAGE, peerRange(TURSO_PACKAGE)), async (terms) => (await queryLexical(conn, terms, { whereJoin: '', whereCond: '', scopeCond: '', limit: 10 })).map((hit) => hit.path));
+  } finally {
+    await db.close();
+  }
+}
+
 // This store's dialect (types.ts's OpenDialect) for the shared orchestration in store/open.ts.
 export const tursoOpenDialect: OpenDialect<Database> = {
   filename: DB_FILENAME,
@@ -85,6 +110,8 @@ export const tursoOpenDialect: OpenDialect<Database> = {
   // process", Windows "another process has locked a portion of the file (os error 33)". Distinct from
   // the write-time "database is locked" its connect-time `timeout` covers; that one never reaches here.
   isLocked: (err) => /File is locked by another process|locked a portion of the file/.test(err.message),
+  engineIdentity: tursoEngineIdentity,
+  checkEngine: checkTursoEngine,
   ensureCoreSchema,
   ensureFeatureSchema,
   setDerivedBusyTimeout,

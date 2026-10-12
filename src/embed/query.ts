@@ -15,7 +15,7 @@ import { getProvider } from './registry.ts';
 import { type EmbedCallOptions, STORE_DIMS } from './types.ts';
 
 // Slice + re-normalize (Matryoshka); optionally round through int8 storage. Exported for
-// benchmark/lib/embed.mjs, which scores the same lever math offline.
+// benchmark/lib/embed.ts, which scores the same lever math offline.
 export function toStore(full: Float32Array, dims: number, int8: boolean): { v: Float32Array; scale: number } {
   const v = new Float32Array(dims);
   let norm = 0;

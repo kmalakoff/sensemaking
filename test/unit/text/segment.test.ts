@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { searchTokens, segmentField, segmentMatch } from '../../../src/text/segment.ts';
 import { runCli as spawnCli } from '../../lib/cli.ts';
-import { scratchDir } from '../../lib/scratch.ts';
+import { scratchDir } from '../../lib/tree.ts';
 
 function writeConfig(dir: string, extra: Record<string, unknown> = {}): void {
   writeFileSync(join(dir, 'sense.config.json'), JSON.stringify({ version: 4, presets: { default: { include: ['*.md'] } }, ...extra, queries: {} }));

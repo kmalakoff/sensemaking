@@ -10,9 +10,10 @@ import { SenseError } from '../errors.ts';
 import { FEATURES } from '../features/index.ts';
 import { createBuilder } from './builder.ts';
 import { clearCache } from './cache.ts';
+import { ENGINE_IDENTITY_META_KEY } from './engine.ts';
 import { lockWaitBudgetMs } from './lock-wait.ts';
 import { CORE_READY_META_KEY, FEATURE_SIGNATURE_META_KEY, isCoreReady, isPublishedFeatureSignature } from './readiness.ts';
-import { getMeta } from './shared.ts';
+import { getMeta, setMeta } from './shared.ts';
 import { changedSignatureKeys, embedIdentityAdopted } from './signature.ts';
 import type { Stages } from './stages.ts';
 import { stageRecorder } from './stages.ts';
@@ -108,14 +109,15 @@ async function connectExisting<Handle>(cfg: ResolvedConfig, dialect: OpenDialect
 
   const { handle, conn } = await connectUnlocked(dbPath, cfg, configDir, dialect, { existingOnly: true, observational: true });
   try {
-    let state: { version: string | null; features: string | null; ready: string | null };
+    let state: { version: string | null; features: string | null; ready: string | null; engine: string | null };
     try {
       state = await withTransaction(conn, async () => {
         const version = await getMeta(conn, 'schema_version');
         const features = await getMeta(conn, FEATURE_SIGNATURE_META_KEY);
         const ready = await getMeta(conn, CORE_READY_META_KEY);
+        const engine = await getMeta(conn, ENGINE_IDENTITY_META_KEY);
         await assertCoreSchema(conn);
-        return { version, features, ready };
+        return { version, features, ready, engine };
       });
     } catch {
       if (!existsSync(dbPath)) throw notReady(`the derived index was deleted while opening ${dbPath}`);
@@ -124,6 +126,10 @@ async function connectExisting<Handle>(cfg: ResolvedConfig, dialect: OpenDialect
 
     if (state.version !== dialect.schemaVersion) {
       throw notReady(`the derived index at ${dbPath} uses schema ${state.version ?? 'unknown'}, but this sense version requires ${dialect.schemaVersion}`);
+    }
+    const engine = await dialect.engineIdentity?.();
+    if (engine !== undefined && state.engine !== engine) {
+      throw notReady(`the derived index at ${dbPath} was built with ${state.engine ?? 'an unrecorded engine'}, but this process loads ${engine}`);
     }
     const wantFeatures = featureSignature(cfg, FEATURES);
     if (!isPublishedFeatureSignature(state.features, wantFeatures)) {
@@ -166,16 +172,23 @@ async function connectForBuild<Handle>(cfg: ResolvedConfig, dialect: OpenDialect
     await conn.exec('CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)');
 
     const version = await getMeta(conn, 'schema_version');
-    if (version !== null && version !== dialect.schemaVersion) {
-      console.error('sense: cache format changed (new sensemaking version); rebuilding the index');
+    const engine = await dialect.engineIdentity?.();
+    const builtWith = version === null ? null : await getMeta(conn, ENGINE_IDENTITY_META_KEY);
+    const engineChanged = version !== null && engine !== undefined && builtWith !== engine;
+    if (version !== null && (version !== dialect.schemaVersion || engineChanged)) {
+      console.error(version !== dialect.schemaVersion ? 'sense: cache format changed (new sensemaking version); rebuilding the index' : `sense: index was built with ${builtWith ?? 'an unrecorded engine'}; rebuilding it with ${engine}`);
       await dialect.close(handle);
       closed = true;
-      if (cacheReplaced) throw notReady(`the derived index at ${dbPath} still reports incompatible schema ${version} after cache replacement`);
+      if (cacheReplaced) throw notReady(`the derived index at ${dbPath} still reports incompatible schema ${version} or engine ${builtWith ?? 'unrecorded'} after cache replacement`);
       clearCache(cfg);
       return connectForBuild(cfg, dialect, requirements, true);
     }
 
-    if (version === null) await dialect.ensureCoreSchema(handle, conn);
+    if (version === null) {
+      await dialect.checkEngine?.();
+      await dialect.ensureCoreSchema(handle, conn);
+      if (engine !== undefined) await setMeta(conn, ENGINE_IDENTITY_META_KEY, engine);
+    }
     await dialect.prepareConnection?.(handle, conn, cfg);
 
     if (dialect.setDerivedBusyTimeout) {

@@ -171,6 +171,54 @@ describe('store lifecycle: cold, no-op, edit, add, delete', () => {
     }
   });
 
+  it('rebuilds a cache built by a different engine version and refuses it without a build', async () => {
+    await forEachStore(async (store) => {
+      const rootDir = tmpTree();
+      const configDir = tmpTree();
+      writeNote(rootDir, 'a.md', { body: 'engine identity candidate' });
+      const cfg: ResolvedConfig = {
+        version: 5,
+        store,
+        presets: { default: { include: ['**/*.md'], signals: { words: 1 } } },
+        queries: {},
+        rootDir,
+        configDir,
+        baseDir: rootDir,
+        configPath: join(configDir, 'sense.config.json'),
+      };
+      const writable = await open(cfg);
+      let current: string;
+      try {
+        current = ((await (await writable.store.prepare(`SELECT value FROM meta WHERE key = 'engine_identity'`)).get()) as { value: string }).value;
+        await (await writable.store.prepare(`UPDATE meta SET value = 'retired-engine@0.0.1' WHERE key = 'engine_identity'`)).run();
+      } finally {
+        await writable.store.close();
+      }
+
+      await assert.rejects(
+        () => open(cfg, { build: false }),
+        (err: unknown) => {
+          assert.equal((err as { code?: string }).code, 'INDEX_NOT_READY', `${store}: wrong refusal`);
+          assert.match((err as Error).message, new RegExp(`built with retired-engine@0\\.0\\.1, but this process loads ${current.replace(/[.^$*+?()[\]{}|\\]/g, '\\$&')}`));
+          return true;
+        }
+      );
+
+      const result = await build(cfg);
+      assert.equal(result.parsed, 1, `${store}: the engine change did not rebuild the cache`);
+      const rebuilt = await open(cfg, { build: false });
+      try {
+        assert.equal(((await (await rebuilt.store.prepare(`SELECT value FROM meta WHERE key = 'engine_identity'`)).get()) as { value: string }).value, current);
+        assert.deepEqual(
+          (await search(rebuilt.store, cfg, 'candidate')).map((row) => row.path),
+          ['a.md']
+        );
+      } finally {
+        await rebuilt.store.close();
+      }
+    });
+  });
+
   it('rolls back a failed feature invalidation without withdrawing the published generation', async () => {
     const rootDir = tmpTree();
     const configDir = tmpTree();

@@ -1,17 +1,16 @@
-import { type ChildProcess, spawn } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { join, resolve } from 'node:path';
 import assert from 'assert';
 import { build, loadConfig, open, type ResolvedConfig, SUPPORTED_CONFIG_VERSION, search } from 'sensemaking';
-import { startMeasuredWatcher } from '../../benchmark/lib/measured-watcher.mjs';
-import { signalProcessTree } from '../../benchmark/lib/native-observer.mjs';
+import { startMeasuredWatcher } from '../../benchmark/lib/measured-watcher.ts';
+import { jobProblems, type OwnedJob, spawnOwned } from '../../benchmark/lib/step-process.ts';
 import { readWatchClaim, WATCH_HEARTBEAT_INTERVAL_MS, WATCH_STALE_HEARTBEAT_MS, type WatchClaimRecord } from '../../src/watch-claim.ts';
 import { writeModel } from '../lib/model.ts';
-import { packageRoot, scratchDir } from '../lib/scratch.ts';
 import { listen } from '../lib/server.ts';
 import { forEachStore, type ParityStoreName, withTreeForStore } from '../lib/stores.ts';
-import { writeNote } from '../lib/tree.ts';
+import { packageRoot, scratchDir, writeNote } from '../lib/tree.ts';
+import { withinTest } from '../lib/watchdog.ts';
 
 const DEADLINE_MS = 30_000;
 
@@ -27,8 +26,13 @@ async function waitForClaim(configDir: string, predicate: (claim: WatchClaimReco
 
 async function killMeasuredWatcher(watcher: ReturnType<typeof startMeasuredWatcher> | undefined): Promise<void> {
   if (!watcher) return;
-  if (watcher.child.pid !== undefined && watcher.child.exitCode === null && watcher.child.signalCode === null) signalProcessTree(watcher.child, 'SIGKILL');
+  watcher.kill('test cleanup');
   await watcher.closed;
+}
+
+// A watcher wait or close, bounded by this test: on expiry the test stops the watcher it owns.
+function watcherWithin<T>(watcher: ReturnType<typeof startMeasuredWatcher>, label: string, ms: number, operation: Promise<T>): Promise<T> {
+  return withinTest(label, ms, operation, () => watcher.kill(`${label} exceeded the test watchdog`));
 }
 
 async function controlledMixedClientProvider(queryInput: string) {
@@ -282,7 +286,8 @@ interface Message {
 }
 
 interface ProtocolChild {
-  child: ChildProcess;
+  // an owned job: the protocol child and anything it starts are released together
+  job: OwnedJob;
   messages: Message[];
   stderr: string;
   waitFor(type: string): Promise<Message>;
@@ -302,24 +307,24 @@ async function waitForAny(process: ProtocolChild, types: string[]): Promise<Mess
 }
 
 function startChild(role: 'writer' | 'reader' | 'reader2' | 'builder' | 'search-reader' | 'migrator', configPath: string, releasePath = '', label = ''): ProtocolChild {
-  const child = spawn(process.execPath, ['--input-type=module', '-e', CHILD, role, configPath, packageRoot, releasePath, label], {
-    cwd: packageRoot,
-    detached: true,
-    stdio: ['pipe', 'pipe', 'pipe'],
-  });
+  const job = spawnOwned([process.execPath, '--input-type=module', '-e', CHILD, role, configPath, packageRoot, releasePath, label], { cwd: packageRoot, stdin: 'pipe' });
   const messages: Message[] = [];
   let stdout = '';
   let stderr = '';
   let failure: Error | undefined;
   const waiters = new Map<string, Waiter[]>();
-  const closed = new Promise<void>((resolve) => child.once('close', () => resolve()));
+  let ended: string | null = null;
+  const closed = job.result.then((result) => {
+    ended = `${JSON.stringify(result.command)}${jobProblems(result).length > 0 ? `; ${jobProblems(result).join('; ')}` : ''}`;
+    for (const waiter of [...waiters.values()].flat()) waiter.close?.();
+  });
   const fail = (err: Error): void => {
     failure ??= err;
     const pending = [...waiters.values()].flat();
     waiters.clear();
     for (const waiter of pending) waiter.reject(failure);
   };
-  child.stdout?.on('data', (chunk: Buffer) => {
+  job.stdout.on('data', (chunk: Buffer) => {
     stdout += chunk.toString();
     for (;;) {
       const newline = stdout.indexOf('\n');
@@ -340,21 +345,18 @@ function startChild(role: 'writer' | 'reader' | 'reader2' | 'builder' | 'search-
       }
     }
   });
-  child.stderr?.on('data', (chunk: Buffer) => {
+  job.stderr.on('data', (chunk: Buffer) => {
     stderr += chunk.toString();
-  });
-  child.on('error', (err) => {
-    fail(new Error(`child process error: ${err.message}`, { cause: err }));
   });
   const waitFor = (type: string): Promise<Message> => {
     const found = messages.find((message) => message.type === type);
     if (found) return Promise.resolve(found);
     if (failure) return Promise.reject(failure);
+    if (ended) return Promise.reject(new Error(`child exited before ${type}: ${ended}; stderr=${stderr || 'none'}`));
     return new Promise((resolve, reject) => {
       let waiter: Waiter;
       const cleanup = (): void => {
         if (waiter.timer) clearTimeout(waiter.timer);
-        if (waiter.close) child.off('close', waiter.close);
         const pending = waiters.get(type);
         if (!pending) return;
         const index = pending.indexOf(waiter);
@@ -372,18 +374,17 @@ function startChild(role: 'writer' | 'reader' | 'reader2' | 'builder' | 'search-
         },
       };
       waiter.timer = setTimeout(() => waiter.reject(new Error(`child produced no ${type} within ${DEADLINE_MS}ms; messages=${JSON.stringify(messages)}; stderr=${stderr || 'none'}`)), DEADLINE_MS);
-      waiter.close = () => waiter.reject(new Error(`child exited before ${type}: ${child.signalCode ?? child.exitCode}; stderr=${stderr || 'none'}`));
+      waiter.close = () => waiter.reject(new Error(`child exited before ${type}: ${ended}; stderr=${stderr || 'none'}`));
       const list = waiters.get(type) ?? [];
       list.push(waiter);
       waiters.set(type, list);
-      child.once('close', waiter.close);
     });
   };
   const send = (message: object): void => {
-    child.stdin?.write(`${JSON.stringify(message)}\n`);
+    job.stdin?.write(`${JSON.stringify(message)}\n`);
   };
   return {
-    child,
+    job,
     messages,
     get stderr() {
       return stderr;
@@ -445,13 +446,13 @@ async function runSearchSnapshotOverlap(): Promise<void> {
 }
 
 async function closeChild(process: ProtocolChild): Promise<void> {
-  process.child.stdin?.end();
+  process.job.stdin?.end();
   await process.closed;
 }
 
 async function killChild(process: ProtocolChild | undefined): Promise<void> {
   if (!process) return;
-  if (process.child.pid !== undefined && process.child.exitCode === null && process.child.signalCode === null) signalProcessTree(process.child, 'SIGKILL');
+  process.job.fail('test cleanup');
   await process.closed;
 }
 
@@ -484,7 +485,7 @@ async function runSameInputMigration(): Promise<void> {
         const readyPath = `${releasePath}.${labels[index]}.ready`;
         const deadline = Date.now() + DEADLINE_MS;
         while (!existsSync(readyPath)) {
-          if (child.child.exitCode !== null || child.child.signalCode !== null || child.messages.some((message) => message.type === 'error')) throw new Error(`migrator exited before readiness: ${JSON.stringify(child.messages)}`);
+          if (child.job.exited !== null || child.messages.some((message) => message.type === 'error')) throw new Error(`migrator exited before readiness: ${JSON.stringify(child.messages)}`);
           if (Date.now() >= deadline) throw new Error('migrator did not reach the publication barrier');
           await new Promise((resolve) => setTimeout(resolve, 25));
         }
@@ -507,7 +508,7 @@ async function runSameInputMigration(): Promise<void> {
               const result = await child.waitFor('migration-result');
               await child.waitFor('done');
               await closeChild(child);
-              assert.deepEqual({ code: child.child.exitCode, signal: child.child.signalCode }, { code: 0, signal: null });
+              assert.deepEqual(child.job.exited, { code: 0, signal: null });
               return result;
             })(),
             new Promise<Message>((_resolve, reject) => {
@@ -544,7 +545,7 @@ async function runSameInputMigration(): Promise<void> {
       const errno = readError as NodeJS.ErrnoException;
       target = { error: errno.message, code: errno.code, syscall: errno.syscall, path: errno.path };
     }
-    const outcomes = children.map((child) => ({ messages: child.messages, stderr: child.stderr, code: child.child.exitCode, signal: child.child.signalCode }));
+    const outcomes = children.map((child) => ({ messages: child.messages, stderr: child.stderr, code: child.job.exited?.code ?? null, signal: child.job.exited?.signal ?? null }));
     throw new Error(`same-input migration failed; outcomes=${JSON.stringify(outcomes)}; finalTarget=${JSON.stringify(target)}`, { cause: err });
   }
 }
@@ -882,8 +883,8 @@ describe('bounded core publication', () => {
       utimesSync(join(baseDir, 'a.md'), startupMtime, startupMtime);
       const activeWatcher = startMeasuredWatcher({ pkgRoot: packageRoot, configPath });
       watcher = activeWatcher;
-      const started = await activeWatcher.waitFor('started', 0, DEADLINE_MS);
-      const startupReconciled = await activeWatcher.waitFor('reconciled', started.next, WATCH_HEARTBEAT_INTERVAL_MS + DEADLINE_MS);
+      const started = await watcherWithin(activeWatcher, 'activeWatcher started', DEADLINE_MS, activeWatcher.waitFor('started', 0));
+      const startupReconciled = await watcherWithin(activeWatcher, 'activeWatcher reconciled', WATCH_HEARTBEAT_INTERVAL_MS + DEADLINE_MS, activeWatcher.waitFor('reconciled', started.next));
       assert.deepEqual({ parsed: startupReconciled.event.parsed, total: startupReconciled.event.total, warnings: startupReconciled.event.warnings }, { parsed: 1, total: 1, warnings: [] }, 'watcher did not report the forced baseline startup reparse');
       assert.equal(await pendingVectorCount(cfg), 0, 'startup reconciliation did not leave baseline vectors ready');
       const before = await publishedState(cfg);
@@ -919,7 +920,7 @@ describe('bounded core publication', () => {
       for (;;) {
         const remainingMs = editDeadline - Date.now();
         if (remainingMs <= 0) throw new Error('watcher produced no authored edit reconciliation before the fallback-aware deadline');
-        const event = await activeWatcher.waitFor('reconciled', editCursor, remainingMs);
+        const event = await watcherWithin(activeWatcher, 'activeWatcher reconciled', remainingMs, activeWatcher.waitFor('reconciled', editCursor));
         editCursor = event.next;
         if (event.event.parsed === 0) continue;
         reconciled = event;
@@ -935,8 +936,8 @@ describe('bounded core publication', () => {
         false,
         'the no-op builder advanced past its attempt-0 gate before watcher publication'
       );
-      assert.equal(activeBuilder.child.exitCode, null, 'the gated builder exited before watcher publication');
-      assert.equal(activeBuilder.child.signalCode, null, 'the gated builder received a signal before watcher publication');
+      assert.equal(activeBuilder.job.exited, null, 'the gated builder exited before watcher publication');
+      assert.equal(activeBuilder.job.running, true, 'the gated builder was not running at watcher publication');
 
       const published = await publishedState(cfg);
       assert.equal(Number(published.generation), Number(before.generation) + 1, 'watcher must publish exactly one new core generation');
@@ -1028,7 +1029,7 @@ describe('bounded core publication', () => {
 
     const resourceCleanup = await Promise.allSettled([
       Promise.resolve().then(() => (queryOpened ? queryOpened.store.close() : undefined)),
-      Promise.resolve().then(() => (watcher ? watcher.close(DEADLINE_MS) : undefined)),
+      Promise.resolve().then(() => (watcher ? watcherWithin(watcher, 'watcher close', DEADLINE_MS, watcher.close()) : undefined)),
       Promise.resolve().then(() => (builder && builderOutcomeObserved ? closeChild(builder) : killChild(builder))),
       closeServer(provider.server),
     ]);
@@ -1250,8 +1251,8 @@ describe('held writer and independent reader', () => {
         'the watcher must still be inside the held initial reconcile'
       );
       watcher.assertRunning();
-      assert.equal(writer.child.exitCode, null, 'the held writer must still be running before release');
-      assert.equal(writer.child.signalCode, null, 'the held writer must not receive a signal before release');
+      assert.equal(writer.job.exited, null, 'the held writer must not have exited before release');
+      assert.equal(writer.job.running, true, 'the held writer must still be running before release');
       assert.equal(
         writer.messages.some((message) => ['error', 'committed', 'done'].includes(message.type)),
         false,
@@ -1259,16 +1260,17 @@ describe('held writer and independent reader', () => {
       );
 
       contender = startMeasuredWatcher({ pkgRoot: packageRoot, configPath });
-      const rejected = await contender.waitFor('run-watch-rejected', 0, DEADLINE_MS);
+      const rejected = await watcherWithin(contender, 'contender run-watch-rejected', DEADLINE_MS, contender.waitFor('run-watch-rejected', 0));
+      assert.ok(rejected.event.error, 'the observed run-watch rejection must contain its error details');
       assert.equal(rejected.event.error.code, 'WATCH_ACTIVE');
-      await contender.close(5_000, 'WATCH_ACTIVE');
+      await watcherWithin(contender, 'contender close', 5_000, contender.close('WATCH_ACTIVE'));
 
       writer.send({ type: 'release' });
       await writer.waitFor('committed');
-      await watcher.waitFor('started', 0, DEADLINE_MS);
+      await watcherWithin(watcher, 'watcher started', DEADLINE_MS, watcher.waitFor('started', 0));
       await closeChild(writer);
 
-      signalProcessTree(watcher.child, 'SIGKILL');
+      watcher.kill('the test terminates the owner');
       const crashed = await watcher.closed;
       assert.notDeepEqual({ code: crashed.code, signal: crashed.signal }, { code: 0, signal: null }, 'the owner must be terminated rather than shut down cleanly');
       const stoppedClaim = readWatchClaim(baseDir);
@@ -1276,8 +1278,8 @@ describe('held writer and independent reader', () => {
       await waitForClaim(baseDir, (claim) => claim.token === liveClaim.token && Date.now() - claim.heartbeatMs >= WATCH_STALE_HEARTBEAT_MS, WATCH_STALE_HEARTBEAT_MS + 5_000);
 
       replacement = startMeasuredWatcher({ pkgRoot: packageRoot, configPath });
-      await replacement.waitFor('started', 0, DEADLINE_MS);
-      await replacement.close(5_000);
+      await watcherWithin(replacement, 'replacement started', DEADLINE_MS, replacement.waitFor('started', 0));
+      await watcherWithin(replacement, 'replacement close', 5_000, replacement.close());
     } finally {
       await Promise.all([killChild(writer), killMeasuredWatcher(watcher), killMeasuredWatcher(contender), killMeasuredWatcher(replacement)]);
     }

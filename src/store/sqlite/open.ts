@@ -3,13 +3,17 @@
 import { DatabaseSync } from 'node:sqlite';
 import type { Config, ResolvedConfig } from '../../config/index.ts';
 import { activeFeatures } from '../../features/index.ts';
+import type { ParsedDoc } from '../../scan/index.ts';
+import { ENGINE_CHECK_DOCS, checkEngine as runEngineCheck } from '../engine.ts';
 import type { InternalOpenOptions, OpenResult } from '../open.ts';
 import { openWithDialect } from '../open.ts';
 import { getMeta, setMeta } from '../shared.ts';
 import { BEGIN_WRITE, withTransaction } from '../transaction.ts';
 import type { Connection, OpenDialect } from '../types.ts';
 import { createConnection } from './connection.ts';
-import { sqliteDialect } from './reconcile.ts';
+import { SQLITE_VERSION, sqliteFts, sqliteIdentity } from './engine.ts';
+import { queryLexical } from './lexical.ts';
+import { contentRow, INSERT_CONTENT_SQL, sqliteDialect } from './reconcile.ts';
 import { registerFunctions } from './sql-functions.ts';
 import { createStore } from './store.ts';
 
@@ -20,18 +24,12 @@ export const SCHEMA_VERSION = '22';
 
 export type { OpenResult };
 
-// unicode61 splits on spaces, so a language written without them indexes a whole run as one
-// token and word search finds nothing; the `_seg` sidecars (always populated) cover that case.
-const TOKENIZE = 'porter unicode61';
-
 interface SqliteHandle {
   db: DatabaseSync;
 }
 
-// The `_seg` sidecars are appended after path, never inserted: bm25() and snippet(content, 2)
-// are documented against the first three columns. Each holds its field's exploded unspaced runs.
 async function createContentTable(conn: Connection): Promise<void> {
-  await conn.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS content USING fts5(title, summary, text, path UNINDEXED, title_seg, summary_seg, text_seg, tokenize = '${TOKENIZE}')`);
+  await conn.exec(sqliteFts().createContent());
 }
 
 // Content is a separate table (not a column on frontmatter) so `SELECT * FROM frontmatter`
@@ -99,6 +97,27 @@ async function setDerivedBusyTimeout(handle: SqliteHandle, _conn: Connection, ms
   handle.db.exec(`PRAGMA busy_timeout = ${ms}`);
 }
 
+// The real schema, content write and lexical query over store/engine.ts's fixture, in memory.
+async function checkSqliteEngine(): Promise<void> {
+  const db = new DatabaseSync(':memory:');
+  try {
+    registerFunctions(db);
+    const conn = createConnection(db);
+    await conn.exec('CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)');
+    await ensureCoreSchemaTables(conn);
+    await conn.runBatch(
+      'INSERT INTO frontmatter ("path") VALUES (?)',
+      ENGINE_CHECK_DOCS.map((doc) => [doc.path])
+    );
+    const docs = ENGINE_CHECK_DOCS.map((doc) => ({ relPath: doc.path, search: { title: doc.title, summary: doc.summary, text: doc.text } }) as ParsedDoc);
+    await conn.runBatch(INSERT_CONTENT_SQL, docs.map(contentRow));
+    const remedy = `this SQLite is bundled with Node ${process.version} (SQLite ${SQLITE_VERSION ?? 'unknown'}); run sense on a Node release whose bundled SQLite passes`;
+    await runEngineCheck('sqlite', sqliteIdentity(), remedy, async (terms) => (await queryLexical(conn, terms, { whereJoin: '', whereCond: '', scopeCond: '', limit: 10 })).map((hit) => hit.path));
+  } finally {
+    db.close();
+  }
+}
+
 // This store's dialect (types.ts's OpenDialect) for the shared orchestration in store/open.ts.
 export const sqliteOpenDialect: OpenDialect<SqliteHandle> = {
   filename: DB_FILENAME,
@@ -106,6 +125,8 @@ export const sqliteOpenDialect: OpenDialect<SqliteHandle> = {
   reconcileDialect: sqliteDialect,
   connect,
   close,
+  engineIdentity: async () => sqliteIdentity(),
+  checkEngine: checkSqliteEngine,
   ensureCoreSchema,
   ensureFeatureSchema,
   setDerivedBusyTimeout,

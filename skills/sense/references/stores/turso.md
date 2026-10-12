@@ -4,7 +4,7 @@ Read this guide when `store` is `turso`.
 
 Sense stores the cache at `.sense/cache.turso.db` and uses `@tursodatabase/database` with Tantivy full-text indexes. Use this experimental adapter when the tree benefits from the embedded Turso engine or its text-index behavior.
 
-The first open installs the native package if needed. Turso holds the cache file for the connection's lifetime, so another Sense command waits for the current command or watcher cycle to close it. The upstream engine supports more deployment and concurrency options than this adapter currently exposes. Sense opens a local file and does not configure sync, remote access, concurrent writers, or encryption.
+The first open installs the native package if needed, at the newest version in sensemaking's declared range. A build after the installed version changes rebuilds the cache, and a no-build query on that cache fails with `INDEX_NOT_READY` until it does. Turso holds the cache file for the connection's lifetime, so another Sense command waits for the current command or watcher cycle to close it. The upstream engine supports more deployment and concurrency options than this adapter currently exposes. Sense opens a local file and does not configure sync, remote access, concurrent writers, or encryption.
 
 ## `sense search` grammar
 

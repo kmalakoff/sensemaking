@@ -12,7 +12,7 @@ Choose it when the tree has no engine-specific requirement, when saved searches 
 - The sense SQL functions `has()`, `basename()`, and `segment()`.
 - WAL-backed concurrent sense commands.
 
-The cache is `.sense/cache.db`. It is derived data and can be rebuilt from the markdown files.
+The cache is `.sense/cache.db`. It is derived data and can be rebuilt from the markdown files. It records the bundled SQLite version that built it, so a Node upgrade that changes that version rebuilds it on the next build.
 
 ## When another store fits the workflow
 

@@ -3,19 +3,20 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import assert from 'assert';
 import { open } from 'sensemaking';
-import { FIXED_HYDRATION_CANDIDATES, FIXED_HYDRATION_CASES, FIXED_HYDRATION_EXPECTED, FIXED_HYDRATION_FILES, FIXED_HYDRATION_INPUTS, FIXED_HYDRATION_LINES, FIXED_HYDRATION_SECTIONS, FIXED_HYDRATION_TERMS } from '../../benchmark/lib/fixed-hydration-workload.mjs';
-import { validateFixedWorkArtifact } from '../../benchmark/lib/fixed-work-measurement.mjs';
-import { MEASURE_VERSION } from '../../benchmark/lib/measure.mjs';
-import { NATIVE_CAPABILITY_READINESS_POLICY } from '../../benchmark/lib/native-capability.mjs';
-import { compareNativeHydrationArtifacts, NATIVE_HYDRATION_HARNESS_FILES, NATIVE_HYDRATION_REPETITIONS, NATIVE_HYDRATION_SCHEMA } from '../../benchmark/lib/native-hydration-compare.mjs';
-import { quietMachineCheck } from '../../benchmark/lib/quiet-machine.mjs';
-import { SHARED_SNIPPET_SCHEMA, validateSharedSnippetArtifact } from '../../benchmark/lib/shared-snippet-contract.mjs';
-import { buildStages } from '../../benchmark/lib/stages.mjs';
-import { identityHash } from '../../benchmark/lib/workload-identity.mjs';
+import { FIXED_HYDRATION_CANDIDATES, FIXED_HYDRATION_CASES, FIXED_HYDRATION_EXPECTED, FIXED_HYDRATION_FILES, FIXED_HYDRATION_INPUTS, FIXED_HYDRATION_LINES, FIXED_HYDRATION_SECTIONS, FIXED_HYDRATION_TERMS } from '../../benchmark/lib/fixed-hydration-workload.ts';
+import { validateFixedWorkArtifact } from '../../benchmark/lib/fixed-work-measurement.ts';
+import { MEASURE_VERSION } from '../../benchmark/lib/measure.ts';
+import { NATIVE_CAPABILITY_READINESS_POLICY } from '../../benchmark/lib/native-capability.ts';
+import { compareNativeHydrationArtifacts, NATIVE_HYDRATION_HARNESS_FILES, NATIVE_HYDRATION_REPETITIONS, NATIVE_HYDRATION_SCHEMA } from '../../benchmark/lib/native-hydration-compare.ts';
+import { quietMachineCheck } from '../../benchmark/lib/quiet-machine.ts';
+import { SHARED_SNIPPET_SCHEMA, validateSharedSnippetArtifact } from '../../benchmark/lib/shared-snippet-contract.ts';
+import { buildStages } from '../../benchmark/lib/stages.ts';
+import { identityHash } from '../../benchmark/lib/workload-identity.ts';
+import { buildReport, renderMarkdown } from '../../benchmark/report.ts';
 import { computeSnippets, hydrateSearchRows, lineNumberAt } from '../../src/commands/search.ts';
 import type { ResolvedConfig } from '../../src/config/types.ts';
-import { packageRoot, scratchDir } from '../lib/scratch.ts';
 import { forEachStore } from '../lib/stores.ts';
+import { packageRoot, scratchDir } from '../lib/tree.ts';
 
 type HydrationRow = { path: string; snippets?: string[]; lines?: string };
 
@@ -36,7 +37,7 @@ function assertSharedSnippetReadinessFailure({ artifact, status }: ReturnType<ty
   assert.ok(Array.isArray(artifact.errors) && artifact.errors.length > 0, 'readiness failure must name its errors');
   for (const error of artifact.errors) {
     assert.equal(typeof error, 'string');
-    assert.match(error, /^quiet-machine (?:preflight refused on [a-z0-9]+: load|readiness lost: load) \d+(?:\.\d+)?$/);
+    assert.match(error, /^quiet-machine preflight refused on [a-z0-9]+: load \d+(?:\.\d+)?$/);
     assert.equal(error.trim(), error);
   }
   assert.throws(() => validateSharedSnippetArtifact(artifact), /artifact is not successful/);
@@ -48,6 +49,8 @@ function hydrationArtifacts() {
   const machine = { platform: 'darwin', logical_cores: 8, cpu_model: 'authored fixture' };
   const environment = { machine, machine_fingerprint: identityHash(machine), runtime: { node: 'v26.0.0-fixture' } };
   const observation = { load1: 0, load5: 0, load15: 0, supported: true, passed: true };
+  // The exit reading is recorded, not gated: it carries whether it was above the admission limit.
+  const exitObservation = { load1: 0, load5: 0, load15: 0, supported: true, above_admission_limit: false };
   const inputs = { ...FIXED_HYDRATION_INPUTS, operation: 'production hydration over fixed ordered candidates and caller snippet budgets' };
   return ['sqlite', 'duckdb', 'turso'].map((store) => {
     const provenance = {
@@ -77,16 +80,14 @@ function hydrationArtifacts() {
         policy: { ...NATIVE_CAPABILITY_READINESS_POLICY, fingerprint: identityHash(NATIVE_CAPABILITY_READINESS_POLICY) },
         environment: { entry: structuredClone(environment), exit: structuredClone(environment) as typeof environment | null },
         entry: { ...observation },
-        exit: { ...observation } as typeof observation | null,
+        exit: { ...exitObservation } as typeof exitObservation | null,
       },
     });
   });
 }
 
 function validateHydrationArtifact(artifact: Record<string, unknown>) {
-  // The JavaScript default infers null, although the validator accepts and checks native stores.
-  const validate = validateFixedWorkArtifact as unknown as (value: Record<string, unknown>, options: { schema: string; repetitions: number; harnessFiles: readonly string[]; store: string }) => unknown;
-  return validate(artifact, { schema: NATIVE_HYDRATION_SCHEMA, repetitions: NATIVE_HYDRATION_REPETITIONS, harnessFiles: NATIVE_HYDRATION_HARNESS_FILES, store: artifact.store as string });
+  return validateFixedWorkArtifact(artifact, { schema: NATIVE_HYDRATION_SCHEMA, repetitions: NATIVE_HYDRATION_REPETITIONS, harnessFiles: NATIVE_HYDRATION_HARNESS_FILES, store: artifact.store as string });
 }
 
 function assertHydrationReadinessFailure({ artifact, status }: ReturnType<typeof runTool>) {
@@ -97,29 +98,19 @@ function assertHydrationReadinessFailure({ artifact, status }: ReturnType<typeof
   const readiness = artifact.readiness as ReturnType<typeof hydrationArtifacts>[number]['readiness'];
   assert.ok(readiness?.entry);
   assert.deepEqual(readiness.policy, { ...NATIVE_CAPABILITY_READINESS_POLICY, fingerprint: identityHash(NATIVE_CAPABILITY_READINESS_POLICY) });
-  let expectedError: string;
-  if (artifact.status === 'refused-preflight') {
-    const { machine } = readiness.environment.entry;
-    const supported = !NATIVE_CAPABILITY_READINESS_POLICY.unsupported_platforms.includes(machine.platform);
-    assert.equal(readiness.entry.supported, supported);
-    assert.equal(readiness.entry.passed, false);
-    assert.ok(!supported || quietMachineCheck(readiness.entry.load1, machine.logical_cores).blocked);
-    assert.equal(readiness.exit, null);
-    assert.equal(readiness.environment.exit, null);
-    assert.deepEqual(artifact.provenance, { status: 'unavailable-before-build-or-import' });
-    assert.equal('samples' in artifact, false);
-    assert.equal('median_ms' in artifact, false);
-    expectedError = `quiet-machine preflight refused on ${machine.platform}: load ${readiness.entry.load1}`;
-  } else {
-    assert.equal(artifact.status, 'invalid');
-    assert.equal(readiness.entry.supported, true);
-    assert.equal(readiness.entry.passed, true);
-    assert.ok(readiness.exit && readiness.environment.exit);
-    assert.equal(readiness.exit.supported, true);
-    assert.equal(readiness.exit.passed, false);
-    assert.ok(quietMachineCheck(readiness.exit.load1, readiness.environment.exit.machine.logical_cores).blocked);
-    expectedError = `quiet-machine readiness lost: load ${readiness.exit.load1}`;
-  }
+  // Only a refused entry is a readiness failure; the exit reading never invalidates correct work.
+  assert.equal(artifact.status, 'refused-preflight');
+  const { machine } = readiness.environment.entry;
+  const supported = !NATIVE_CAPABILITY_READINESS_POLICY.unsupported_platforms.includes(machine.platform);
+  assert.equal(readiness.entry.supported, supported);
+  assert.equal(readiness.entry.passed, false);
+  assert.ok(!supported || quietMachineCheck(readiness.entry.load1, machine.logical_cores).blocked);
+  assert.equal(readiness.exit, null);
+  assert.equal(readiness.environment.exit, null);
+  assert.deepEqual(artifact.provenance, { status: 'unavailable-before-build-or-import' });
+  assert.equal('samples' in artifact, false);
+  assert.equal('median_ms' in artifact, false);
+  const expectedError = `quiet-machine preflight refused on ${machine.platform}: load ${readiness.entry.load1}`;
   assert.ok(Array.isArray(artifact.errors) && artifact.errors.length > 0);
   for (const error of artifact.errors) assert.equal(error, expectedError);
   assert.throws(() => validateHydrationArtifact(artifact), /artifact is not successful/);
@@ -183,7 +174,7 @@ describe('fixed-work benchmark artifacts', () => {
     assert.equal(baseline?.steps[6]?.id, 'compare');
     assert.deepEqual(
       baseline?.steps.filter(({ id }) => id.startsWith('result-sets-')),
-      [{ id: 'result-sets-hub', argv: ['node', 'benchmark/tools/result-sets.mjs', 'obsidian-hub'], timeout: 15 * 60_000, quiet: false, owedBy: 'baseline', out: true }]
+      [{ id: 'result-sets-hub', argv: ['node', 'benchmark/tools/result-sets.ts', 'obsidian-hub'], quiet: false, owedBy: 'baseline', out: true }]
     );
     assert.ok(baseline?.steps.slice(0, 4).every((step) => step.quiet && 'out' in step && step.out));
     assert.equal(baseline?.steps[4].quiet, false);
@@ -193,25 +184,26 @@ describe('fixed-work benchmark artifacts', () => {
     assert.equal(scale?.steps[1]?.id, 'scale-13k');
     assert.deepEqual(
       scale?.steps.filter(({ id }) => id.startsWith('result-sets-')),
-      [{ id: 'result-sets-stress', argv: ['node', 'benchmark/tools/result-sets.mjs', 'stress'], timeout: 15 * 60_000, quiet: false, owedBy: 'scale', out: true }]
+      [{ id: 'result-sets-stress', argv: ['node', 'benchmark/tools/result-sets.ts', 'stress'], quiet: false, owedBy: 'scale', out: true }]
     );
   });
 
   it('measures shared snippet work once against its authored output', () => {
     const out = join(scratchDir('shared-snippet-tool'), 'artifact.json');
-    const { artifact, status } = runTool([join(packageRoot, 'benchmark/tools/shared-snippet.mjs')], out);
+    const { artifact, status } = runTool([join(packageRoot, 'benchmark/tools/shared-snippet.ts')], out);
     if (status === 0) validateSharedSnippetArtifact(artifact);
     else assertSharedSnippetReadinessFailure({ artifact, status });
   });
 
-  it('keeps shared snippet preflight refusal and postflight readiness loss invalid', () => {
-    for (const error of ['quiet-machine preflight refused on linux: load 2.24', 'quiet-machine readiness lost: load 2.24']) {
+  it('keeps shared snippet preflight refusal invalid and no longer accepts an exit reading as a failure', () => {
+    for (const error of ['quiet-machine preflight refused on linux: load 2.24']) {
       assertSharedSnippetReadinessFailure({ status: 1, artifact: { schema: 'shared-snippet-v2', measure_version: MEASURE_VERSION, status: 'invalid', valid: false, errors: [error] } });
     }
+    assert.throws(() => assertSharedSnippetReadinessFailure({ status: 1, artifact: { schema: 'shared-snippet-v2', measure_version: MEASURE_VERSION, status: 'invalid', valid: false, errors: ['quiet-machine readiness lost: load 2.24'] } }), assert.AssertionError);
   });
 
   it('rejects unrelated or mixed shared snippet errors and invalid failure records', () => {
-    const failure = { status: 1, artifact: { schema: 'shared-snippet-v2', measure_version: MEASURE_VERSION, status: 'invalid', valid: false, errors: ['quiet-machine readiness lost: load 2.24'] } };
+    const failure = { status: 1, artifact: { schema: 'shared-snippet-v2', measure_version: MEASURE_VERSION, status: 'invalid', valid: false, errors: ['quiet-machine preflight refused on linux: load 2.24'] } };
     const cases = [
       { ...failure, status: 0 },
       { ...failure, status: null },
@@ -221,14 +213,14 @@ describe('fixed-work benchmark artifacts', () => {
         { status: 'success' },
         { valid: true },
         { errors: [] },
-        { errors: 'quiet-machine readiness lost: load 2.24' },
+        { errors: 'quiet-machine preflight refused on linux: load 2.24' },
         { errors: [null] },
         { errors: ['implementation identity changed during measurement'] },
-        { errors: ['quiet-machine readiness lost: load 2.24', 'repetition 1: wrong output'] },
-        { errors: ['close: native failure', 'quiet-machine readiness lost: load 2.24'] },
-        { errors: ['unexpected quiet-machine readiness lost: load 2.24'] },
-        { errors: ['quiet-machine readiness lost: load 2.24; cleanup failed'] },
-        { errors: ['quiet-machine readiness lost: load 2.24\n'] },
+        { errors: ['quiet-machine preflight refused on linux: load 2.24', 'repetition 1: wrong output'] },
+        { errors: ['close: native failure', 'quiet-machine preflight refused on linux: load 2.24'] },
+        { errors: ['unexpected quiet-machine preflight refused on linux: load 2.24'] },
+        { errors: ['quiet-machine preflight refused on linux: load 2.24; cleanup failed'] },
+        { errors: ['quiet-machine preflight refused on linux: load 2.24\n'] },
       ].map((changed) => ({ ...failure, artifact: { ...failure.artifact, ...changed } })),
     ];
     for (const record of cases) assert.throws(() => assertSharedSnippetReadinessFailure(record), assert.AssertionError);
@@ -236,7 +228,7 @@ describe('fixed-work benchmark artifacts', () => {
 
   it('compares exact production hydration of one fixed candidate sequence across real stores', () => {
     const dir = scratchDir('native-hydration-tools');
-    const observed = ['sqlite', 'duckdb', 'turso'].map((store) => runTool([join(packageRoot, 'benchmark/tools/native-hydration.mjs'), '--store', store], join(dir, `native-hydration-${store}.json`)));
+    const observed = ['sqlite', 'duckdb', 'turso'].map((store) => runTool([join(packageRoot, 'benchmark/tools/native-hydration.ts'), '--store', store], join(dir, `native-hydration-${store}.json`)));
     for (const [index, record] of observed.entries()) {
       assert.equal(record.artifact.store, ['sqlite', 'duckdb', 'turso'][index]);
       if (record.status === 0) {
@@ -249,10 +241,10 @@ describe('fixed-work benchmark artifacts', () => {
     const comparison = compareNativeHydrationArtifacts(artifacts);
     assert.equal(comparison.valid, true, comparison.errors.join('\n'));
     assert.deepEqual(comparison.stores, ['duckdb', 'sqlite', 'turso']);
-    assert.deepEqual(Object.keys(comparison.samples_ms_by_store).sort(), ['duckdb', 'sqlite', 'turso']);
+    assert.deepEqual(Object.keys(comparison.samples_ms_by_store as NonNullable<typeof comparison.samples_ms_by_store>).sort(), ['duckdb', 'sqlite', 'turso']);
     assert.match(comparison.scope, /excludes ranking/);
     const cliOut = join(dir, 'native-hydration-comparison.json');
-    const cli = runTool([join(packageRoot, 'benchmark/tools/native-hydration-compare.mjs')], cliOut);
+    const cli = runTool([join(packageRoot, 'benchmark/tools/native-hydration-compare.ts')], cliOut);
     assert.equal(cli.status, 0);
     assert.deepEqual(cli.artifact, comparison);
   });
@@ -333,7 +325,7 @@ describe('fixed-work benchmark artifacts', () => {
       (value) => {
         value.readiness.entry.passed = false;
       },
-      /entry readiness did not pass/,
+      /entry readiness pass contradicts load and core count/,
     ],
     [
       'unsupported entry readiness',
@@ -344,12 +336,19 @@ describe('fixed-work benchmark artifacts', () => {
       /entry readiness is unsupported/,
     ],
     [
-      'failed exit readiness',
+      'exit limit flag that contradicts its load',
       (value) => {
         assert.ok(value.readiness.exit);
-        value.readiness.exit.passed = false;
+        value.readiness.exit.above_admission_limit = true;
       },
-      /exit readiness did not pass/,
+      /exit readiness limit flag contradicts load and core count/,
+    ],
+    [
+      'unrecognised readiness policy',
+      (value) => {
+        value.readiness.policy = { ...value.readiness.policy, max_load_per_logical_core: 1 };
+      },
+      /readiness policy mismatch/,
     ],
     [
       'missing exit readiness',
@@ -387,7 +386,88 @@ describe('fixed-work benchmark artifacts', () => {
     assert.equal('median_ms_by_store' in comparison, false);
   });
 
-  it('keeps hydration preflight refusal and postflight loss invalid and rejects unrelated errors', () => {
+  // The policy artifacts recorded before 2026-10-12 carry, when the exit reading also had to pass.
+  const HISTORICAL_POLICY = { method: 'os.loadavg[0] <= logical_cores / 2', max_load_per_logical_core: 0.5, unsupported_platforms: ['win32'] };
+  const asHistorical = (artifact: ReturnType<typeof hydrationArtifacts>[number]) => {
+    artifact.readiness.policy = { ...HISTORICAL_POLICY, fingerprint: identityHash(HISTORICAL_POLICY) } as typeof artifact.readiness.policy;
+    artifact.readiness.exit = { load1: 0, load5: 0, load15: 0, supported: true, passed: true } as unknown as typeof artifact.readiness.exit;
+    return artifact;
+  };
+
+  it('keeps correct hydration valid when an exit reading is above the admission limit, and flags it', () => {
+    const artifacts = hydrationArtifacts();
+    // 8 logical cores: the admission limit is 4.
+    Object.assign(artifacts[1].readiness.exit as object, { load1: 5, above_admission_limit: true });
+    for (const artifact of artifacts) validateHydrationArtifact(artifact);
+    const comparison = compareNativeHydrationArtifacts(artifacts);
+    assert.equal(comparison.valid, true, comparison.errors.join('\n'));
+    assert.deepEqual(comparison.exit_load_above_admission_limit, ['duckdb']);
+    assert.deepEqual(Object.keys(comparison.median_ms_by_store ?? {}).sort(), ['duckdb', 'sqlite', 'turso']);
+    assert.equal('exit_load_above_admission_limit' in compareNativeHydrationArtifacts(hydrationArtifacts()), false, 'no flag when every exit was within the limit');
+  });
+
+  it('reads a historical-policy artifact by the rule it was recorded under', () => {
+    const artifacts = hydrationArtifacts().map(asHistorical);
+    for (const artifact of artifacts) validateHydrationArtifact(artifact);
+    const comparison = compareNativeHydrationArtifacts(artifacts);
+    assert.equal(comparison.valid, true, comparison.errors.join('\n'));
+    assert.equal('exit_load_above_admission_limit' in comparison, false);
+    const failedExit = asHistorical(hydrationArtifacts()[0]);
+    Object.assign(failedExit.readiness.exit as object, { load1: 5, passed: false });
+    assert.throws(() => validateHydrationArtifact(failedExit), /exit readiness did not pass/);
+  });
+
+  it('refuses to compare stores recorded under different readiness policies', () => {
+    const artifacts = hydrationArtifacts();
+    asHistorical(artifacts[2]);
+    for (const artifact of artifacts) validateHydrationArtifact(artifact);
+    const comparison = compareNativeHydrationArtifacts(artifacts);
+    assert.equal(comparison.valid, false);
+    assert.match(comparison.errors.join('\n'), /readiness policy differs between sqlite and turso/);
+    assert.equal('median_ms_by_store' in comparison, false);
+  });
+
+  it('renders hydration ratios only from clean exit readings and leaves recorded evidence unchanged', () => {
+    // The report's own build and render over a sitting written with the benchmark-harness recipe.
+    const render = (label: string, artifacts: ReturnType<typeof hydrationArtifacts>) => {
+      const dir = scratchDir(`report-hydration-${label}`);
+      const comparison = compareNativeHydrationArtifacts(artifacts);
+      assert.equal(comparison.valid, true, comparison.errors.join('\n'));
+      const written = new Map<string, string>();
+      for (const artifact of artifacts) written.set(`native-hydration-${artifact.store}.json`, JSON.stringify(artifact));
+      written.set('native-hydration-comparison.json', JSON.stringify(comparison));
+      for (const [name, text] of written) writeFileSync(join(dir, name), text);
+      const steps = Object.fromEntries([...artifacts.map((artifact) => `native-hydration-${artifact.store}`), 'native-hydration-comparison'].map((id) => [id, { id, status: 'ok' }]));
+      writeFileSync(
+        join(dir, 'sitting.json'),
+        JSON.stringify({ date: '2099-09-09', baseline_version: '9.9.9', last_tag: 'v9.9.8', machine: { cpu_model: 'Fixture' }, node: 'v99', changed_paths: [], owed: {}, steps: { validate: { id: 'validate', status: 'ok' }, 'npm-test': { id: 'npm-test', status: 'ok' }, ...steps }, failed_stage_reasons: [] })
+      );
+      const report = buildReport(dir, { reportsDir: scratchDir(`report-hydration-${label}-reports`) });
+      // Retained and validated before any rendered text is read.
+      assert.ok(report.assessment.verified_artifacts.includes('native-hydration-comparison'), `${label}: hydration comparison was not verified`);
+      assert.equal(report.assessment.current_fixed_work.hydration.length, 3, `${label}: hydration rows`);
+      for (const [name, text] of written) assert.equal(readFileSync(join(dir, name), 'utf8'), text, `${label}: ${name} was rewritten`);
+      return { rows: report.assessment.current_fixed_work.hydration, markdown: renderMarkdown(report) };
+    };
+
+    const quiet = render('quiet', hydrationArtifacts());
+    for (const row of quiet.rows) assert.deepEqual(row.slice(1), ['3', '1.000 to 3.000 ms', '2.000 ms', '1.00× fastest']);
+    assert.ok(quiet.markdown.includes('1.00× fastest'));
+
+    const elevatedArtifacts = hydrationArtifacts();
+    Object.assign(elevatedArtifacts[1].readiness.exit as object, { load1: 5, above_admission_limit: true });
+    const elevated = render('elevated', elevatedArtifacts);
+    for (const row of elevated.rows) {
+      assert.deepEqual(row.slice(1, 4), ['3', '1.000 to 3.000 ms', '2.000 ms'], 'samples and median are kept');
+      assert.equal(row[4], 'not compared: exit load above the admission limit, an observation and not a clean comparison (duckdb)');
+    }
+    assert.ok(!elevated.markdown.includes('× fastest'), 'no ratio is rendered for an elevated exit');
+
+    const historical = render('historical', hydrationArtifacts().map(asHistorical));
+    for (const row of historical.rows) assert.equal(row[4], '1.00× fastest');
+  });
+
+  it('keeps hydration preflight refusal invalid and rejects unrelated errors', () => {
     const success = hydrationArtifacts()[0];
     const preflight = {
       status: 1,
@@ -407,8 +487,7 @@ describe('fixed-work benchmark artifacts', () => {
     unsupported.artifact.readiness.environment.entry.machine_fingerprint = identityHash(unsupported.artifact.readiness.environment.entry.machine);
     unsupported.artifact.readiness.entry.supported = false;
     unsupported.artifact.errors = ['quiet-machine preflight refused on win32: load 5'];
-    const postflight = { status: 1, artifact: { ...success, status: 'invalid', valid: false, errors: ['quiet-machine readiness lost: load 5'], readiness: { ...success.readiness, exit: { ...success.readiness.entry, load1: 5, passed: false } } } };
-    for (const record of [preflight, unsupported, postflight]) {
+    for (const record of [preflight, unsupported]) {
       assertHydrationReadinessFailure(record);
       for (const error of ['repetition 1: wrong output', 'close: native failure', 'cleanup: temporary tree remains', 'final provenance: missing']) {
         for (const errors of [[error], [...record.artifact.errors, error], [error, ...record.artifact.errors]]) {

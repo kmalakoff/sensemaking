@@ -94,3 +94,13 @@ export function forEachStoreByCapability(capability: Capability, ifSupported: (s
 export function forEachOtherStoreByCapability(capability: Capability, ifSupported: (store: Exclude<ParityStoreName, 'sqlite'>) => Promise<void>, ifMissing: (store: Exclude<ParityStoreName, 'sqlite'>) => Promise<void>): Promise<void> {
   return runStores(OTHER_STORE_NAMES, (store) => (hasCapability(store, capability) ? ifSupported(store) : ifMissing(store)));
 }
+
+// Errors that reach each engine's isLocked and must not read as a lock, or a real failure would be
+// retried until the budget ran out and then reported as contention. Both engines' wording, for both.
+export const NOT_LOCKED_MESSAGES = [
+  'IO Error: Cannot open file "/t/.sense/cache.duckdb": No such file or directory',
+  'IO Error: Cannot open file "/t/.sense/cache.duckdb": Permission denied',
+  'Parser Error: syntax error at or near "SELCT"',
+  'Locking error: Failed locking file, Input/output error (os error 5)',
+  'database disk image is malformed',
+] as const;

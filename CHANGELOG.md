@@ -2,6 +2,25 @@
 
 All notable changes to sensemaking are documented here.
 
+## [0.28.0] - 2026-10-11
+
+### Changed
+
+- CLI operational failures now exit with code 4 and usage errors with code 6. Success
+  remains 0. Update scripts that previously expected error codes 1 or 2.
+- DuckDB and Turso are optional peer dependencies. When a binding is missing, first use
+  installs a version in the declared tested range. An installed version outside that range
+  is reported rather than rejected solely for its version.
+- Indexes record the native engine version that built them. Existing indexes without this
+  identity, or built with a different engine version, rebuild on the next build-enabled open.
+  No-build access reports `INDEX_NOT_READY` until the index is rebuilt. Source notes and
+  configuration are preserved.
+
+### Added
+
+- Fresh index creation checks the native engine's search behavior before building. An
+  incompatible engine fails with `STORE_CAPABILITY_MISSING` and an actionable diagnostic.
+
 ## [0.27.0] - 2026-10-03
 
 ### Added

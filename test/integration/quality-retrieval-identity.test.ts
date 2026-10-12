@@ -1,11 +1,11 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import assert from 'assert';
-import { qualityRetrievalIdentity } from '../../benchmark/lib/quality-retrieval-identity.mjs';
-import { scratchDir } from '../lib/scratch.ts';
+import { qualityRetrievalIdentity } from '../../benchmark/lib/quality-retrieval-identity.ts';
+import { scratchDir } from '../lib/tree.ts';
 
 const SOURCE_FILES = ['src/commands/scope.ts', 'src/commands/search.ts', 'src/commands/signals.ts', 'src/commands/snapshot.ts', 'src/errors.ts', 'src/index.ts', 'src/output/search-error.ts'];
-const COLLECTION_FILES = ['benchmark/steps/quality.mjs', 'benchmark/lib/corpus.mjs', 'benchmark/lib/labels.mjs', 'benchmark/lib/quality.mjs', 'benchmark/lib/quality-work-tree.mjs'];
+const COLLECTION_FILES = ['benchmark/steps/quality.ts', 'benchmark/lib/corpus.ts', 'benchmark/lib/labels.ts', 'benchmark/lib/quality.ts', 'benchmark/lib/quality-work-tree.ts'];
 
 function write(root: string, path: string, text: string): void {
   const target = join(root, path);
@@ -79,6 +79,6 @@ describe('quality retrieval identity', () => {
   });
 
   it('invalidates the quality collection harness', () => {
-    assertInvalidates(fixture(), 'benchmark/lib/quality.mjs');
+    assertInvalidates(fixture(), 'benchmark/lib/quality.ts');
   });
 });

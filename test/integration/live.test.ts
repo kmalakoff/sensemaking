@@ -1,4 +1,5 @@
 import assert from 'node:assert';
+import { loadEnv } from 'portable-env/node';
 import { type SenseError, search } from 'sensemaking';
 import { cohereProvider } from '../../src/embed/cohere.ts';
 import { openaiProvider } from '../../src/embed/openai.ts';
@@ -8,9 +9,7 @@ import { CHINESE_SENTENCES, openConfig, tmpTree, writeNote } from '../lib/tree.t
 
 // Gated on a variable in .env.test (gitignored) per INTEGRATIONS.md row; an unconfigured machine
 // or CI skips this file. The embed/*.test.ts twins pin mock-server shape; these pin the real thing.
-try {
-  process.loadEnvFile('.env.test');
-} catch {}
+loadEnv('.env.test');
 
 // Doc and query embeddings of related text point the same general direction; exact values are
 // the model's business, direction is the contract worth pinning.

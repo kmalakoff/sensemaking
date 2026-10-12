@@ -2,8 +2,7 @@ import assert from 'node:assert';
 import { rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { clearCache, mapTree, open, SenseError } from 'sensemaking';
-import { scratchDir } from '../../../lib/scratch.ts';
-import { openTree, tmpTree, writeNote } from '../../../lib/tree.ts';
+import { openTree, scratchDir, tmpTree, writeNote } from '../../../lib/tree.ts';
 
 function tmpReconcileTree(): string {
   return scratchDir('reconcile');

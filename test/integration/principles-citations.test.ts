@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import cr from 'cr';
-import { packageRoot } from '../lib/scratch.ts';
+import { packageRoot } from '../lib/tree.ts';
 
 // Citing by name makes a stale citation detectable: it resolves to no heading here, where a stale
 // number would resolve to the wrong principle silently. Scoped to src and test; plans cite numbers.

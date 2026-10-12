@@ -4,7 +4,7 @@ import assert from 'assert';
 import { featureSignature } from '../../../src/config/index.ts';
 import { FEATURES } from '../../../src/features/index.ts';
 import { forcedPresetPaths, isPresetOnlyChange } from '../../../src/store/preset-scope.ts';
-import { scratchDir } from '../../lib/scratch.ts';
+import { scratchDir } from '../../lib/tree.ts';
 
 function writeFiles(baseDir: string, relPaths: string[]): void {
   for (const rel of relPaths) {

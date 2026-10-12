@@ -1,6 +1,6 @@
 import assert from 'node:assert';
 import { existsSync } from 'node:fs';
-import { cleanupScratchDirs, scratchDir } from '../lib/scratch.ts';
+import { cleanupScratchDirs, scratchDir } from '../lib/tree.ts';
 
 describe('test scratch cleanup', () => {
   it('continues owned-path cleanup after a real filesystem failure', () => {

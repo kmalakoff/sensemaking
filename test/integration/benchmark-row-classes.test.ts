@@ -1,11 +1,11 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import assert from 'assert';
-import { renderRowsTable } from '../../benchmark/lib/render.mjs';
-import { COMPARISON_CLASSES, ROW_BY_KEY, ROWS } from '../../benchmark/lib/rows.mjs';
-import { aggregateVerdict, classifyCompare, classifyCrossGroup, classifyEval, classifyWatchSanity } from '../../benchmark/lib/verdict.mjs';
-import { buildReport, comparisonCounts, persist, renderMarkdown } from '../../benchmark/report.mjs';
-import { scratchDir } from '../lib/scratch.ts';
+import { renderRowsTable } from '../../benchmark/lib/render.ts';
+import { COMPARISON_CLASSES, ROW_BY_KEY, ROWS } from '../../benchmark/lib/rows.ts';
+import { aggregateVerdict, classifyCompare, classifyCrossGroup, classifyEval, classifyWatchSanity } from '../../benchmark/lib/verdict.ts';
+import { buildReport, comparisonCounts, persist, renderMarkdown } from '../../benchmark/report.ts';
+import { scratchDir } from '../lib/tree.ts';
 
 const byClass = (name: string) => ROWS.filter((row) => row.comparison_class === name).map((row) => row.key);
 
@@ -60,18 +60,18 @@ describe('benchmark row comparison classes', () => {
     const current = classifyEval('eval-fixture', { variants: { semantic: { ndcg: 1.01, rr: 0.6, hit: 1, errors: 0 } } }, null, true);
     assert.equal(current[0].key, 'validity');
     assert.equal(current[0].invalid, true);
-    assert.match(current[0].reason, /out-of-range metric\(s\): ndcg \(ndcg must be between 0 and 1\)/);
+    assert.match(current[0].reason as string, /out-of-range metric\(s\): ndcg \(ndcg must be between 0 and 1\)/);
 
     const prior = classifyEval('eval-fixture', { variants: { semantic: { ndcg: 0.7, rr: 0.6, hit: 1, errors: 0 } } }, { variants: { semantic: { ndcg: 0.7, rr: -0.1, hit: 1, errors: 0 } } }, true);
     assert.equal(prior[0].key, 'validity');
     assert.equal(prior[0].invalid, true);
-    assert.match(prior[0].reason, /prior artifact is out-of-range/);
+    assert.match(prior[0].reason as string, /prior artifact is out-of-range/);
 
     for (const malformed of [null, 'not an object']) {
       const malformedPrior = classifyEval('eval-fixture', { variants: { semantic: { ndcg: 0.7, rr: 0.6, hit: 1, errors: 0 } } }, { variants: { semantic: malformed } }, true);
       assert.equal(malformedPrior[0].key, 'validity');
       assert.equal(malformedPrior[0].invalid, true);
-      assert.match(malformedPrior[0].reason, /prior artifact is invalid \(malformed variant\)/);
+      assert.match(malformedPrior[0].reason as string, /prior artifact is invalid \(malformed variant\)/);
     }
   });
 

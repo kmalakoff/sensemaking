@@ -4,13 +4,13 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { PeekSection, Row, SearchResult, TreeMapField, TreeMapHub, TreeMapRecent } from 'sensemaking';
 import { build, loadConfig, mapTree, open, peek, type ResolvedConfig, SenseError, SUPPORTED_CONFIG_VERSION, search } from 'sensemaking';
+import { ERROR_CODE, USAGE_CODE } from '../../src/cli/constants.ts';
 import { resolveNote, scopedPaths } from '../../src/commands/index.ts';
 import { renderPeek } from '../../src/output/output.ts';
 import { openStoreFor } from '../../src/store/index.ts';
 import { WATCH_CLAIM_FILENAME } from '../../src/watch-claim.ts';
-import { runCli } from '../lib/cli.ts';
-import { packageRoot } from '../lib/scratch.ts';
-import { openConfig, openTree, tmpTree, writeNote } from '../lib/tree.ts';
+import { cliPath, runCli } from '../lib/cli.ts';
+import { openConfig, openTree, packageRoot, tmpTree, writeNote } from '../lib/tree.ts';
 
 const write = (baseDir: string, relPath: string, body: string, frontmatter: Record<string, unknown> = {}) => writeNote(baseDir, relPath, { body, frontmatter });
 
@@ -646,7 +646,7 @@ describe('search error coverage beyond ad-hoc search', () => {
     writeFileSync(join(base, 'sense.config.json'), JSON.stringify({ version: 4, presets: { default: { include: ['**/*.md'] } }, queries: { probe: { sql: matchSql } } }));
     writeNote(base, 'a.md', { body: 'about player-coach roles' });
     const result = runCli(['probe', 'player-coach'], { cwd: base });
-    assert.equal(result.status, 1);
+    assert.equal(result.status, ERROR_CODE);
     assert.match(result.stderr, /punctuation in `player-coach`/);
     assert.match(result.stderr, /double-quoting/);
   });
@@ -656,7 +656,7 @@ describe('search error coverage beyond ad-hoc search', () => {
     writeFileSync(join(base, 'sense.config.json'), JSON.stringify({ version: 2, scan: { include: ['**/*.md'] }, queries: {} }));
     writeNote(base, 'a.md', { body: 'text' });
     const result = runCli(['sql', matchSql, 'player-coach'], { cwd: base });
-    assert.equal(result.status, 1);
+    assert.equal(result.status, ERROR_CODE);
     assert.match(result.stderr, /punctuation in `player-coach`/);
   });
 
@@ -665,7 +665,7 @@ describe('search error coverage beyond ad-hoc search', () => {
     writeFileSync(join(base, 'sense.config.json'), JSON.stringify({ version: 2, scan: { include: ['**/*.md'] }, queries: {} }));
     writeNote(base, 'a.md', { body: 'text' });
     const result = runCli(['sql', 'SELECT nosuchcol FROM frontmatter'], { cwd: base });
-    assert.equal(result.status, 1);
+    assert.equal(result.status, ERROR_CODE);
     assert.match(result.stderr, /no such column: nosuchcol/);
     assert.doesNotMatch(result.stderr, /punctuation|double-quoting/);
   });
@@ -976,13 +976,13 @@ describe('peek stays bounded (sections)', () => {
     for (const flag of ['--section-count-limit', '--link-count-limit']) {
       for (const value of ['0', '-1', '1.5', 'NaN', 'Infinity', '-Infinity', '9007199254740992', 'invalid']) {
         const result = runCli(['peek', 'missing', `${flag}=${value}`], { cwd: baseDir });
-        assert.equal(result.status, 2, result.stderr);
+        assert.equal(result.status, USAGE_CODE, result.stderr);
         assert.ok(result.stderr.includes(`${flag} expects a positive safe integer`), result.stderr);
         assert.doesNotMatch(result.stderr, /no sense\.config\.json/);
       }
       for (const args of [[flag], [flag, '-1']]) {
         const result = runCli(['peek', 'missing', ...args], { cwd: baseDir });
-        assert.equal(result.status, 2, result.stderr);
+        assert.equal(result.status, USAGE_CODE, result.stderr);
       }
     }
   });
@@ -995,7 +995,7 @@ describe('peek stays bounded (sections)', () => {
     assert.doesNotMatch(help.stdout, /--list-limit/);
     for (const flag of ['--list-limit', '--k']) {
       const foreign = runCli(['peek', 'wide', flag, '7']);
-      assert.equal(foreign.status, 2, foreign.stderr);
+      assert.equal(foreign.status, USAGE_CODE, foreign.stderr);
       assert.ok(foreign.stderr.includes(`Unknown option '${flag}'`), foreign.stderr);
     }
   });
@@ -1017,21 +1017,45 @@ describe('peek stays bounded (sections)', () => {
   });
 });
 
-describe('renamed verbs keep one release of a pointer', () => {
-  it('sense query exits 2 pointing at sql, not the unknown-entry error', async () => {
+describe('CLI bootstrap', () => {
+  for (const [type, target, errorCode] of [
+    ['module', 'esm', 'ERR_MODULE_NOT_FOUND'],
+    ['commonjs', 'cjs', 'MODULE_NOT_FOUND'],
+  ] as const) {
+    it(`reports an operational error when the ${target} dist is missing`, () => {
+      const root = tmpTree();
+      const binDir = join(root, 'bin');
+      mkdirSync(binDir);
+      writeFileSync(join(root, 'package.json'), JSON.stringify({ type }));
+      const binPath = join(binDir, 'cli.js');
+      writeFileSync(binPath, readFileSync(cliPath));
+
+      const result = spawnSync(process.execPath, [binPath, '--version'], { encoding: 'utf8', timeout: 10_000 });
+      assert.equal(result.status, ERROR_CODE, result.stderr);
+      assert.equal(result.signal, null);
+      assert.equal(result.stdout, '');
+      assert.match(result.stderr, new RegExp(errorCode));
+      assert.ok(result.stderr.includes(join('dist', target)) || result.stderr.includes(`dist/${target}`), result.stderr);
+      assert.match(result.stderr, /cli\.js/);
+    });
+  }
+});
+
+describe('renamed verbs point to current commands', () => {
+  it('sense query reports a usage error pointing at sql', async () => {
     const base = makeTree();
     writeFileSync(join(base, 'sense.config.json'), JSON.stringify({ version: 4, presets: { default: { include: ['**/*.md'] } }, queries: {} }));
     const result = runCli(['query', 'SELECT 1'], { cwd: base });
-    assert.equal(result.status, 2);
+    assert.equal(result.status, USAGE_CODE);
     assert.match(result.stderr, /query is now sql/);
   });
 
-  it('sense find exits 2 with a pointer, not the unknown-entry error', async () => {
+  it('sense find reports a usage error pointing at search', async () => {
     const base = tmpTree();
     writeFileSync(join(base, 'sense.config.json'), JSON.stringify({ version: 4, presets: { default: { include: ['**/*.md'] } }, queries: {} }));
     writeNote(base, 'a.md', { body: 'alpha' });
     const result = runCli(['find', 'alpha'], { cwd: base });
-    assert.equal(result.status, 2);
+    assert.equal(result.status, USAGE_CODE);
     assert.match(result.stderr, /find is now search/);
     assert.match(result.stderr, /usage:/);
   });
@@ -1140,11 +1164,11 @@ describe('--preset scope', () => {
     );
   });
 
-  it('an unknown --preset at the CLI exits 1 naming the declared presets', async () => {
+  it('an unknown --preset is an operational error naming the declared presets', async () => {
     const base = twoPresetTree();
     writeFileSync(join(base, 'sense.config.json'), JSON.stringify({ version: 4, presets: twoPresets, queries: {} }));
     const result = runCli(['search', 'alpha', '--preset', 'nope'], { cwd: base });
-    assert.equal(result.status, 1);
+    assert.equal(result.status, ERROR_CODE);
     assert.match(result.stderr, /unknown preset "nope"/);
     assert.match(result.stderr, /wiki/);
     assert.match(result.stderr, /raw/);
@@ -1209,36 +1233,36 @@ describe('search resolution precedence', () => {
 // --lexical was removed with the per-preset vector switch (now `signals`): search is search,
 // and a tree without an `embed` block simply has fewer signals.
 describe('removed flags', () => {
-  it('--lexical is no longer a flag: it exits 2 with the usage line rather than being ignored', async () => {
+  it('--lexical reports a usage error with the usage line', async () => {
     const base = makeTree();
     writeFileSync(join(base, 'sense.config.json'), JSON.stringify({ version: 4, presets: { default: { include: ['**/*.md'] } }, queries: {} }));
     const result = runCli(['search', 'price', '--lexical', '--format', 'json'], { cwd: base });
-    assert.equal(result.status, 2, result.stderr);
+    assert.equal(result.status, USAGE_CODE, result.stderr);
     assert.match(result.stderr, /usage: /);
   });
 });
 
 describe('per-command flag parsing', () => {
-  it('a foreign flag exits 2: init does not accept --k', async () => {
+  it('init rejects --k with a usage error', async () => {
     const base = tmpTree();
     const result = runCli(['init', '--k', '5'], { cwd: base });
-    assert.equal(result.status, 2);
+    assert.equal(result.status, USAGE_CODE);
     assert.match(result.stderr, /usage: sense init/);
   });
 
-  it('a foreign flag exits 2: status does not accept --force', async () => {
+  it('status rejects --force with a usage error', async () => {
     const base = makeTree();
     writeFileSync(join(base, 'sense.config.json'), JSON.stringify({ version: 4, presets: { default: { include: ['**/*.md'] } }, queries: {} }));
     const result = runCli(['status', '--force'], { cwd: base });
-    assert.equal(result.status, 2);
+    assert.equal(result.status, USAGE_CODE);
     assert.match(result.stderr, /usage: sense status/);
   });
 
-  it('sense map --list rejects --list and exits 2 (map runs its own parser, not the top-level one)', async () => {
+  it('sense map --list reports a usage error from its command parser', async () => {
     const base = makeTree();
     writeFileSync(join(base, 'sense.config.json'), JSON.stringify({ version: 4, presets: { default: { include: ['**/*.md'] } }, queries: {} }));
     const result = runCli(['map', '--list'], { cwd: base });
-    assert.equal(result.status, 2);
+    assert.equal(result.status, USAGE_CODE);
     assert.match(result.stderr, /usage: sense map/);
   });
 
@@ -1246,7 +1270,7 @@ describe('per-command flag parsing', () => {
     const base = makeTree();
     writeFileSync(join(base, 'sense.config.json'), JSON.stringify({ version: 4, presets: { default: { include: ['**/*.md'] } }, queries: {} }));
     const result = runCli(['status', '--version'], { cwd: base });
-    assert.equal(result.status, 2);
+    assert.equal(result.status, USAGE_CODE);
   });
 
   it('sense search -h exits 0 and prints the search usage line', async () => {
@@ -1259,7 +1283,7 @@ describe('per-command flag parsing', () => {
     const base = makeTree();
     writeFileSync(join(base, 'sense.config.json'), JSON.stringify({ version: 4, presets: { default: { include: ['**/*.md'] } }, queries: {} }));
     const result = runCli(['--format', 'json', 'status'], { cwd: base });
-    assert.equal(result.status, 2);
+    assert.equal(result.status, USAGE_CODE);
   });
 
   it('top-level --list still works', async () => {
@@ -1310,12 +1334,11 @@ describe('flag value shapes', () => {
     const base = makeTree();
     writeFileSync(join(base, 'sense.config.json'), JSON.stringify({ version: 4, presets: { default: { include: ['**/*.md'] } }, queries: {} }));
     const joined = runCli(['search', 'price', '--k=-1'], { cwd: base });
-    assert.equal(joined.status, 2);
+    assert.equal(joined.status, USAGE_CODE);
     assert.match(joined.stderr, /--k expects a positive integer/);
-    // parseArgs calls a dashed value ambiguous rather than guessing: still exit 2, never
-    // a silent default.
+    // parseArgs rejects an ambiguous dashed value as a usage error.
     const spaced = runCli(['search', 'price', '--k', '-1'], { cwd: base });
-    assert.equal(spaced.status, 2);
+    assert.equal(spaced.status, USAGE_CODE);
   });
 });
 
@@ -1388,7 +1411,7 @@ describe('sense build and query --no-build', () => {
       await initial.store.close();
     }
     const result = runCli(['search', 'indexed', '--format', 'json'], { cwd: configDir });
-    assert.equal(result.status, 1);
+    assert.equal(result.status, ERROR_CODE);
     assert.match(result.stderr, /still need vectors/);
     const observed = await open(cfg, { build: false });
     try {
@@ -1404,7 +1427,7 @@ describe('sense build and query --no-build', () => {
     const legacy = JSON.stringify(config);
     writeFileSync(configPath, legacy);
     const absent = runCli(['map', '--format', 'json'], { cwd: configDir });
-    assert.equal(absent.status, 1);
+    assert.equal(absent.status, ERROR_CODE);
     assert.match(absent.stderr, /run "sense build"/);
     assert.equal(readFileSync(configPath, 'utf8'), legacy);
     assert.equal(existsSync(join(configDir, '.sense')), false);
@@ -1456,7 +1479,7 @@ describe('sense build and query --no-build', () => {
     const { configDir } = configuredTree();
     const result = runCli(['map', '--no-build'], { cwd: configDir });
 
-    assert.equal(result.status, 1);
+    assert.equal(result.status, ERROR_CODE);
     assert.match(result.stderr, /run "sense build"/);
     assert.equal(existsSync(join(configDir, '.sense')), false);
   });
@@ -1467,7 +1490,7 @@ describe('sense build and query --no-build', () => {
     writeFileSync(configPath, legacy);
 
     const query = runCli(['map', '--no-build'], { cwd: configDir });
-    assert.equal(query.status, 1);
+    assert.equal(query.status, ERROR_CODE);
     assert.match(query.stderr, /using the migrated form in memory only/);
     assert.equal(readFileSync(configPath, 'utf8'), legacy);
 

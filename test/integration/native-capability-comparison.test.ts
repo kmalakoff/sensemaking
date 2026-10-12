@@ -4,25 +4,25 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { loadavg } from 'node:os';
 import { join } from 'node:path';
 import { STORE_NAMES } from 'sensemaking';
-import { NATIVE_CAPABILITY_READINESS_POLICY, nativeCapabilityEnvironment, runNativeCapability } from '../../benchmark/lib/native-capability.mjs';
-import { compareNativeCapabilityArtifacts } from '../../benchmark/lib/native-capability-compare.mjs';
-import { quietMachineCheck } from '../../benchmark/lib/quiet-machine.mjs';
-import { identityHash } from '../../benchmark/lib/workload-identity.mjs';
+import { NATIVE_CAPABILITY_READINESS_POLICY, nativeCapabilityEnvironment, runNativeCapability } from '../../benchmark/lib/native-capability.ts';
+import { compareNativeCapabilityArtifacts } from '../../benchmark/lib/native-capability-compare.ts';
+import { quietMachineCheck } from '../../benchmark/lib/quiet-machine.ts';
+import { identityHash } from '../../benchmark/lib/workload-identity.ts';
 import { STORE_DIMS } from '../../src/embed/types.ts';
 import { openStoreFor } from '../../src/store/index.ts';
 import type { BuildRequirement } from '../../src/store/open.ts';
-import { packageRoot, scratchDir } from '../lib/scratch.ts';
+import { packageRoot, scratchDir } from '../lib/tree.ts';
 
 const policy = { ...NATIVE_CAPABILITY_READINESS_POLICY, fingerprint: identityHash(NATIVE_CAPABILITY_READINESS_POLICY) };
 type NativeArtifact = Awaited<ReturnType<typeof runNativeCapability>>;
 type LoadObservation = { load1: number; load5: number; load15: number };
-type ReadinessPolicyEvidence = { method: string; max_load_per_logical_core: number; unsupported_platforms: string[]; fingerprint: string };
+type ReadinessPolicyEvidence = { method: string; max_load_per_logical_core: number; unsupported_platforms: string[]; exit?: string; attribution?: string; fingerprint: string };
 type ComparisonArtifact = NativeArtifact & {
   readiness: {
     policy: ReadinessPolicyEvidence;
     environment: { entry: NativeArtifact['environment']; exit: NativeArtifact['environment'] };
     entry: LoadObservation & { supported: boolean; passed: boolean };
-    exit: LoadObservation & { supported: boolean; passed: boolean };
+    exit: LoadObservation & { supported: boolean; above_admission_limit: boolean };
   };
   timing: { valid: boolean; entry: LoadObservation; exit: LoadObservation; error?: string };
 };
@@ -49,7 +49,7 @@ function comparisonFixture(artifacts: NativeArtifact[]): ComparisonArtifact[] {
         policy,
         environment: { entry: structuredClone(environment), exit: structuredClone(environment) },
         entry: { load1: 0, load5: 0, load15: 0, supported: true, passed: true },
-        exit: { load1: 0, load5: 0, load15: 0, supported: true, passed: true },
+        exit: { load1: 0, load5: 0, load15: 0, supported: true, above_admission_limit: false },
       },
       timing: { valid: true, entry: { load1: 0, load5: 0, load15: 0 }, exit: { load1: 0, load5: 0, load15: 0 } },
     };
@@ -66,6 +66,12 @@ function lexicalSample(artifact: NativeArtifact, index: number) {
   const sample = successfulSample(artifact, index);
   assert.ok(sample.lexical);
   return sample.lexical;
+}
+
+function vectorSample(artifact: NativeArtifact, index: number) {
+  const sample = successfulSample(artifact, index);
+  assert.ok(sample.vectors);
+  return sample.vectors;
 }
 
 function replaceEnvironment(artifact: ComparisonArtifact, environment: NativeArtifact['environment']) {
@@ -103,7 +109,7 @@ describe('native capability comparison preflight', () => {
     for (const artifact of realArtifacts) {
       assert.equal(artifact.valid, true);
       assert.equal(artifact.samples.length, 3);
-      assert.deepEqual(successfulSample(artifact, 0).vectors.candidates, [
+      assert.deepEqual(vectorSample(artifact, 0).candidates, [
         { path: 'a.md', similarity: 1 },
         { path: 'b.md', similarity: Number(Math.SQRT1_2.toFixed(3)) },
         { path: 'c.md', similarity: 0 },
@@ -122,6 +128,7 @@ describe('native capability comparison preflight', () => {
     for (const [storeIndex, artifact] of artifacts.entries()) {
       for (const [sampleIndex, sample] of artifact.samples.entries()) {
         assert.ok(!('error' in sample));
+        assert.ok(sample.vectors);
         sample.vectors.candidates_ms = storeIndex * 10 + sampleIndex + 1;
       }
     }
@@ -197,7 +204,7 @@ describe('native capability comparison preflight', () => {
   const mutations: Array<{ name: string; mutate: (rows: ComparisonArtifact[]) => void; reason: RegExp }> = [
     { name: 'wrong same-count lexical path', mutate: (rows) => (lexicalSample(rows[0], 0).first_paths[1] = 'wrong.md'), reason: /cold lexical paths mismatch/ },
     { name: 'changed row input identity', mutate: (rows) => (rows[1].row_workload_ids.open = '0'.repeat(64)), reason: /row workload identities mismatch/ },
-    { name: 'changed vector tuple', mutate: (rows) => (successfulSample(rows[2], 1).vectors.candidates[1].similarity = 0.5), reason: /vector candidates mismatch/ },
+    { name: 'changed vector tuple', mutate: (rows) => (vectorSample(rows[2], 1).candidates[1].similarity = 0.5), reason: /vector candidates mismatch/ },
     { name: 'missing repetition', mutate: (rows) => void rows[0].samples.pop(), reason: /samples do not match repetitions/ },
     { name: 'wrong repetition state', mutate: (rows) => (successfulSample(rows[0], 0).state.index = 'warm'), reason: /state mismatch/ },
     {
@@ -223,7 +230,7 @@ describe('native capability comparison preflight', () => {
       },
       reason: /runtime Node version differs/,
     },
-    { name: 'failed readiness', mutate: (rows) => (rows[0].readiness.exit.passed = false), reason: /exit readiness pass contradicts/ },
+    { name: 'exit limit flag contradicting its load', mutate: (rows) => (rows[0].readiness.exit.above_admission_limit = true), reason: /exit readiness limit flag contradicts/ },
     {
       name: 'different readiness machine snapshot',
       mutate: (rows) => {
@@ -309,6 +316,17 @@ describe('native capability comparison preflight', () => {
     });
   }
 
+  it('keeps a correct comparison eligible when an exit reading is above the admission limit, and flags it', () => {
+    const artifacts = comparisonFixture(realArtifacts);
+    const cores = artifacts[0].environment.machine.logical_cores;
+    Object.assign(artifacts[2].readiness.exit, { load1: cores, above_admission_limit: true });
+    artifacts[2].timing.exit.load1 = cores;
+    const result = compareNativeCapabilityArtifacts(artifacts);
+    assert.equal(result.eligible, true, result.reasons.join('\n'));
+    assert.deepEqual(result.exit_load_above_admission_limit, [artifacts[2].store]);
+    assert.equal('exit_load_above_admission_limit' in compareNativeCapabilityArtifacts(comparisonFixture(realArtifacts)), false);
+  });
+
   it('rejects historical, duplicate-store, and incomplete store sets without inference', () => {
     const historical = comparisonFixture(realArtifacts);
     historical[0].schema = 'native-capability-v1';
@@ -336,7 +354,7 @@ describe('native capability comparison preflight', () => {
       writeFileSync(path, JSON.stringify(artifact));
       return path;
     });
-    const tool = join(packageRoot, 'benchmark/tools/native-capability-compare.mjs');
+    const tool = join(packageRoot, 'benchmark/tools/native-capability-compare.ts');
     const valid = spawnSync(process.execPath, [tool, ...files], { cwd: packageRoot, encoding: 'utf8', timeout: 30_000, maxBuffer: 4 * 1024 * 1024 });
     assert.equal(valid.error, undefined, valid.error?.message ?? 'valid comparison CLI spawn failed');
     assert.equal(valid.signal, null);

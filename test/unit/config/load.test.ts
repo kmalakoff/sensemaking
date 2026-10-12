@@ -2,9 +2,10 @@ import assert from 'node:assert';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { loadConfig, SUPPORTED_CONFIG_VERSION } from 'sensemaking';
+import { ERROR_CODE } from '../../../src/cli/constants.ts';
 import { DEFAULT_EMBED_MODEL } from '../../../src/config/index.ts';
 import { runCli as spawnCli } from '../../lib/cli.ts';
-import { scratchDir } from '../../lib/scratch.ts';
+import { scratchDir } from '../../lib/tree.ts';
 
 const runCli = (configPath: string) => spawnCli(['--list', '--config', configPath]);
 
@@ -36,10 +37,10 @@ describe('config version', () => {
     assert.deepEqual(JSON.parse(readFileSync(join(dir, 'sense.config.json'), 'utf8')).embed, { model: 'custom/m', url: 'http://localhost:11434/v1', key: 'MY_KEY', provider: 'openai' });
   });
 
-  it('newer than supported: exit 1 with the version message', () => {
+  it('a newer config version reports an operational error with the version message', () => {
     const configPath = writeConfig(SUPPORTED_CONFIG_VERSION + 1);
     const result = runCli(configPath);
-    assert.equal(result.status, 1);
+    assert.equal(result.status, ERROR_CODE);
     assert.match(result.stderr, new RegExp(`config version ${SUPPORTED_CONFIG_VERSION + 1} requires a newer sense`));
   });
 

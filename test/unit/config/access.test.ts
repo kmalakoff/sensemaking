@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { runCli as spawnCli } from '../../lib/cli.ts';
 import { writeModel } from '../../lib/model.ts';
-import { scratchDir } from '../../lib/scratch.ts';
+import { scratchDir } from '../../lib/tree.ts';
 
 // Follows the embed-identity signature pattern in db/open.test.ts: simulate a stale on-disk
 // signature, then prove the next open() rebuilds instead of adopting it silently.

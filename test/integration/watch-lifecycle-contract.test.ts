@@ -5,17 +5,24 @@ import { join } from 'node:path';
 import assert from 'assert';
 import { safeRmSync } from 'fs-remove-compat';
 import { loadConfig, open, type ResolvedConfig, runWatch, STATE_DIR, SUPPORTED_CONFIG_VERSION, search } from 'sensemaking';
-import { startMeasuredWatcher } from '../../benchmark/lib/measured-watcher.mjs';
-import { nativeObserverDeadlineMs, waitForNativeIndex } from '../../benchmark/lib/native-observer.mjs';
-import { captureFileManifest, readIndexSnapshot, verifyIndexSnapshot } from '../../benchmark/lib/work-tree.mjs';
+import { startMeasuredWatcher } from '../../benchmark/lib/measured-watcher.ts';
+import { waitForNativeIndex } from '../../benchmark/lib/native-observer.ts';
+import { captureFileManifest, readIndexSnapshot, verifyIndexSnapshot } from '../../benchmark/lib/work-tree.ts';
 import { getProvider } from '../../src/embed/registry.ts';
 import { openStoreFor } from '../../src/store/index.ts';
+import { lockWaitBudgetMs } from '../../src/store/lock-wait.ts';
 import type { BuildRequirement } from '../../src/store/open.ts';
 import { readWatchClaim } from '../../src/watch-claim.ts';
 import { runCli } from '../lib/cli.ts';
-import { packageRoot, scratchDir } from '../lib/scratch.ts';
 import { listen } from '../lib/server.ts';
 import { openTreeForStore, type ParityStoreName, STORE_NAMES } from '../lib/stores.ts';
+import { packageRoot, scratchDir } from '../lib/tree.ts';
+import { abortableWithin, withinTest } from '../lib/watchdog.ts';
+
+// A watcher's cooperative close, bounded by this test: on expiry the test stops the watcher it owns.
+function closeWithin(watcher: ReturnType<typeof startMeasuredWatcher>, expectedErrorCode: unknown = null, ms = 5_000) {
+  return withinTest('watcher close', ms, watcher.close(expectedErrorCode), () => watcher.kill('watcher close exceeded the test watchdog'));
+}
 
 type Store = Awaited<ReturnType<typeof open>>['store'];
 
@@ -253,26 +260,26 @@ describe('public watcher freshness lifecycle', () => {
         await initial.store.close();
       }
 
-      const deadlineMs = await nativeObserverDeadlineMs(packageRoot, tree);
+      const deadlineMs = lockWaitBudgetMs(tree);
       // A missed or delayed fs notification is recovered by the default five-second heartbeat.
       // Give that fallback one derived reconcile budget to finish before calling the watcher stale.
       const watcherDeadlineMs = 5_000 + deadlineMs;
       const watcher = startMeasuredWatcher({ pkgRoot: packageRoot, configPath });
       try {
-        const started = await watcher.waitFor('started', 0, watcherDeadlineMs);
+        const started = await withinTest('watcher started', watcherDeadlineMs, watcher.waitFor('started', 0), () => watcher.kill('test watchdog'));
         writeFileSync(join(tree, 'a.md'), 'freshneedle body.\n');
         setMtime(tree, 'a.md', 4102444801000);
         const expectedManifest = captureFileManifest(tree);
         const expectedRow = { title: '', summary: '', text: 'freshneedle body.' };
-        await watcher.waitFor('reconciled', started.next, watcherDeadlineMs);
-        const observed = await waitForNativeIndex({ pkgRoot: packageRoot, store, configPath, manifest: expectedManifest, expectedContent: [['a.md', rowHash(expectedRow)]], authoredContent: [['a.md', expectedRow]] }, deadlineMs);
+        await withinTest('watcher reconciled', watcherDeadlineMs, watcher.waitFor('reconciled', started.next), () => watcher.kill('test watchdog'));
+        const observed = await abortableWithin('waitForNativeIndex', 30_000, (signal) => waitForNativeIndex({ pkgRoot: packageRoot, store, configPath, manifest: expectedManifest, expectedContent: [['a.md', rowHash(expectedRow)]], authoredContent: [['a.md', expectedRow]] }, { signal }));
         assert.equal(observed.state, 'ready', `${store}: watcher native state`);
         watcher.assertRunning();
         await verifyFreshPublicSearch(store, tree, 'freshneedle', expectedRow);
         verifyFreshCliSearch(store, tree);
         watcher.assertRunning();
       } finally {
-        await watcher.close(deadlineMs);
+        await closeWithin(watcher, null, deadlineMs);
       }
       await verifyFreshPublicSearch(store, tree, 'freshneedle', { title: '', summary: '', text: 'freshneedle body.' });
     });
@@ -292,20 +299,21 @@ describe('public watcher freshness lifecycle', () => {
     const watcher = startMeasuredWatcher({ pkgRoot: packageRoot, configPath });
     let closePromise: ReturnType<typeof watcher.close> | null = null;
     try {
-      const started = await watcher.waitFor('started', 0, 5_000);
+      const started = await withinTest('watcher started', 5_000, watcher.waitFor('started', 0), () => watcher.kill('test watchdog'));
       safeRmSync(stateDir, { recursive: true, force: true });
       writeFileSync(stateDir, 'state directory collision');
       await watcher.requestGracefulStop();
-      const rejected = await watcher.waitFor('run-watch-rejected', started.next, 5_000);
-      closePromise = watcher.close(5_000, 'EEXIST');
+      const rejected = await withinTest('watcher run-watch-rejected', 5_000, watcher.waitFor('run-watch-rejected', started.next), () => watcher.kill('test watchdog'));
+      closePromise = closeWithin(watcher, 'EEXIST');
       const closed = await closePromise;
+      assert.ok(rejected.event.error, 'the observed run-watch rejection must contain its error details');
       assert.equal(rejected.event.error.code, 'EEXIST');
       assert.deepEqual({ code: closed.code, signal: closed.signal }, { code: 0, signal: null });
       assertOnlyKnownNodeWarnings(closed.stderr);
-      await assert.rejects(watcher.close(5_000), { name: 'Error', message: /^runWatch rejected: EEXIST/ });
+      await assert.rejects(closeWithin(watcher), { name: 'Error', message: /^runWatch rejected: EEXIST/ });
     } finally {
       if (closePromise) await closePromise;
-      else await watcher.close(5_000);
+      else await closeWithin(watcher);
     }
   });
 
@@ -325,20 +333,23 @@ describe('public watcher freshness lifecycle', () => {
     try {
       await Promise.all([first.ready, second.ready]);
       await Promise.all([first.start(), second.start()]);
-      const [firstOutcome, secondOutcome] = await Promise.all([first.waitForAny(['started', 'run-watch-rejected'], 0, 10_000), second.waitForAny(['started', 'run-watch-rejected'], 0, 10_000)]);
+      const [firstOutcome, secondOutcome] = await Promise.all([
+        withinTest('first first event', 10_000, first.waitForAny(['started', 'run-watch-rejected'], 0), () => first.kill('test watchdog')),
+        withinTest('second first event', 10_000, second.waitForAny(['started', 'run-watch-rejected'], 0), () => second.kill('test watchdog')),
+      ]);
       assert.deepEqual([firstOutcome.event.type, secondOutcome.event.type].sort(), ['run-watch-rejected', 'started'], 'the native write transaction must grant exactly one claim');
       const winner = firstOutcome.event.type === 'started' ? first : second;
       const loser = winner === first ? second : first;
       const rejection = loser.events.find((event) => event.type === 'run-watch-rejected');
       assert.equal(rejection?.error?.code, 'WATCH_ACTIVE', JSON.stringify(rejection));
-      firstClose = first.close(5_000, firstOutcome.event.type === 'run-watch-rejected' ? 'WATCH_ACTIVE' : null);
-      secondClose = second.close(5_000, secondOutcome.event.type === 'run-watch-rejected' ? 'WATCH_ACTIVE' : null);
+      firstClose = closeWithin(first, firstOutcome.event.type === 'run-watch-rejected' ? 'WATCH_ACTIVE' : null);
+      secondClose = closeWithin(second, secondOutcome.event.type === 'run-watch-rejected' ? 'WATCH_ACTIVE' : null);
     } catch (err) {
       bodyFailed = true;
       bodyError = err;
     }
-    firstClose ??= first.close(5_000, first.events.find((event) => event.type === 'run-watch-rejected')?.error?.code ?? null);
-    secondClose ??= second.close(5_000, second.events.find((event) => event.type === 'run-watch-rejected')?.error?.code ?? null);
+    firstClose ??= closeWithin(first, first.events.find((event) => event.type === 'run-watch-rejected')?.error?.code ?? null);
+    secondClose ??= closeWithin(second, second.events.find((event) => event.type === 'run-watch-rejected')?.error?.code ?? null);
     const closes = await Promise.allSettled([firstClose, secondClose]);
     const cleanupErrors = closes.filter((result): result is PromiseRejectedResult => result.status === 'rejected').map((result) => result.reason);
     if (bodyFailed && cleanupErrors.length > 0) throw new AggregateError([bodyError, ...cleanupErrors], 'watch contender body and cleanup failed');

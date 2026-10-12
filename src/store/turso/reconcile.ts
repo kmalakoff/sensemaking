@@ -6,19 +6,14 @@ import { hasUnspacedRun } from '../../text/segment.ts';
 import { quoteIdent, recordReconcileDuration } from '../shared.ts';
 import { BEGIN_WRITE } from '../transaction.ts';
 import type { Connection, ReconcileDialect } from '../types.ts';
+import { tursoFts } from './engine.ts';
 import { stemFolded } from './lexical-text.ts';
 
 // This store's dialect (types.ts's ReconcileDialect) for the shared orchestration in
 // store/reconcile.ts. content is a plain table with "_ngram" sidecars for lexical.ts.
 
-// The ngram index is scoped to disjoint "_ngram" sidecar columns: a second index over the same
-// columns makes a bare substring match a whole word, defeating the prefix-query rejection.
-// The two FTS indexes, named here (not open.ts) because reconcile drops and rebuilds them around
+// The two FTS indexes (engine.ts's indexDdl), named here because reconcile drops and rebuilds them around
 // a bulk load: Tantivy maintains them per inserted row, which is quadratic in what is already indexed.
-export const CONTENT_FTS_DDL = [
-  `CREATE INDEX IF NOT EXISTS content_fts ON content USING fts (title_stem, summary_stem, text_stem) WITH (weights = 'title_stem=10.0,summary_stem=5.0,text_stem=1.0')`,
-  `CREATE INDEX IF NOT EXISTS content_fts_ngram ON content USING fts (title_ngram, summary_ngram, text_ngram) WITH (tokenizer='ngram', weights='title_ngram=10.0,summary_ngram=5.0,text_ngram=1.0')`,
-] as const;
 export const CONTENT_FTS_NAMES = ['content_fts', 'content_fts_ngram'] as const;
 
 // '' when the field has no unspaced-script run (the common case), so the ngram index carries
@@ -65,7 +60,7 @@ export async function reconcileTursoContentWithStrategy(conn: Connection, touche
     await conn.runBatch(`DELETE FROM content WHERE "path" IN (${placeholders})`, [touched]);
   }
   if (docs.length > 0) await conn.runBatch(INSERT_CONTENT_SQL, docs.map(contentRow));
-  if (bulk) for (const ddl of CONTENT_FTS_DDL) await conn.exec(ddl);
+  if (bulk) for (const ddl of (await tursoFts()).indexDdl()) await conn.exec(ddl);
 }
 
 async function reconcileTursoContent(conn: Connection, touched: string[], docs: ParsedDoc[], delta: ReconcileDelta, _cfg: Config): Promise<void> {

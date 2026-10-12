@@ -5,7 +5,7 @@ import type { ResolvedConfig } from '../../src/config/index.ts';
 import { SenseError } from '../../src/errors.ts';
 import { clearCache } from '../../src/store/index.ts';
 import { readWatchClaim, WATCH_CLAIM_FILENAME, WatchClaimDatabase } from '../../src/watch-claim.ts';
-import { scratchDir } from '../lib/scratch.ts';
+import { scratchDir } from '../lib/tree.ts';
 
 describe('watch claim', () => {
   it('atomically replaces ownership and guards renew and release by token', async () => {

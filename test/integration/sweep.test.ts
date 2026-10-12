@@ -2,8 +2,8 @@ import assert from 'node:assert';
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { COMPARISON_CLASSES, ROWS } from '../../benchmark/lib/rows.mjs';
-import { packageRoot, scratchDir } from '../lib/scratch.ts';
+import { COMPARISON_CLASSES, ROWS } from '../../benchmark/lib/rows.ts';
+import { packageRoot, scratchDir } from '../lib/tree.ts';
 
 describe('documented shape sweep', () => {
   it('keeps one classified 26-row catalog with explicit output-size units', () => {
@@ -22,7 +22,7 @@ describe('documented shape sweep', () => {
   it('uses current presets and retains valid small-fixture repetitions', function () {
     this.timeout(30_000);
     const out = join(scratchDir('sweep-smoke'), 'rows.jsonl');
-    const result = spawnSync(process.execPath, [join(packageRoot, 'benchmark/tools/sweep.mjs'), 'notes', '--smoke', '--out', out], {
+    const result = spawnSync(process.execPath, [join(packageRoot, 'benchmark/tools/sweep.ts'), 'notes', '--smoke', '--out', out], {
       cwd: packageRoot,
       encoding: 'utf8',
       timeout: 30_000,
@@ -46,7 +46,7 @@ describe('documented shape sweep', () => {
   });
 
   it('rejects an unknown dimension before measuring', () => {
-    const result = spawnSync(process.execPath, [join(packageRoot, 'benchmark/tools/sweep.mjs'), 'not-a-dimension', '--smoke'], { cwd: packageRoot, encoding: 'utf8', timeout: 10_000 });
+    const result = spawnSync(process.execPath, [join(packageRoot, 'benchmark/tools/sweep.ts'), 'not-a-dimension', '--smoke'], { cwd: packageRoot, encoding: 'utf8', timeout: 10_000 });
     assert.equal(result.status, 2);
     assert.match(result.stderr, /unknown dimension/);
   });

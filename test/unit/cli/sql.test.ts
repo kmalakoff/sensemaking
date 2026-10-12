@@ -1,6 +1,7 @@
 import assert from 'node:assert';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { ERROR_CODE, USAGE_CODE } from '../../../src/cli/constants.ts';
 import { configTestTree, runCli as spawnCli } from '../../lib/cli.ts';
 
 const { tempDir, makeTree, runCli } = configTestTree();
@@ -28,24 +29,24 @@ describe('sql subcommand (ad-hoc SQL)', () => {
     );
   });
 
-  it('wrong parameter count: exit 2', () => {
+  it('a wrong parameter count reports a usage error', () => {
     const dir = makeTree();
     const result = runCli(dir, ['sql', 'SELECT path FROM frontmatter WHERE has(tags, ?)']);
-    assert.equal(result.status, 2);
+    assert.equal(result.status, USAGE_CODE);
     assert.match(result.stderr, /expects 1 parameter/);
   });
 
-  it('missing SQL: exit 2 with usage', () => {
+  it('missing SQL reports a usage error with the usage line', () => {
     const dir = makeTree();
     const result = runCli(dir, ['sql']);
-    assert.equal(result.status, 2);
+    assert.equal(result.status, USAGE_CODE);
     assert.match(result.stderr, /sql "<statement>"/);
   });
 
-  it('bad SQL: exit 1 with SQLite message', () => {
+  it('bad SQL reports an operational error with the SQLite message', () => {
     const dir = makeTree();
     const result = runCli(dir, ['sql', 'SELECT nope FROM missing_table']);
-    assert.equal(result.status, 1);
+    assert.equal(result.status, ERROR_CODE);
     assert.match(result.stderr, /no such table/);
   });
 });
@@ -101,7 +102,7 @@ describe('sql --preset', () => {
   it('refuses --preset when the statement never joins scope, which would silently return everything', () => {
     const dir = scopedTree();
     const result = spawnCli(['sql', 'SELECT path FROM frontmatter', '--preset', 'default'], { cwd: dir });
-    assert.equal(result.status, 2);
+    assert.equal(result.status, USAGE_CODE);
     assert.match(result.stderr, /never joins it/);
   });
 

@@ -1,8 +1,8 @@
 import assert from 'node:assert';
 import { type SearchOptions, search } from 'sensemaking';
-import { bareAnd, orBag } from '../../benchmark/lib/labels.mjs';
-import { buildQualityArtifactBase, evaluateVariant, qualityVariantEvidence, queryFormFor } from '../../benchmark/lib/quality.mjs';
-import { executionEvidence } from '../../benchmark/lib/workload-identity.mjs';
+import { bareAnd, orBag } from '../../benchmark/lib/labels.ts';
+import { buildQualityArtifactBase, evaluateVariant, qualityVariantEvidence, queryFormFor } from '../../benchmark/lib/quality.ts';
+import { executionEvidence } from '../../benchmark/lib/workload-identity.ts';
 import { forEachStore, withTreeForStore } from '../lib/stores.ts';
 import { tmpTree, writeNote } from '../lib/tree.ts';
 
@@ -76,8 +76,10 @@ describe('portable quality query form', () => {
         assert.deepEqual(evidence.per_query.thai.paths, ['thai-both.md']);
         assert.ok(Object.hasOwn(evidence.per_query, 'empty'), `${name}: empty query evidence was not recorded`);
         assert.deepEqual(evidence.per_query.empty.paths, [], `${name}: recorded empty query paths must stay empty`);
-        assert.equal(evidence.execution.config.embed.model, 'fixture-model');
-        assert.match(evidence.execution.config.embed.url.redacted_sha256, /^[0-9a-f]{64}$/);
+        assert.ok(evidence.execution);
+        const config = evidence.execution.config as { embed: { model: string; url: { redacted_sha256: string } } };
+        assert.equal(config.embed.model, 'fixture-model');
+        assert.match(config.embed.url.redacted_sha256, /^[0-9a-f]{64}$/);
         assert.equal(evidence.execution.invocation_kind, 'requested invocation projection');
         assert.deepEqual(evidence.model_observation, { provider: 'static', model: 'fixture-model', revision: 'unknown', resolved_identity: 'unverified' });
         assert.doesNotMatch(JSON.stringify(evidence), /secret\.example/);

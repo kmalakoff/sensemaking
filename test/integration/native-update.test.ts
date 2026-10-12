@@ -2,12 +2,12 @@ import assert from 'node:assert';
 import { spawnSync } from 'node:child_process';
 import { readFileSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { fixedWorkProvenance, fixedWorkReadiness, readinessObservation, stableFixedWorkIdentity } from '../../benchmark/lib/fixed-work-measurement.mjs';
-import { MEASURE_VERSION } from '../../benchmark/lib/measure.mjs';
-import { NATIVE_CAPABILITY_READINESS_POLICY, nativeCapabilityEnvironment } from '../../benchmark/lib/native-capability.mjs';
-import { compareNativeUpdateArtifacts, NATIVE_UPDATE_COUNTS, NATIVE_UPDATE_SCHEMA, NATIVE_UPDATE_STORES, nativeComparisonSucceeded, nativeEvidenceExecutionPlan, nativeEvidenceSchedule, nativeUpdateInputs, nativeUpdatePaths } from '../../benchmark/lib/native-update-contract.mjs';
-import { identityHash } from '../../benchmark/lib/workload-identity.mjs';
-import { packageRoot, scratchDir } from '../lib/scratch.ts';
+import { fixedWorkProvenance, fixedWorkReadiness, readinessObservation, stableFixedWorkIdentity } from '../../benchmark/lib/fixed-work-measurement.ts';
+import { MEASURE_VERSION } from '../../benchmark/lib/measure.ts';
+import { NATIVE_CAPABILITY_READINESS_POLICY, nativeCapabilityEnvironment } from '../../benchmark/lib/native-capability.ts';
+import { compareNativeUpdateArtifacts, NATIVE_UPDATE_COUNTS, NATIVE_UPDATE_SCHEMA, NATIVE_UPDATE_STORES, nativeComparisonSucceeded, nativeEvidenceExecutionPlan, nativeEvidenceSchedule, nativeUpdateInputs, nativeUpdatePaths } from '../../benchmark/lib/native-update-contract.ts';
+import { identityHash } from '../../benchmark/lib/workload-identity.ts';
+import { packageRoot, scratchDir } from '../lib/tree.ts';
 
 function updateComparisonFixture(store: string, changed = 250) {
   const environment = nativeCapabilityEnvironment();
@@ -22,17 +22,17 @@ function updateComparisonFixture(store: string, changed = 250) {
   const provenance = fixedWorkProvenance({
     packageRoot,
     harnessFiles: [
-      'benchmark/lib/canonical-json.mjs',
-      'benchmark/lib/fixed-work-measurement.mjs',
-      'benchmark/lib/measure.mjs',
-      'benchmark/lib/native-capability.mjs',
-      'benchmark/lib/native-update-contract.mjs',
-      'benchmark/lib/out.mjs',
-      'benchmark/lib/quiet-machine.mjs',
-      'benchmark/lib/require-build.mjs',
-      'benchmark/lib/work-tree.mjs',
-      'benchmark/lib/workload-identity.mjs',
-      'benchmark/tools/native-update.mjs',
+      'benchmark/lib/canonical-json.ts',
+      'benchmark/lib/fixed-work-measurement.ts',
+      'benchmark/lib/measure.ts',
+      'benchmark/lib/native-capability.ts',
+      'benchmark/lib/native-update-contract.ts',
+      'benchmark/lib/out.ts',
+      'benchmark/lib/quiet-machine.ts',
+      'benchmark/lib/require-build.ts',
+      'benchmark/lib/work-tree.ts',
+      'benchmark/lib/workload-identity.ts',
+      'benchmark/tools/native-update.ts',
     ],
     store,
     nativeObservation,
@@ -197,7 +197,7 @@ describe('native update threshold evidence', () => {
   });
 
   it('propagates command and comparator failures instead of producing a valid artifact', () => {
-    const tool = join(packageRoot, 'benchmark/tools/native-update.mjs');
+    const tool = join(packageRoot, 'benchmark/tools/native-update.ts');
     const badArguments = spawnSync(process.execPath, [tool, '--store', 'sqlite', '--changed', '248'], { cwd: packageRoot, encoding: 'utf8', timeout: 30_000 });
     assert.equal(badArguments.status, 2);
     assert.match(`${badArguments.stdout}\n${badArguments.stderr}`, /usage:/);
@@ -205,11 +205,11 @@ describe('native update threshold evidence', () => {
     const dir = scratchDir('native-update-cli-error');
     const malformed = join(dir, 'malformed.json');
     writeFileSync(malformed, '{ malformed');
-    const comparison = spawnSync(process.execPath, [join(packageRoot, 'benchmark/tools/native-update-compare.mjs'), malformed, malformed, malformed], { cwd: packageRoot, encoding: 'utf8', timeout: 30_000 });
+    const comparison = spawnSync(process.execPath, [join(packageRoot, 'benchmark/tools/native-update-compare.ts'), malformed, malformed, malformed], { cwd: packageRoot, encoding: 'utf8', timeout: 30_000 });
     assert.equal(comparison.status, 1);
     assert.match(`${comparison.stdout}\n${comparison.stderr}`, /Unexpected token|JSON/);
 
-    const matrix = join(packageRoot, 'benchmark/tools/native-evidence-matrix.mjs');
+    const matrix = join(packageRoot, 'benchmark/tools/native-evidence-matrix.ts');
     const help = spawnSync(process.execPath, [matrix, '--help'], { cwd: packageRoot, encoding: 'utf8', timeout: 30_000 });
     assert.equal(help.status, 0);
     assert.match(help.stderr, /native-evidence-matrix/);
@@ -227,12 +227,12 @@ describe('native update threshold evidence', () => {
     const oversized = join(preflight, 'oversized.json');
     writeFileSync(oversized, '');
     truncateSync(oversized, 16 * 1024 * 1024 + 1);
-    const oversizedRun = spawnSync(process.execPath, [join(packageRoot, 'benchmark/tools/native-update-compare.mjs'), oversized, oversized, oversized], { cwd: packageRoot, encoding: 'utf8', timeout: 30_000 });
+    const oversizedRun = spawnSync(process.execPath, [join(packageRoot, 'benchmark/tools/native-update-compare.ts'), oversized, oversized, oversized], { cwd: packageRoot, encoding: 'utf8', timeout: 30_000 });
     assert.equal(oversizedRun.status, 1);
     assert.match(`${oversizedRun.stdout}\n${oversizedRun.stderr}`, /exceeds 16777216/);
     const linked = join(preflight, 'linked.json');
     symlinkSync(oversized, linked);
-    const linkedRun = spawnSync(process.execPath, [join(packageRoot, 'benchmark/tools/native-update-compare.mjs'), linked, linked, linked], { cwd: packageRoot, encoding: 'utf8', timeout: 30_000 });
+    const linkedRun = spawnSync(process.execPath, [join(packageRoot, 'benchmark/tools/native-update-compare.ts'), linked, linked, linked], { cwd: packageRoot, encoding: 'utf8', timeout: 30_000 });
     assert.equal(linkedRun.status, 1);
     assert.match(`${linkedRun.stdout}\n${linkedRun.stderr}`, /not a regular file/);
   });

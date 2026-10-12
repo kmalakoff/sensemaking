@@ -5,9 +5,8 @@ import assert from 'assert';
 import { enabledFeatures } from '../../../src/config/access.ts';
 import { PARSE_BYTES_PER_WORKER } from '../../../src/scan/reparse.ts';
 import { FEATURE_HOOKS, FIXED_STAGES, STAGES_VERSION, type Stages, stageRecorder, unaccountedMs } from '../../../src/store/stages.ts';
-import { scratchDir } from '../../lib/scratch.ts';
 import { forEachStore, openTreeForStore } from '../../lib/stores.ts';
-import { writeNote } from '../../lib/tree.ts';
+import { scratchDir, writeNote } from '../../lib/tree.ts';
 
 // The stage vocabulary is a published contract (STAGES_VERSION), read across releases and across
 // stores, so these specs pin the key set and the disjointness the residual depends on.

@@ -1,12 +1,40 @@
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { safeRmSync } from 'fs-remove-compat';
 import type { Config, Preset } from 'sensemaking';
-import { open } from 'sensemaking';
-import { scratchDir } from './scratch.ts';
+
+export const packageRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
+
+const SCRATCH_ROOT = join(packageRoot, '.tmp', 'test');
+const dirs: string[] = [];
+export function cleanupScratchDirs(paths: readonly string[] = dirs): void {
+  const errors: unknown[] = [];
+  for (const d of paths) {
+    try {
+      safeRmSync(d, { recursive: true, force: true });
+      if (existsSync(d)) errors.push(new Error(`scratch cleanup left path: ${d}`));
+    } catch (err) {
+      errors.push(new Error(`scratch cleanup failed for ${d}: ${(err as Error).message}`, { cause: err }));
+    }
+  }
+  if (errors.length > 0) {
+    const details = errors.map((error) => (error instanceof Error ? error.message : String(error))).join('\n');
+    throw new AggregateError(errors, `scratch cleanup failed for ${errors.length} path(s)\n${details}`);
+  }
+}
+
+after(() => cleanupScratchDirs());
+
+export function scratchDir(prefix: string): string {
+  const dir = join(SCRATCH_ROOT, `${prefix}-${randomUUID()}`);
+  mkdirSync(dir, { recursive: true });
+  dirs.push(dir);
+  return dir;
+}
 
 // Throwaway markdown trees for unit tests.
-
-export { scratchDir } from './scratch.ts';
 
 export function tmpTree(): string {
   return scratchDir('test');
@@ -56,11 +84,13 @@ export function chineseTree(): string {
 
 // The `embed` block is the whole vector switch, so a tree without one has no vectors and never
 // reaches the model: that is what a bare call gives you. Tests that want vectors pass an `embed` block pointing at a local fixture model.
-export function openTree(baseDir: string, features?: Config['features'], presets?: Record<string, Preset>) {
+export async function openTree(baseDir: string, features?: Config['features'], presets?: Record<string, Preset>) {
+  const { open } = await import('sensemaking');
   return open({ presets: presets ?? { default: { include: ['**/*.md'] } }, queries: {}, features, baseDir, configPath: null });
 }
 
 // For tests that need config beyond features/presets (embed provider settings, queries).
-export function openConfig(cfg: Parameters<typeof open>[0]) {
+export async function openConfig(cfg: Parameters<typeof import('sensemaking').open>[0]) {
+  const { open } = await import('sensemaking');
   return open(cfg);
 }

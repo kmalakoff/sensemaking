@@ -3,6 +3,7 @@
 import { SenseError } from '../../errors.ts';
 import { matchesSearchPhrase, type SearchToken, searchTokens } from '../../text/segment.ts';
 import type { Connection, LexicalHit, LexicalQueryOptions } from '../types.ts';
+import { type TursoFtsBuilders, tursoFts } from './engine.ts';
 import { stemFolded } from './lexical-text.ts';
 
 const FIELDS = ['title_stem', 'summary_stem', 'text_stem'] as const;
@@ -58,8 +59,7 @@ function splitTerms(terms: string): { words: string[]; phrases: SearchToken[][];
   return { words, phrases, unspaced, emptyPhrase };
 }
 
-// fts_match/fts_score's query argument must be a SQL literal: bound as `?`, the row set stays
-// correct but fts_score silently returns 0 for every row (PRINCIPLES: no-silent-modes).
+// engine.ts's score/match take the query as a SQL literal (PRINCIPLES: no-silent-modes).
 function escapeFtsLiteral(query: string): string {
   return query.replace(/'/g, "''");
 }
@@ -77,13 +77,12 @@ function buildQueries(words: string[], phrases: SearchToken[][], unspaced: strin
   return { defaultQuery: defaultParts.join(' AND '), ngramQuery: unspacedParts.join(' AND ') };
 }
 
-// fts_score() is real only as a SELECT's bare projected expression, and only for the index that
-// SELECT's fts_match() chose; every other form silently returns 0. Hence one SELECT per index.
-function ftsBranch(cols: readonly string[], query: string, opts: LexicalQueryOptions): string {
+// One SELECT per index: fts_score is real only for the index its own SELECT's fts_match chose (engine.ts).
+function ftsBranch(fts: TursoFtsBuilders, cols: readonly string[], query: string, opts: LexicalQueryOptions): string {
   const colList = cols.map((c) => `content.${c}`).join(', ');
   const lit = escapeFtsLiteral(query);
-  return `SELECT content."path" AS path, fts_score(${colList}, '${lit}') AS score
-    FROM content ${opts.whereJoin} WHERE fts_match(${colList}, '${lit}') ${opts.whereCond} ${opts.scopeCond}`;
+  return `SELECT content."path" AS path, ${fts.score(colList, lit)} AS score
+    FROM content ${opts.whereJoin} WHERE ${fts.match(colList, lit)} ${opts.whereCond} ${opts.scopeCond}`;
 }
 
 // Ranked query, scoped by the caller-built SQL fragments (same shape sqlite's/duckdb's
@@ -98,9 +97,10 @@ export async function queryLexical(conn: Connection, terms: string, opts: Lexica
   const { defaultQuery, ngramQuery } = buildQueries(words, phrases, unspaced);
   if (defaultQuery === '' && ngramQuery === '') return [];
 
+  const fts = await tursoFts();
   const branches: string[] = [];
-  if (defaultQuery !== '') branches.push(ftsBranch(FIELDS, defaultQuery, opts));
-  if (ngramQuery !== '') branches.push(ftsBranch(NGRAM_FIELDS, ngramQuery, opts));
+  if (defaultQuery !== '') branches.push(ftsBranch(fts, FIELDS, defaultQuery, opts));
+  if (ngramQuery !== '') branches.push(ftsBranch(fts, NGRAM_FIELDS, ngramQuery, opts));
 
   // HAVING COUNT(*) = branches.length is the AND across indexes; with one branch it is a no-op,
   // `path` being content's primary key. fts_score is higher-is-better BM25, so DESC. Phrase

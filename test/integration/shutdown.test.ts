@@ -1,11 +1,11 @@
-import { spawn, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import assert from 'assert';
-import { signalProcessTree } from '../../benchmark/lib/native-observer.mjs';
+import { jobProblems, spawnOwned } from '../../benchmark/lib/step-process.ts';
 import { STORE_NAMES } from '../../src/config/index.ts';
-import { packageRoot } from '../lib/scratch.ts';
-import { tmpTree, writeNote } from '../lib/tree.ts';
+import { packageRoot, tmpTree, writeNote } from '../lib/tree.ts';
+import { withinTest } from '../lib/watchdog.ts';
 
 // Interrupting a cold build: the store is mid-write when the signal lands; threads die with
 // the process, so the claim is the process exits and the tree is usable afterwards.
@@ -32,76 +32,45 @@ describe('interrupting a pooled cold build', () => {
   for (const store of stores)
     it(`exits on SIGINT during the reparse, and the ${store} tree still builds afterwards`, async () => {
       const baseDir = bigTree(store);
-      const child = spawn(process.execPath, [cli, 'build', '--config', join(baseDir, 'sense.config.json')], { cwd: packageRoot, detached: true });
-      let exited = false;
-      const childClosed = new Promise<{ code: number | null; signal: string | null }>((resolve) => {
-        child.once('close', (code, signal) => {
-          exited = true;
-          resolve({ code, signal });
-        });
-      });
-      const childExit = new Promise<{ code: number | null; signal: string | null }>((resolve, reject) => {
-        child.once('error', reject);
-        childClosed.then(resolve);
-      });
-      void childExit.catch(() => undefined);
+      // An owned job: the build and anything it starts (npm installs) are released together, and a
+      // killed test runner releases them too. The interrupt itself goes to the build process.
+      const job = spawnOwned([process.execPath, cli, 'build', '--config', join(baseDir, 'sense.config.json')], { cwd: packageRoot });
+      job.stdout.resume();
+      const stop = (reason: string) => {
+        if (job.exited === null) job.fail(reason);
+      };
 
       try {
         // Signal only once the reparse stage has actually started, so the test is not racing the
         // build to completion and silently proving nothing.
-        let readyTimer: ReturnType<typeof setTimeout>;
-        const reparseReady = new Promise<void>((resolve, reject) => {
-          readyTimer = setTimeout(() => {
-            if (child.pid) signalProcessTree(child, 'SIGKILL');
-            reject(new Error('reparse never started'));
-          }, 30_000);
-          child.stderr.on('data', (chunk: Buffer) => {
-            if (chunk.toString().includes('reparsing files')) {
-              clearTimeout(readyTimer);
-              resolve();
-            }
-          });
-        });
-        await Promise.race([
-          reparseReady,
-          childExit.then(
-            ({ code, signal }) => {
-              clearTimeout(readyTimer);
-              throw new Error(`build exited before reparse started: exit ${code ?? 'null'}${signal ? ` (${signal})` : ''}`);
-            },
-            (error) => {
-              clearTimeout(readyTimer);
-              throw new Error(`build failed before reparse started: ${error instanceof Error ? error.message : String(error)}`);
-            }
-          ),
-        ]);
-        child.kill('SIGINT');
+        await withinTest(
+          'reparse start',
+          30_000,
+          new Promise<void>((resolve, reject) => {
+            job.stderr.on('data', (chunk: Buffer) => {
+              if (chunk.toString().includes('reparsing files')) resolve();
+            });
+            job.result.then((result) => reject(new Error(`build ended before reparse started: ${JSON.stringify(result.command)}; ${jobProblems(result).join('; ') || 'no job problems'}`)));
+          }),
+          () => stop('reparse never started')
+        );
+        if (job.commandPid === null || job.exited !== null) throw new Error('build is not running at the interrupt');
+        process.kill(job.commandPid, 'SIGINT');
 
         // A live pool would keep the event loop alive; the assertion is that it does not.
-        const outcome = await Promise.race([
-          childExit,
-          new Promise<null>((resolve) => {
-            const killTimer = setTimeout(() => {
-              if (child.pid) signalProcessTree(child, 'SIGKILL');
-              resolve(null);
-            }, 10_000);
-            childExit.then(
-              () => clearTimeout(killTimer),
-              () => clearTimeout(killTimer)
-            );
-          }),
-        ]);
-        assert.ok(outcome, 'process did not exit within 10s of SIGINT during a pooled reparse');
-        // A clean exit code would mean the build finished before the signal landed, so the test
-        // would be proving nothing about an interrupted one.
-        assert.equal(outcome.signal, 'SIGINT', `expected death by SIGINT mid-build, got ${JSON.stringify(outcome)}`);
+        const result = await withinTest('exit after SIGINT during a pooled reparse', 10_000, job.result, () => stop('process did not exit within 10s of SIGINT'));
+        // A clean exit would mean the build finished before the interrupt. Windows PID-directed SIGINT
+        // uses TerminateProcess(1); the observing leader's child handle does not record that signal.
+        const expected = process.platform === 'win32' ? { code: 1, signal: null } : { code: null, signal: 'SIGINT' };
+        assert.deepEqual(result.command, expected, `expected death by SIGINT mid-build, got ${JSON.stringify(result.command)}`);
+        assert.deepEqual(jobProblems(result), [], 'the interrupted build left no process or cleanup problem');
 
         const after = spawnSync(process.execPath, [cli, 'sql', 'SELECT COUNT(*) AS n FROM frontmatter', '--format', 'json', '--config', join(baseDir, 'sense.config.json')], { cwd: packageRoot, encoding: 'utf8' });
         assert.equal(after.status, 0, `rebuild after interrupt failed: ${after.stderr}`);
         assert.equal(JSON.parse(after.stdout)[0].n, 800);
       } finally {
-        if (!exited && child.pid) signalProcessTree(child, 'SIGKILL');
-        await childClosed;
+        stop('test ended');
+        await job.result;
       }
     });
 });

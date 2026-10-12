@@ -1,6 +1,7 @@
 import assert from 'node:assert';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { ERROR_CODE, USAGE_CODE } from '../../../src/cli/constants.ts';
 import { runCli } from '../../lib/cli.ts';
 import { tmpTree, writeNote } from '../../lib/tree.ts';
 
@@ -84,14 +85,14 @@ describe('saved searches', () => {
     );
   });
 
-  it('--lexical is gone from saved searches too: it exits 2 rather than being silently ignored', () => {
+  it('--lexical on a saved search reports a usage error', () => {
     const dir = makeTree();
     writeConfig(dir, { presets: DEFAULT_LEXICAL, queries: { hot: { search: 'price' } } });
 
     const plain = runCli(['hot', '--format', 'json'], { cwd: dir });
     const lexical = runCli(['hot', '--lexical', '--format', 'json'], { cwd: dir });
     assert.equal(plain.status, 0, plain.stderr);
-    assert.equal(lexical.status, 2, lexical.stderr);
+    assert.equal(lexical.status, USAGE_CODE, lexical.stderr);
   });
 
   it('a saved search still carrying "semantic" is a named config error, not silently ignored', () => {
@@ -99,16 +100,16 @@ describe('saved searches', () => {
     writeConfig(dir, { presets: DEFAULT_LEXICAL, queries: { hot: { search: 'price', semantic: true } } });
 
     const result = runCli(['hot'], { cwd: dir });
-    assert.equal(result.status, 1, result.stdout);
+    assert.equal(result.status, ERROR_CODE, result.stdout);
     assert.match(result.stderr, /unknown key\(s\) semantic/);
   });
 
-  it('a positional parameter on a saved search exits 2', () => {
+  it('a positional parameter on a saved search reports a usage error', () => {
     const dir = makeTree();
     writeConfig(dir, { presets: DEFAULT_LEXICAL, queries: { hot: { search: 'price' } } });
 
     const result = runCli(['hot', 'extra'], { cwd: dir });
-    assert.equal(result.status, 2);
+    assert.equal(result.status, USAGE_CODE);
     assert.match(result.stderr, /no positional parameters/);
   });
 
@@ -117,7 +118,7 @@ describe('saved searches', () => {
     writeConfig(dir, { presets: DEFAULT_LEXICAL, queries: { hot: { k: 5 } } });
 
     const result = runCli(['--list'], { cwd: dir });
-    assert.equal(result.status, 1);
+    assert.equal(result.status, ERROR_CODE);
     assert.match(result.stderr, /queries\.hot must be \{ sql \} or \{ search/);
     assert.ok(!result.stderr.includes('TypeError'), result.stderr);
   });
@@ -127,7 +128,7 @@ describe('saved searches', () => {
     writeConfig(dir, { presets: DEFAULT_LEXICAL, queries: { hot: { search: 'price', bogus: true } } });
 
     const result = runCli(['--list'], { cwd: dir });
-    assert.equal(result.status, 1);
+    assert.equal(result.status, ERROR_CODE);
     assert.match(result.stderr, /queries\.hot has unknown key\(s\) bogus/);
   });
 
@@ -136,7 +137,7 @@ describe('saved searches', () => {
     for (const k of [0, -1, 1.5]) {
       writeConfig(dir, { presets: DEFAULT_LEXICAL, queries: { hot: { search: 'price', k } } });
       const result = runCli(['--list'], { cwd: dir });
-      assert.equal(result.status, 1, `k=${k} should be rejected`);
+      assert.equal(result.status, ERROR_CODE, `k=${k} should be rejected`);
       assert.match(result.stderr, /queries\.hot\.k must be a positive integer/);
     }
   });
@@ -146,7 +147,7 @@ describe('saved searches', () => {
     writeConfig(dir, { presets: DEFAULT_LEXICAL, queries: { hot: { search: 'price', preset: 'nope' } } });
 
     const result = runCli(['hot'], { cwd: dir });
-    assert.equal(result.status, 1);
+    assert.equal(result.status, ERROR_CODE);
     assert.match(result.stderr, /unknown preset "nope"/);
   });
 
@@ -173,8 +174,8 @@ describe('saved searches', () => {
     const dir = makeTree();
     writeConfig(dir, { presets: DEFAULT_LEXICAL, queries: { hot: { search: 'price' } } });
     for (const bad of ['0', '-1', '5.9']) {
-      assert.equal(runCli(['hot', '--k', bad], { cwd: dir }).status, 2, `saved search --k ${bad}`);
-      assert.equal(runCli(['search', 'price', '--k', bad], { cwd: dir }).status, 2, `search --k ${bad}`);
+      assert.equal(runCli(['hot', '--k', bad], { cwd: dir }).status, USAGE_CODE, `saved search --k ${bad}`);
+      assert.equal(runCli(['search', 'price', '--k', bad], { cwd: dir }).status, USAGE_CODE, `search --k ${bad}`);
     }
   });
 
@@ -185,7 +186,7 @@ describe('saved searches', () => {
     writeConfig(dir, { presets: DEFAULT_LEXICAL, queries: { hot: { search: 'price', where: "f.stauts = 'active'" } } });
 
     const result = runCli(['hot'], { cwd: dir });
-    assert.equal(result.status, 1, `expected the run to fail: ${result.stdout}`);
+    assert.equal(result.status, ERROR_CODE, `expected the run to fail: ${result.stdout}`);
     assert.match(result.stderr, /stauts/);
   });
 
@@ -194,7 +195,7 @@ describe('saved searches', () => {
     writeConfig(dir, { presets: DEFAULT_LEXICAL, queries: { broken: { sql: 'SELECT path FROM frontmatter WHERE has(stauts, ?)' }, fine: { sql: 'SELECT path FROM frontmatter WHERE has(status, ?)' } } });
 
     const bad = runCli(['broken', 'zzz'], { cwd: dir });
-    assert.equal(bad.status, 1);
+    assert.equal(bad.status, ERROR_CODE);
     assert.match(bad.stderr, /no such column: stauts/);
     assert.equal(runCli(['fine', 'zzz'], { cwd: dir }).status, 0);
   });
@@ -217,7 +218,7 @@ describe('queries entries name their verb', () => {
     writeConfig(dir, { presets: DEFAULT_LEXICAL, queries: { oops: 'SELECT path FROM frontmatter' } });
 
     const result = runCli(['--list'], { cwd: dir });
-    assert.equal(result.status, 1);
+    assert.equal(result.status, ERROR_CODE);
     assert.match(result.stderr, /queries\.oops must say which verb it runs/);
     assert.match(result.stderr, /\{ "sql": "SELECT path FROM frontmatter" \}/);
   });
@@ -228,7 +229,7 @@ describe('queries entries name their verb', () => {
     writeConfig(dir, { presets: DEFAULT_LEXICAL, queries: { oops: long } });
 
     const result = runCli(['--list'], { cwd: dir });
-    assert.equal(result.status, 1);
+    assert.equal(result.status, ERROR_CODE);
     assert.match(result.stderr, /\.\.\./);
     assert.ok(!result.stderr.includes(long), result.stderr);
   });

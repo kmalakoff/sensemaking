@@ -1,54 +1,36 @@
-import { spawn, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { cpSync, mkdirSync, readdirSync, readFileSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import assert from 'assert';
-import { signalProcessTree } from '../../benchmark/lib/native-observer.mjs';
-import { revalidateQualityArtifact } from '../../benchmark/lib/portable-quality.mjs';
-import { needsQualityModelDownload, observeQualityModel, prepareQualityWorkTree } from '../../benchmark/lib/quality-work-tree.mjs';
-import { buildStages } from '../../benchmark/lib/stages.mjs';
-import { buildReport, persist } from '../../benchmark/report.mjs';
+import { revalidateQualityArtifact } from '../../benchmark/lib/portable-quality.ts';
+import { needsQualityModelDownload, observeQualityModel, prepareQualityWorkTree } from '../../benchmark/lib/quality-work-tree.ts';
+import { buildStages } from '../../benchmark/lib/stages.ts';
+import { jobProblems, spawnOwned } from '../../benchmark/lib/step-process.ts';
+import { buildReport, persist } from '../../benchmark/report.ts';
 import { writeModel } from '../lib/model.ts';
-import { packageRoot, scratchDir } from '../lib/scratch.ts';
 import { forEachStore, openTreeForStore, type ParityStoreName, STORE_NAMES } from '../lib/stores.ts';
+import { packageRoot, scratchDir } from '../lib/tree.ts';
+import { withinTest } from '../lib/watchdog.ts';
 
+// The quality step runs as an owned job, so the step and everything it starts are released together.
+// The 30 s bound is this test's own watchdog, not a limit the benchmark imposes.
 async function runQualityStep(root: string, store: ParityStoreName, model: string, out: string): Promise<string> {
-  const child = spawn(process.execPath, [join(root, 'benchmark', 'steps', 'quality.mjs'), 'nfcorpus', '--queries', '1', '--k', '1', '--query-form', 'bare-and', '--store', store, '--model', model, '--out', out], { cwd: root, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  const job = spawnOwned([process.execPath, join(root, 'benchmark', 'steps', 'quality.ts'), 'nfcorpus', '--queries', '1', '--k', '1', '--query-form', 'bare-and', '--store', store, '--model', model, '--out', out], { cwd: root });
   let stderr = '';
   let stdout = '';
   let outputBytes = 0;
-  let timedOut = false;
-  child.stdout.on('data', (chunk) => {
+  job.stdout.on('data', (chunk) => {
     outputBytes += chunk.length;
     if (outputBytes <= 1024 * 1024) stdout += chunk;
   });
-  child.stderr.on('data', (chunk) => {
+  job.stderr.on('data', (chunk) => {
     outputBytes += chunk.length;
     if (outputBytes <= 1024 * 1024) stderr += chunk;
   });
-  const closed = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
-    child.once('error', reject);
-    child.once('close', (code, signal) => resolve({ code, signal }));
-  });
-  let timeoutError: unknown = null;
-  const timer = setTimeout(() => {
-    timedOut = true;
-    try {
-      signalProcessTree(child, 'SIGKILL');
-    } catch (err) {
-      timeoutError = err;
-    }
-  }, 30_000);
-  const result = await (async () => {
-    try {
-      return await closed;
-    } finally {
-      clearTimeout(timer);
-    }
-  })();
-  if (timeoutError) throw timeoutError;
-  assert.equal(timedOut, false, `${store} quality step timed out`);
+  const result = await withinTest(`${store} quality step`, 30_000, job.result, () => job.fail(`${store} quality step exceeded the test watchdog`));
   assert.equal(outputBytes <= 1024 * 1024, true, `${store} quality step exceeded its output bound`);
-  assert.deepEqual(result, { code: 0, signal: null }, stderr);
+  assert.deepEqual(result.command, { code: 0, signal: null }, stderr);
+  assert.deepEqual(jobProblems(result), [], stderr);
   return stdout;
 }
 
@@ -378,7 +360,7 @@ describe('quality cache work trees', () => {
 
     const comparisonId = 'portable-eval-nfcorpus-comparison';
     const comparisonOut = join(root, `${comparisonId}.json`);
-    const compared = spawnSync(process.execPath, [join(root, 'benchmark', 'tools', 'portable-quality-compare.mjs'), ...portableArtifacts, '--out', comparisonOut], { cwd: root, encoding: 'utf8', timeout: 30_000, maxBuffer: 4 * 1024 * 1024 });
+    const compared = spawnSync(process.execPath, [join(root, 'benchmark', 'tools', 'portable-quality-compare.ts'), ...portableArtifacts, '--out', comparisonOut], { cwd: root, encoding: 'utf8', timeout: 30_000, maxBuffer: 4 * 1024 * 1024 });
     assert.equal(compared.error, undefined, compared.error?.message ?? 'portable quality comparator failed to start');
     assert.equal(compared.status, 0, compared.stderr);
     const comparison = JSON.parse(readFileSync(comparisonOut, 'utf8'));

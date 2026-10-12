@@ -2,8 +2,7 @@ import assert from 'node:assert';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runCli } from '../lib/cli.ts';
-import { scratchDir } from '../lib/scratch.ts';
-import { tmpTree, writeNote } from '../lib/tree.ts';
+import { scratchDir, tmpTree, writeNote } from '../lib/tree.ts';
 
 // The llm-wiki example config from skills/sense-setup/EXAMPLES.md, run verbatim through the
 // CLI. Its `embed` block points at a local fixture model, so the semantic path never hits the network.

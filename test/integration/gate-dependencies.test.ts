@@ -1,6 +1,6 @@
 import assert from 'node:assert';
-import { missingPrerequisites } from '../../benchmark/lib/gate-dependencies.mjs';
-import { buildStages } from '../../benchmark/lib/stages.mjs';
+import { missingPrerequisites } from '../../benchmark/lib/gate-dependencies.ts';
+import { buildStages } from '../../benchmark/lib/stages.ts';
 
 const stages = buildStages();
 const sitting = (steps: Record<string, { status: string }>, owed: Record<string, string[]> = {}) => ({ steps, owed });

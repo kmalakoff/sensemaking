@@ -1,12 +1,11 @@
 import assert from 'node:assert';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { readLabels } from '../../benchmark/lib/labels.mjs';
-import { metricRangeError, metrics } from '../../benchmark/lib/metrics.mjs';
-import { evaluateVariant } from '../../benchmark/lib/quality.mjs';
-import { scratchDir } from '../lib/scratch.ts';
+import { readLabels } from '../../benchmark/lib/labels.ts';
+import { metricRangeError, metrics } from '../../benchmark/lib/metrics.ts';
+import { evaluateVariant, orBagCandidates } from '../../benchmark/lib/quality.ts';
 import { withTreeForStore } from '../lib/stores.ts';
-import { writeNote } from '../lib/tree.ts';
+import { scratchDir, writeNote } from '../lib/tree.ts';
 
 function labelDir(queries: string, qrels: string): string {
   const dir = scratchDir('quality-label-validity');
@@ -159,5 +158,43 @@ describe('quality metric validity', () => {
       ['{"_id":"q1","text":"query"}\n', `${HEADER}q1\tdoc\t-1\n`, /malformed score/],
     ];
     for (const [queries, qrels, reason] of cases) assert.throws(() => readLabels(labelDir(queries, qrels)), reason);
+  });
+});
+
+describe('or-bag lexical candidates', () => {
+  it('returns every real BM25 match through the store lexical index', async () => {
+    const baseDir = scratchDir('quality-or-bag');
+    writeNote(baseDir, 'apple.md', { frontmatter: { title: 'Apple' }, body: 'apple orchard apple harvest' });
+    writeNote(baseDir, 'pear.md', { frontmatter: { title: 'Pear' }, body: 'a pear tree' });
+    writeNote(baseDir, 'stone.md', { frontmatter: { title: 'Stone' }, body: 'granite and slate' });
+    const candidates = await withTreeForStore('sqlite', baseDir, ({ store }) => orBagCandidates(store, 'apple, pear?', 30));
+    assert.deepEqual([...candidates].sort(), ['apple', 'pear']);
+  });
+
+  it('returns candidates in BM25 rank order', async () => {
+    const baseDir = scratchDir('quality-or-bag-rank');
+    const filler = Array.from({ length: 20 }, (_, i) => `filler${i}`).join(' ');
+    writeNote(baseDir, 'z-dense.md', { frontmatter: { title: 'Dense' }, body: 'apple apple apple' });
+    writeNote(baseDir, 'a-sparse.md', { frontmatter: { title: 'Sparse' }, body: `apple ${filler}` });
+    await withTreeForStore('sqlite', baseDir, async ({ store }) => {
+      assert.deepEqual(await orBagCandidates(store, 'apple', 30), ['z-dense', 'a-sparse']);
+      assert.deepEqual(await orBagCandidates(store, 'apple', 1), ['z-dense']);
+    });
+  });
+
+  it('returns no candidates for unmatched text or text without searchable terms', async () => {
+    const baseDir = scratchDir('quality-or-bag-empty');
+    writeNote(baseDir, 'apple.md', { body: 'apple' });
+    await withTreeForStore('sqlite', baseDir, async ({ store }) => {
+      assert.deepEqual(await orBagCandidates(store, 'granite', 30), []);
+      assert.deepEqual(await orBagCandidates(store, '?!', 30), []);
+    });
+  });
+
+  it('rejects a failed store query instead of scoring it as no match', async () => {
+    const baseDir = scratchDir('quality-or-bag-closed');
+    writeNote(baseDir, 'apple.md', { body: 'apple' });
+    const closed = await withTreeForStore('sqlite', baseDir, async ({ store }) => store);
+    await assert.rejects(orBagCandidates(closed, 'apple', 30), /database is not open/);
   });
 });

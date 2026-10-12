@@ -9,6 +9,7 @@ import { searchError } from '../output/search-error.ts';
 import { openStoreFor } from '../store/index.ts';
 import type { BuildRequirement, OpenResult } from '../store/open.ts';
 import type { Store } from '../store/types.ts';
+import { USAGE_CODE } from './constants.ts';
 import type { Ctx } from './types.ts';
 
 // Spreadable option fragments -- one flag name keeps one meaning across every command's table.
@@ -48,7 +49,7 @@ function pickFormat<T extends string>(values: Values, allowed: readonly T[]): T 
   const format = String(values.format);
   if ((allowed as readonly string[]).includes(format)) return format as T;
   console.error(`unknown --format "${format}"; expected ${allowed.join(', ')}`);
-  process.exit(2);
+  process.exit(USAGE_CODE);
 }
 
 export function formatOf(values: Values): 'table' | 'json' {
@@ -61,7 +62,7 @@ export function rowFormatOf(values: Values): RowFormat {
   return pickFormat(values, ['table', 'json', 'csv'] as const);
 }
 
-// Per-command parseArgs: strict (a foreign flag exits 2), and every table gets --help for free.
+// Per-command parseArgs rejects foreign flags as usage errors; every table gets --help for free.
 export function parse(argv: string[], usage: string, options: ParseArgsOptionsConfig): { values: Values; positionals: string[] } {
   let values: Values;
   let positionals: string[];
@@ -75,7 +76,7 @@ export function parse(argv: string[], usage: string, options: ParseArgsOptionsCo
   } catch (err) {
     console.error((err as Error).message);
     console.error(usage);
-    process.exit(2);
+    process.exit(USAGE_CODE);
   }
   if (values.help) {
     console.log(usage);
@@ -154,14 +155,14 @@ export async function runSql(cfg: ResolvedConfig, sql: string, params: string[],
   const placeholderCount = (sql.match(/\?/g) ?? []).length;
   if (params.length !== placeholderCount) {
     console.error(`${label} expects ${placeholderCount} parameter(s), got ${params.length}`);
-    process.exit(2);
+    process.exit(USAGE_CODE);
   }
   // Naming a preset and never joining it would return the whole index while reading as scoped,
   // which is the one hazard of binding rather than applying. Refuse instead.
   if (preset !== undefined && !/\bscope\b/i.test(sql)) {
     console.error(`--preset binds a temporary "scope" table of the preset's paths, and ${label} never joins it, so the preset would have no effect`);
     console.error(`add: JOIN scope ON scope."path" = <table>."path"`);
-    process.exit(2);
+    process.exit(USAGE_CODE);
   }
   await withResolvedDb(cfg, { noBuild, requirements: new Set<BuildRequirement>(['core']) }, async (store) => {
     if (preset !== undefined) await bindScope(store, cfg, preset);

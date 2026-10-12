@@ -3,16 +3,16 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import assert from 'assert';
-import { missingPrerequisites } from '../../benchmark/lib/gate-dependencies.mjs';
-import { runStageSteps, stepOutputEvidence } from '../../benchmark/lib/gate-runner.mjs';
-import { LIVE_SUITE_ARGV, LIVE_SUITE_COST_ARTIFACT, LIVE_SUITE_ENV, liveSuiteMachine, liveSuiteProvenance, liveSuiteRuntime, profileReasons, readLiveSuiteCost, remainingCost } from '../../benchmark/lib/gates.mjs';
-import { buildStages } from '../../benchmark/lib/stages.mjs';
-import { buildReport, doneOnResume, failedStageReasons, renderMarkdown } from '../../benchmark/report.mjs';
-import { scratchDir } from '../lib/scratch.ts';
+import { missingPrerequisites } from '../../benchmark/lib/gate-dependencies.ts';
+import { preserveAttempt, runLoggedJob, runStageSteps, stepOutputEvidence } from '../../benchmark/lib/gate-runner.ts';
+import { LIVE_SUITE_ARGV, LIVE_SUITE_COST_ARTIFACT, LIVE_SUITE_ENV, liveSuiteMachine, liveSuiteProvenance, liveSuiteRuntime, profileReasons, readLiveSuiteCost, remainingCost } from '../../benchmark/lib/gates.ts';
+import { buildStages } from '../../benchmark/lib/stages.ts';
+import { buildReport, doneOnResume, failedStageReasons, renderMarkdown } from '../../benchmark/report.ts';
+import { scratchDir } from '../lib/tree.ts';
 
 function liveCostFixture() {
   const root = scratchDir('live-suite-cost');
-  for (const path of ['src/embed/index.ts', 'dist/esm/embed/index.js', 'dist/cjs/embed/index.js', 'test/lib/gate.ts', 'test/integration/live.test.ts', 'benchmark/lib/gates.mjs', 'benchmark/lib/stages.mjs', 'benchmark/tools/live-suite-cost.ts']) {
+  for (const path of ['src/embed/index.ts', 'dist/esm/embed/index.js', 'dist/cjs/embed/index.js', 'test/lib/gate.ts', 'test/integration/live.test.ts', 'benchmark/lib/gates.ts', 'benchmark/lib/stages.ts', 'benchmark/tools/live-suite-cost.ts']) {
     const destination = join(root, path);
     mkdirSync(dirname(destination), { recursive: true });
     writeFileSync(destination, `fixture:${path}\n`);
@@ -35,7 +35,6 @@ function liveCostFixture() {
     provenance_after: liveSuiteProvenance(root),
     recorded_at: '2099-01-01T00:00:00.000Z',
     elapsed_ms: 1234,
-    timed_out: false,
     exit_code: 0,
     signal: null,
     passing_count: 1,
@@ -44,6 +43,62 @@ function liveCostFixture() {
   writeFileSync(join(root, LIVE_SUITE_COST_ARTIFACT), `${JSON.stringify(artifact)}\n`);
   return { root, artifact, logPath };
 }
+
+describe('release gate attempt evidence', () => {
+  it('moves an earlier attempt aside byte-for-byte, so identical fresh output counts only when rewritten', () => {
+    const sittingDir = scratchDir('gate-attempts');
+    const output = '{"ok":true}\n';
+    writeFileSync(join(sittingDir, 'step.json'), output);
+    writeFileSync(join(sittingDir, 'step.log'), 'first log\n');
+    const record = { id: 'step', status: 'cancelled' };
+    const first = preserveAttempt(sittingDir, 'step', record);
+    assert.equal(first, join(sittingDir, 'attempts', 'step', '1'));
+    assert.equal(existsSync(join(sittingDir, 'step.json')), false, 'the target must be fresh for the next attempt');
+    assert.equal(readFileSync(join(first as string, 'step.json'), 'utf8'), output);
+    assert.equal(readFileSync(join(first as string, 'step.log'), 'utf8'), 'first log\n');
+    assert.deepEqual(JSON.parse(readFileSync(join(first as string, 'attempt.json'), 'utf8')).record, record);
+    assert.equal(stepOutputEvidence(join(sittingDir, 'step.json')).status, 'failed', 'a step that writes nothing has no output');
+
+    // A deterministic re-run writes the same bytes: that is fresh evidence, and it is kept, not compared.
+    writeFileSync(join(sittingDir, 'step.json'), output);
+    const second = preserveAttempt(sittingDir, 'step', { id: 'step', status: 'ok' });
+    assert.equal(second, join(sittingDir, 'attempts', 'step', '2'));
+    assert.equal(readFileSync(join(second as string, 'step.json'), 'utf8'), output);
+    assert.equal(existsSync(join(second as string, 'step.log')), false);
+    assert.equal(preserveAttempt(sittingDir, 'step', null), null, 'nothing to preserve');
+  });
+
+  it('writes a fresh step log and fails the step when the log cannot be written, with the job released', async () => {
+    const dir = scratchDir('gate-logged-job');
+    const logged = await runLoggedJob([process.execPath, '-e', "console.log('out'); console.error('err')"], { cwd: dir, env: process.env, logPath: join(dir, 'step.log'), echo: false });
+    assert.equal(logged.status, 'ok', JSON.stringify(logged));
+    assert.equal(readFileSync(join(dir, 'step.log'), 'utf8').split('\n').filter(Boolean).sort().join(','), 'err,out');
+
+    // A real I/O failure: the log's directory does not exist, so opening it fails.
+    const missing = join(dir, 'no-such-dir', 'step.log');
+    let jobPid: number | undefined;
+    const failed = await runLoggedJob([process.execPath, '-e', 'setInterval(() => {}, 1000)'], { cwd: dir, env: process.env, logPath: missing, echo: false, onStart: (job) => (jobPid = job.leader.pid) });
+    assert.equal(failed.status, 'failed');
+    assert.ok(failed.logError?.includes('ENOENT'), JSON.stringify(failed));
+    assert.ok(failed.details.includes(failed.logError as string));
+    assert.equal(existsSync(missing), false);
+    assert.ok(jobPid);
+    assert.throws(() => process.kill(jobPid as number, 0), { code: 'ESRCH' }, 'the job did not keep running after its log failed');
+
+    // An existing log is never overwritten: the fresh-target open fails and so does the step.
+    const existing = join(dir, 'existing.log');
+    writeFileSync(existing, 'earlier evidence\n');
+    const refused = await runLoggedJob([process.execPath, '-e', "console.log('new')"], { cwd: dir, env: process.env, logPath: existing, echo: false });
+    assert.equal(refused.status, 'failed');
+    assert.ok(refused.logError?.includes('EEXIST'), JSON.stringify(refused));
+    assert.equal(readFileSync(existing, 'utf8'), 'earlier evidence\n', 'the earlier log is preserved');
+  });
+
+  it('never resumes past a cancelled step, and refuses to accept one', () => {
+    assert.equal(doneOnResume('step', { status: 'cancelled' }, new Set(['step: cancelled'])), false);
+    assert.deepEqual(failedStageReasons({ step: { id: 'step', status: 'cancelled' } }), ['step: cancelled']);
+  });
+});
 
 describe('release gate independent failure collection', () => {
   it('schedules complete portable quality argv and every other obligation without legacy producers', async () => {
@@ -116,8 +171,8 @@ describe('release gate independent failure collection', () => {
       assert.deepEqual(
         invoked.filter((step) => step.id.startsWith('portable-eval-')),
         corpora.flatMap((corpus) => [
-          ...['sqlite', 'duckdb', 'turso'].map((store) => ({ id: `portable-eval-${corpus}-${store}`, argv: ['node', 'benchmark/steps/quality.mjs', corpus, '--store', store, '--query-form', 'bare-and'] })),
-          { id: `portable-eval-${corpus}-comparison`, argv: ['node', 'benchmark/tools/portable-quality-compare.mjs'] },
+          ...['sqlite', 'duckdb', 'turso'].map((store) => ({ id: `portable-eval-${corpus}-${store}`, argv: ['node', 'benchmark/steps/quality.ts', corpus, '--store', store, '--query-form', 'bare-and'] })),
+          { id: `portable-eval-${corpus}-comparison`, argv: ['node', 'benchmark/tools/portable-quality-compare.ts'] },
         ])
       );
       for (const step of steps) assert.equal(recorded.get(step.id), expected.includes(step) ? 'ok' : 'not-owed');
@@ -151,6 +206,10 @@ describe('release gate independent failure collection', () => {
     const remaining = remainingCost([{ id: 'live-suite' }], { 'live-suite': measured?.elapsed_ms }, () => false);
     assert.deepEqual(remaining.reused_steps, []);
     assert.deepEqual(remaining.remaining_steps, [{ id: 'live-suite', estimated_ms: 1234 }]);
+
+    const long = liveCostFixture();
+    writeFileSync(join(long.root, LIVE_SUITE_COST_ARTIFACT), JSON.stringify({ ...long.artifact, elapsed_ms: 30 * 60_000 }));
+    assert.equal(readLiveSuiteCost(long.root, JSON.parse(readFileSync(join(long.root, 'package.json'), 'utf8')).version)?.elapsed_ms, 30 * 60_000, 'a long run is a measurement, not a timeout');
   });
 
   it('rejects failed, zero-test, mismatched, and corrupted live-suite measurements', () => {

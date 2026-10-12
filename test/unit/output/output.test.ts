@@ -1,6 +1,7 @@
 import assert from 'node:assert';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { USAGE_CODE } from '../../../src/cli/constants.ts';
 import { printRows } from '../../../src/output/output.ts';
 import { configTestTree } from '../../lib/cli.ts';
 
@@ -76,17 +77,17 @@ describe('sql output formats', () => {
     assert.equal(result.stdout, 'path\n------\none.md\ntwo.md\n');
   });
 
-  it('an unrecognised --format exits 2 instead of silently rendering a table', () => {
+  it('an unrecognised --format reports a usage error', () => {
     const dir = makeTree();
     const result = runCli(dir, ['sql', 'SELECT path FROM frontmatter', '--format', 'nonsense']);
-    assert.equal(result.status, 2);
+    assert.equal(result.status, USAGE_CODE);
     assert.match(result.stderr, /unknown --format "nonsense"; expected table, json, csv/);
   });
 
   it('csv is refused where the command renders a structure rather than a row set', () => {
     const dir = makeTree();
     const result = runCli(dir, ['map', '--format', 'csv']);
-    assert.equal(result.status, 2);
+    assert.equal(result.status, USAGE_CODE);
     assert.match(result.stderr, /unknown --format "csv"; expected table, json/);
   });
 

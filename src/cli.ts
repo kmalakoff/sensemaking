@@ -1,5 +1,6 @@
 import { createRequire } from 'node:module';
 import { parseArgs } from 'node:util';
+import { ERROR_CODE, USAGE_CODE } from './cli/constants.ts';
 import { COMMANDS, USAGE } from './cli/index.ts';
 import type { Ctx } from './cli/types.ts';
 import type { LoadConfigOptions } from './config/index.ts';
@@ -43,14 +44,14 @@ function resolveConfigFor(name: string, configPath: string | undefined, options:
   return cfg;
 }
 
-// Thrown errors -> exit 1 with the message verbatim; usage errors exit 2 directly.
+// Thrown errors exit with ERROR_CODE and the message verbatim; usage errors exit with USAGE_CODE.
 export default async function cli(argv: string[], name: string): Promise<void> {
   // A closed pipe reader's EPIPE arrives async, after the write loop returns: console.log absorbs it, process.stdout.write (streaming formats) does not, so an unhandled listener kills the process.
   // A throw here is uncaught (async); process.exit() would skip `sense watch`'s cleanup, leaving a heartbeat behind that makes a dead watcher look alive.
   process.stdout.on('error', (err: NodeJS.ErrnoException) => {
     if (err.code === 'EPIPE') return;
     console.error(`sense: ${err.message}`);
-    process.exitCode = 1;
+    process.exitCode = ERROR_CODE;
   });
 
   const first = argv[0];
@@ -72,7 +73,7 @@ export default async function cli(argv: string[], name: string): Promise<void> {
     } catch (err) {
       console.error((err as Error).message);
       console.error(usage(name));
-      process.exit(2);
+      process.exit(USAGE_CODE);
     }
 
     try {
@@ -95,20 +96,20 @@ export default async function cli(argv: string[], name: string): Promise<void> {
       }
     } catch (err) {
       console.error((err as Error).message);
-      process.exit(1);
+      process.exit(ERROR_CODE);
     }
 
     console.error(usage(name));
-    process.exit(2);
+    process.exit(USAGE_CODE);
   }
 
-  // Breaking renames get one release of a pointer instead of an "unknown" error: find ->
+  // Renamed verbs get a pointer to their current name instead of the unknown-entry error: find ->
   // search, and query -> sql (which took its name back from the search sense of "query").
   const RENAMED: Record<string, string> = { find: 'search', query: 'sql' };
   if (RENAMED[first]) {
     console.error(`${name}: ${first} is now ${RENAMED[first]}`);
     console.error(usage(name));
-    process.exit(2);
+    process.exit(USAGE_CODE);
   }
 
   const ctx: Ctx = {
@@ -117,7 +118,7 @@ export default async function cli(argv: string[], name: string): Promise<void> {
     resolveConfig: (configPath, options) => resolveConfigFor(name, configPath, options),
     usageError(message) {
       console.error(message);
-      process.exit(2);
+      process.exit(USAGE_CODE);
     },
   };
 
@@ -127,6 +128,6 @@ export default async function cli(argv: string[], name: string): Promise<void> {
     else await (await import('./cli/named.ts')).default(ctx, first);
   } catch (err) {
     console.error((err as Error).message);
-    process.exit(1);
+    process.exit(ERROR_CODE);
   }
 }

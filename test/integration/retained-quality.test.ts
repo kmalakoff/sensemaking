@@ -2,19 +2,19 @@ import { spawnSync } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, readFileSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import assert from 'assert';
-import { cachedCorpusPaths } from '../../benchmark/lib/corpus.mjs';
-import { runStageSteps } from '../../benchmark/lib/gate-runner.mjs';
-import { assertCompatibleSelection, profileReasons, remainingCost, resolveRetainedQualityRequirement, retainedQualityForSitting } from '../../benchmark/lib/gates.mjs';
-import { MEASURE_VERSION } from '../../benchmark/lib/measure.mjs';
-import { comparePortableQualityArtifacts, PORTABLE_QUALITY_STORES } from '../../benchmark/lib/portable-quality.mjs';
-import { qualityRetrievalIdentity } from '../../benchmark/lib/quality-retrieval-identity.mjs';
-import { observeQualityModel } from '../../benchmark/lib/quality-work-tree.mjs';
-import { inspectRetainedQuality, RETAINED_QUALITY_SCHEMA, RETAINED_QUALITY_SCOPE, retainedQualityIds, retainedQualityProducerIds } from '../../benchmark/lib/retained-quality.mjs';
-import { buildStages } from '../../benchmark/lib/stages.mjs';
-import { captureFileManifest } from '../../benchmark/lib/work-tree.mjs';
-import { identityHash, logicalWorkloadIdentity, manifestIdentity } from '../../benchmark/lib/workload-identity.mjs';
-import { buildReport, compactReleaseRecord, doneOnResume, persist, renderMarkdown } from '../../benchmark/report.mjs';
-import { packageRoot, scratchDir } from '../lib/scratch.ts';
+import { cachedCorpusPaths } from '../../benchmark/lib/corpus.ts';
+import { runStageSteps } from '../../benchmark/lib/gate-runner.ts';
+import { assertCompatibleSelection, profileReasons, remainingCost, resolveRetainedQualityRequirement, retainedQualityForSitting } from '../../benchmark/lib/gates.ts';
+import { MEASURE_VERSION } from '../../benchmark/lib/measure.ts';
+import { comparePortableQualityArtifacts, PORTABLE_QUALITY_STORES } from '../../benchmark/lib/portable-quality.ts';
+import { qualityRetrievalIdentity } from '../../benchmark/lib/quality-retrieval-identity.ts';
+import { observeQualityModel } from '../../benchmark/lib/quality-work-tree.ts';
+import { inspectRetainedQuality, RETAINED_QUALITY_SCHEMA, RETAINED_QUALITY_SCOPE, retainedQualityIds, retainedQualityProducerIds } from '../../benchmark/lib/retained-quality.ts';
+import { buildStages } from '../../benchmark/lib/stages.ts';
+import { captureFileManifest } from '../../benchmark/lib/work-tree.ts';
+import { identityHash, logicalWorkloadIdentity, manifestIdentity } from '../../benchmark/lib/workload-identity.ts';
+import { buildReport, compactReleaseRecord, doneOnResume, persist, renderMarkdown } from '../../benchmark/report.ts';
+import { packageRoot, scratchDir } from '../lib/tree.ts';
 
 const PACKAGE_VERSION = '0.24.1';
 type QualityArtifact = Awaited<ReturnType<typeof qualityArtifact>>;
@@ -28,7 +28,7 @@ function write(root: string, path: string, value: string): void {
 
 function currentRoot(withCorpora = true): string {
   const root = scratchDir('retained-quality-root');
-  for (const path of ['src', 'dist', 'benchmark/steps/quality.mjs', 'benchmark/lib/corpus.mjs', 'benchmark/lib/labels.mjs', 'benchmark/lib/quality.mjs', 'benchmark/lib/quality-work-tree.mjs', 'package.json', 'package-lock.json']) {
+  for (const path of ['src', 'dist', 'benchmark/steps/quality.ts', 'benchmark/lib/corpus.ts', 'benchmark/lib/labels.ts', 'benchmark/lib/quality.ts', 'benchmark/lib/quality-work-tree.ts', 'package.json', 'package-lock.json']) {
     const target = join(root, path);
     mkdirSync(dirname(target), { recursive: true });
     cpSync(join(packageRoot, path), target, { recursive: true });
@@ -170,17 +170,17 @@ describe('retained quality report integration', () => {
 
   it('schedules actual retained evaluation for report-only edits without fresh producer calls at unknown or large cost', async () => {
     for (const [path, estimatedMs] of [
-      ['benchmark/report.mjs', null],
-      ['benchmark/lib/portable-quality.mjs', 21 * 60_000],
+      ['benchmark/report.ts', null],
+      ['benchmark/lib/portable-quality.ts', 21 * 60_000],
     ] as const) {
       const f = await fixture();
       cpSync(join(packageRoot, 'benchmark', 'lib'), join(f.root, 'benchmark', 'lib'), { recursive: true });
-      cpSync(join(packageRoot, 'benchmark', 'steps', 'retained-quality.mjs'), join(f.root, 'benchmark', 'steps', 'retained-quality.mjs'));
+      cpSync(join(packageRoot, 'benchmark', 'steps', 'retained-quality.ts'), join(f.root, 'benchmark', 'steps', 'retained-quality.ts'));
       symlinkSync(join(packageRoot, 'node_modules'), join(f.root, 'node_modules'), 'junction');
-      cpSync(join(packageRoot, 'benchmark', 'report.mjs'), join(f.root, 'benchmark', 'report.mjs'));
+      cpSync(join(packageRoot, 'benchmark', 'report.ts'), join(f.root, 'benchmark', 'report.ts'));
       writeFileSync(join(f.root, path), `${readFileSync(join(f.root, path), 'utf8')}\n// evaluator wording changed\n`);
       const sittingsDir = join(f.root, '.tmp', 'sittings');
-      const sourceDir = join(sittingsDir, f.retained.source.sitting);
+      const sourceDir = join(sittingsDir, (f.retained.source as { sitting: unknown }).sitting as string);
       const targetDir = join(sittingsDir, '2099-01-02-target');
       cpSync(f.sourceDir, sourceDir, { recursive: true });
       cpSync(f.targetDir, targetDir, { recursive: true });
@@ -228,14 +228,14 @@ describe('retained quality report integration', () => {
       writeFileSync(sittingPath, JSON.stringify(sitting));
       const report = buildReport(targetDir, { reportsDir: f.reportsDir, sittingsDir, currentRoot: f.root });
       assert.equal(report.verdict, 'PASS', report.verdict_reasons.join('\n'));
-      assert.equal(report.retained_quality.source.sitting, f.retained.source.sitting);
+      assert.equal(((report.retained_quality as { source: unknown }).source as { sitting: unknown }).sitting, (f.retained.source as { sitting: unknown }).sitting);
       const markdown = renderMarkdown(report);
       assert.match(markdown, /retained measurements: package 0\.24\.1, nfcorpus\/bare-and, split test, k=10, on sqlite, duckdb, turso/);
       assert.match(markdown, /Quality metrics were recomputed from the original rankings; this retained-quality step did not rerun search or measure timing/);
       unlinkSync(join(sourceDir, 'portable-eval-nfcorpus-sqlite.json'));
       const missing = buildReport(targetDir, { reportsDir: f.reportsDir, sittingsDir, currentRoot: f.root });
       assert.equal(missing.verdict, 'BLOCK');
-      assert.equal(missing.retained_quality.valid, false);
+      assert.equal((missing.retained_quality as { valid: unknown }).valid, false);
     }
   });
 
@@ -267,15 +267,15 @@ describe('retained quality report integration', () => {
     assert.equal(first.verdict, 'PASS', first.verdict_reasons.join('\n'));
     assert.equal(first.profile, 'ordinary');
     const retainedSteps = first.steps as Record<string, QualityArtifact>;
-    assert.deepEqual(first.retained_quality.scope, RETAINED_QUALITY_SCOPE);
+    assert.deepEqual((first.retained_quality as { scope: unknown }).scope, RETAINED_QUALITY_SCOPE);
     assert.deepEqual(
       Object.keys(retainedSteps)
         .filter((id) => id.startsWith('portable-eval-'))
         .sort(),
       [...retainedQualityIds].sort()
     );
-    assert.deepEqual(Object.keys(first.retained_quality.raw_evidence).sort(), [...retainedQualityProducerIds].sort());
-    assert.deepEqual(Object.keys(first.retained_quality.source_steps_status).sort(), [...retainedQualityProducerIds].sort());
+    assert.deepEqual(Object.keys((first.retained_quality as { raw_evidence: object }).raw_evidence).sort(), [...retainedQualityProducerIds].sort());
+    assert.deepEqual(Object.keys((first.retained_quality as { source_steps_status: object }).source_steps_status).sort(), [...retainedQualityProducerIds].sort());
     assert.equal(retainedSteps['eval-fever'], undefined);
     assert.ok(first.assessment.verified_artifacts.includes('retained-quality'));
     persist(first, { sittingDir: f.targetDir, reportsDir: f.reportsDir, benchmarkingMdPath: join(f.root, 'BENCHMARKING.md') });
@@ -303,13 +303,13 @@ describe('retained quality report integration', () => {
     writeFileSync(join(f.targetDir, 'sitting.json'), JSON.stringify(resumedSitting));
     const resumed = buildReport(f.targetDir, { reportsDir: f.reportsDir, sittingsDir: f.sittingsDir, currentRoot: f.root });
     assert.equal(resumed.verdict, 'PASS');
-    assert.equal(resumed.retained_quality.source.sitting, f.retained.source.sitting);
+    assert.equal(((resumed.retained_quality as { source: unknown }).source as { sitting: unknown }).sitting, (f.retained.source as { sitting: unknown }).sitting);
 
     const promoted = compactReleaseRecord({ ...resumed, release_version: PACKAGE_VERSION });
-    assert.equal(promoted.retained_quality.source_compact, undefined);
-    assert.ok(promoted.retained_quality.source_compact_hashes['portable-eval-nfcorpus-sqlite']);
-    assert.equal(promoted.steps['retained-quality'].source_compact, undefined);
-    assert.equal(promoted.steps['retained-quality'].artifacts, undefined);
+    assert.equal((promoted.retained_quality as { source_compact: unknown }).source_compact, undefined);
+    assert.ok((promoted.retained_quality as { source_compact_hashes: Record<string, unknown> }).source_compact_hashes['portable-eval-nfcorpus-sqlite']);
+    assert.equal((promoted.steps['retained-quality'] as { source_compact: unknown }).source_compact, undefined);
+    assert.equal((promoted.steps['retained-quality'] as { artifacts: unknown }).artifacts, undefined);
     writeFileSync(join(f.reportsDir, `2099-01-02-${PACKAGE_VERSION}-release-gate.json`), JSON.stringify(promoted));
     unlinkSync(join(f.sourceDir, 'release-gate.json'));
     const second = await inspectRetainedQuality({ reportsDir: f.reportsDir, sittingsDir: f.sittingsDir, baselineVersion: PACKAGE_VERSION, currentRoot: f.root });
@@ -335,11 +335,11 @@ describe('retained quality report integration', () => {
     const compact = compactReleaseRecord(report);
     const serialized = JSON.stringify(compact);
     assert.equal(serialized.split(payload).length - 1, 1);
-    assert.deepEqual(compact.retained_quality.source, source);
-    assert.equal(compact.retained_quality.source_compact, undefined);
-    assert.equal(compact.retained_quality.source_compact_hashes['portable-eval-nfcorpus-sqlite'], identityHash(sourceCompact['portable-eval-nfcorpus-sqlite']));
-    assert.equal(compact.steps['retained-quality'].artifacts, undefined);
-    assert.equal(compact.steps['retained-quality'].artifact_hashes['portable-eval-nfcorpus-sqlite'], identityHash(artifacts['portable-eval-nfcorpus-sqlite']));
+    assert.deepEqual((compact.retained_quality as { source: unknown }).source, source);
+    assert.equal((compact.retained_quality as { source_compact: unknown }).source_compact, undefined);
+    assert.equal((compact.retained_quality as { source_compact_hashes: Record<string, unknown> }).source_compact_hashes['portable-eval-nfcorpus-sqlite'], identityHash(sourceCompact['portable-eval-nfcorpus-sqlite']));
+    assert.equal((compact.steps['retained-quality'] as { artifacts: unknown }).artifacts, undefined);
+    assert.equal((compact.steps['retained-quality'] as { artifact_hashes: Record<string, unknown> }).artifact_hashes['portable-eval-nfcorpus-sqlite'], identityHash(artifacts['portable-eval-nfcorpus-sqlite']));
   });
 
   it('fails closed after scope, workload, raw, summary, input-coverage, producer-completion, or artifact-file tampering', async () => {
@@ -368,10 +368,10 @@ describe('retained quality report integration', () => {
       }
       const report = buildReport(f.targetDir, { reportsDir: f.reportsDir, sittingsDir: f.sittingsDir, currentRoot: f.root });
       assert.equal(report.verdict, 'BLOCK', kind);
-      assert.notEqual(report.retained_quality?.valid, true, kind);
+      assert.notEqual((report.retained_quality as { valid?: unknown } | null | undefined)?.valid, true, kind);
       const validity = report.classifications.find((row) => row.id === 'retained-quality/validity' && 'invalid' in row && row.invalid);
       assert.ok(validity, kind);
-      if (kind === 'workload') assert.match(validity.reason, /full nfcorpus gate workload/);
+      if (kind === 'workload') assert.match(validity.reason as string, /full nfcorpus gate workload/);
     }
   });
 
@@ -412,7 +412,7 @@ describe('retained quality report integration', () => {
     sitting.effective_requirements = sitting.owed;
     sitting.retained_quality = retainedQualityForSitting(sitting.retained_quality, unavailable, reasons);
     assert.equal(sitting.retained_quality.status, 'superseded-by-fresh-quality');
-    assert.equal(sitting.retained_quality.source.sitting, f.retained.source.sitting);
+    assert.equal(sitting.retained_quality.source.sitting, (f.retained.source as { sitting: unknown }).sitting);
     assert.match(sitting.retained_quality.reason, /retained|artifact|evidence/i);
     const qualitySteps = (buildStages().find((stage) => stage.id === 'quality')?.steps ?? []) as StageStep[];
     const executed: string[] = [];
@@ -449,8 +449,8 @@ describe('retained quality report integration', () => {
     writeFileSync(sittingPath, JSON.stringify(sitting));
     const report = buildReport(f.targetDir, { reportsDir: f.reportsDir, sittingsDir: f.sittingsDir, currentRoot: f.root });
     assert.equal(report.verdict, 'PASS', report.verdict_reasons.join('\n'));
-    assert.equal(report.retained_quality.status, 'superseded-by-fresh-quality');
-    assert.equal(report.retained_quality.source.sitting, f.retained.source.sitting);
+    assert.equal((report.retained_quality as { status: unknown }).status, 'superseded-by-fresh-quality');
+    assert.equal(((report.retained_quality as { source: unknown }).source as { sitting: unknown }).sitting, (f.retained.source as { sitting: unknown }).sitting);
   });
 
   it('treats a missing cache as unavailable without creating it', async () => {

@@ -8,37 +8,37 @@ digits linked from "Numbers of record" below.
 ## Running
 
 The gate is one command. Everything under it is reachable alone, and the directory says which is
-which: `benchmark/gate.mjs` is the entry, `benchmark/steps/` is what the gate runs, and
+which: `benchmark/gate.ts` is the entry, `benchmark/steps/` is what the gate runs, and
 `benchmark/tools/` is decision support that is never part of a release.
 
 ```bash
 npm run benchmark                     # ordinary assessment: required stages selected from the diff
 npm run benchmark -- --profile deep   # explicit deep assessment
 npm run benchmark -- --dry-run        # selected stages, reasons, and historical-cost estimate; measures nothing
-node benchmark/report.mjs             # re-render a report from its sitting, measuring nothing
-node benchmark/report.mjs --sitting <archived-sitting> --out <assessment-dir> [--native-matrix <matrix.json>] # render isolated assessment files without changing retained evidence
+node benchmark/report.ts             # re-render a report from its sitting, measuring nothing
+node benchmark/report.ts --sitting <archived-sitting> --out <assessment-dir> [--native-matrix <matrix.json>] # render isolated assessment files without changing retained evidence
 ```
 
-`ordinary` is the default release assessment. Changed capabilities select its common correctness and matched-input current-store work. Its fresh or retained relevance view is the full portable NFCorpus workload on every offered store. `deep` explicitly adds large scale/stress workloads and portable FEVER on every store. New assessments omit the SQLite OR-bag relevance runs for both corpora, including conservative unknown-input selections. The dry run records the selected profile, reasons, and historical execution estimates. Unknown or large durations do not stop ordinary execution or expand its selected work. Estimates exclude setup and quiet waits. Per-stage process-tree timeouts bound execution independently of estimates.
+`ordinary` is the default release assessment. Changed capabilities select its common correctness and matched-input current-store work. Its fresh or retained relevance view is the full portable NFCorpus workload on every offered store. `deep` explicitly adds large scale/stress workloads and portable FEVER on every store. New assessments omit the SQLite OR-bag relevance runs for both corpora, including conservative unknown-input selections. The dry run records the selected profile, reasons, and historical execution estimates. Unknown or large durations do not stop ordinary execution or expand its selected work. Estimates exclude setup and quiet waits. The gate imposes no execution time limit on any step, stage or quiet wait.
 
 New sittings record `quality_scope: portable-only-v1`. An old unmarked sitting retains its original legacy coverage when rendered; it cannot resume into the new scope. Start a clean sitting instead. Unknown scope is invalid. Separately collected OR-bag artifacts remain validated and historical reports remain readable.
 
-When an ordinary run owes baseline or report/evaluator assessment without a changed capability requiring fresh retrieval, it revalidates retained raw portable NFCorpus quality against current retrieval, model, corpus, query, judgment, and all-store identities. Missing or incompatible raw evidence selects fresh portable NFCorpus before work starts; compact summaries alone cannot establish that evidence. A missing revalidation duration estimate does not select fresh collection. Only the report/evaluator-only paths named in `benchmark/lib/gates.mjs` avoid baseline collection. Mixed producer/evaluator files, unknown benchmark paths, and edits that also change a producer retain collection. Recomputed metrics retain the original measured package and workload provenance; they do not claim a new search or timing measurement. An applicable completed step is reused on resume. The sitting and final report retain the selected profile, scope, and requirements, and resume must be compatible with them. Native diagnostic matrices and historical sweeps remain optional and neither profile selects them automatically.
+When an ordinary run owes baseline or report/evaluator assessment without a changed capability requiring fresh retrieval, it revalidates retained raw portable NFCorpus quality against current retrieval, model, corpus, query, judgment, and all-store identities. Missing or incompatible raw evidence selects fresh portable NFCorpus before work starts; compact summaries alone cannot establish that evidence. A missing revalidation duration estimate does not select fresh collection. Only the report/evaluator-only paths named in `benchmark/lib/gates.ts` avoid baseline collection. Mixed producer/evaluator files, unknown benchmark paths, and edits that also change a producer retain collection. Recomputed metrics retain the original measured package and workload provenance; they do not claim a new search or timing measurement. An applicable completed step is reused on resume. The sitting and final report retain the selected profile, scope, and requirements, and resume must be compatible with them. Native diagnostic matrices and historical sweeps remain optional and neither profile selects them automatically.
 
 The steps, each runnable alone when investigating one thing:
 
 ```bash
-node benchmark/steps/measure-tree.mjs . <notes-dir|corpus>          # one package against one tree; the JSON row everything else reads
-node benchmark/steps/compare-versions.mjs                           # released baseline (package.json) vs working tree
-node benchmark/steps/compare-versions.mjs obsidian-hub 0.2.1 local  # explicit corpus and versions
-node benchmark/steps/quality.mjs nfcorpus                           # retrieval quality on a labeled corpus
-node benchmark/steps/oracle.mjs <corpus> <path>                     # tags/links/chunk extents vs Obsidian's metadataCache
-node benchmark/steps/store-dump.mjs capture <dir>                   # every store's rows and ranked output, for an A/B against a refactor
-node benchmark/steps/store-dump.mjs compare <dirA> <dirB>           # diffs two captures, non-zero on any difference
-node benchmark/tools/native-capability.mjs [--store STORE] [--case CASE] [--notes N] [--out FILE] # tiny native API diagnostic
-node benchmark/tools/duckdb-lexical-cost.mjs --out FILE             # optional DuckDB lexical-path diagnostic
-node benchmark/tools/turso-update-cost.mjs --out FILE               # optional Turso 250-file update-strategy diagnostic
-node benchmark/tools/result-sets.mjs [corpus ...] [--queries lexical,words,default] [--k 10] [--out FILE] # ranked-path overlap evidence
+node benchmark/steps/measure-tree.ts . <notes-dir|corpus>          # one package against one tree; the JSON row everything else reads
+node benchmark/steps/compare-versions.ts                           # released baseline (package.json) vs working tree
+node benchmark/steps/compare-versions.ts obsidian-hub 0.2.1 local  # explicit corpus and versions
+node benchmark/steps/quality.ts nfcorpus                           # retrieval quality on a labeled corpus
+node benchmark/steps/oracle.ts <corpus> <path>                     # tags/links/chunk extents vs Obsidian's metadataCache
+node benchmark/steps/store-dump.ts capture <dir>                   # every store's rows and ranked output, for an A/B against a refactor
+node benchmark/steps/store-dump.ts compare <dirA> <dirB>           # diffs two captures, non-zero on any difference
+node benchmark/tools/native-capability.ts [--store STORE] [--case CASE] [--notes N] [--out FILE] # tiny native API diagnostic
+node benchmark/tools/duckdb-lexical-cost.ts --out FILE             # optional DuckDB lexical-path diagnostic
+node benchmark/tools/turso-update-cost.ts --out FILE               # optional Turso 250-file update-strategy diagnostic
+node benchmark/tools/result-sets.ts [corpus ...] [--queries lexical,words,default] [--k 10] [--out FILE] # ranked-path overlap evidence
 ```
 
 The DuckDB diagnostic records the real adapter's prepare and execute/read/JavaScript-conversion
@@ -51,18 +51,18 @@ cost, select an optimization, or change a production threshold.
 The native-capability v3 diagnostic defaults to SQLite, the `baseline` case, four authored notes, and three fresh repetitions. It accepts one store at a time. Generate one artifact per store, keeping `--case` identical, then compare exactly the SQLite, DuckDB, and Turso artifacts:
 
 ```bash
-node benchmark/tools/native-capability.mjs --store sqlite --case baseline --notes 4 --out .tmp/native-capability/sqlite-baseline.json
-node benchmark/tools/native-capability.mjs --store duckdb --case baseline --notes 4 --out .tmp/native-capability/duckdb-baseline.json
-node benchmark/tools/native-capability.mjs --store turso --case baseline --notes 4 --out .tmp/native-capability/turso-baseline.json
-node benchmark/tools/native-capability-compare.mjs .tmp/native-capability/sqlite-baseline.json .tmp/native-capability/duckdb-baseline.json .tmp/native-capability/turso-baseline.json --out .tmp/native-capability/baseline-comparison.json
+node benchmark/tools/native-capability.ts --store sqlite --case baseline --notes 4 --out .tmp/native-capability/sqlite-baseline.json
+node benchmark/tools/native-capability.ts --store duckdb --case baseline --notes 4 --out .tmp/native-capability/duckdb-baseline.json
+node benchmark/tools/native-capability.ts --store turso --case baseline --notes 4 --out .tmp/native-capability/turso-baseline.json
+node benchmark/tools/native-capability-compare.ts .tmp/native-capability/sqlite-baseline.json .tmp/native-capability/duckdb-baseline.json .tmp/native-capability/turso-baseline.json --out .tmp/native-capability/baseline-comparison.json
 ```
 
-The comparator is fail-closed on schema, store set, case/workload inputs, row identities, implementation/package/harness identity, runtime, machine, and quiet-readiness differences; core authored path, content, pending-vector, and rounded geometry postconditions pass before timing rows are eligible. It accepts only v3 artifacts from the same case, not historical v1/v2 artifacts, and compares no pair or subset in place of the required three stores. Each comparison input is bounded to 16 MiB. The CLI always uses three repetitions; the library contract allows 3–100, and `--notes` accepts 4–50,000. The diagnostic reports timings without adding release rows or choosing a fastest store.
+The comparator is fail-closed on schema, store set, case/workload inputs, row identities, implementation/package/harness identity, runtime, machine, and readiness-policy differences; core authored path, content, pending-vector, and rounded geometry postconditions pass before timing rows are eligible. It accepts only v3 artifacts from the same case, not historical v1/v2 artifacts, and compares no pair or subset in place of the required three stores. Each comparison input is bounded to 16 MiB. The CLI always uses three repetitions; the library contract allows 3–100, and `--notes` accepts 4–50,000. The diagnostic reports timings without adding release rows or choosing a fastest store.
 
 For an owner-run evidence matrix, run the bounded driver after validation and a successful build:
 
 ```bash
-node benchmark/tools/native-evidence-matrix.mjs \
+node benchmark/tools/native-evidence-matrix.ts \
   --out-dir .tmp/native-matrix-<date> \
   --baseline-notes 6
 ```
@@ -90,19 +90,21 @@ The seven v3 cases change bounded workload axes:
 | `narrow-vectors` | vector wire rows and query use 64 dimensions while the native schema remains 256 dimensions |
 | `structured-content` | four structured lexical notes add authored frontmatter/status, heading levels 1–4, and an `a↔b` link pair; filler notes appear when `--notes` exceeds four, and the vector tree remains the baseline fixture for the requested count |
 
-These cases are workload-axis observations, not strict one-covariate experiments and not cross-case causal claims; compare stores only within one case. The `structured-content` facts are authored frontmatter/status, heading levels 1–4, and the `a↔b` lexical links; they are checked after the content-read timer and add no timing row or shape-performance claim. The `measure-tree.mjs` table output remains opaque: its rows are not reverse-parsed into a correctness claim. Native-capability output is structured JSON; lexical checks retain an output hash and authored path postconditions, but do not claim snippet or hydration equivalence. Its fixed `content_read` row is a native SQL read of authored `content` rows, not production search hydration. Public `open` timing includes shared parse/reconcile orchestration and native work; cold and warm lexical timers stop before shared search fusion and snippet construction. Source-file manifests and explicit int8-plus-scale wire vectors are separate workload evidence; no embedding provider is constructed by this diagnostic, and changing wire or native-schema dimensions changes the workload identity. Optional native provenance records the package name/version and engine version query, not a cryptographic hash of the native binary. This remains a standalone diagnostic: release owners control whether any later comparison enters a stage or gate, and no timing bands or stored acceptances change here.
+These cases are workload-axis observations, not strict one-covariate experiments and not cross-case causal claims; compare stores only within one case. The `structured-content` facts are authored frontmatter/status, heading levels 1–4, and the `a↔b` lexical links; they are checked after the content-read timer and add no timing row or shape-performance claim. The `measure-tree.ts` table output remains opaque: its rows are not reverse-parsed into a correctness claim. Native-capability output is structured JSON; lexical checks retain an output hash and authored path postconditions, but do not claim snippet or hydration equivalence. Its fixed `content_read` row is a native SQL read of authored `content` rows, not production search hydration. Public `open` timing includes shared parse/reconcile orchestration and native work; cold and warm lexical timers stop before shared search fusion and snippet construction. Source-file manifests and explicit int8-plus-scale wire vectors are separate workload evidence; no embedding provider is constructed by this diagnostic, and changing wire or native-schema dimensions changes the workload identity. Optional native provenance records the package name/version and engine version query, not a cryptographic hash of the native binary. This remains a standalone diagnostic: release owners control whether any later comparison enters a stage or gate, and no timing bands or stored acceptances change here.
 
 The tools, for settling a decision rather than gating a release:
 
 ```bash
-node benchmark/tools/bakeoff.mjs nfcorpus       # storage-lever bake-off for one model
-node benchmark/tools/weight-sweep.mjs nfcorpus  # per-signal RRF weight sweep
-node benchmark/tools/sweep.mjs                  # the shape sweep behind the stress corpus
-node benchmark/tools/profile.mjs                # cold build by stage
-node benchmark/tools/shared-snippet.mjs         # shared snippet + line lookup, measured once
-node benchmark/tools/native-hydration.mjs --store sqlite
-node benchmark/tools/native-hydration-compare.mjs sqlite.json duckdb.json turso.json
+node benchmark/tools/bakeoff.ts nfcorpus       # storage-lever bake-off for one model
+node benchmark/tools/weight-sweep.ts nfcorpus  # per-signal RRF weight sweep
+node benchmark/tools/sweep.ts                  # the shape sweep behind the stress corpus
+node benchmark/tools/profile.ts                # cold build by stage
+node benchmark/tools/shared-snippet.ts         # shared snippet + line lookup, measured once
+node benchmark/tools/native-hydration.ts --store sqlite
+node benchmark/tools/native-hydration-compare.ts sqlite.json duckdb.json turso.json
 ```
+
+Fixed-work and native-capability measurements share one readiness policy (`NATIVE_CAPABILITY_READINESS_POLICY`). A measurement starts only when the one-minute load average is at most half the logical cores; that entry admission is unchanged. The exit reading is recorded, not gated: machine load counts the measured workload itself and attributes nothing to anyone else, so an exit above the limit is neither evidence of external contention nor a reason to discard correct work. Such a timing is reported as an observation, without a ratio, not as a clean comparison. Correctness, schema, provenance and sample completeness still decide validity. Artifacts recorded under the earlier policy, which also required the exit reading to pass, keep the judgement they were recorded under; they are read, never produced, and never compared with the current policy.
 
 The release baseline stage runs the shared snippet check once and fixed-candidate production hydration on every offered store. Hydration uses the same non-ranked candidate order with short, medium, multi-section and exactly 1 MiB word-dense notes. The large note contains over 250,000 short words, not a single long token. Both default and larger caller budgets require exact authored snippets and line ranges on every store. The file bytes and candidate order identify the workload, so the earlier single-word fixture cannot supply a compatible baseline. These steps gate artifact and correctness validity only; their timings have no catalog row, band or stored acceptance. Fixed-path native SQL content reads remain a different diagnostic.
 
@@ -112,7 +114,7 @@ missing store captures, while their pairwise overlap remains descriptive and nev
 performance number. The release report renders the pairwise path overlap so a ranking or corpus
 change is visible without treating another store as the correctness oracle.
 
-`result-sets.mjs` captures the exact ranked path lists for the lexical, words-only, and default
+`result-sets.ts` captures the exact ranked path lists for the lexical, words-only, and default
 searches from every declared store. Each store receives a fresh private copy of the same corpus,
 query arguments, configuration, and `k`; the artifact records their common workload fingerprint and
 fails on a missing store, command error, malformed row, duplicate path, or path outside the corpus.
@@ -127,15 +129,15 @@ The generated assessment has two views. Current fixed-work costs compare SQLite,
 
 Invalid required evidence and failed required behavior block the verdict. Historical timing, quality, and output observations warn unless an artifact names an explicit caller bound, quality floor, or approved guard. Missing history is information, not a pass. A store-dump or snapshot difference needs contract review before the report can call it a warning.
 
-A run resumes by default. Independent failures are collected in one sitting; a failed build/test prerequisite or missing producer output prevents only dependent work. Snippet, result-set and store-dump evidence failures do not suppress independent measurements, and still block the final verdict. The sitting is keyed on the tree it measures, so an interrupted run reuses successful steps and editing code starts a fresh one. Unaccepted failures retry; accepted failures remain recorded. One store or one tree alone is `measure-tree.mjs`, below. Normal exits clean private measurement copies; a forcibly killed process can leave a `.tmp/run-*` copy. The gate does not delete unidentified copies that may belong to another active run.
+A run resumes by default. Independent failures are collected in one sitting; a failed build/test prerequisite or missing producer output prevents only dependent work. Snippet, result-set and store-dump evidence failures do not suppress independent measurements, and still block the final verdict. The sitting is keyed on the tree it measures, so an interrupted run reuses successful steps and editing code starts a fresh one. Unaccepted failures retry; accepted failures remain recorded. One store or one tree alone is `measure-tree.ts`, below. Normal exits clean private measurement copies; a forcibly killed process can leave a `.tmp/run-*` copy. The gate does not delete unidentified copies that may belong to another active run.
 
-The default run answers "did the working tree regress?" `local` is whatever is checked out. The working-tree column is labeled `local` until the release exists: regenerate the table at release time and the column gets its real number. Named corpora, dataset builds, and npm-installed comparison versions all cache through `benchmark/lib/cache.mjs` into `.tmp/cache/` (gitignored): fetched once, built atomically in a staging dir, safe to delete anytime. Corpus specs are pinned in `benchmark/lib/corpus.mjs`, the single source of truth. A directory path works in place of a corpus name.
+The default run answers "did the working tree regress?" `local` is whatever is checked out. The working-tree column is labeled `local` until the release exists: regenerate the table at release time and the column gets its real number. Named corpora, dataset builds, and npm-installed comparison versions all cache through `benchmark/lib/cache.ts` into `.tmp/cache/` (gitignored): fetched once, built atomically in a staging dir, safe to delete anytime. Corpus specs are pinned in `benchmark/lib/corpus.ts`, the single source of truth. A directory path works in place of a corpus name.
 
-`compare-versions.mjs` installs each npm version into a temp dir (`local` = this working tree), gives every version an isolated copy of the tree with a v1 config (the lowest common denominator every version can read; copies keep cache formats and config auto-migration from cross-contaminating), runs `benchmark/steps/measure-tree.mjs` per version, and prints the table. `measure-tree.mjs` can also run alone against any single package root + tree; it prints one JSON row.
+`compare-versions.ts` installs each npm version into a temp dir (`local` = this working tree), gives every version an isolated copy of the tree with a v1 config (the lowest common denominator every version can read; copies keep cache formats and config auto-migration from cross-contaminating), runs `benchmark/steps/measure-tree.ts` per version, and prints the table. `measure-tree.ts` can also run alone against any single package root + tree; it prints one JSON row.
 
-`bakeoff.mjs` and `weight-sweep.mjs` measure one specific model/dims/weight choice against a labeled corpus's qrels, decision-support for a config default, not a release gate. `oracle.mjs` is the correctness gate against Obsidian's own metadataCache; the gate runs it, opening the vault itself, and it stores nothing.
+`bakeoff.ts` and `weight-sweep.ts` measure one specific model/dims/weight choice against a labeled corpus's qrels, decision-support for a config default, not a release gate. `oracle.ts` is the correctness gate against Obsidian's own metadataCache; the gate runs it, opening the vault itself, and it stores nothing.
 
-`store-dump.mjs` is the refactor gate for anything touching the write path: capture before a change,
+`store-dump.ts` is the refactor gate for anything touching the write path: capture before a change,
 capture after, compare. It records two things per store and both halves are required. Every logical
 table's rows in primary-key order, and the ordered results of a fixed query set with their scores.
 The ranking half is not redundant: a lexical index lives outside the logical tables, so dumps compare
@@ -145,7 +147,7 @@ every file it checked rather than passing in silence.
 
 Two kinds of metric per version:
 
-- **Wall-time:** spawns the CLI per operation, so every number includes ~40 ms of Node startup. This is what a calling agent pays per invocation. On embed-enabled trees `measure-tree.mjs` also times `search` with vectors (`semantic_find_ms`). The difference from `find_ms` is a derived end-to-end diagnostic, not an isolated semantic cost: selected candidates, readiness, model loading, query embedding, vector scan, and downstream work can differ (null on trees without embed).
+- **Wall-time:** spawns the CLI per operation, so every number includes ~40 ms of Node startup. This is what a calling agent pays per invocation. On embed-enabled trees `measure-tree.ts` also times `search` with vectors (`semantic_find_ms`). The difference from `find_ms` is a derived end-to-end diagnostic, not an isolated semantic cost: selected candidates, readiness, model loading, query embedding, vector scan, and downstream work can differ (null on trees without embed).
 - **In-process:** imports the version's `dist/esm/index.js` as a library and times the engine entry point: cold index build, the no-change freshness check, and incremental updates (1 file touched, 10 files modified). Native backend behavior remains part of the result.
 
 ## Maintaining
@@ -153,22 +155,22 @@ Two kinds of metric per version:
 - Regenerate **all** columns of a table in one sitting on one machine. Numbers are not comparable across machines or Node versions. Record machine + Node in the report's frontmatter.
 - Regenerate **before** the version bump, not after publishing: a benchmark run is only a release gate if a bad number can still stop the release. See [RELEASING.md](RELEASING.md).
 - The performance tables regenerate every release; the retrieval-quality tables regenerate when retrieval itself changes: fusion, ranking, the default model, tokenizer, chunking. A quality report older than the current version is expected, and says the ranking has not moved since; a retrieval change shipped without a fresh report is the gap to catch.
-- To add a metric: one measured field in `measure-tree.mjs` and one row in `benchmark/lib/rows.mjs`, the single catalog every table and frontmatter key derives from. Versions lacking a command report `—` automatically; a version that errors records the error against the row.
-- Corpus pins live in `benchmark/lib/corpus.mjs`. If a pin must move (repo disappears, need a bigger corpus), regenerate every column at the new pin.
-- Each sitting is a new file in `benchmark/reports/`, never an edit to a previous one, and nothing is deleted: the gate resolves a row's prior from the newest earlier report that ran that step, so the history is what makes a comparison possible. A tracked release JSON is a compact projection: it keeps row identities, numerics, errors, verdict, and assessment needed for compatible comparisons; raw evidence remains in its named sitting and omitted fields carry canonical hashes and byte counts, so the record does not claim to revalidate them. On a PASS, `report.mjs` repoints "Numbers of record" below and rewrites the concise store-selection evidence shipped at `skills/sense-setup/references/store-benchmarks.md`; neither file is edited by hand. Add a "Methodology changelog" entry only when the change is about HOW something is measured (a new guard, a new corpus, a harness bug fix, a discipline rule); a numbers-only regeneration gets a report file and nothing else.
+- To add a metric: one measured field in `measure-tree.ts` and one row in `benchmark/lib/rows.ts`, the single catalog every table and frontmatter key derives from. Versions lacking a command report `—` automatically; a version that errors records the error against the row.
+- Corpus pins live in `benchmark/lib/corpus.ts`. If a pin must move (repo disappears, need a bigger corpus), regenerate every column at the new pin.
+- Each sitting is a new file in `benchmark/reports/`, never an edit to a previous one, and nothing is deleted: the gate resolves a row's prior from the newest earlier report that ran that step, so the history is what makes a comparison possible. A tracked release JSON is a compact projection: it keeps row identities, numerics, errors, verdict, and assessment needed for compatible comparisons; raw evidence remains in its named sitting and omitted fields carry canonical hashes and byte counts, so the record does not claim to revalidate them. On a PASS, `report.ts` repoints "Numbers of record" below and rewrites the concise store-selection evidence shipped at `skills/sense-setup/references/store-benchmarks.md`; neither file is edited by hand. Add a "Methodology changelog" entry only when the change is about HOW something is measured (a new guard, a new corpus, a harness bug fix, a discipline rule); a numbers-only regeneration gets a report file and nothing else.
 
 ### Adding a check
 
-One rule: **a check goes in the earliest stage whose failure it can cause cheaply.** `benchmark/lib/stages.mjs` lists the stages in order and is the one obvious place a new step goes.
+One rule: **a check goes in the earliest stage whose failure it can cause cheaply.** `benchmark/lib/stages.ts` lists the stages in order and is the one obvious place a new step goes.
 
 | the check | stage | what it is |
 |---|---|---|
 | correctness or parity | 1 functional | a test, or a gate script with `--out` |
 | a contract or shape on the hub corpus | 2 baseline | a catalog row with `kind: 'tokens'`, or a band |
 | a scaling or shape cliff | 3 scale | a row measured at 13k, 26k or stress |
-| retrieval quality | 4 quality | a metric in `steps/quality.mjs` and a catalog row |
+| retrieval quality | 4 quality | a metric in `steps/quality.ts` and a catalog row |
 
-A measured step needs one entry in `stages.mjs` plus one row in `benchmark/lib/rows.mjs`. The harness test asserts every step id has a catalog row or is a functional gate, and that a real `measure-tree.mjs` row carries exactly the catalog's keys.
+A measured step needs one entry in `stages.ts` plus one row in `benchmark/lib/rows.ts`. The harness test asserts every step id has a catalog row or is a functional gate, and that a real `measure-tree.ts` row carries exactly the catalog's keys.
 
 ## Interpreting
 
@@ -182,7 +184,7 @@ A measured step needs one entry in `stages.mjs` plus one row in `benchmark/lib/r
 
 ## Scale
 
-The README claims linear scaling and links here rather than carrying figures of its own. `obsidian-hub-x2` and `obsidian-hub-x4` (13k / 26k notes) are named corpora that replicate the pinned hub tree N times under one root: real notes, real frontmatter, real links, regenerated from nothing like every corpus. Duplicate basenames across copies stress link-ambiguity resolution harder than a natural tree. Run `node benchmark/steps/measure-tree.mjs . <corpusPath>` per tree; regenerate scale rows together with the main table, in the same report file.
+The README claims linear scaling and links here rather than carrying figures of its own. `obsidian-hub-x2` and `obsidian-hub-x4` (13k / 26k notes) are named corpora that replicate the pinned hub tree N times under one root: real notes, real frontmatter, real links, regenerated from nothing like every corpus. Duplicate basenames across copies stress link-ambiguity resolution harder than a natural tree. Run `node benchmark/steps/measure-tree.ts . <corpusPath>` per tree; regenerate scale rows together with the main table, in the same report file.
 
 Cold-crawl wall numbers move with file-cache state: the first pass of the day reads high, so only a same-sitting, same-cache version A/B is a meaningful comparison for that row, confirmed more than once across sittings (see the reports).
 
@@ -192,21 +194,21 @@ Current numbers: see "Numbers of record" below.
 
 ## Stress: the shape-cliff guard
 
-`stress` is a pinned synthetic corpus (benchmark/lib/corpus.mjs) that packs every measured shape cliff into one 2,000-note tree: a 1 MB note, 200 headings per note, 100 links per note, 300 distinct frontmatter fields. Each cliff was found by the shape sweep (`benchmark/tools/sweep.mjs`), fixed, and is held fixed by this row per release: `node benchmark/steps/measure-tree.mjs . .tmp/cache/stress-stress-1`.
+`stress` is a pinned synthetic corpus (benchmark/lib/corpus.ts) that packs every measured shape cliff into one 2,000-note tree: a 1 MB note, 200 headings per note, 100 links per note, 300 distinct frontmatter fields. Each cliff was found by the shape sweep (`benchmark/tools/sweep.ts`), fixed, and is held fixed by this row per release: `node benchmark/steps/measure-tree.ts . .tmp/cache/stress-stress-1`.
 
-The sweep itself (`sweep.mjs`) re-runs when the engine changes, not per release; the probes it keeps (SQLite's 2,000-column limit fenced with a named error, adversarial markdown at ~8 s / 5 pathological notes with no timeout) are recorded in the findings file.
+The sweep itself (`sweep.ts`) re-runs when the engine changes, not per release; the probes it keeps (SQLite's 2,000-column limit fenced with a named error, adversarial markdown at ~8 s / 5 pathological notes with no timeout) are recorded in the findings file.
 
 Current numbers: see "Numbers of record" below.
 
 ## Retrieval quality
 
-`benchmark/steps/quality.mjs <corpus>` runs every labeled query through the shipped library in four passes and reports nDCG@10, MRR@10 and hit@10 against the corpus qrels: **bm25-only** (links and rank off), **fused** (BM25 + link expansion), **fused-embed-configured** (the embed block present, the preset's `signals` without `vectors`; a hidden guard pass), and **semantic** (embed block present, `vectors` in the preset's `signals`). There is no per-call semantic switch: the preset decides, so the guard exercises the one lever a tree owner actually has. Queries are natural-language text submitted as an OR bag of words (the standard bag-of-words baseline; bare FTS5 terms AND-join and punctuation is syntax).
+`benchmark/steps/quality.ts <corpus>` runs every labeled query through the shipped library in four passes and reports nDCG@10, MRR@10 and hit@10 against the corpus qrels: **bm25-only** (links and rank off), **fused** (BM25 + link expansion), **fused-embed-configured** (the embed block present, the preset's `signals` without `vectors`; a hidden guard pass), and **semantic** (embed block present, `vectors` in the preset's `signals`). There is no per-call semantic switch: the preset decides, so the guard exercises the one lever a tree owner actually has. Queries are natural-language text submitted as an OR bag of words (the standard bag-of-words baseline; bare FTS5 terms AND-join and punctuation is syntax).
 
 Use `--query-form or-bag|bare-and` to select the quality workload. `or-bag` is the default and preserves the historical series; `bare-and` is the portable track, which uses one required query form and the same qids, qrels, corpus, and `k` for each store. Quality artifacts record the exact source and canonical query text, qrels, store, query form, and returned paths, so a result identifies the workload it measured without treating path agreement as a correctness oracle.
 
 The ordinary release gate runs NFCorpus as a portable `bare-and` track on every offered store. Deep adds portable FEVER. SQLite OR-bag relevance is an explicit standalone investigation. The comparator checks the exact corpus, split, qrels, query form, `k`, model/config identity, and complete per-query coverage before relevance results are classified. A new portable workload is visible as `no-compatible-prior` until it has its own baseline; retrieval errors, incomplete coverage, and invalid artifacts block. Ordinary does not relabel omitted FEVER or legacy rows as passing evidence.
 
-SQLite grammar remains functional coverage; portable full-corpus relevance does not replace OR-specific scores. For a SQLite FTS/query-transform change or a reported OR-ranking issue, run `node benchmark/steps/quality.mjs <nfcorpus|fever> --query-form or-bag --store sqlite --out <artifact.json>` against the corpus relevant to that decision. Keep full portable FEVER when linked relevance is owed; NFCorpus's unlinked prose does not replace that population evidence.
+SQLite grammar remains functional coverage; portable full-corpus relevance does not replace OR-specific scores. For a SQLite FTS/query-transform change or a reported OR-ranking issue, run `node benchmark/steps/quality.ts <nfcorpus|fever> --query-form or-bag --store sqlite --out <artifact.json>` against the corpus relevant to that decision. Keep full portable FEVER when linked relevance is owed; NFCorpus's unlinked prose does not replace that population evidence.
 
 Quality index reuse is identity-keyed and private per invocation. Each run copies Markdown from the pinned source, optionally carries a verified completed `.sense` cache into that private copy, and publishes a new immutable generation only after every variant, guard, and native close succeeds. The identity includes source bytes and mtimes, exact index configs, source/dist/harness and native-package provenance, and byte hashes of both supported static-model files (with the local Hugging Face ref recorded separately). A missing local model or unknown remote revision is never presumed reusable. Completed Markdown and native-cache files are hash-verified before reuse; malformed or changed generations fail preflight instead of being trusted by file count. Query text, qrels, split, and `k` remain separate result-workload evidence because they do not shape the stored index. These checks establish cache identity, not retrieval correctness; the authored qrels and guard passes remain the oracle.
 
@@ -215,13 +217,13 @@ Two guards run before any number is reported:
 - **Bit-identity.** The guard pass must return rows identical to fused, query for query; a divergence aborts the run with a nonzero exit. This is what makes "a vectors-free preset changes nothing on an embed-configured tree" a tested claim rather than a design intention.
 - **Paired per-query deltas.** Point metrics hide whether a change moved many queries a little or a few queries a lot, and at these sample sizes a 0.01 difference can be noise. Every comparison also reports wins/losses and a sign-test z (|z| > 2 is beyond noise).
 
-Labeled corpora convert their labels to one format (`labels/queries.jsonl` + `test.tsv`, read by `benchmark/lib/labels.mjs`):
+Labeled corpora convert their labels to one format (`labels/queries.jsonl` + `test.tsv`, read by `benchmark/lib/labels.ts`):
 
 - **nfcorpus:** BEIR NFCorpus, 3,633 medical abstracts, 323 queries, graded qrels (~38 judged/query). No links, so fused equals bm25-only; it measures lexical recall and the vocabulary gap semantic expansion targets.
 - **fever:** FEVER dev split, 2,860 Wikipedia pages cited as evidence by 13,229 verifiable claims, with sentence link annotations kept as wikilinks. The claims are the queries; the corpus that can measure whether link fusion helps or hurts ranking.
-- **miracl-\<lang\>:** per-language MIRACL (`benchmark/lib/corpus.mjs`'s `miracl` builder), judged docs as a floor plus reservoir-sampled distractors toward ~3-5k docs. The multilingual counterpart to nfcorpus/fever's English-only pair; CJK-script queries need `orBag`'s unigram split (see the methodology changelog) or they score at chance level.
+- **miracl-\<lang\>:** per-language MIRACL (`benchmark/lib/corpus.ts`'s `miracl` builder), judged docs as a floor plus reservoir-sampled distractors toward ~3-5k docs. The multilingual counterpart to nfcorpus/fever's English-only pair; CJK-script queries need `orBag`'s unigram split (see the methodology changelog) or they score at chance level.
 
-Storage-lever and fusion-weight choices (dims, int8 vs f32, per-signal RRF weight) are measured against these same corpora by `bakeoff.mjs` and `weight-sweep.mjs`. The historical NFCorpus comparison reported nDCG@10 ≈ 0.32 for both the published BEIR BM25 (Anserini) baseline and this FTS5 pipeline. Similar aggregate relevance scores do not prove identical retrieval semantics or implementation correctness. NFCorpus and FEVER exercise different vocabulary gaps: layman queries over jargon versus claims close to their evidence. Evaluate changes against both; the current portable quality artifacts, not these historical observations, provide release evidence.
+Storage-lever and fusion-weight choices (dims, int8 vs f32, per-signal RRF weight) are measured against these same corpora by `bakeoff.ts` and `weight-sweep.ts`. The historical NFCorpus comparison reported nDCG@10 ≈ 0.32 for both the published BEIR BM25 (Anserini) baseline and this FTS5 pipeline. Similar aggregate relevance scores do not prove identical retrieval semantics or implementation correctness. NFCorpus and FEVER exercise different vocabulary gaps: layman queries over jargon versus claims close to their evidence. Evaluate changes against both; the current portable quality artifacts, not these historical observations, provide release evidence.
 
 Current numbers: see "Numbers of record" below.
 
@@ -381,13 +383,33 @@ history; each entry names the commit that introduced the change.
   fixed in 0.19.1), so one run needs over two hours. A plain non-zero exit is not a kill and is
   still retried; `--retry-killed` measures everything anyway.
 
+- **2026-10-11 (no execution time limits; owned process groups).** The gate no longer kills a
+  step at a per-step timeout (5 to 90 minutes), `result-sets.ts` no longer kills a CLI call at 10
+  minutes, and the quiet-machine wait no longer gives up after 30 minutes and records `blocked`: it
+  polls until the machine is quiet or the run is cancelled. The native observer, the measured
+  watcher and the oracle have no deadlines; the watcher's close is its cooperative drain. `timeline.ts`
+  drops `--timeout`, `--no-timeouts`, `--retry-killed` and its kill-log skips; `sweep.ts` records the
+  adversarial crawl's real exit, signal and duration with no cap. Every benchmark process now runs as
+  an owned job (`benchmark/lib/step-process.ts`) whose leader anchors one process group and releases
+  it, so npm installs and test runners are covered and a job that leaves processes running fails.
+  Cancellation records `cancelled`; a re-run preserves the earlier attempt under `attempts/`. Older
+  sittings that recorded `timeout` or `blocked` still render with those statuses as failures.
+
+- **2026-10-12 (exit load is an observation).** Fixed-work and native-capability measurements no
+  longer invalidate correct work when the exit load reading is above the admission limit; the
+  reading is recorded with `above_admission_limit`, its timing is rendered without a ratio as not a
+  clean comparison, and comparisons list the affected stores. Entry admission, correctness, schema,
+  provenance and completeness gates are unchanged. The readiness policy identity changes, so the next
+  fixed-work and native-capability series starts fresh; artifacts under the earlier policy keep their
+  recorded validity, including the invalid Turso hydration in the 2026-10-11 BLOCK sitting.
+
 - **2026-09-08 (m4 repeat isolation and bulk readiness).** In-process no-change, one-file, ten-file, cold-build, bulk-change, and bulk-watch rows now use independent fresh private copies of an untouched source. The harness verifies canonical paths, bytes, hashes, sizes, and copied mtimes before timing; deterministic mutations and exact postconditions make repeated output state explicit. Bulk watcher readiness is established by a direct native snapshot after the measured package's public `runWatch` child reports wake-up events, not by sleeping or by treating an event as completion. Preparation and observer costs are reported separately and excluded from timed rows. This is a provisional method with no comparable m3 baseline, so owner calibration remains due. Complete workload provenance, lexical readiness for the other query rows, and expanded metadata/render coverage remain in progress.
 
 ## Numbers of record
 
 The canonical digits a release gate compares against, each linking to the report that
 produced it. When a number here moves, replace the value and the link together. This table is
-generated by `benchmark/report.mjs`: a `PASS` sitting repoints it at the newest report, a
+generated by `benchmark/report.ts`: a `PASS` sitting repoints it at the newest report, a
 `BLOCK` sitting leaves it exactly as it was.
 
 These are historical per-store diagnostics, including same-store end-to-end and in-process workload records. They are not a cross-store leaderboard for identical work: logical workload, selected candidates, downstream rows, and readiness can differ. Native physical plans differ intentionally and are part of the store comparison, but a ranking-dependent number does not establish identical downstream work or an overall store winner.

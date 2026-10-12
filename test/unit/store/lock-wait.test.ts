@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import assert from 'assert';
 import { STATE_DIR } from '../../../src/config/index.ts';
 import { lockWaitBudgetMs, recordLockWaitMs } from '../../../src/store/lock-wait.ts';
-import { scratchDir } from '../../lib/scratch.ts';
+import { scratchDir } from '../../lib/tree.ts';
 
 function fixture(): { configDir: string; sidecar: string } {
   const configDir = scratchDir('lock-wait');

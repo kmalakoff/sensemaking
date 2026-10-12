@@ -5,15 +5,15 @@ import assert from 'assert';
 import cr from 'cr';
 import { STORE_NAMES, SUPPORTED_CONFIG_VERSION } from 'sensemaking';
 import { parse } from 'yaml';
-import { MEASURE_VERSION } from '../../benchmark/lib/measure.mjs';
-import { RUN_METRIC_KEYS } from '../../benchmark/lib/rows.mjs';
-import { captureIdentity, compareCaptureDirectories } from '../../benchmark/lib/store-dump-evidence.mjs';
-import { REPORT_JSON_RE } from '../../benchmark/lib/verdict.mjs';
-import { identityHash } from '../../benchmark/lib/workload-identity.mjs';
-import { failedStageReasons } from '../../benchmark/report.mjs';
+import { MEASURE_VERSION } from '../../benchmark/lib/measure.ts';
+import { RUN_METRIC_KEYS } from '../../benchmark/lib/rows.ts';
+import { captureIdentity, compareCaptureDirectories } from '../../benchmark/lib/store-dump-evidence.ts';
+import { REPORT_JSON_RE } from '../../benchmark/lib/verdict.ts';
+import { identityHash } from '../../benchmark/lib/workload-identity.ts';
+import { failedStageReasons } from '../../benchmark/report.ts';
 import { COMMANDS } from '../../dist/esm/cli/index.js';
 import { KNOWN_EMBED_KEYS } from '../../src/config/index.ts';
-import { packageRoot, scratchDir } from '../lib/scratch.ts';
+import { packageRoot, scratchDir } from '../lib/tree.ts';
 
 // Published surfaces drift silently: nothing fails when the README stops describing what
 // ships. These are the facts cheap enough to assert; the rest is RELEASING.md step 4.
@@ -117,13 +117,13 @@ describe('schema.json matches the code that decides what is valid', () => {
   });
 });
 
-// The release-gate benchmark harness (benchmark/report.mjs and friends): generated numbers of
+// The release-gate benchmark harness (benchmark/report.ts and friends): generated numbers of
 // record, the owner-override contract, and idempotent re-rendering. See benchmark-automation.md.
 
 // Fabricated, not measured: a benchmark fixture built as data, per the plan's own rule that a
 // timing check is never exercised by running the real gate here.
 // steps is what an earlier run recorded, carried across a resume untouched; its reasons come from
-// the harness's own function, so the fixture cannot drift from the key format gate.mjs writes.
+// the harness's own function, so the fixture cannot drift from the key format gate.ts writes.
 function fixtureSitting(dir: string, date: string, findRowTokens: [number, number], steps: Record<string, { id: string; status: string }> = {}): void {
   const owed = steps['store-dump'] ? { 'store-dump': ['fixture'] } : {};
   const recordedSteps = {
@@ -228,7 +228,7 @@ describe('benchmark release-gate: numbers of record', () => {
     const jsonFiles = existsSync(reportsDir) ? readdirSync(reportsDir).filter((f) => REPORT_JSON_RE.test(f)) : [];
     if (jsonFiles.length === 0) return; // no generated report has landed yet (phase 4 migration, out of scope here)
     const newest = jsonFiles.sort().at(-1) as string;
-    const { updateNumbersOfRecord, parseNumbersTable, renderStoreBenchmarkSummary, NUMBERS_START: START, NUMBERS_END: END } = await import('../../benchmark/report.mjs');
+    const { updateNumbersOfRecord, parseNumbersTable, renderStoreBenchmarkSummary, NUMBERS_START: START, NUMBERS_END: END } = await import('../../benchmark/report.ts');
     const report = JSON.parse(readFileSync(join(reportsDir, newest), 'utf8'));
     if (report.verdict !== 'PASS') return; // a blocked sitting's numbers are never the official ones
     const scratch = scratchDir('numbers-render');
@@ -248,7 +248,7 @@ describe('benchmark release-gate: numbers of record', () => {
   });
 
   it('fixture: a PASS sitting merges into the numbers-of-record table without deleting a metric it did not measure', async () => {
-    const { buildReport, persist } = await import('../../benchmark/report.mjs');
+    const { buildReport, persist } = await import('../../benchmark/report.ts');
     const sitting = scratchDir('numbers-fixture-sitting');
     fixtureSitting(sitting, '2099-06-01', [71, 71]); // identical, so this sitting is PASS
     const reportsDir = scratchDir('numbers-fixture-reports');
@@ -269,7 +269,7 @@ describe('benchmark release-gate: numbers of record', () => {
 
 describe('benchmark release-gate: the numbers of record never move to an older version', () => {
   it('fixture: a row pointing at a newer version is not overwritten by an older release, but is by a same-or-newer one', async () => {
-    const { buildReport, persist } = await import('../../benchmark/report.mjs');
+    const { buildReport, persist } = await import('../../benchmark/report.ts');
     const sitting = scratchDir('numbers-version-order-sitting');
     fixtureSitting(sitting, '2099-06-07', [71, 71]); // identical, so this sitting is PASS
     const reportsDir = scratchDir('numbers-version-order-reports');
@@ -291,7 +291,7 @@ describe('benchmark release-gate: the numbers of record never move to an older v
 
 describe('benchmark release-gate: owner override needs a reason', () => {
   it('acceptRow refuses a blank reason, whatever calls it', async () => {
-    const { acceptRow, buildReport, persist } = await import('../../benchmark/report.mjs');
+    const { acceptRow, buildReport, persist } = await import('../../benchmark/report.ts');
     const sitting = scratchDir('accept-blank-sitting');
     fixtureSitting(sitting, '2099-06-03', [71, 90]); // output observation -> WARN
     const reportsDir = scratchDir('accept-blank-reports');
@@ -303,14 +303,14 @@ describe('benchmark release-gate: owner override needs a reason', () => {
     for (const blank of ['', '   ', '\n']) {
       assert.throws(() => acceptRow('compare/find_row_tokens', blank, { sittingDir: sitting, reportsDir, benchmarkingMdPath: mdPath }), /needs a reason/, `a reason of ${JSON.stringify(blank)} must be refused`);
     }
-    const { SITTING_REPORT } = await import('../../benchmark/report.mjs');
+    const { SITTING_REPORT } = await import('../../benchmark/report.ts');
     const stillBlocked = JSON.parse(readFileSync(join(sitting, `${SITTING_REPORT}.json`), 'utf8')) as { verdict: string; accepted: Record<string, unknown> };
     assert.equal(stillBlocked.verdict, 'PASS', 'a refused override must leave the verdict alone');
     assert.deepEqual(stillBlocked.accepted, {}, 'a refused override must record nothing');
   });
 
-  it('fixture: report.mjs --accept refuses a missing reason at the CLI, and a recorded override always carries one', async () => {
-    const { acceptRow, buildReport, persist } = await import('../../benchmark/report.mjs');
+  it('fixture: report.ts --accept refuses a missing reason at the CLI, and a recorded override always carries one', async () => {
+    const { acceptRow, buildReport, persist } = await import('../../benchmark/report.ts');
     const sitting = scratchDir('accept-fixture-sitting');
     fixtureSitting(sitting, '2099-06-02', [71, 90]); // output observation -> WARN
     const reportsDir = scratchDir('accept-fixture-reports');
@@ -320,15 +320,15 @@ describe('benchmark release-gate: owner override needs a reason', () => {
     assert.equal(report.verdict, 'PASS');
     persist(report, { sittingDir: sitting, reportsDir, benchmarkingMdPath: mdPath });
     const accepted = acceptRow('compare/find_row_tokens', 'fixture: exercising the override', { sittingDir: sitting, reportsDir, benchmarkingMdPath: mdPath });
-    assert.equal(accepted.verdict, 'PASS');
-    assert.equal(accepted.accepted['compare/find_row_tokens'].reason, 'fixture: exercising the override');
+    assert.equal((accepted as { verdict: unknown }).verdict, 'PASS');
+    assert.equal(((accepted as { accepted: Record<string, unknown> }).accepted['compare/find_row_tokens'] as { reason: unknown }).reason, 'fixture: exercising the override');
     // Every accepted entry the module ever writes carries a non-empty reason: acceptRow has no
     // path that stores one without it (the CLI itself refuses before calling acceptRow).
-    for (const entry of Object.values(accepted.accepted) as Array<{ reason: string }>) assert.ok(entry.reason.length > 0);
+    for (const entry of Object.values((accepted as { accepted: Record<string, unknown> }).accepted) as Array<{ reason: string }>) assert.ok(entry.reason.length > 0);
   });
 
   it('does not carry an acceptance onto changed workload evidence', async () => {
-    const { acceptRow, buildReport, persist } = await import('../../benchmark/report.mjs');
+    const { acceptRow, buildReport, persist } = await import('../../benchmark/report.ts');
     const sitting = scratchDir('accept-workload-sitting');
     const reportsDir = scratchDir('accept-workload-reports');
     const mdPath = join(scratchDir('accept-workload-md'), 'BENCHMARKING.md');
@@ -336,7 +336,7 @@ describe('benchmark release-gate: owner override needs a reason', () => {
     fixtureSitting(sitting, '2099-06-06', [71, 90]);
     persist(buildReport(sitting, { reportsDir }), { sittingDir: sitting, reportsDir, benchmarkingMdPath: mdPath });
     const accepted = acceptRow('compare/find_row_tokens', 'fixture decision for one exact workload', { sittingDir: sitting, reportsDir, benchmarkingMdPath: mdPath });
-    assert.equal(accepted.verdict, 'PASS');
+    assert.equal((accepted as { verdict: unknown }).verdict, 'PASS');
 
     const path = join(sitting, 'compare.json');
     const compare = JSON.parse(readFileSync(path, 'utf8')) as { versions: string[]; results: Record<string, { workload_identity: { logical_inputs: { rows: Record<string, { inputs: unknown; fingerprint: string }> } } }> };
@@ -355,7 +355,7 @@ describe('benchmark release-gate: owner override needs a reason', () => {
   });
 
   it('does not carry a compare acceptance onto changed reversed evidence', async () => {
-    const { acceptRow, buildReport, persist } = await import('../../benchmark/report.mjs');
+    const { acceptRow, buildReport, persist } = await import('../../benchmark/report.ts');
     const sitting = scratchDir('accept-reversed-sitting');
     const reportsDir = scratchDir('accept-reversed-reports');
     const mdPath = join(scratchDir('accept-reversed-md'), 'BENCHMARKING.md');
@@ -371,7 +371,7 @@ describe('benchmark release-gate: owner override needs a reason', () => {
     writeFileSync(join(sitting, 'sitting.json'), JSON.stringify(sittingState));
     persist(buildReport(sitting, { reportsDir }), { sittingDir: sitting, reportsDir, benchmarkingMdPath: mdPath });
     const accepted = acceptRow('compare/map_ms', 'fixture decision for one exact reversed workload', { sittingDir: sitting, reportsDir, benchmarkingMdPath: mdPath });
-    assert.equal(accepted.verdict, 'PASS');
+    assert.equal((accepted as { verdict: unknown }).verdict, 'PASS');
 
     const reversedPath = join(sitting, 'compare-reversed.json');
     const reversed = JSON.parse(readFileSync(reversedPath, 'utf8')) as { results: Record<string, Record<string, unknown>> };
@@ -383,14 +383,14 @@ describe('benchmark release-gate: owner override needs a reason', () => {
   });
 
   it('the real --sitting option directs acceptance to that sitting', async () => {
-    const { buildReport, persist } = await import('../../benchmark/report.mjs');
+    const { buildReport, persist } = await import('../../benchmark/report.ts');
     const first = fixtureDir('cli-target-first');
     const second = fixtureDir('cli-target-second');
     for (const sitting of [first, second]) {
       const reportsDir = scratchDir(`cli-target-reports-${sitting.slice(-5)}`);
       persist(buildReport(sitting, { reportsDir }), { sittingDir: sitting, reportsDir });
     }
-    execFileSync(process.execPath, ['benchmark/report.mjs', '--accept', 'compare/find_row_tokens', '--reason', 'explicit sitting target', '--sitting', first], { cwd: packageRoot, encoding: 'utf8' });
+    execFileSync(process.execPath, ['benchmark/report.ts', '--accept', 'compare/find_row_tokens', '--reason', 'explicit sitting target', '--sitting', first], { cwd: packageRoot, encoding: 'utf8' });
     const firstReport = JSON.parse(readFileSync(join(first, 'release-gate.json'), 'utf8')) as { accepted: Record<string, { reason: string }> };
     const secondReport = JSON.parse(readFileSync(join(second, 'release-gate.json'), 'utf8')) as { accepted: Record<string, unknown> };
     assert.equal(firstReport.accepted['compare/find_row_tokens'].reason, 'explicit sitting target');
@@ -398,7 +398,7 @@ describe('benchmark release-gate: owner override needs a reason', () => {
   });
 
   it('a malformed store-dump artifact remains a non-waivable BLOCK', async () => {
-    const { buildReport, failedStageReasons } = await import('../../benchmark/report.mjs');
+    const { buildReport, failedStageReasons } = await import('../../benchmark/report.ts');
     const sitting = fixtureDir('cli-malformed-store-dump');
     const sittingJson = JSON.parse(readFileSync(join(sitting, 'sitting.json'), 'utf8')) as { owed: Record<string, string[]>; steps: Record<string, { id: string; status: string }>; failed_stage_reasons?: unknown };
     sittingJson.owed = { 'store-dump': ['fixture'] };
@@ -408,18 +408,18 @@ describe('benchmark release-gate: owner override needs a reason', () => {
     writeFileSync(join(sitting, 'store-dump.json'), '{ malformed');
     const report = buildReport(sitting, { reportsDir: scratchDir('cli-malformed-store-dump-reports') });
     assert.equal(report.verdict, 'BLOCK');
-    assert.ok(report.verdict_reasons.some((reason: string) => reason.includes('store-dump: current artifact JSON is malformed')));
+    assert.ok(report.verdict_reasons.some((reason: unknown) => (reason as string).includes('store-dump: current artifact JSON is malformed')));
   });
 
   it('missing owed step records produce named coverage BLOCK reasons', async () => {
-    const { buildReport } = await import('../../benchmark/report.mjs');
+    const { buildReport } = await import('../../benchmark/report.ts');
     const sitting = fixtureDir('cli-missing-coverage');
     const sittingJson = JSON.parse(readFileSync(join(sitting, 'sitting.json'), 'utf8')) as { owed: Record<string, string[]> };
     sittingJson.owed = { baseline: ['fixture'] };
     writeFileSync(join(sitting, 'sitting.json'), JSON.stringify(sittingJson));
     const report = buildReport(sitting, { reportsDir: scratchDir('cli-missing-coverage-reports') });
     assert.equal(report.verdict, 'BLOCK');
-    assert.ok(report.verdict_reasons.some((reason: string) => reason === 'coverage: owed step "compare" is recorded not-owed' || reason.includes('coverage: owed step')));
+    assert.ok(report.verdict_reasons.some((reason: unknown) => reason === 'coverage: owed step "compare" is recorded not-owed' || (reason as string).includes('coverage: owed step')));
   });
 
   it('every release-gate JSON currently in the tree has a non-empty reason on every accepted row', () => {
@@ -471,7 +471,7 @@ describe('benchmark release-gate: a stage failure has an owner path', () => {
   const words = 'the A/B diff is the parser change the changelog names';
 
   it("fixture: accepting a stage reason with the owner's words clears the block and renders in the json and the md", async () => {
-    const { acceptRow, acceptedIds, buildReport, persist, SITTING_REPORT } = await import('../../benchmark/report.mjs');
+    const { acceptRow, acceptedIds, buildReport, persist, SITTING_REPORT } = await import('../../benchmark/report.ts');
     const sitting = scratchDir('accept-stage-sitting');
     fixtureSitting(sitting, '2099-06-04', [71, 71], failedStoreDump); // every row flat: the stage failure is the only block
     const reportsDir = scratchDir('accept-stage-reports');
@@ -483,11 +483,11 @@ describe('benchmark release-gate: a stage failure has an owner path', () => {
     persist(blocked, { sittingDir: sitting, reportsDir, benchmarkingMdPath: mdPath });
 
     const accepted = acceptRow('store-dump: failed', words, { sittingDir: sitting, reportsDir, benchmarkingMdPath: mdPath });
-    assert.equal(accepted.verdict, 'PASS');
-    assert.deepEqual(accepted.verdict_reasons, []);
-    assert.equal(accepted.accepted['store-dump: failed'].reason, words);
-    assert.match(accepted.accepted['store-dump: failed'].date, /^\d{4}-\d{2}-\d{2}$/);
-    assert.deepEqual(accepted.stage_reasons, ['store-dump: failed'], 'the stage stays in the report, accepted rather than gone');
+    assert.equal((accepted as { verdict: unknown }).verdict, 'PASS');
+    assert.deepEqual((accepted as { verdict_reasons: unknown }).verdict_reasons, []);
+    assert.equal(((accepted as { accepted: Record<string, unknown> }).accepted['store-dump: failed'] as { reason: unknown }).reason, words);
+    assert.match(((accepted as { accepted: Record<string, unknown> }).accepted['store-dump: failed'] as { date: string }).date, /^\d{4}-\d{2}-\d{2}$/);
+    assert.deepEqual((accepted as { stage_reasons: unknown }).stage_reasons, ['store-dump: failed'], 'the stage stays in the report, accepted rather than gone');
     assert.match(readFileSync(join(sitting, `${SITTING_REPORT}.md`), 'utf8'), new RegExp(`- stage store-dump: failed: owner decision, \\d{4}-\\d{2}-\\d{2}: ${words}`));
     assert.match(readFileSync(join(sitting, `${SITTING_REPORT}.md`), 'utf8'), /#### Store-dump evidence/);
 
@@ -518,7 +518,7 @@ describe('benchmark release-gate: a stage failure has an owner path', () => {
   });
 
   it('acceptRow refuses a blank reason on a stage reason, and refuses a name that is neither a row nor a stage', async () => {
-    const { acceptRow, buildReport, persist, SITTING_REPORT } = await import('../../benchmark/report.mjs');
+    const { acceptRow, buildReport, persist, SITTING_REPORT } = await import('../../benchmark/report.ts');
     const sitting = scratchDir('accept-stage-blank-sitting');
     fixtureSitting(sitting, '2099-06-05', [71, 71], failedStoreDump);
     const reportsDir = scratchDir('accept-stage-blank-reports');
@@ -543,7 +543,7 @@ describe('benchmark release-gate: unmeasured work (an earlier failure, or an int
   // Every reason asserted below is read off the real exported functions, never hand-typed, so a
   // wording change cannot make this pass by drift.
   it('a sitting owing three gates with store-dump failed and compare not-run blocks on both; accepting the failure leaves the not-run reason; the real not-run reason is refused by acceptRow', async () => {
-    const { acceptRow, buildReport, failedStageReasons, persist, unmeasuredSteps } = await import('../../benchmark/report.mjs');
+    const { acceptRow, buildReport, failedStageReasons, persist, unmeasuredSteps } = await import('../../benchmark/report.ts');
     const sitting = scratchDir('unmeasured-after-failure-sitting');
     const steps = { 'store-dump': { id: 'store-dump', status: 'failed' }, compare: { id: 'compare', status: 'not-run' } };
     const sittingJson = {
@@ -568,19 +568,19 @@ describe('benchmark release-gate: unmeasured work (an earlier failure, or an int
     const report = buildReport(sitting, { reportsDir });
     assert.equal(report.verdict, 'BLOCK');
     assert.ok(report.verdict_reasons.includes(notRunReason));
-    assert.ok(report.verdict_reasons.some((reason: string) => reason.startsWith('coverage:')));
+    assert.ok(report.verdict_reasons.some((reason: unknown) => (reason as string).startsWith('coverage:')));
     assert.deepEqual(report.stage_reasons, ['store-dump: failed'], 'the not-run reason is never in stage_reasons, so acceptRow can never find it as an id');
     persist(report, { sittingDir: sitting, reportsDir, benchmarkingMdPath: mdPath });
 
     const afterAccept = acceptRow('store-dump: failed', 'the diff is the parser change the changelog names', { sittingDir: sitting, reportsDir, benchmarkingMdPath: mdPath });
-    assert.equal(afterAccept.verdict, 'BLOCK', 'the unmeasured step still blocks once the stage failure is accepted');
-    assert.ok(afterAccept.verdict_reasons.includes(notRunReason));
+    assert.equal((afterAccept as { verdict: unknown }).verdict, 'BLOCK', 'the unmeasured step still blocks once the stage failure is accepted');
+    assert.ok((afterAccept as { verdict_reasons: unknown[] }).verdict_reasons.includes(notRunReason));
 
     assert.throws(() => acceptRow(notRunReason, 'trying anyway', { sittingDir: sitting, reportsDir, benchmarkingMdPath: mdPath }), /neither a row nor a stage reason/, 'the real not-run string, not a truncation, must still be refused');
   });
 
   it('a real interrupted-step reason is refused by acceptRow the same way, and never appears in stage_reasons', async () => {
-    const { acceptRow, buildReport, interruptedSteps, persist } = await import('../../benchmark/report.mjs');
+    const { acceptRow, buildReport, interruptedSteps, persist } = await import('../../benchmark/report.ts');
     const sitting = scratchDir('interrupted-not-acceptable-sitting');
     const sittingJson = { date: '2099-06-09', baseline_version: '9.9.9', last_tag: 'v9.9.8', machine: { cpu_model: 'Fixture' }, node: 'v99', changed_paths: [], owed: {}, steps: { validate: { id: 'validate', status: 'ok' }, 'npm-test': { id: 'npm-test', status: 'ok' } }, failed_stage_reasons: [] };
     writeFileSync(join(sitting, 'battery-turso-hub.log'), 'partial output, then the kill\n'); // the log exists, the status never got written
@@ -613,7 +613,7 @@ describe('benchmark store-dump: retained captures and structured differences', (
     writeFileSync(join(after, 'sqlite', 'tables.txt'), '== content (2 rows) ==\n{"path":"a.md","score":2,"snippets":["new"]}\n{"path":"b.md","score":1,"snippets":["added"]}\n');
     writeFileSync(join(before, 'sqlite', 'ranking.txt'), '== "q" (1 rows) ==\n{"path":"a.md","score":1}\n');
     writeFileSync(join(after, 'sqlite', 'ranking.txt'), '== "q" (1 rows) ==\n{"path":"a.md","score":2}\n');
-    const run = spawnSync(process.execPath, ['benchmark/steps/store-dump.mjs', 'compare', before, after, '--out', output], { cwd: packageRoot, encoding: 'utf8' });
+    const run = spawnSync(process.execPath, ['benchmark/steps/store-dump.ts', 'compare', before, after, '--out', output], { cwd: packageRoot, encoding: 'utf8' });
     assert.equal(run.status, 1, 'changed captures must fail the byte-parity comparator');
     const artifact = JSON.parse(readFileSync(output, 'utf8')) as { capture_identity: { before: { sha256: string }; after: { sha256: string } }; diff: { version: number; changed_files: unknown[]; categories: Record<string, { count: number; sha256: string }> }; captures: { before: string; after: string } };
     assert.notEqual(artifact.capture_identity.before.sha256, artifact.capture_identity.after.sha256);
@@ -630,12 +630,12 @@ describe('benchmark store-dump: retained captures and structured differences', (
 
 describe('benchmark release-gate: generated report re-render is idempotent', () => {
   it('renders a profile only when the report records one', async () => {
-    const { buildReport, renderMarkdown } = await import('../../benchmark/report.mjs');
+    const { buildReport, renderMarkdown } = await import('../../benchmark/report.ts');
     const sitting = scratchDir('report-profile-fixture-sitting');
     fixtureSitting(sitting, '2099-06-01', [71, 71]);
     const report = buildReport(sitting, { reportsDir: scratchDir('report-profile-fixture-reports') });
     const missingProfile = { ...report };
-    delete missingProfile.profile;
+    delete (missingProfile as { profile?: unknown }).profile;
 
     assert.equal(report.profile, null);
     for (const legacy of [missingProfile, { ...report, profile: undefined }, report]) {
@@ -647,8 +647,8 @@ describe('benchmark release-gate: generated report re-render is idempotent', () 
   });
 
   it('fixture: a tracked record is compact, keeps identities, and renders from saved JSON', async () => {
-    const { buildReport, compactReleaseRecord, persist, renderMarkdown } = await import('../../benchmark/report.mjs');
-    const { classifyCrossGroup, classifyEval, priorStepLookup } = await import('../../benchmark/lib/verdict.mjs');
+    const { buildReport, compactReleaseRecord, persist, renderMarkdown } = await import('../../benchmark/report.ts');
+    const { classifyCrossGroup, classifyEval, priorStepLookup } = await import('../../benchmark/lib/verdict.ts');
     const sitting = scratchDir('compact-record-fixture-sitting');
     fixtureSitting(sitting, '2099-06-02', [71, 71], { 'store-dump': { id: 'store-dump', status: 'ok' } });
     const reportsDir = scratchDir('compact-record-fixture-reports');
@@ -656,10 +656,10 @@ describe('benchmark release-gate: generated report re-render is idempotent', () 
     writeFileSync(mdPath, `# Benchmarks\n\n${'<!-- numbers -->'}\n\n<!-- /numbers -->\n`);
     const report = buildReport(sitting, { reportsDir, releaseVersionOverride: '9.9.10' });
     const compact = compactReleaseRecord(report);
-    const row = compact.steps.compare.results.local.workload_identity.logical_inputs.rows.find_ms;
+    const row = ((((compact.steps.compare as { results: Record<string, unknown> }).results.local as { workload_identity: unknown }).workload_identity as { logical_inputs: unknown }).logical_inputs as { rows: Record<string, unknown> }).rows.find_ms as { fingerprint: unknown; inputs: unknown };
     assert.equal(row.fingerprint, identityHash(row.inputs));
-    assert.equal(compact.steps['store-dump'].stores, undefined);
-    assert.match(compact.steps['store-dump'].omitted_evidence.retention, /cannot revalidate/);
+    assert.equal((compact.steps['store-dump'] as { stores: unknown }).stores, undefined);
+    assert.match(((compact.steps['store-dump'] as { omitted_evidence: unknown }).omitted_evidence as { retention: string }).retention, /cannot revalidate/);
     const { jsonPath, mdPath: savedMdPath } = persist(report, { sittingDir: sitting, reportsDir, benchmarkingMdPath: mdPath });
     const saved = JSON.parse(readFileSync(jsonPath, 'utf8'));
     assert.deepEqual(saved, compact);
@@ -675,11 +675,11 @@ describe('benchmark release-gate: generated report re-render is idempotent', () 
       query_evidence: [{ qid: 'q1' }],
       qrels: { q1: { d1: 1 } },
     };
-    const scaleRun = compact.steps.compare.results.local;
+    const scaleRun = (compact.steps.compare as { results: Record<string, unknown> }).results.local;
     const fullPrior = { measure_version: MEASURE_VERSION, steps: { eval: evalStep, scale: scaleRun } };
     const compactPrior = compactReleaseRecord({ ...report, steps: fullPrior.steps });
-    assert.equal(compactPrior.steps.eval.query_evidence, undefined);
-    assert.equal(compactPrior.steps.eval.variants.semantic.per_query, undefined);
+    assert.equal((compactPrior.steps.eval as { query_evidence: unknown }).query_evidence, undefined);
+    assert.equal(((compactPrior.steps.eval as { variants: Record<string, unknown> }).variants.semantic as { per_query: unknown }).per_query, undefined);
     const fullLookup = priorStepLookup([{ name: 'full.json', report: fullPrior }], MEASURE_VERSION);
     const compactLookup = priorStepLookup([{ name: 'compact.json', report: compactPrior }], MEASURE_VERSION);
     const fullEval = fullLookup('eval');
@@ -692,7 +692,7 @@ describe('benchmark release-gate: generated report re-render is idempotent', () 
   });
 
   it('fixture: buildReport + persist is byte-identical to a second run against the same sitting', async () => {
-    const { buildReport, persist } = await import('../../benchmark/report.mjs');
+    const { buildReport, persist } = await import('../../benchmark/report.ts');
     const sitting = scratchDir('idempotent-fixture-sitting');
     fixtureSitting(sitting, '2099-06-03', [71, 71]);
     const reportsDir = scratchDir('idempotent-fixture-reports');
@@ -713,7 +713,7 @@ describe('benchmark release-gate: generated report re-render is idempotent', () 
     const reportsDir = join(packageRoot, 'benchmark', 'reports');
     const jsonFiles = existsSync(reportsDir) ? readdirSync(reportsDir).filter((f) => REPORT_JSON_RE.test(f)) : [];
     if (jsonFiles.length === 0) return; // no generated report has landed yet
-    const { renderMarkdown } = await import('../../benchmark/report.mjs');
+    const { renderMarkdown } = await import('../../benchmark/report.ts');
     for (const file of jsonFiles) {
       const report = JSON.parse(readFileSync(join(reportsDir, file), 'utf8')) as { generated?: boolean; measure_version?: string };
       if (!report.generated) continue;

@@ -5,12 +5,13 @@ import { foldForSearch, matchesSearchPhrase, type SearchToken, searchTokens } fr
 import { getMeta, setMeta } from '../shared.ts';
 import { withTransaction } from '../transaction.ts';
 import type { Connection, LexicalHit, LexicalQueryOptions } from '../types.ts';
-import { FTS_STEMMER, nativeQueryTerms, orderedBm25Sql } from './ordered-bm25.ts';
+import { type DuckdbFtsBuilders, duckdbFts } from './engine.ts';
+import { nativeQueryTerms, orderedBm25Sql } from './ordered-bm25.ts';
 
 const FIELDS = ['title', 'summary', 'text'] as const;
 type Field = (typeof FIELDS)[number];
 // Mirrors sqlite's bm25(content, 10.0, 5.0, 1.0, ...) column-weight intent; DuckDB's match_bm25 has no
-// field_weights argument (verified 1.5.5), so each field is scored separately and combined here.
+// field_weights argument (verified 1.4.5 through 1.5.6), so each field is scored separately and combined here.
 const FIELD_WEIGHT: Record<Field, number> = { title: 10, summary: 5, text: 1 };
 
 // FTS5 operator syntax (sqlite.org/fts5.html sec. 3) that words/substrings below would otherwise silently
@@ -120,9 +121,7 @@ async function rebuildFts(conn: Connection, state: FtsIndexState): Promise<void>
   if (!state.stale && (await hasFtsArtifact(conn))) return;
   state.stale = true;
   await withTransaction(conn, async () => {
-    // stopwords='none': sqlite's porter/unicode61 tokenizer never removes stopwords either (verified 1.5.5); the fts extension's
-    // default 571-word list would otherwise drop common words (e.g. "and") from the index but not match_bm25's conjunctive gate, breaking multi-word matches.
-    await conn.exec(`PRAGMA create_fts_index('content', 'path', 'title', 'summary', 'text', stemmer='${FTS_STEMMER}', stopwords='none', overwrite=1)`);
+    await conn.exec((await duckdbFts()).createIndex());
     // Same transaction as the rebuild: a crash before commit leaves the mark set (a redundant
     // rebuild next time), never a cleared mark serving a half-built index as fresh.
     await setMeta(conn, FTS_STALE_META_KEY, '0');
@@ -150,7 +149,7 @@ export async function assertFtsReady(conn: Connection): Promise<void> {
 
 // Field-weighted fragments (title 10 / summary 5 / text 1), with params emitted in the exact left-to-right order the assembled SQL needs for positional `?` binding.
 // score/gate params stay in separate arrays until joined at the end, since the SQL puts every score part before every gate part; sharing one array would shift binds once a query has both words and substrings (PRINCIPLES: no-silent-modes).
-function buildScoreAndGate(words: string[], nativeTerms: string[], bareWords: string[], phraseWords: string[], substrings: string[]): { scoreSql: string; gateSql: string; params: unknown[] } {
+function buildScoreAndGate(fts: DuckdbFtsBuilders, words: string[], nativeTerms: string[], bareWords: string[], phraseWords: string[], substrings: string[]): { scoreSql: string; gateSql: string; params: unknown[] } {
   const scoreParts: string[] = [];
   const gateParts: string[] = [];
   const scoreParams: unknown[] = [];
@@ -158,16 +157,16 @@ function buildScoreAndGate(words: string[], nativeTerms: string[], bareWords: st
 
   if (words.length > 0) {
     for (const field of FIELDS) {
-      scoreParts.push(`${FIELD_WEIGHT[field]}.0 * COALESCE(${orderedBm25Sql(field, nativeTerms.length)}, 0)`);
+      scoreParts.push(`${FIELD_WEIGHT[field]}.0 * COALESCE(${orderedBm25Sql(fts, field, nativeTerms.length)}, 0)`);
       scoreParams.push(...nativeTerms);
     }
     if (bareWords.length > 0) {
-      const nativeGate = `fts_main_content.match_bm25(content."path", ?, conjunctive := true) IS NOT NULL`;
+      const nativeGate = fts.conjunctiveGate();
       gateParts.push(nativeGate);
       gateParams.push(bareWords.map(foldForSearch).join(' '));
     }
     if (phraseWords.length > 0) {
-      const nativeGate = `fts_main_content.match_bm25(content."path", ?, conjunctive := true) IS NOT NULL`;
+      const nativeGate = fts.conjunctiveGate();
       const fallback = phraseWords.map((_word) => `(${FIELDS.map((field) => `contains(strip_accents(lower(content.${field})), ?)`).join(' OR ')})`).join(' AND ');
       gateParts.push(`(${nativeGate} OR (${fallback}))`);
       gateParams.push(phraseWords.map(foldForSearch).join(' '));
@@ -200,9 +199,10 @@ export async function queryLexical(conn: Connection, terms: string, opts: Lexica
   if (emptyPhrase || (words.length === 0 && substrings.length === 0)) return [];
 
   if (words.length > 0) await assertFtsReady(conn);
-  const nativeTerms = words.length > 0 ? await nativeQueryTerms(conn, words.map(foldForSearch).join(' ')) : [];
+  const fts = await duckdbFts();
+  const nativeTerms = words.length > 0 ? await nativeQueryTerms(conn, fts, words.map(foldForSearch).join(' ')) : [];
 
-  const { scoreSql, gateSql, params } = buildScoreAndGate(words, nativeTerms, bareWords, phraseWords, substrings);
+  const { scoreSql, gateSql, params } = buildScoreAndGate(fts, words, nativeTerms, bareWords, phraseWords, substrings);
   const selectFields = phrases.length > 0 ? ', content.title, content.summary, content.text' : '';
   const sqlLimit = phrases.length > 0 ? '' : ' LIMIT ?';
   const sql = `SELECT path, score${phrases.length > 0 ? ', title, summary, text' : ''} FROM (

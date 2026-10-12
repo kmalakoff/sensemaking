@@ -183,11 +183,11 @@ quoted phrases also pass shared phrase verification.
 This composition avoids inspecting or modifying generated extension SQL.
 Floating-point addition still needs a specified order; DuckDB documents that
 [`sum` is affected by ordering](https://duckdb.org/docs/current/sql/functions/aggregates).
-The callable FTS surface was checked against shipped DuckDB 1.5.6 FTS extension
-revision `6814ec9`, including its
-[`tokenize` and `match_bm25` definitions](https://github.com/duckdb/duckdb-fts/blob/6814ec9/extension/fts/fts_indexing.cpp).
-Later extension releases require behavior validation; current main documentation
-is not evidence of their compatibility with this adapter. Query SQL and bind
+DuckDB 1.4.5 (FTS revision `3937662`), 1.5.0 and 1.5.6 (revision `6814ec9`)
+generate byte-identical `match_bm25` and `tokenize` macros and return identical
+tokens and scores; `match_bm25` itself tokenizes through `tokenize`, so the adapter
+calls the same macro. Other versions are covered by the engine check in
+[Native engine versions](#native-engine-versions), not by this list. Query SQL and bind
 counts grow with distinct native terms (three scoring calls per term). Focused
 coverage includes a 64-term query; this is coverage, not a supported maximum.
 The extra native token query and per-term calls have a measured cost compared
@@ -214,6 +214,37 @@ relevance data; we have not.
 Returning several snippets is a caller parameter over the same scores, not a
 different algorithm: keep the scores that selection already computes, sort, take
 the top non-overlapping, then restore document order.
+
+## Native engine versions
+
+Each store's index is built by an engine sensemaking does not control: Node's
+bundled SQLite (`node:sqlite`), `@duckdb/node-api`, and `@tursodatabase/database`.
+Whatever version is present is used, so correctness comes from detecting the
+engine and checking it, not from pinning it.
+
+**Contract.** `peerDependencies` (optional) declares the DuckDB and Turso ranges
+the suites run against, and equals their `devDependencies` entries; a unit test
+fails when `ncu -u -m` moves one without the other. A missing package is
+installed at the newest version in that range. An installed version outside it is
+used and reported on stderr. SQLite has no range: its version follows Node.
+
+**Identity.** Each derived index records the engine that built it in
+`meta.engine_identity` (`node:sqlite@3.53.4`, `@duckdb/node-api@1.5.6-r.1`). A
+build under a different identity rebuilds the cache, as a `schema_version` change
+does, because index formats and scoring belong to the engine. A no-build open
+refuses it with `INDEX_NOT_READY`.
+
+**Check.** Before building a fresh or rebuilt cache, the store runs its real schema,
+content write, index preparation and `queryLexical` over a fixed fixture in memory
+(`src/store/engine.ts`). The fixture catches lost field weights and Turso's
+silent all-zero `fts_score`. A failure is `STORE_CAPABILITY_MISSING`, naming the
+engine and what to change.
+
+**Patches.** Each store keeps every engine-specific statement in one builders
+table (`src/store/<store>/engine.ts`). When a version behaves differently, a
+patch entry names its version range and the reason, and replaces only the
+builders that differ; the check then runs against the patched builders. No
+version observed so far needs one.
 
 ## Watch coordination
 

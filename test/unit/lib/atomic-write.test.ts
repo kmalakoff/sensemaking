@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { join } from 'node:path';
 import assert from 'assert';
 import { writeFileAtomic } from '../../../src/lib/atomic-write.ts';
-import { scratchDir } from '../../lib/scratch.ts';
+import { scratchDir } from '../../lib/tree.ts';
 
 describe('writeFileAtomic', () => {
   it('writes the file and preserves an unrelated staging sibling', () => {

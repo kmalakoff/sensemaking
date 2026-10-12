@@ -2,10 +2,10 @@ import assert from 'node:assert';
 import { mkdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { sqliteOpenDialect } from '../../../../src/store/sqlite/open.ts';
 import { runCli as spawnCli } from '../../../lib/cli.ts';
 import { writeModel } from '../../../lib/model.ts';
-import { scratchDir } from '../../../lib/scratch.ts';
-import { openTree, tmpTree, writeNote } from '../../../lib/tree.ts';
+import { openTree, scratchDir, tmpTree, writeNote } from '../../../lib/tree.ts';
 
 function runCli(dir: string, args: string[]) {
   return spawnCli([...args, '--config', join(dir, 'sense.config.json')]);
@@ -512,5 +512,15 @@ describe('derived busy_timeout', () => {
     const timeout = ((await (await store.prepare('PRAGMA busy_timeout')).get()) as { timeout: number }).timeout;
     assert.equal(timeout, 30000);
     await store.close();
+  });
+});
+
+describe('sqlite engine', () => {
+  it("records Node's bundled SQLite as its engine identity", async () => {
+    assert.equal(await sqliteOpenDialect.engineIdentity?.(), `node:sqlite@${process.versions.sqlite}`);
+  });
+
+  it('passes the shared behaviour check on the bundled engine', async () => {
+    await sqliteOpenDialect.checkEngine?.();
   });
 });

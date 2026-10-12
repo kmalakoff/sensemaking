@@ -112,7 +112,7 @@ Save a query in `sense.config.json` only when it will be reused:
 
 Run these as `sense by-tag urgent` and `sense hot`. Invocation flags override a saved search's `preset`, `k`, or `where` value.
 
-Running a saved entry validates it. Exit code 0 means it ran, 2 means the invocation needs different arguments, and 1 means the query or store failed. An empty result can be valid data, so interpret it from the query's purpose.
+Running a saved entry validates it. Exit code 0 means it ran, 6 means the invocation needs different arguments, and 4 means an operational failure, such as a query, store or CLI bootstrap failure. An empty result can be valid data, so interpret it from the query's purpose.
 
 ## Tables
 

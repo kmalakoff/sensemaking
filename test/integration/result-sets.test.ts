@@ -3,13 +3,12 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { STORE_NAMES } from 'sensemaking';
-import { MEASURE_VERSION } from '../../benchmark/lib/measure.mjs';
-import { pairwisePathOverlap, queryDefinitions, RESULT_SET_SCHEMA, validateResultSetArtifact } from '../../benchmark/lib/result-sets.mjs';
-import { buildReport, renderMarkdown } from '../../benchmark/report.mjs';
-import { packageRoot, scratchDir } from '../lib/scratch.ts';
-import { writeNote } from '../lib/tree.ts';
+import { MEASURE_VERSION } from '../../benchmark/lib/measure.ts';
+import { pairwisePathOverlap, queryDefinitions, RESULT_SET_SCHEMA, validateResultSetArtifact } from '../../benchmark/lib/result-sets.ts';
+import { buildReport, renderMarkdown } from '../../benchmark/report.ts';
+import { packageRoot, scratchDir, writeNote } from '../lib/tree.ts';
 
-const TOOL = join(packageRoot, 'benchmark', 'tools', 'result-sets.mjs');
+const TOOL = join(packageRoot, 'benchmark', 'tools', 'result-sets.ts');
 
 describe('ranked result-set diagnostic', () => {
   it('captures exact ranked paths from every real store on one logical workload', function () {
@@ -72,7 +71,7 @@ describe('ranked result-set diagnostic', () => {
     const invalidReport = buildReport(invalidSitting, { reportsDir: scratchDir('result-sets-invalid-reports') });
     assert.equal(invalidReport.verdict, 'BLOCK');
     assert.ok(invalidReport.classifications.some((row: { id: string; invalid?: boolean }) => row.id === 'result-sets-hub/validity' && row.invalid === true));
-    assert.ok(invalidReport.verdict_reasons.some((reason: string) => reason.includes('persisted overlap does not recompute')));
+    assert.ok(invalidReport.verdict_reasons.some((reason: unknown) => (reason as string).includes('persisted overlap does not recompute')));
     const invalidMarkdown = renderMarkdown(invalidReport);
     assert.match(invalidMarkdown, /#### result-sets-hub/);
     assert.match(invalidMarkdown, /persisted overlap does not recompute/);

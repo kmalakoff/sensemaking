@@ -1,13 +1,28 @@
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import assert from 'assert';
+import semver from 'semver';
 import { SenseError } from '../../../src/errors.ts';
+import { DUCKDB_PACKAGE } from '../../../src/store/duckdb/native.ts';
 import { loadOrInstall, type NativeDescriptor } from '../../../src/store/native.ts';
-import { packageRoot, scratchDir } from '../../lib/scratch.ts';
+import { TURSO_PACKAGE } from '../../../src/store/turso/native.ts';
+import { packageRoot, scratchDir } from '../../lib/tree.ts';
 
-const DESCRIPTOR: NativeDescriptor = { store: 'test-store', pkg: 'test-store-native-pkg', sizeHint: '~1MB' };
+const DESCRIPTOR: NativeDescriptor = { store: 'test-store', pkg: 'test-store-native-pkg', sizeHint: '~1MB', range: '^1.0.0' };
+
+// Captures the loader's stderr notices for one call.
+async function notices<T>(fn: () => Promise<T>): Promise<{ result: T; lines: string[] }> {
+  const lines: string[] = [];
+  const original = console.error;
+  console.error = (message: unknown) => lines.push(String(message));
+  try {
+    return { result: await fn(), lines };
+  } finally {
+    console.error = original;
+  }
+}
 
 // chmod is a no-op on Windows directories, so deny write with an ACL there; returns a restore fn.
 function makeUnwritable(dir: string): () => void {
@@ -34,8 +49,8 @@ describe('loadOrInstall', () => {
       (err: unknown) => {
         assert.ok(err instanceof SenseError);
         assert.equal(err.code, 'STORE_DEPENDENCY_MISSING');
-        assert.match(err.message, new RegExp(`${DESCRIPTOR.pkg}, and installing it automatically failed`));
-        assert.match(err.message, new RegExp(`npm install ${DESCRIPTOR.pkg}`));
+        assert.ok(err.message.includes(`${DESCRIPTOR.pkg}@${DESCRIPTOR.range}, and installing it automatically failed`));
+        assert.ok(err.message.includes(`npm install ${DESCRIPTOR.pkg}@${DESCRIPTOR.range}`));
         return true;
       }
     );
@@ -56,9 +71,9 @@ describe('loadOrInstall', () => {
         (err: unknown) => {
           assert.ok(err instanceof SenseError);
           assert.equal(err.code, 'STORE_DEPENDENCY_MISSING');
-          assert.match(err.message, new RegExp(`${DESCRIPTOR.pkg}, and installing it automatically failed`));
+          assert.ok(err.message.includes(`${DESCRIPTOR.pkg}@${DESCRIPTOR.range}, and installing it automatically failed`));
           assert.match(err.message, /read-only or owned by another user/);
-          assert.match(err.message, new RegExp(`npm install ${DESCRIPTOR.pkg}`));
+          assert.ok(err.message.includes(`npm install ${DESCRIPTOR.pkg}@${DESCRIPTOR.range}`));
           return true;
         }
       );
@@ -67,15 +82,31 @@ describe('loadOrInstall', () => {
     }
   });
 
-  it('installs a real, tiny, already-published package and loads it, working around Node caching the first bare-specifier miss', async () => {
+  it('installs the tested range of a real, tiny, already-published package and loads it, working around Node caching the first bare-specifier miss', async () => {
     const nodeModulesPath = scratchDir('native-install-success');
-    const fixture = { ...DESCRIPTOR, version: '4.0.1', installSpec: 'is-natural-number@4.0.1' };
-    const mod = (await loadOrInstall(fixture, nodeModulesPath, 'is-natural-number')) as { default: (n: number) => boolean };
-    assert.equal(typeof mod.default, 'function');
-    assert.equal(mod.default(4), true);
-    assert.equal(mod.default(-1), false);
-    const installed = JSON.parse(readFileSync(join(nodeModulesPath, 'is-natural-number', 'package.json'), 'utf8')) as { version?: string };
-    assert.equal(installed.version, fixture.version);
+    const fixture = { ...DESCRIPTOR, range: '~4.0.0' };
+    const { result, lines } = await notices(() => loadOrInstall<{ default: (n: number) => boolean }>(fixture, nodeModulesPath, 'is-natural-number'));
+    assert.equal(result.api.default(4), true);
+    assert.equal(result.api.default(-1), false);
+    const installed = JSON.parse(readFileSync(join(nodeModulesPath, 'is-natural-number', 'package.json'), 'utf8')) as { version: string };
+    assert.equal(result.version, installed.version);
+    assert.ok(semver.satisfies(installed.version, fixture.range));
+    assert.deepEqual(lines, [`sense: store "test-store" needs ${DESCRIPTOR.pkg}@~4.0.0; installing it now (one-time download, ~1MB)...`]);
+  });
+
+  it('uses an already-resolvable version inside the tested range without notices', async () => {
+    const installed = (JSON.parse(readFileSync(join(packageRoot, 'node_modules', 'semver', 'package.json'), 'utf8')) as { version: string }).version;
+    const { result, lines } = await notices(() => loadOrInstall({ ...DESCRIPTOR, pkg: 'semver', range: `^${semver.major(installed)}.0.0` }, scratchDir('native-in-range')));
+    assert.equal(result.version, installed);
+    assert.deepEqual(lines, []);
+  });
+
+  it('uses an already-resolvable version outside the tested range and reports it', async () => {
+    const installed = (JSON.parse(readFileSync(join(packageRoot, 'node_modules', 'semver', 'package.json'), 'utf8')) as { version: string }).version;
+    const range = `^${semver.major(installed) - 1}.0.0`;
+    const { result, lines } = await notices(() => loadOrInstall({ ...DESCRIPTOR, pkg: 'semver', range }, scratchDir('native-out-of-range')));
+    assert.equal(result.version, installed);
+    assert.deepEqual(lines, [`sense: store "test-store" using semver@${installed} (tested ${range})`]);
   });
 
   it('loads the installed package through both built module formats with the import namespace shape', () => {
@@ -89,11 +120,11 @@ describe('loadOrInstall', () => {
         ? await import(pathToFileURL(builtPath).href)
         : createRequire(import.meta.url)(builtPath);
       const loaded = await native.loadOrInstall(
-        { store: 'built-' + mode, pkg: 'built-native-pkg', sizeHint: 'tiny' },
+        { store: 'built-' + mode, pkg: 'built-native-pkg', sizeHint: 'tiny', range: '^4.0.0' },
         nodeModulesPath,
         'is-natural-number'
       );
-      const check = loaded.default;
+      const check = loaded.api.default;
       console.log(JSON.stringify({ defaultType: typeof check, positive: check(4), negative: check(-1) }));
     `;
 
@@ -110,27 +141,26 @@ describe('loadOrInstall', () => {
     const { duckdbApi } = await import('../../../src/store/duckdb/native.ts');
     assert.equal(typeof (await duckdbApi()).DuckDBInstance, 'function');
   });
+});
 
-  it('fails closed before installation for incompatible, missing, malformed, and versionless manifests', async () => {
-    for (const [label, manifest] of [
-      ['incompatible', JSON.stringify({ name: DESCRIPTOR.pkg, version: '0.0.1' })],
-      ['missing', undefined],
-      ['malformed', '{not-json'],
-      ['versionless', JSON.stringify({ name: DESCRIPTOR.pkg })],
-    ] as const) {
-      const nodeModulesPath = scratchDir(`native-${label}-version`);
-      const packageDir = join(nodeModulesPath, ...DESCRIPTOR.pkg.split('/'));
-      mkdirSync(packageDir, { recursive: true });
-      if (manifest !== undefined) writeFileSync(join(packageDir, 'package.json'), manifest);
-      await assert.rejects(
-        () => loadOrInstall({ ...DESCRIPTOR, version: '9.9.9', installSpec: `${DESCRIPTOR.pkg}@9.9.9` }, nodeModulesPath),
-        (err: unknown) => {
-          assert.ok(err instanceof SenseError);
-          assert.equal(err.code, 'STORE_DEPENDENCY_MISSING');
-          assert.ok(err.message.includes(`npm install ${DESCRIPTOR.pkg}@9.9.9`));
-          return true;
-        }
-      );
-    }
+// The published optional-peer contract tracks what the suite installs: `ncu -u -m` moves devDependencies, and this fails until peerDependencies follow.
+describe('optional native peer contract', () => {
+  const manifest = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8')) as {
+    devDependencies: Record<string, string>;
+    peerDependencies: Record<string, string>;
+    peerDependenciesMeta: Record<string, { optional?: boolean }>;
+  };
+
+  for (const pkg of [DUCKDB_PACKAGE, TURSO_PACKAGE]) {
+    it(`declares ${pkg} as an optional peer with the tested devDependency range`, () => {
+      assert.equal(manifest.peerDependenciesMeta[pkg]?.optional, true);
+      assert.equal(manifest.peerDependencies[pkg], manifest.devDependencies[pkg], `${pkg}: devDependencies moved to ${manifest.devDependencies[pkg]}; update peerDependencies once the store suites pass`);
+      const installed = (JSON.parse(readFileSync(join(packageRoot, 'node_modules', ...pkg.split('/'), 'package.json'), 'utf8')) as { version: string }).version;
+      assert.ok(semver.satisfies(installed, manifest.peerDependencies[pkg]), `${pkg}@${installed} is outside ${manifest.peerDependencies[pkg]}`);
+    });
+  }
+
+  it('declares exactly the store packages as optional peers', () => {
+    assert.deepEqual(Object.keys(manifest.peerDependencies).sort(), [DUCKDB_PACKAGE, TURSO_PACKAGE].sort());
   });
 });

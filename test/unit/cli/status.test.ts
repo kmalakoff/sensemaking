@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import assert from 'assert';
 import { WATCH_CLAIM_FILENAME, WatchClaimDatabase } from '../../../src/watch-claim.ts';
 import { runCli } from '../../lib/cli.ts';
-import { scratchDir } from '../../lib/scratch.ts';
+import { scratchDir } from '../../lib/tree.ts';
 
 // status opens every store the config names. busy_timeout comes from Store.engineStatus(),
 // which each store owns; duckdb reports an empty record instead of a dialect-only pragma error.

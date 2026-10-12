@@ -2,7 +2,7 @@
 
 Read this guide when `store` is `sqlite` or omitted.
 
-SQLite is the default store. It uses Node's built-in SQLite, keeps the cache at `.sense/cache.db`, supports concurrent sense commands through WAL, and implements the full search grammar documented here.
+SQLite is the default store. It uses Node's built-in SQLite, keeps the cache at `.sense/cache.db`, supports concurrent sense commands through WAL, and implements the full search grammar documented here. A build after a Node upgrade that changes the bundled SQLite version rebuilds the cache, and a no-build query on that cache fails with `INDEX_NOT_READY` until it does.
 
 ## `sense search` grammar
 
