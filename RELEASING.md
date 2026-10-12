@@ -102,14 +102,7 @@ Subagents dispatched during a release are spawned with `model: sonnet`. Reviews 
    The mechanical facts are tested in `test/integration/docs.test.ts`; the rest is a read. The
    keyword review and the npm indexer's hyphen tokenization are in `releasing-standards`.
 
-   **Keep the published surfaces self-contained.** `npm pack --dry-run` is the boundary: a relative
-   link from the README or either skill must resolve inside that tarball. Contributor plans,
-   benchmark reports, `BENCHMARKING.md`, `DESIGN.md`, and `INTEGRATIONS.md` do not ship. Leave them
-   out when the reader does not need them. When a public source is useful, link to its stable web
-   page instead of a package-relative path. Keep benchmark method and full evidence in
-   `BENCHMARKING.md` and its reports. Store-selection measurements for installed agents belong only
-   in the generated `skills/sense-setup/references/store-benchmarks.md`. The README explains the
-   choice without carrying release figures.
+   **Check each installation boundary.** `npm pack --dry-run --ignore-scripts` must exclude `skills/` and benchmark files. Relative README links must resolve inside the npm tarball; link Git documentation by its public URL. Skills install separately from Git with `npx skills add kmalakoff/sensemaking`; their relative references must resolve within the installed skills collection. Keep detailed measurements and methodology in `BENCHMARKING.md` and `benchmark/reports/`. The TypeScript release reporter generates a short performance comparison in `skills/sense-setup/references/store-benchmarks.md`, linked only when performance could affect store selection. It names the workload and measurement scope without prescribing a permanent engine ranking.
 
    **Review the stores as evolving implementations, not fixed product tiers.** The shared commands,
    tables, result shapes, and declared capabilities are the public contract. Preserve them with the
@@ -178,7 +171,7 @@ Subagents dispatched during a release are spawned with `model: sonnet`. Reviews 
 
 5. Ask the maintainer which version this is going out as, write the CHANGELOG entry under that heading, and commit steps 1-4 per `releasing-standards`. A sitting usually separates into the code change and the benchmark tables; the grouping is proposed and agreed before anything is rewritten, and it is collapsed before the bump.
 
-6. With the version named, name the sitting's report for it. This copies it to `benchmark/reports/<date>-<version>-release-gate.{md,json}`, updates BENCHMARKING.md, and generates the shipped store summary from the same data. It measures nothing:
+6. With the version named, name the sitting's report for it. This copies it to `benchmark/reports/<date>-<version>-release-gate.{md,json}`, updates BENCHMARKING.md, and generates the Git-installed skill's short performance summary from the same data. It measures nothing:
 
    ```bash
    node benchmark/report.ts --release <chosen>

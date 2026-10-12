@@ -10,7 +10,7 @@ import { RUN_METRIC_KEYS } from '../../benchmark/lib/rows.ts';
 import { captureIdentity, compareCaptureDirectories } from '../../benchmark/lib/store-dump-evidence.ts';
 import { REPORT_JSON_RE } from '../../benchmark/lib/verdict.ts';
 import { identityHash } from '../../benchmark/lib/workload-identity.ts';
-import { failedStageReasons } from '../../benchmark/report.ts';
+import { failedStageReasons, renderStoreBenchmarkSummary } from '../../benchmark/report.ts';
 import { COMMANDS } from '../../dist/esm/cli/index.js';
 import { KNOWN_EMBED_KEYS } from '../../src/config/index.ts';
 import { packageRoot, scratchDir } from '../lib/tree.ts';
@@ -60,13 +60,11 @@ describe('published docs', () => {
   });
 });
 
-describe('shipped skills are well formed', () => {
-  // Not prose drift: these assert the artifacts this package ships are loadable at all. An
-  // unquoted `description:` containing ": " parses as a nested mapping and the installer skips
-  // the skill silently, so nothing else in the tree would notice.
+describe('Git-installed skills are well formed', () => {
+  // Invalid frontmatter makes skill discovery fail even when npm packaging is correct.
   it('every SKILL.md has frontmatter that parses, with a name matching its directory and a description', () => {
     const dir = join(packageRoot, 'skills');
-    assert.ok(existsSync(dir), 'skills/ must exist; package.json ships it');
+    assert.ok(existsSync(dir), 'skills/ must exist for Git-based installation');
     const names = readdirSync(dir, { withFileTypes: true })
       .filter((d) => d.isDirectory())
       .map((d) => d.name);
@@ -80,12 +78,12 @@ describe('shipped skills are well formed', () => {
     }
   });
 
-  it('package.json ships the skills directory, so a publish cannot drop it', () => {
+  it('package.json excludes the separately installed skills directory', () => {
     const pkg = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8')) as { files: string[] };
-    assert.ok(pkg.files.includes('skills'), 'skills/ is not in package.json files');
+    assert.ok(!pkg.files.includes('skills'), 'skills/ belongs to Git-based installation, not npm');
   });
 
-  it('every relative markdown link in a shipped skill resolves inside the package', () => {
+  it('every relative markdown link in a skill resolves inside the skills collection', () => {
     const skillsRoot = join(packageRoot, 'skills');
     const markdownFiles = (dir: string): string[] =>
       readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
@@ -95,9 +93,38 @@ describe('shipped skills are well formed', () => {
     for (const path of markdownFiles(skillsRoot)) {
       for (const target of relativeMarkdownTargets(path)) {
         const resolved = resolve(dirname(path), target);
-        assert.ok(existsSync(resolved), `${path} links to missing shipped file ${target}`);
-        assert.ok(isWithin(skillsRoot, resolved), `${path} links outside the shipped skills directory: ${target}`);
+        assert.ok(existsSync(resolved), `${path} links to missing skill file ${target}`);
+        assert.ok(isWithin(skillsRoot, resolved), `${path} links outside the installed skills collection: ${target}`);
       }
+    }
+  });
+});
+
+describe('store performance summary', () => {
+  it('compares measured elapsed times without turning them into a permanent store recommendation', () => {
+    const summary = renderStoreBenchmarkSummary({
+      release_version: '0.28.0',
+      date: '2026-10-12',
+      machine: 'fixture machine',
+      node: 'v26.11.1',
+      corpus_shape: { hub: { notes: 4 } },
+      record: { hub_cold_crawl_ms: 100, hub_find_ms: 200, hub_semantic_find_ms: 400, battery_duckdb_hub_cold_crawl_ms: 200, battery_duckdb_hub_find_ms: 100, battery_duckdb_hub_semantic_find_ms: 400 },
+    });
+    assert.ok(summary.includes('| sqlite | 1.00× | 1.00× | 1.00× | not measured |'));
+    assert.ok(summary.includes('| duckdb | 2.00× | 0.50× | 1.00× | not measured |'));
+    assert.ok(summary.includes('| turso | not compared | not compared | not compared | not measured |'));
+    assert.ok(summary.includes('4-note tree'));
+    assert.ok(summary.includes('fixture machine'));
+    assert.ok(summary.includes('not a permanent engine ranking'));
+    assert.ok(summary.includes('https://github.com/kmalakoff/sensemaking/blob/master/benchmark/reports/2026-10-12-0.28.0-release-gate.md'));
+  });
+
+  it('does not manufacture ratios from missing, zero or invalid measurements', () => {
+    for (const value of [undefined, null, 0, -1, NaN, Infinity, '100']) {
+      const summary = renderStoreBenchmarkSummary({ record: { hub_cold_crawl_ms: value, battery_duckdb_hub_cold_crawl_ms: 200 } });
+      assert.ok(summary.includes('| duckdb | not compared | not compared | not compared | not measured |'));
+      const invalidStore = renderStoreBenchmarkSummary({ record: { hub_cold_crawl_ms: 100, battery_duckdb_hub_cold_crawl_ms: value } });
+      assert.ok(invalidStore.includes('| duckdb | not compared | not compared | not compared | not measured |'));
     }
   });
 });
@@ -244,7 +271,7 @@ describe('benchmark release-gate: numbers of record', () => {
       if (value === null || value === undefined) continue;
       assert.deepEqual(rendered.get(key)?.[0], live.get(key)?.[0], `BENCHMARKING.md's numbers-of-record row "${key}" does not match ${newest}`);
     }
-    assert.equal(read(packageRoot, 'skills', 'sense-setup', 'references', 'store-benchmarks.md'), renderStoreBenchmarkSummary(report), `the shipped store benchmark summary does not match ${newest}`);
+    assert.equal(read(packageRoot, 'skills', 'sense-setup', 'references', 'store-benchmarks.md'), renderStoreBenchmarkSummary(report), `the skill performance summary does not match ${newest}`);
   });
 
   it('fixture: a PASS sitting merges into the numbers-of-record table without deleting a metric it did not measure', async () => {
@@ -263,7 +290,7 @@ describe('benchmark release-gate: numbers of record', () => {
     assert.match(after, /hub_find_row_tokens \| 71/, 'a metric this sitting measured must be added');
     const summary = readFileSync(storeSummaryPath, 'utf8');
     assert.match(summary, /sense-store-benchmark release=9\.9\.10/);
-    assert.match(summary, /\| sqlite \| 100 ms \| 50 ms \| 60 ms \| 90 ms \| not measured \|/);
+    assert.ok(summary.includes('| sqlite | 1.00× | 1.00× | 1.00× | not measured |'));
   });
 });
 

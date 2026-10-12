@@ -42,7 +42,7 @@ Read the matching selection guide before recommending or configuring a non-defau
 - [DuckDB selection guide](references/stores/duckdb.md)
 - [Turso selection guide](references/stores/turso.md)
 
-Read the [current store benchmark summary](references/store-benchmarks.md) only when performance could change the choice. The release assessment generates that shipped summary from the latest accepted all-store run.
+Read the [performance trade-offs](references/store-benchmarks.md) only when latency or retrieval quality could change the choice. This short comparison is generated from the accepted release report; detailed measurements stay in Git.
 
 Each store uses a separate cache file. Changing `store` rebuilds the index instead of migrating the old cache. Commands and public tables are shared, while raw SQL and advanced word-search syntax follow the selected engine.
 

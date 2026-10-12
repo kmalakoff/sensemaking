@@ -2,6 +2,14 @@
 
 All notable changes to sensemaking are documented here.
 
+## [0.28.1] - 2026-10-12
+
+### Changed
+
+- Agent skills are no longer bundled in the npm package. Install them separately
+  from Git with `npx skills add kmalakoff/sensemaking`; the CLI, library and schema
+  remain included in npm installs.
+
 ## [0.28.0] - 2026-10-11
 
 ### Changed

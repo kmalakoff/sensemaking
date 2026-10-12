@@ -7,7 +7,7 @@
 //        node benchmark/report.ts --accept <row id | stage reason> --reason "<owner's words>"
 //
 // Releasing a PASS (or a BLOCK whose every blocking row carries an accepted override) repoints
-// BENCHMARKING.md's numbers-of-record table and rewrites the shipped store-selection summary;
+// BENCHMARKING.md's numbers-of-record table and rewrites the skill's store-selection summary;
 // a BLOCK, or an unreleased sitting, leaves both exactly as they were.
 //
 // Every exported function takes its target paths through an options object, defaulted to the
@@ -1355,18 +1355,17 @@ export function updateNumbersOfRecord(report: unknown, benchmarkingMdPath = BENC
 }
 
 const STORE_SUMMARY_METRICS = [
-  ['cold_crawl_ms', 'Cold index'],
-  ['warm_query_ms', 'Warm count'],
-  ['find_ms', 'Lexical search'],
-  ['semantic_find_ms', 'Semantic search'],
+  ['cold_crawl_ms', 'Index time'],
+  ['find_ms', 'Lexical time'],
+  ['semantic_find_ms', 'Semantic time'],
 ];
 
 function storeRecordPrefix(store: string) {
   return store === DEFAULT_STORE ? 'hub' : `battery_${store}_hub`;
 }
 
-function metricCell(value: unknown) {
-  return Number.isFinite(value) ? `${new Intl.NumberFormat('en-US', { maximumFractionDigits: 1 }).format(value as number)} ms` : 'not measured';
+function metricCell(value: unknown, baseline: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 && typeof baseline === 'number' && Number.isFinite(baseline) && baseline > 0 ? `${(value / baseline).toFixed(2)}×` : 'not compared';
 }
 
 function semanticNdcg(report: unknown, store: string) {
@@ -1378,21 +1377,22 @@ export function renderStoreBenchmarkSummary(report: unknown) {
   const notes = (((report as { corpus_shape: unknown }).corpus_shape as { hub?: unknown } | null | undefined)?.hub as { notes?: unknown } | null | undefined)?.notes;
   const rows = OFFERED.map((store) => {
     const prefix = storeRecordPrefix(store);
-    return [store, ...STORE_SUMMARY_METRICS.map(([key]) => metricCell((report as { record: Record<string, unknown> }).record?.[`${prefix}_${key}`])), semanticNdcg(report, store)];
+    const record = (report as { record: Record<string, unknown> }).record;
+    return [store, ...STORE_SUMMARY_METRICS.map(([key]) => metricCell(record?.[`${prefix}_${key}`], record?.[`hub_${key}`])), semanticNdcg(report, store)];
   });
   const timingScope = Number.isFinite(notes) ? `the same ${new Intl.NumberFormat('en-US').format(notes as number)}-note tree` : 'the same tree';
   return `<!-- sense-store-benchmark release=${(report as { release_version: unknown }).release_version} -->
-# Current store benchmark summary
+# Store performance trade-offs
 
-The release assessment generated this file for store selection. Release \`${(report as { release_version: unknown }).release_version}\` passed on ${(report as { date: unknown }).date}, measured on ${(report as { machine: unknown }).machine ?? 'an unrecorded machine'} with Node ${(report as { node: unknown }).node ?? 'unrecorded'}.
+Release \`${(report as { release_version: unknown }).release_version}\`, ${(report as { date: unknown }).date}: ${(report as { machine: unknown }).machine ?? 'unrecorded machine'}, Node ${(report as { node: unknown }).node ?? 'unrecorded'}, ${timingScope}.
 
-The timing rows ran on ${timingScope}. They include CLI startup and each store's complete selected path. Ranked candidates and downstream work can differ by store, so these are current operating measurements rather than an isolated database-engine contest.
+Times are relative to SQLite (1.00×); lower means less elapsed time. Index time excludes embeddings. Search includes CLI startup and each store's selected work, not isolated engine speed.
 
-${mdTable(['Store', ...STORE_SUMMARY_METRICS.map(([, label]) => label), 'Portable semantic nDCG@10'], rows)}
+${mdTable(['Store', ...STORE_SUMMARY_METRICS.map(([, label]) => label), 'Semantic nDCG@10'], rows)}
 
-Cold index measures core index creation and a count query, excluding document embeddings. Warm count is a no-change \`COUNT(*)\` query. Lexical and semantic search are steady-state \`sense search\` commands. Lower timing is faster. Higher nDCG@10 is better; that quality column uses the same NFCorpus queries, judgments, result count, and model on every store.
+Relevance uses the same NFCorpus queries, judgments and model; higher nDCG is better. Small differences are not a reason to switch stores. Choose capabilities and SQL compatibility first; check a representative workload if latency matters.
 
-Choose from the intended workflow, capabilities, and SQL compatibility. These numbers describe the current Sense implementations, not a permanent ranking of the engines. Treat small timing or relevance differences as diagnostic unless a representative workload for the target tree reproduces them.
+[Full measurements and methodology](https://github.com/kmalakoff/sensemaking/blob/master/benchmark/reports/${reportBase((report as { date: unknown }).date, (report as { release_version: unknown }).release_version)}.md). Generated by \`node benchmark/report.ts --release <version>\`; these results describe this run, not a permanent engine ranking.
 `;
 }
 
@@ -1465,7 +1465,7 @@ async function main() {
   console.log(`wrote ${relative(ROOT, mdPath)}`);
   console.log(`verdict: ${(report as { verdict: unknown }).verdict}`);
   const repointed = (report as { release_version: unknown }).release_version && (report as { verdict: unknown }).verdict === 'PASS';
-  console.log(repointed ? 'numbers of record and shipped store summary: updated' : `numbers of record and shipped store summary: left as they were (${(report as { release_version: unknown }).release_version ? 'BLOCK' : 'not released'})`);
+  console.log(repointed ? 'numbers of record and skill performance summary: updated' : `numbers of record and skill performance summary: left as they were (${(report as { release_version: unknown }).release_version ? 'BLOCK' : 'not released'})`);
 }
 
 // Only run the CLI when this file is the entry point; report.ts's functions are also imported

@@ -66,7 +66,7 @@ The handle uses the completed index prepared by `build`; the example awaits the 
 
 ## What sense indexes
 
-The [Sense terminology reference](skills/sense/references/terminology.md) defines notes, snippets, sections, chunks and links. A section is a span of the note; `peek` returns its description, not its prose. The ordered section descriptions form the outline.
+The [Sense terminology reference](https://github.com/kmalakoff/sensemaking/blob/master/skills/sense/references/terminology.md) defines notes, snippets, sections, chunks and links. A section is a span of the note; `peek` returns its description, not its prose. The ordered section descriptions form the outline.
 
 Every file becomes rows in these tables, plus whatever an enabled feature adds of its own:
 
@@ -212,7 +212,7 @@ Default CLI queries start with an incremental build of the capabilities they nee
 npx skills add kmalakoff/sensemaking   # -g for global, -a claude-code to target
 ```
 
-Three skills: `sense` for querying a tree, including store-specific SQL and search guidance; `sense-setup` for creating one and choosing its store, presets, vectors, and note conventions; and `sense-bases` for translating an Obsidian Bases `.base` file into sense SQL.
+Three skills: `sense` for querying a tree, including store-specific SQL and search guidance; `sense-setup` for creating one and choosing its store, presets, vectors, and note conventions; and `sense-bases` for translating an Obsidian Bases `.base` file into sense SQL. Skills install from Git through this command, separately from the npm package.
 
 ## Prior art
 
