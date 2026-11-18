@@ -6,7 +6,7 @@ import { LIVE_SUITE_ARGV, LIVE_SUITE_COST_ARTIFACT, LIVE_SUITE_ENV, liveSuiteMac
 import { ROOT } from '../lib/stages.ts';
 import { jobProblems, spawnOwned } from '../lib/step-process.ts';
 
-const dir = join(ROOT, '.tmp', 'live-suite-cost');
+const dir = join(ROOT, '.cache', 'live-suite-cost');
 const logName = `${new Date().toISOString().replace(/[:.]/g, '-')}-${randomUUID()}.log`;
 const logPath = join(dir, logName);
 const artifactPath = join(ROOT, LIVE_SUITE_COST_ARTIFACT);

@@ -41,8 +41,8 @@ const LEVERS = [
   { name: 'int8-256', dims: 256, int8: true },
 ];
 
-const tree = corpusPath(corpus);
-const labelsDir = corpusLabels(corpus);
+const tree = await corpusPath(corpus);
+const labelsDir = await corpusLabels(corpus);
 if (!tree || !labelsDir) {
   console.error(`not a labeled corpus: ${corpus}`);
   process.exit(2);

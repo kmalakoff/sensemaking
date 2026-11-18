@@ -1,5 +1,5 @@
 // A corpus tree copy that keeps the pinned cache entry read-only: every write a measurement
-// makes (.sense, sense.config.json, touched mtimes) lands in the copy, never in .tmp/cache.
+// makes (.sense, sense.config.json, touched mtimes) lands in the copy, never in .cache.
 import type { Store } from '../../src/store/types.ts';
 
 export interface FileManifestEntry {

@@ -1769,9 +1769,9 @@ describe('timeline-skips.json: a typo cannot silently skip nothing', () => {
 });
 
 describe('catalog / run.mjs key agreement', () => {
-  it('a run.mjs row on the 20-note synthetic corpus has exactly the catalog wall/inproc/tokens keys', function () {
+  it('a run.mjs row on the 20-note synthetic corpus has exactly the catalog wall/inproc/tokens keys', async function () {
     this.timeout(120_000);
-    const corpus = syntheticPath({ notes: 20, noteTokens: 500, headingsPerNote: 8, linksPerNote: 5, distinctFields: 30, fieldsPerNote: 8, seed: 1 });
+    const corpus = await syntheticPath({ notes: 20, noteTokens: 500, headingsPerNote: 8, linksPerNote: 5, distinctFields: 30, fieldsPerNote: 8, seed: 1 });
     const outPath = join(scratchDir('benchmark-harness-run'), 'row.json');
     execFileSync(process.execPath, [join(packageRoot, 'benchmark', 'steps', 'measure-tree.ts'), packageRoot, corpus, '--out', outPath], { cwd: packageRoot, encoding: 'utf8' });
     const row = JSON.parse(readFileSync(outPath, 'utf8'));

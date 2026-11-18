@@ -17,9 +17,10 @@ import assert from 'assert';
 import { safeRmSync } from 'fs-remove-compat';
 import type { FeatureName } from '../../src/config/index.ts';
 import type { ResolvedConfig, Store } from '../../src/index.ts';
-import { CORPUS_NAMES, corpusPath, writeTreeConfig } from '../lib/corpus.ts';
+import { CORPUS_NAMES, corpusPath } from '../lib/corpus.ts';
 import { writeOut } from '../lib/out.ts';
 import { captureIdentity, compareCaptureDirectories } from '../lib/store-dump-evidence.ts';
+import { writeTreeConfig } from '../lib/tree-config.ts';
 import { ephemeralWorkTree } from '../lib/work-tree.ts';
 
 type Library = typeof import('../../src/index.ts');
@@ -366,7 +367,7 @@ async function runCapture(outDirArg: string | undefined) {
   }
   const outDir = resolve(outDirArg);
   const corpus = corpusArg ?? 'obsidian-hub';
-  const sourceTree = CORPUS_NAMES.includes(corpus) ? (corpusPath(corpus) as string) : resolve(corpus);
+  const sourceTree = CORPUS_NAMES.includes(corpus) ? ((await corpusPath(corpus)) as string) : resolve(corpus);
   assert(existsSync(sourceTree), `corpus tree not found: ${sourceTree}`);
   const stores = (storeArg ?? ALL_STORES.join(','))
     .split(',')

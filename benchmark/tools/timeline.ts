@@ -35,7 +35,7 @@ const {
 const repeats = Number(repeatsArg);
 // The corpus is part of the key. The same version on two trees is two results, so they cannot
 // share a filename; a new corpus is a new directory that fills in without disturbing the others.
-const outDir = outArg ?? join(ROOT, '.tmp', 'timeline', corpus);
+const outDir = outArg ?? join(ROOT, '.cache', 'timeline', corpus);
 // Work that would contend with a measurement. A sitting taken alongside any of these is not one
 // sitting, and the numbers cannot be compared with the rest of the series.
 const INTERFERES = /measure-tree|tools\/timeline|run-matrix|mocha|tsds|benchmark\/(gate|steps|store-dump)/;
@@ -58,7 +58,7 @@ function interfering() {
 }
 
 const SKIPS_FILE = join(ROOT, 'benchmark', 'timeline-skips.json');
-const cacheDir = join(ROOT, '.tmp', 'cache');
+const cacheDir = join(ROOT, '.cache', 'shared');
 const pkgRoot = (v: string) => join(cacheDir, `sensemaking-${v}`, 'node_modules', 'sensemaking');
 
 const cmp = (a: string, b: string) => {

@@ -1,17 +1,18 @@
 // Runs run.mjs per version against its own copy of the tree, prints a pasteable table. Baseline is package.json's version, so a bare run answers "did the working tree regress?".
 // usage: node benchmark/steps/compare-versions.ts [corpus-or-dir] [version...] [--store <name>] [--reverse] [--out <file>]
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { safeRmSync } from 'fs-remove-compat';
-import { cached } from '../lib/cache.ts';
-import { corpusPath, writeTreeConfig } from '../lib/corpus.ts';
+import { cachedRelease } from '../lib/cache.ts';
+import { corpusPath } from '../lib/corpus.ts';
 import { MEASURE_VERSION } from '../lib/measure.ts';
 import { writeOut } from '../lib/out.ts';
 import { renderRowsTable } from '../lib/render.ts';
 import { ROWS, TIMING_KINDS } from '../lib/rows.ts';
+import { writeTreeConfig } from '../lib/tree-config.ts';
 import { copyTree } from '../lib/work-tree.ts';
 
 const benchDir = dirname(fileURLToPath(import.meta.url));
@@ -33,7 +34,7 @@ const {
   options: { store: { type: 'string' }, out: { type: 'string' }, reverse: { type: 'boolean', default: false } },
   allowPositionals: true,
 });
-const treeDir = corpusArg ? (corpusPath(corpusArg) ?? resolve(corpusArg)) : corpusPath('obsidian-hub');
+const treeDir = corpusArg ? ((await corpusPath(corpusArg)) ?? resolve(corpusArg)) : await corpusPath('obsidian-hub');
 if (!existsSync(treeDir)) {
   console.error(`not a corpus name or directory: ${corpusArg}`);
   process.exit(2);
@@ -47,14 +48,9 @@ if (reverse) versions.reverse();
 mkdirSync(join(benchDir, '..', '..', '.tmp'), { recursive: true });
 const work = mkdtempSync(join(benchDir, '..', '..', '.tmp', 'bench-'));
 
-function rootFor(version: unknown) {
+async function rootFor(version: unknown) {
   if (version === 'local') return ROOT;
-  const dir = cached(`sensemaking-${version}`, (staging) => {
-    writeFileSync(join(staging, 'package.json'), '{"name":"bench","private":true}'); // stop npm walking up
-    const install = spawnSync('npm', ['install', `sensemaking@${version}`, '--ignore-scripts', '--no-audit', '--no-fund', '--prefix', staging], { cwd: staging, encoding: 'utf8' });
-    if (install.status !== 0) throw new Error(`npm install sensemaking@${version} failed:\n${install.stderr}`);
-  });
-  return join(dir, 'node_modules', 'sensemaking');
+  return join(await cachedRelease(version), 'node_modules', 'sensemaking');
 }
 
 // Fresh copy per version: cache formats and config auto-migration must not cross versions.
@@ -71,7 +67,7 @@ function treeCopyFor(version: unknown) {
 const results = new Map<unknown, unknown>();
 for (const version of versions) {
   process.stderr.write(`benchmarking ${version}...\n`);
-  const out = spawnSync(process.execPath, [join(benchDir, 'measure-tree.ts'), rootFor(version), treeCopyFor(version), ...(store ? ['--store', store] : [])], { encoding: 'utf8', maxBuffer: 16e6 });
+  const out = spawnSync(process.execPath, [join(benchDir, 'measure-tree.ts'), await rootFor(version), treeCopyFor(version), ...(store ? ['--store', store] : [])], { encoding: 'utf8', maxBuffer: 16e6 });
   if (out.status !== 0) {
     writeOut(outArg, { corpus: treeDir, store: store ?? 'sqlite', versions, reversed: reverse, measure_version: MEASURE_VERSION, error: `run.mjs failed for ${version}: ${out.stderr}` });
     console.error(`run.mjs failed for ${version}:\n${out.stderr}`);

@@ -90,8 +90,8 @@ function writeOut(path: string | null | undefined, artifact: unknown) {
 }
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url));
-const source = corpusPath(corpus);
-const labelsDir = corpusLabels(corpus);
+const source = await corpusPath(corpus);
+const labelsDir = await corpusLabels(corpus);
 if (!source || !labelsDir) {
   console.error(`not a labeled corpus: ${corpus}`);
   process.exit(2);
@@ -156,7 +156,7 @@ const cacheInputsFor = (model: Awaited<ReturnType<typeof observeQualityModel>>) 
 const initialCacheInputs = cacheInputsFor(modelObservation);
 let qualityWork: Work | undefined;
 try {
-  qualityWork = prepareQualityWorkTree({ workRoot: join(ROOT, '.tmp', 'eval-work'), key: `${corpus}-${STORE ?? 'sqlite'}`, source, cacheInputs: initialCacheInputs, reuseEligible: modelObservation.reuse_eligible });
+  qualityWork = prepareQualityWorkTree({ workRoot: join(ROOT, '.cache', 'shared', 'eval-work'), key: `${corpus}-${STORE ?? 'sqlite'}`, source, cacheInputs: initialCacheInputs, reuseEligible: modelObservation.reuse_eligible });
   tree = qualityWork.tree;
   cacheState = { cache_fingerprint: qualityWork.cacheFingerprint, cache_inputs: qualityWork.cacheInputs, copied_state: qualityWork.copied_state, reuse_state: qualityWork.reuse_state, reused_generation: qualityWork.reused_generation };
 } catch (err) {

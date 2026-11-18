@@ -1,7 +1,8 @@
 import { spawnSync } from 'node:child_process';
-import { cpSync, mkdirSync, readdirSync, readFileSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import assert from 'assert';
+import { corpusEntryDir } from '../../benchmark/lib/corpus.ts';
 import { revalidateQualityArtifact } from '../../benchmark/lib/portable-quality.ts';
 import { needsQualityModelDownload, observeQualityModel, prepareQualityWorkTree } from '../../benchmark/lib/quality-work-tree.ts';
 import { buildStages } from '../../benchmark/lib/stages.ts';
@@ -101,6 +102,35 @@ describe('quality cache work trees', () => {
     assert.throws(() => runs[0].discard(new Error('quality run failed')), /quality run failed/);
     assert.throws(() => runs[1].discard(new Error('quality run failed')), /quality run failed/);
     assert.equal(readFileSync(join(source, 'a.md'), 'utf8'), '# Alpha\n\nneedle alpha\n');
+  });
+
+  it('keeps in-progress staging out of the completed entries a shared root lists', async () => {
+    const source = sourceTree();
+    const workRoot = scratchDir('quality-staging-not-entry');
+    const run = prepareQualityWorkTree({ workRoot, key: 'k', source, cacheInputs: cacheInputs('sqlite'), reuseEligible: true });
+    assert.ok(basename(run.tree).startsWith('.run-'));
+    assert.equal(existsSync(join(workRoot, 'k', 'completed')), false, 'nothing is an entry while the run is open');
+    run.discard();
+    const { published } = await seedPublished('sqlite', workRoot, 'k', source);
+    const entries = readdirSync(join(workRoot, 'k', 'completed'));
+    assert.deepEqual(entries, [basename(published.tree)]);
+    assert.ok(entries[0].startsWith(published.cache_fingerprint));
+  });
+
+  it('opens only completed generations named for the current fingerprint', async () => {
+    const source = sourceTree();
+    const workRoot = scratchDir('quality-other-fingerprint');
+    // A generation of another fingerprint with no marker would make readMarker throw if it were opened.
+    mkdirSync(join(workRoot, 'k', 'completed', 'other-fingerprint-run'), { recursive: true });
+    const run = prepareQualityWorkTree({ workRoot, key: 'k', source, cacheInputs: cacheInputs('sqlite'), reuseEligible: true });
+    assert.equal(run.reuse_state, 'source-copy');
+    run.discard();
+    const { prepared } = await seedPublished('sqlite', workRoot, 'k', source);
+    const reused = prepareQualityWorkTree({ workRoot, key: 'k', source, cacheInputs: cacheInputs('sqlite'), reuseEligible: true });
+    assert.equal(reused.reuse_state, 'copied-completed-index');
+    assert.notEqual(basename(reused.reused_generation as string), 'other-fingerprint-run');
+    reused.discard();
+    assert.ok(prepared);
   });
 
   it('publishes one immutable completed generation and reuses its native cache', async () => {
@@ -272,7 +302,7 @@ describe('quality cache work trees', () => {
       atomicPath,
       `import { appendFileSync, readFileSync } from 'node:fs';\n${atomicSource.replace('export function writeFileAtomic(', 'function publishAtomic(')}\nconst observedOutputs = new Set(${JSON.stringify(observedOutputs)});\nexport function writeFileAtomic(path, data) {\n  publishAtomic(path, data);\n  if (observedOutputs.has(path)) appendFileSync(path + '.publications.jsonl', JSON.stringify(JSON.parse(readFileSync(path, 'utf8'))) + '\\n');\n}\n`
     );
-    const corpus = join(root, '.tmp', 'cache', 'nfcorpus-beir-1');
+    const corpus = corpusEntryDir('nfcorpus', root) as string;
     mkdirSync(join(corpus, 'tree'), { recursive: true });
     mkdirSync(join(corpus, 'labels'), { recursive: true });
     writeFileSync(join(corpus, 'tree', 'a.md'), '# Alpha\n\napple target\n');

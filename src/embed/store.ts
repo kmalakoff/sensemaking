@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Config } from '../config/index.ts';
@@ -7,6 +8,9 @@ import { writeFileAtomic } from '../lib/atomic-write.ts';
 import { type BufferedResponse, fetchWithRetry, HTTP_ATTEMPT_TIMEOUT_MS, MODEL_FILE_ATTEMPT_TIMEOUT_MS } from './http.ts';
 import { DEFAULT_MODELS_ROOT, hasModelFiles, isDownloadable, languagesPath, MODEL_FILES, readRef, snapshotDir, writeLanguages, writeRef } from './identity.ts';
 import { isKnownLanguageTag, MEASURED_MODEL_LANGUAGES } from './languages.ts';
+
+// The Hub base for every request here; downloadModelRevision takes it as a parameter so a test can point it at a local server.
+const HF_HUB = 'https://huggingface.co';
 
 // identity.ts holds paths and cache identity, no network; store.ts holds the network fetches
 // (downloads, sha resolution, language metadata), re-exported here for its network surface.
@@ -33,7 +37,7 @@ export function localModelMissing(e: ResolvedEmbedConfig | null): e is ResolvedE
 async function resolveSha(model: string, root: string = DEFAULT_MODELS_ROOT): Promise<string> {
   const existing = readRef(model, root);
   if (existing) return existing;
-  const url = `https://huggingface.co/${model}/resolve/main/model.safetensors`;
+  const url = `${HF_HUB}/${model}/resolve/main/model.safetensors`;
   // redirect: manual -- the header rides the Hub's own response; following the LFS/CDN
   // redirect would read the CDN's headers instead, which do not carry it.
   const res = await fetchWithRetry(url, { method: 'HEAD', redirect: 'manual' }, { attemptTimeoutMs: HTTP_ATTEMPT_TIMEOUT_MS });
@@ -87,7 +91,7 @@ async function ensureLanguages(model: string, root: string = DEFAULT_MODELS_ROOT
   }
   let res: BufferedResponse;
   try {
-    res = await fetchWithRetry(`https://huggingface.co/api/models/${model}`, {}, { attemptTimeoutMs: HTTP_ATTEMPT_TIMEOUT_MS });
+    res = await fetchWithRetry(`${HF_HUB}/api/models/${model}`, {}, { attemptTimeoutMs: HTTP_ATTEMPT_TIMEOUT_MS });
   } catch {
     cardUnreadable(model);
     return;
@@ -108,21 +112,98 @@ async function ensureLanguages(model: string, root: string = DEFAULT_MODELS_ROOT
   writeLanguages(model, languagesFromCard(info) ?? [], root);
 }
 
-async function fetchToFile(url: string, dest: string): Promise<void> {
+// What the Hub publishes for one file at a pinned commit: sha256 of the content for LFS files,
+// the git blob sha1 for plain git files, plus the size.
+interface ExpectedFile {
+  kind: 'sha256' | 'git-sha1';
+  hash: string;
+  size: number;
+}
+
+interface HfTreeEntry {
+  path: string;
+  oid: string;
+  size: number;
+  lfs?: { oid: string; size: number };
+}
+
+function isHfTreeEntry(value: unknown): value is HfTreeEntry {
+  if (value === null || typeof value !== 'object') return false;
+  if (!('path' in value) || typeof value.path !== 'string') return false;
+  if (!('oid' in value) || typeof value.oid !== 'string') return false;
+  if (!('size' in value) || typeof value.size !== 'number') return false;
+  if (!('lfs' in value) || value.lfs === undefined) return true;
+  if (value.lfs === null || typeof value.lfs !== 'object') return false;
+  return 'oid' in value.lfs && typeof value.lfs.oid === 'string' && 'size' in value.lfs && typeof value.lfs.size === 'number';
+}
+
+function isHfTree(value: unknown): value is HfTreeEntry[] {
+  return Array.isArray(value) && value.every(isHfTreeEntry);
+}
+
+function unverifiable(model: string, sha: string, detail: string): SenseError {
+  return new SenseError('EMBED_MODEL', `could not get the Hub's published hashes for ${model}@${sha.slice(0, 8)}: ${detail}; no model file was written. Retry \`sense download\`; if it repeats, something between this machine and Hugging Face is changing the response`);
+}
+
+async function fetchExpected(model: string, sha: string, files: string[], hub: string): Promise<Map<string, ExpectedFile>> {
+  const url = `${hub}/api/models/${model}/tree/${sha}`;
+  let res: BufferedResponse;
+  try {
+    res = await fetchWithRetry(url, {}, { attemptTimeoutMs: HTTP_ATTEMPT_TIMEOUT_MS });
+  } catch (err) {
+    throw unverifiable(model, sha, `${url} failed (${(err as Error).message})`);
+  }
+  if (res.status !== 200) throw unverifiable(model, sha, `${url} -> HTTP ${res.status}`);
+  let tree: unknown;
+  try {
+    tree = JSON.parse(new TextDecoder().decode(res.body));
+  } catch {
+    throw unverifiable(model, sha, `${url} did not return JSON`);
+  }
+  if (!isHfTree(tree)) throw unverifiable(model, sha, `${url} returned an unrecognized tree`);
+  const expected = new Map<string, ExpectedFile>();
+  for (const file of files) {
+    const entry = tree.find((e) => e.path === file);
+    if (!entry) throw unverifiable(model, sha, `the tree has no entry for ${file}`);
+    expected.set(file, entry.lfs ? { kind: 'sha256', hash: entry.lfs.oid, size: entry.lfs.size } : { kind: 'git-sha1', hash: entry.oid, size: entry.size });
+  }
+  return expected;
+}
+
+// git blob id: sha1 over "blob <size>\0" then the bytes.
+function digest(kind: ExpectedFile['kind'], bytes: Buffer): string {
+  if (kind === 'sha256') return createHash('sha256').update(bytes).digest('hex');
+  return createHash('sha1').update(`blob ${bytes.byteLength}\0`).update(bytes).digest('hex');
+}
+
+async function fetchToFile(url: string, dest: string, expected: ExpectedFile, label: string): Promise<void> {
   const res = await fetchWithRetry(url, {}, { attemptTimeoutMs: MODEL_FILE_ATTEMPT_TIMEOUT_MS });
   if (!res.ok) throw new SenseError('EMBED_MODEL', `${res.url} -> HTTP ${res.status}`);
-  writeFileAtomic(dest, Buffer.from(res.body));
+  const bytes = Buffer.from(res.body);
+  const mismatch = (actual: string) =>
+    new SenseError('EMBED_MODEL', `${label} does not match the Hub's published ${expected.kind}: expected ${expected.hash.slice(0, 12)} (${expected.size} bytes), got ${actual}; ${label} was not written. Retry \`sense download\`; if it repeats, something between this machine and Hugging Face is changing the file`);
+  if (bytes.byteLength !== expected.size) throw mismatch(`${bytes.byteLength} bytes`);
+  const actual = digest(expected.kind, bytes);
+  if (actual !== expected.hash) throw mismatch(`${actual.slice(0, 12)} (${bytes.byteLength} bytes)`);
+  writeFileAtomic(dest, bytes);
 }
 
 // Fetches an already-known sha straight into its snapshot dir, without touching refs/main --
 // for downloadModel below, and for callers pinning an exact revision (the parity suite).
-export async function downloadModelRevision(model: string, sha: string, onFile?: (file: string, dir: string) => void, root: string = DEFAULT_MODELS_ROOT): Promise<string> {
+// Each fetched file is verified against the Hub's published hash before it is written.
+export async function downloadModelRevision(model: string, sha: string, onFile?: (file: string, dir: string) => void, root: string = DEFAULT_MODELS_ROOT, hub: string = HF_HUB): Promise<string> {
   const dir = snapshotDir(model, sha, root);
   mkdirSync(dir, { recursive: true });
-  for (const file of MODEL_FILES) {
-    if (existsSync(join(dir, file))) continue;
+  // Files already on disk are not re-hashed (0.3 s per open), including ones written before
+  // verification existed; removing the snapshot folder re-downloads and verifies them.
+  const missing = MODEL_FILES.filter((file) => !existsSync(join(dir, file)));
+  if (missing.length === 0) return dir;
+  const expected = await fetchExpected(model, sha, missing, hub);
+  for (const file of missing) {
+    const want = expected.get(file);
+    if (!want) throw unverifiable(model, sha, `no expected value for ${file}`);
     onFile?.(file, dir);
-    await fetchToFile(`https://huggingface.co/${model}/resolve/${sha}/${file}`, join(dir, file));
+    await fetchToFile(`${hub}/${model}/resolve/${sha}/${file}`, join(dir, file), want, `${model}@${sha.slice(0, 8)}/${file}`);
   }
   return dir;
 }

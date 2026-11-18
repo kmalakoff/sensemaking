@@ -10,7 +10,7 @@ import { inspectRetainedQuality } from '../lib/retained-quality.ts';
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const { values } = parseArgs({ options: { out: { type: 'string' } } });
 const baselineVersion = (JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { version?: unknown }).version;
-const record = await inspectRetainedQuality({ reportsDir: join(ROOT, 'benchmark', 'reports'), sittingsDir: join(ROOT, '.tmp', 'sittings'), baselineVersion: baselineVersion as string | null | undefined, currentRoot: ROOT });
+const record = await inspectRetainedQuality({ reportsDir: join(ROOT, 'benchmark', 'reports'), sittingsDir: join(ROOT, '.cache', 'sittings'), baselineVersion: baselineVersion as string | null | undefined, currentRoot: ROOT });
 writeOut(values.out, record);
 console.log(
   record.valid

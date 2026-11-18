@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, readFileSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import assert from 'assert';
-import { cachedCorpusPaths } from '../../benchmark/lib/corpus.ts';
+import { cachedCorpusPaths, corpusEntryDir } from '../../benchmark/lib/corpus.ts';
 import { runStageSteps } from '../../benchmark/lib/gate-runner.ts';
 import { assertCompatibleSelection, profileReasons, remainingCost, resolveRetainedQualityRequirement, retainedQualityForSitting } from '../../benchmark/lib/gates.ts';
 import { MEASURE_VERSION } from '../../benchmark/lib/measure.ts';
@@ -37,16 +37,16 @@ function currentRoot(withCorpora = true): string {
   pkg.version = PACKAGE_VERSION;
   writeFileSync(join(root, 'package.json'), JSON.stringify(pkg));
   for (const corpus of withCorpora ? ['nfcorpus', 'fever'] : []) {
-    const key = corpus === 'nfcorpus' ? 'nfcorpus-beir-1' : 'fever-fever-1';
-    write(root, `.tmp/cache/${key}/tree/doc.md`, 'alpha\n');
-    write(root, `.tmp/cache/${key}/labels/queries.jsonl`, '{"_id":"q1","text":"alpha"}\n');
-    write(root, `.tmp/cache/${key}/labels/test.tsv`, 'query-id\tcorpus-id\tscore\nq1\tdoc\t1\n');
+    const entry = corpusEntryDir(corpus, root) as string;
+    write(entry, 'tree/doc.md', 'alpha\n');
+    write(entry, 'labels/queries.jsonl', '{"_id":"q1","text":"alpha"}\n');
+    write(entry, 'labels/test.tsv', 'query-id\tcorpus-id\tscore\nq1\tdoc\t1\n');
   }
   return root;
 }
 
 async function qualityArtifact(root: string, corpus: string, store: string, queryForm: string, modelPath: string) {
-  const { tree } = cachedCorpusPaths(corpus, join(root, '.tmp', 'cache'));
+  const { tree } = cachedCorpusPaths(corpus, root);
   assert.ok(tree);
   const queryEvidence = { q1: { text: 'alpha', canonical: 'alpha' } };
   const qrels = { q1: { doc: 1 } };
@@ -179,7 +179,7 @@ describe('retained quality report integration', () => {
       symlinkSync(join(packageRoot, 'node_modules'), join(f.root, 'node_modules'), 'junction');
       cpSync(join(packageRoot, 'benchmark', 'report.ts'), join(f.root, 'benchmark', 'report.ts'));
       writeFileSync(join(f.root, path), `${readFileSync(join(f.root, path), 'utf8')}\n// evaluator wording changed\n`);
-      const sittingsDir = join(f.root, '.tmp', 'sittings');
+      const sittingsDir = join(f.root, '.cache', 'sittings');
       const sourceDir = join(sittingsDir, (f.retained.source as { sitting: unknown }).sitting as string);
       const targetDir = join(sittingsDir, '2099-01-02-target');
       cpSync(f.sourceDir, sourceDir, { recursive: true });
@@ -380,11 +380,11 @@ describe('retained quality report integration', () => {
       const f = await fixture();
       if (kind === 'retrieval') writeFileSync(join(f.root, 'src/output/search-error.ts'), `${readFileSync(join(f.root, 'src/output/search-error.ts'), 'utf8')}\n// changed\n`);
       if (kind === 'model') writeFileSync(join(f.root, 'model/model.safetensors'), 'changed weights');
-      if (kind === 'corpus') writeFileSync(join(f.root, '.tmp/cache/nfcorpus-beir-1/tree/doc.md'), 'changed alpha\n');
-      if (kind === 'labels') writeFileSync(join(f.root, '.tmp/cache/nfcorpus-beir-1/labels/queries.jsonl'), '{"_id":"q1","text":"changed alpha"}\n');
+      if (kind === 'corpus') writeFileSync(join(corpusEntryDir('nfcorpus', f.root) as string, 'tree/doc.md'), 'changed alpha\n');
+      if (kind === 'labels') writeFileSync(join(corpusEntryDir('nfcorpus', f.root) as string, 'labels/queries.jsonl'), '{"_id":"q1","text":"changed alpha"}\n');
       if (kind === 'new-query') {
-        writeFileSync(join(f.root, '.tmp/cache/nfcorpus-beir-1/labels/queries.jsonl'), '{"_id":"q1","text":"alpha"}\n{"_id":"q2","text":"beta"}\n');
-        writeFileSync(join(f.root, '.tmp/cache/nfcorpus-beir-1/labels/test.tsv'), 'query-id\tcorpus-id\tscore\nq1\tdoc\t1\nq2\tdoc\t1\n');
+        writeFileSync(join(corpusEntryDir('nfcorpus', f.root) as string, 'labels/queries.jsonl'), '{"_id":"q1","text":"alpha"}\n{"_id":"q2","text":"beta"}\n');
+        writeFileSync(join(corpusEntryDir('nfcorpus', f.root) as string, 'labels/test.tsv'), 'query-id\tcorpus-id\tscore\nq1\tdoc\t1\nq2\tdoc\t1\n');
       }
       const report = buildReport(f.targetDir, { reportsDir: f.reportsDir, sittingsDir: f.sittingsDir, currentRoot: f.root });
       assert.equal(report.verdict, 'BLOCK', kind);
@@ -456,10 +456,10 @@ describe('retained quality report integration', () => {
   it('treats a missing cache as unavailable without creating it', async () => {
     const f = await fixture();
     const emptyRoot = currentRoot(false);
-    const missing = join(emptyRoot, '.tmp', 'cache', 'nfcorpus-beir-1');
+    const missing = corpusEntryDir('nfcorpus', emptyRoot) as string;
     const result = await inspectRetainedQuality({ reportsDir: f.reportsDir, sittingsDir: f.sittingsDir, baselineVersion: PACKAGE_VERSION, currentRoot: emptyRoot, expectedSource: f.retained.source });
     assert.equal(result.valid, false);
-    assert.equal(cachedCorpusPaths('nfcorpus', join(emptyRoot, '.tmp', 'cache')).tree, null);
+    assert.equal(cachedCorpusPaths('nfcorpus', emptyRoot).tree, null);
     assert.equal(existsSync(missing), false);
   });
 });

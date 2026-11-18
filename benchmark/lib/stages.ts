@@ -100,7 +100,8 @@ export function buildStages(): Stage[] {
         { id: 'store-dump', argv: ['node', 'benchmark/store-dump-ab.ts'], quiet: false, owedBy: 'store-dump', out: true },
         // Opens the vault itself; exits 78 where Obsidian is not installed, which the gate reports
         // as owed-and-unmet rather than a failure.
-        { id: 'oracle', argv: ['node', 'benchmark/steps/oracle.ts', '.tmp/cache/obsidian-hub-b11036f9'], quiet: false, owedBy: 'oracle', out: true, unavailableExit: 78 },
+        // The hub stays in this checkout's .cache, outside .cache/shared: Obsidian opens it as a vault and writes into it.
+        { id: 'oracle', argv: ['node', 'benchmark/steps/oracle.ts', '.cache/obsidian-hub-b11036f9'], quiet: false, owedBy: 'oracle', out: true, unavailableExit: 78 },
       ],
     },
     {

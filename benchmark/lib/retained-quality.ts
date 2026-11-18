@@ -129,7 +129,7 @@ function validateCurrentInputs(artifact: unknown, id: string, currentRoot: strin
       errors.push(`${id}: current model identity differs from collection`);
   }
   const corpusIdentity = (((((artifact as { variants?: unknown }).variants as { [key: string]: unknown } | null | undefined)?.['bm25-only'] as { workload_identity?: unknown } | null | undefined)?.workload_identity as { inputs?: unknown } | null | undefined)?.inputs as { corpus?: unknown } | null | undefined)?.corpus;
-  const { tree: currentCorpusPath, labels: labelsPath } = cachedCorpusPaths((artifact as { corpus?: unknown }).corpus as string, join(currentRoot, '.tmp', 'cache'));
+  const { tree: currentCorpusPath, labels: labelsPath } = cachedCorpusPaths((artifact as { corpus?: unknown }).corpus as string, currentRoot);
   if (!isObject(corpusIdentity) || !currentCorpusPath || !existsSync(currentCorpusPath)) errors.push(`${id}: current corpus source is unavailable`);
   else {
     const currentCorpus = manifestIdentity(captureFileManifest(currentCorpusPath));

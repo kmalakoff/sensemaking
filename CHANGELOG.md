@@ -2,6 +2,18 @@
 
 All notable changes to sensemaking are documented here.
 
+## [0.28.2] - 2026-11-18
+
+### Fixed
+
+- Downloaded embedding model files are checked against the hash and size Hugging Face
+  publishes for the pinned revision before they are saved. A mismatch fails with
+  `EMBED_MODEL` and that file is not saved. The first download of a model revision makes
+  one more request, to Hugging Face's file list for that revision; if it cannot be read,
+  the download fails with `EMBED_MODEL` instead of saving unchecked files. Files downloaded
+  before this version are not re-checked; delete the model's snapshot folder to download
+  and check them again.
+
 ## [0.28.1] - 2026-10-12
 
 ### Changed

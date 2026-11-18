@@ -19,7 +19,7 @@ function liveCostFixture() {
   }
   writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'fixture', version: '1.0.0' }));
   writeFileSync(join(root, 'package-lock.json'), '{}\n');
-  const logPath = join(root, '.tmp', 'live-suite-cost', 'fixture.log');
+  const logPath = join(root, '.cache', 'live-suite-cost', 'fixture.log');
   mkdirSync(join(logPath, '..'), { recursive: true });
   writeFileSync(logPath, '1 passing\n');
   const log = readFileSync(logPath);
@@ -202,7 +202,7 @@ describe('release gate independent failure collection', () => {
   it('uses a valid live-suite measurement for cost only, never as completed work', () => {
     const fixture = liveCostFixture();
     const measured = readLiveSuiteCost(fixture.root, JSON.parse(readFileSync(join(fixture.root, 'package.json'), 'utf8')).version);
-    assert.deepEqual(measured, { elapsed_ms: 1234, source: '.tmp/live-suite-cost/latest.json (fixture.log)' });
+    assert.deepEqual(measured, { elapsed_ms: 1234, source: '.cache/live-suite-cost/latest.json (fixture.log)' });
     const remaining = remainingCost([{ id: 'live-suite' }], { 'live-suite': measured?.elapsed_ms }, () => false);
     assert.deepEqual(remaining.reused_steps, []);
     assert.deepEqual(remaining.remaining_steps, [{ id: 'live-suite', estimated_ms: 1234 }]);

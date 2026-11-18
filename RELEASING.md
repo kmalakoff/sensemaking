@@ -28,7 +28,7 @@ Subagents dispatched during a release are spawned with `model: sonnet`. Reviews 
 
    SQLite grammar remains functional coverage. Portable full-corpus relevance does not replace OR-specific scores. Run `node benchmark/steps/quality.ts <nfcorpus|fever> --query-form or-bag --store sqlite --out <artifact.json>` for an explicit SQLite FTS/query-transform change or reported OR-ranking investigation. Full linked portable FEVER remains required when its relevance decision is owed; NFCorpus has no links and cannot replace it. New sittings record `quality_scope: portable-only-v1`. Old unmarked sittings keep their original legacy coverage when rendered and cannot resume into the new scope; start a clean sitting. Unknown scope is invalid, and separately collected OR-bag evidence still undergoes artifact validation.
 
-   `node benchmark/tools/live-suite-cost.ts` optionally records a provenance-bound estimate under `.tmp/live-suite-cost/`. It is not a prerequisite. Its artifact never marks the owed live suite as completed or reusable coverage. A missing, failed, stale, or mismatched artifact leaves the estimate unknown.
+   `node benchmark/tools/live-suite-cost.ts` optionally records a provenance-bound estimate under `.cache/live-suite-cost/`. It is not a prerequisite. Its artifact never marks the owed live suite as completed or reusable coverage. A missing, failed, stale, or mismatched artifact leaves the estimate unknown.
 
    The gate has no execution time limit: no step, stage, quiet wait or whole run is killed or blocked for taking long. When elapsed time exceeds the estimate, inspect the running step's log in the sitting. Each step runs as an owned job (`benchmark/lib/step-process.ts`): its whole process tree, npm installs and test runners included, sits in one process group that the job's leader releases when the command exits. A step that leaves processes running fails. Stop a run with SIGINT or SIGTERM to the gate (Ctrl-C only reaches it from an interactive terminal): the running step is recorded `cancelled`, which is never accepted and re-runs on resume, and the gate exits 130. A re-run first moves the step's earlier output and log to `attempts/<id>/<n>/`. Run a single benchmark tool with the same ownership through `node benchmark/lib/step-process.ts -- <command>`. On Windows the cleanup of descendants is not verifiable (no process groups) and is recorded as such. Indefinite waiting avoids failing a slow but correct run; it cannot promise that an unattended run finishes by morning.
 
@@ -66,7 +66,7 @@ Subagents dispatched during a release are spawned with `model: sonnet`. Reviews 
    SENSE_TEST_LMSTUDIO_URL=http://localhost:1234/v1   # same three, LM Studio side; _KEY too if it wants one
    ```
 
-2. **Read the verdict.** PASS or BLOCK, with one generated line per reason. Nothing is retyped: the report is rendered from the sitting's own JSON into `.tmp/sittings/<sitting>/release-gate.{md,json}`, beside the data, and `npm test` fails if a record and its data disagree.
+2. **Read the verdict.** PASS or BLOCK, with one generated line per reason. Nothing is retyped: the report is rendered from the sitting's own JSON into `.cache/sittings/<sitting>/release-gate.{md,json}`, beside the data, and `npm test` fails if a record and its data disagree.
 
    **The report cites no commit hash.** One reached by rebase or squash is unreachable afterwards,
    and the claim resting on it becomes uncheckable. The report records what survives instead: the

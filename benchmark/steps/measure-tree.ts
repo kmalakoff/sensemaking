@@ -8,11 +8,12 @@ import { parseArgs } from 'node:util';
 import { safeRmSync } from 'fs-remove-compat';
 import type { Stages } from '../../src/store/stages.ts';
 import type { Store } from '../../src/store/types.ts';
-import { CORPUS_NAMES, corpusPath, writeTreeConfig } from '../lib/corpus.ts';
+import { CORPUS_NAMES, corpusPath } from '../lib/corpus.ts';
 import { MEASURE_VERSION, medianAsync, medianOf, stdoutEvidence, structuredSearchEvidence, timedCli, verbsFrom, walkMd, warmFileCache } from '../lib/measure.ts';
 import { startMeasuredWatcher } from '../lib/measured-watcher.ts';
 import { waitForNativeIndex } from '../lib/native-observer.ts';
 import { writeOut } from '../lib/out.ts';
+import { writeTreeConfig } from '../lib/tree-config.ts';
 import type { FileManifestEntry } from '../lib/work-tree.ts';
 import { applyDeterministicMutation, captureFileManifest, captureMutationFiles, copyTree, deterministicMutationMtime, ephemeralWorkTree, fileManifestFingerprint, openVerified, verifyContentTransition, verifyFileManifest, verifyManifestContents, verifyRepeatFingerprint } from '../lib/work-tree.ts';
 import { executionEvidence, implementationProvenance, logicalWorkloadIdentity, manifestIdentity } from '../lib/workload-identity.ts';
@@ -167,7 +168,7 @@ if (!pkgRootArg || !treeArg) {
 const pkgRoot = resolve(pkgRootArg);
 // A known corpus name builds and caches itself (atomic, fetch-once) rather than needing a
 // pre-materialized path; anything else is treated as a directory path. Read-only from here on.
-const sourceTree = (CORPUS_NAMES.includes(treeArg as (typeof CORPUS_NAMES)[number]) ? corpusPath(treeArg) : resolve(treeArg)) as string;
+const sourceTree = (CORPUS_NAMES.includes(treeArg as (typeof CORPUS_NAMES)[number]) ? await corpusPath(treeArg) : resolve(treeArg)) as string;
 const cli = join(pkgRoot, 'bin', 'cli.js');
 
 // A run measures a private copy, never the cached corpus, which the in-place edits below would

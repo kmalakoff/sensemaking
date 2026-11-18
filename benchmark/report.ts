@@ -1,4 +1,4 @@
-// Renders a sitting's release-gate.{json,md} into the sitting directory under .tmp/sittings/, and
+// Renders a sitting's release-gate.{json,md} into the sitting directory under .cache/sittings/, and
 // with --release <version> also the record benchmark/reports/<date>-<version>-release-gate.{json,md}.
 // Recomputes classification from the sitting's own step JSONs and the earlier records every time,
 // so re-running this against the same sitting is idempotent, byte for byte. Never re-measures.
@@ -58,7 +58,7 @@ interface PersistOptions {
 type AcceptanceEntries = Record<string, { reason?: unknown; date?: unknown; evidence_fingerprint?: unknown }>;
 
 export const REPORTS_DIR = join(ROOT, 'benchmark', 'reports');
-export const SITTINGS_DIR = join(ROOT, '.tmp', 'sittings');
+export const SITTINGS_DIR = join(ROOT, '.cache', 'sittings');
 export const BENCHMARKING_MD = join(ROOT, 'BENCHMARKING.md');
 export const STORE_BENCHMARK_SUMMARY_MD = join(ROOT, 'skills', 'sense-setup', 'references', 'store-benchmarks.md');
 export const NUMBERS_START = '<!-- numbers -->';

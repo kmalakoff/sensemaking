@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { appendFileSync, cpSync, existsSync, mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, cpSync, existsSync, mkdirSync, readFileSync, renameSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import assert from 'assert';
@@ -88,12 +88,24 @@ describe('release assessment profiles', () => {
     const root = scratchDir('gate-scale-corpora');
     const lib = join(root, 'benchmark', 'lib');
     mkdirSync(lib, { recursive: true });
-    for (const name of ['corpus.ts', 'cache.ts', 'canonical-json.ts']) cpSync(join(packageRoot, 'benchmark', 'lib', name), join(lib, name));
+    for (const name of ['cache.ts', 'canonical-json.ts', 'converters.ts', 'prng.ts', 'synthetic.ts', 'tree-config.ts']) cpSync(join(packageRoot, 'benchmark', 'lib', name), join(lib, name));
     symlinkSync(join(packageRoot, 'node_modules'), join(root, 'node_modules'), 'junction');
-    // A local source fixture exercises replication without fetching the pinned Hub repository.
-    const hub = join(root, '.tmp', 'cache', 'obsidian-hub-b11036f9');
+    // A local git repository stands in for the pinned Hub repository: the copy of corpus.ts pins its commit, so
+    // the entry verifies as complete and replication runs without fetching.
+    const hub = join(root, '.cache', 'obsidian-hub-fixture');
     mkdirSync(hub, { recursive: true });
     writeFileSync(join(hub, 'fixture.md'), '# Fixture\n\nA corpus input.\n');
+    git(hub, 'init');
+    git(hub, 'config', 'user.email', 'fixture@example.com');
+    git(hub, 'config', 'user.name', 'Fixture');
+    git(hub, 'add', '.');
+    git(hub, 'commit', '-m', 'fixture');
+    const fixtureCommit = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: hub, encoding: 'utf8' }).stdout.trim();
+    const corpusSource = readFileSync(join(packageRoot, 'benchmark', 'lib', 'corpus.ts'), 'utf8');
+    const pinned = /commit: '([0-9a-f]{40})'/.exec(corpusSource)?.[1] as string;
+    assert.ok(pinned, 'the hub commit pin must be found in corpus.ts');
+    writeFileSync(join(lib, 'corpus.ts'), corpusSource.replaceAll(pinned, fixtureCommit));
+    renameSync(hub, join(root, '.cache', `obsidian-hub-${fixtureCommit.slice(0, 8)}`));
     const result = spawnSync(
       process.execPath,
       [
@@ -102,14 +114,15 @@ describe('release assessment profiles', () => {
         `
       import assert from 'node:assert';
       import { readdirSync } from 'node:fs';
+      import { dirname } from 'node:path';
       const { corpusPath, cachedCorpusPaths } = await import(process.argv[1]);
       const { CACHE_DIR } = await import(new URL('./cache.ts', process.argv[1]));
       const results = [];
       for (const input of process.argv.slice(2)) {
-        assert.equal(cachedCorpusPaths(input, CACHE_DIR).tree, null);
-        const tree = corpusPath(input);
+        assert.equal(cachedCorpusPaths(input, dirname(CACHE_DIR)).tree, null);
+        const tree = await corpusPath(input);
         assert.ok(tree, 'selected input must be handled as a corpus name: ' + input);
-        assert.equal(corpusPath(input), tree);
+        assert.equal(await corpusPath(input), tree);
         results.push({ input, markdownFiles: readdirSync(tree, { recursive: true }).filter(path => path.endsWith('.md')).length });
       }
       console.log(JSON.stringify(results));
@@ -296,7 +309,7 @@ describe('release assessment profiles', () => {
 
   it('prints an actual dry-run with the effective profile, reasons, and estimate', () => {
     const root = realGateFixture('gate-dry-run');
-    const sittingsDir = join(root, '.tmp', 'sittings');
+    const sittingsDir = join(root, '.cache', 'sittings');
     assert.equal(existsSync(sittingsDir), false);
     const result = spawnSync(process.execPath, [join(root, 'benchmark', 'gate.ts'), '--dry-run', '--profile', 'ordinary'], { cwd: root, encoding: 'utf8', timeout: 20_000 });
     assert.equal(result.status, 0, result.stderr);

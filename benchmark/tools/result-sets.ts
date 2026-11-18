@@ -9,11 +9,12 @@ import { parseArgs } from 'node:util';
 import { safeRmSync } from 'fs-remove-compat';
 import type { Config } from 'sensemaking';
 import { STORE_NAMES, SUPPORTED_CONFIG_VERSION } from 'sensemaking';
-import { CORPUS_NAMES, corpusPath, writeTreeConfig } from '../lib/corpus.ts';
+import { CORPUS_NAMES, corpusPath } from '../lib/corpus.ts';
 import { MEASURE_VERSION } from '../lib/measure.ts';
 import { writeOut } from '../lib/out.ts';
 import { overlapByStore, queryDefinitions, RESULT_SET_QUERY_IDS, RESULT_SET_SCHEMA, resultSetWorkload, validateResultSetArtifact } from '../lib/result-sets.ts';
 import { jobProblems, spawnOwned } from '../lib/step-process.ts';
+import { writeTreeConfig } from '../lib/tree-config.ts';
 import { captureFileManifest, ephemeralWorkTree, verifyManifestContents } from '../lib/work-tree.ts';
 import { identityHash, manifestIdentity } from '../lib/workload-identity.ts';
 
@@ -107,8 +108,8 @@ async function runCli(cwd: string, argv: string[]): Promise<CliResult> {
   return { status: outcome.code, signal: outcome.signal, stdout, stderr, error };
 }
 
-function sourceFor(arg: string) {
-  const source = CORPUS_NAMES.includes(arg) ? corpusPath(arg) : resolve(arg);
+async function sourceFor(arg: string) {
+  const source = CORPUS_NAMES.includes(arg) ? await corpusPath(arg) : resolve(arg);
   if (!source || !existsSync(source)) throw new Error(`corpus does not exist: ${arg}`);
   return source;
 }
@@ -138,7 +139,7 @@ function parseRows(stdout: string, expectedPaths: ReadonlySet<string>, label: st
 }
 
 async function captureCorpus(arg: string) {
-  const sourceTree = sourceFor(arg);
+  const sourceTree = await sourceFor(arg);
   const manifest = captureFileManifest(sourceTree);
   const corpus = manifestIdentity(manifest, { includeMtime: true });
   const workload = resultSetWorkload({ corpus, queries, k, config: logicalConfig });

@@ -113,10 +113,12 @@ function readMarker(dir: string, expectedFingerprint: string) {
   return marker;
 }
 
-function completedGenerations(root: string) {
+// Only generations named for this fingerprint are opened; the root is shared and holds every worktree's other generations.
+function completedGenerations(root: string, fingerprint: string) {
   if (!existsSync(root)) return [];
   const generations: string[] = [];
   for (const entry of readdirSync(root, { withFileTypes: true })) {
+    if (!entry.name.startsWith(`${fingerprint}-`)) continue;
     if (entry.isSymbolicLink() || !entry.isDirectory()) throw new Error(`quality cache completed entry is not a regular directory: ${join(root, entry.name)}`);
     generations.push(join(root, entry.name));
   }
@@ -132,7 +134,7 @@ export function prepareQualityWorkTree({ workRoot, key, source, cacheInputs, reu
   let reused: string | null = null;
   let reusedMarker: MarkerCandidate | null = null;
   if (reuseEligible) {
-    for (const dir of completedGenerations(completedRoot)) {
+    for (const dir of completedGenerations(completedRoot, cacheFingerprint)) {
       const marker = readMarker(dir, cacheFingerprint);
       if (marker) {
         reused = dir;

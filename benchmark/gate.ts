@@ -94,7 +94,7 @@ async function selection(profileName: string, changes: ReturnType<typeof release
   let reasons = profileReasons(changes.paths, changes.lastTag, profileName, changes.packageJson, changes.packageLock);
   let retainedQuality: ReturnType<typeof retainedQualitySummary> | null = null;
   if (reasons.has('quality-revalidation')) {
-    const evidence = await inspectRetainedQuality({ reportsDir: join(ROOT, 'benchmark', 'reports'), sittingsDir: join(ROOT, '.tmp', 'sittings'), baselineVersion: packageVersion(), currentRoot: ROOT });
+    const evidence = await inspectRetainedQuality({ reportsDir: join(ROOT, 'benchmark', 'reports'), sittingsDir: join(ROOT, '.cache', 'sittings'), baselineVersion: packageVersion(), currentRoot: ROOT });
     retainedQuality = retainedQualitySummary(evidence);
     reasons = resolveRetainedQualityRequirement(reasons, evidence);
   }
@@ -167,7 +167,7 @@ const today = new Date().toISOString().slice(0, 10);
 const baselineVersion = packageVersion();
 // Resuming is the default and needs no flag: a run that crashed or was interrupted picks up where
 // it stopped. Delete the directory the run prints to start clean.
-const sittingDir = join(ROOT, '.tmp', 'sittings', `${today}-${baselineVersion}-${currentTreeFingerprint()}`);
+const sittingDir = join(ROOT, '.cache', 'sittings', `${today}-${baselineVersion}-${currentTreeFingerprint()}`);
 const resuming = existsSync(join(sittingDir, 'sitting.json'));
 // Read before anything is rewritten: the owner's accepted stage reasons decide which recorded
 // failures this resume keeps rather than re-runs.

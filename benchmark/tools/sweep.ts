@@ -7,9 +7,10 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { safeRmSync } from 'fs-remove-compat';
-import type { SyntheticOptions } from '../lib/corpus.ts';
-import { syntheticPath, writeTreeConfig } from '../lib/corpus.ts';
+import { syntheticPath } from '../lib/corpus.ts';
 import { median, medianAsync, timedCli, walkMd } from '../lib/measure.ts';
+import type { SyntheticOptions } from '../lib/synthetic.ts';
+import { writeTreeConfig } from '../lib/tree-config.ts';
 import { applyDeterministicMutation, captureFileManifest, captureMutationFiles, copyTree, deterministicMutationMtime, verifyFileManifest } from '../lib/work-tree.ts';
 
 type Library = typeof import('../../src/index.ts');
@@ -89,7 +90,7 @@ function configureWork(tree: string, { embed = false }: { embed?: boolean } = {}
 // Three in-process measurements plus three wall CLI ones. peek and the touch target the
 // largest note: on the filesize dimension that note is the whole point.
 async function measurePoint(spec: SyntheticOptions) {
-  const src = syntheticPath(spec);
+  const src = await syntheticPath(spec);
   const work = workingCopy(src);
   try {
     configureWork(work, { embed: spec.embed === true });
@@ -204,7 +205,7 @@ async function columnLimitProbe(dimension: string) {
   const rows = [];
   for (const distinctFields of [1900, 2000, 2100]) {
     const spec = { notes: 100, noteTokens: 200, headingsPerNote: 4, linksPerNote: 3, distinctFields, fieldsPerNote: distinctFields, seed: 7 };
-    const src = syntheticPath(spec);
+    const src = await syntheticPath(spec);
     const work = workingCopy(src);
     let result: { status: number | null; stdout: string; stderr: string };
     try {
@@ -230,7 +231,7 @@ async function columnLimitProbe(dimension: string) {
 async function adversarialProbe() {
   console.log('\n### probes: remove-markdown adversarial crawl');
   const spec = { notes: 5, noteTokens: 50, headingsPerNote: 2, linksPerNote: 1, distinctFields: 5, fieldsPerNote: 2, seed: 11, adversarial: true };
-  const src = syntheticPath(spec);
+  const src = await syntheticPath(spec);
   const work = workingCopy(src);
   let result: { ms: number; status: number | null; signal: NodeJS.Signals | null; error: string | null; stderr: string };
   try {
@@ -252,7 +253,7 @@ async function semanticProbe() {
   const rows = [];
   for (const notes of [6000, 26000]) {
     const spec = { ...HUB, notes, embed: true };
-    const src = syntheticPath(spec);
+    const src = await syntheticPath(spec);
     const work = workingCopy(src);
     try {
       configureWork(work, { embed: true });
@@ -290,7 +291,7 @@ async function presetsProbe() {
       { name: 'raw', dir: 'b', semantic: false },
     ],
   };
-  const src = syntheticPath(spec);
+  const src = await syntheticPath(spec);
   const work = workingCopy(src);
   try {
     const t = process.hrtime.bigint();
@@ -344,7 +345,7 @@ for (const dimension of dimensions) {
   } else if (dimension === 'bulk') {
     console.log('\n### bulk (notes=26000, touch N files, time the next open)\n');
     const spec = { ...HUB, notes: 26000 };
-    const src = syntheticPath(spec);
+    const src = await syntheticPath(spec);
     const points = [];
     for (const touchFiles of [50, 500, 5000]) {
       console.error(`bulk: touch=${touchFiles}`);

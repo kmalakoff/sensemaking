@@ -2,14 +2,14 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import assert from 'assert';
 import { canonicalJson } from '../../benchmark/lib/canonical-json.ts';
-import { syntheticSpecKey } from '../../benchmark/lib/corpus.ts';
+import { syntheticSpecKey } from '../../benchmark/lib/synthetic.ts';
 import { executionEvidence, identityHash, implementationProvenance, logicalWorkloadIdentity, manifestIdentity } from '../../benchmark/lib/workload-identity.ts';
 import { packageRoot, scratchDir } from '../lib/tree.ts';
 
 describe('benchmark workload identity', () => {
-  it('preserves the canonical encoding and existing synthetic cache key', () => {
+  it('pins the canonical encoding and the synthetic cache key, which includes the generator revision', () => {
     assert.equal(canonicalJson({ z: [{ b: 2, a: 1 }], a: 'x' }), '{"a":"x","z":[{"a":1,"b":2}]}');
-    assert.equal(syntheticSpecKey({ notes: 2, noteTokens: 3, seed: 7, presets: [{ name: 'z', dir: 'z', semantic: false }] }), 'synthetic-n2-t3-h8-l5-f30-fpn8-s7-9d9aae9e');
+    assert.equal(syntheticSpecKey({ notes: 2, noteTokens: 3, seed: 7, presets: [{ name: 'z', dir: 'z', semantic: false }] }), 'synthetic-n2-t3-h8-l5-f30-fpn8-s7-d17d6ef02806');
   });
 
   it('separates corpus bytes from mtimes and includes mtimes only for rows that observe them', () => {

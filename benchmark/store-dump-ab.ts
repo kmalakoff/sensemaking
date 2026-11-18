@@ -1,15 +1,15 @@
 #!/usr/bin/env node
 // The write-path gate, run by the pipeline rather than by hand: capture the last release and the
 // working tree, then diff. The old build is the npm install compare-versions already caches under
-// .tmp/cache, so nothing is checked out and nothing is built twice.
+// .cache, so nothing is checked out and nothing is built twice.
 // usage: node benchmark/store-dump-ab.ts [--out <file>]
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { safeRmSync } from 'fs-remove-compat';
-import { cached } from './lib/cache.ts';
+import { cachedRelease } from './lib/cache.ts';
 import { writeOut } from './lib/out.ts';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -22,11 +22,7 @@ const {
 const version = (JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { version: unknown }).version;
 
 // Same cache key compare-versions writes, so a sitting that ran compare has already paid for this.
-const installed = cached(`sensemaking-${version}`, (staging) => {
-  writeFileSync(join(staging, 'package.json'), '{"name":"bench","private":true}');
-  const r = spawnSync('npm', ['install', `sensemaking@${version}`, '--ignore-scripts', '--no-audit', '--no-fund', '--prefix', staging], { cwd: staging, encoding: 'utf8' });
-  if (r.status !== 0) throw new Error(`npm install sensemaking@${version} failed:\n${r.stderr}`);
-});
+const installed = await cachedRelease(version);
 const oldPkg = join(installed, 'node_modules', 'sensemaking');
 if (!existsSync(join(oldPkg, 'dist', 'esm', 'index.js'))) throw new Error(`${oldPkg} carries no built dist to capture`);
 

@@ -30,7 +30,7 @@ import { directoryIdentity, identityHash, pathSetIdentity } from './workload-ide
 
 export const LIVE_SUITE_ARGV = ['node', 'node_modules/ts-dev-stack/bin/cli.js', 'test:node', 'test/integration/live.test.ts', '--no-timeouts'];
 export const LIVE_SUITE_ENV = { SENSE_TEST_ENV: 'local-release' };
-export const LIVE_SUITE_COST_ARTIFACT = '.tmp/live-suite-cost/latest.json';
+export const LIVE_SUITE_COST_ARTIFACT = '.cache/live-suite-cost/latest.json';
 
 export function liveSuiteRuntime() {
   return { node: process.version, platform: platform(), arch: arch() };
@@ -79,7 +79,7 @@ export function readLiveSuiteCost(root: string, packageVersion: unknown): { elap
     )
       return null;
     if (!(artifact as { log?: { path?: unknown } | null }).log?.path || !/^[^/\\]+$/.test((artifact as { log: { path?: unknown } }).log.path as string)) return null;
-    const logPath = join(root, '.tmp', 'live-suite-cost', (artifact as { log: { path?: unknown } }).log.path as string);
+    const logPath = join(root, '.cache', 'live-suite-cost', (artifact as { log: { path?: unknown } }).log.path as string);
     if (!existsSync(logPath)) return null;
     const logBytes = readFileSync(logPath);
     if ((artifact as { log: { bytes?: unknown } }).log.bytes !== logBytes.length || (artifact as { log: { sha256?: unknown } }).log.sha256 !== createHash('sha256').update(logBytes).digest('hex')) return null;
