@@ -35,7 +35,7 @@ sense sql 'SELECT path FROM frontmatter WHERE "plugin-id" = ? LIMIT 50' example
 
 ## Shared query patterns
 
-```sql
+```sql portable
 SELECT COUNT(*) AS notes FROM frontmatter;
 
 SELECT path, title
@@ -80,7 +80,7 @@ A saved SQL query written against `scope` can run under different presets withou
 
 Bound recursive walks. An unrestricted walk on a dense graph can enumerate paths faster than it eliminates them.
 
-```sql
+```sql portable
 WITH RECURSIVE hop(path, d) AS (
   SELECT ?, 0
   UNION
@@ -106,7 +106,7 @@ YAML strings remain text, whole numbers and booleans remain integer-like values,
 
 A malformed frontmatter block produces `_parse_error` and no recovered field values. This query lists the files to fix:
 
-```sql
+```sql portable
 SELECT path, _parse_error
 FROM frontmatter
 WHERE _parse_error IS NOT NULL

@@ -11,7 +11,7 @@ import { nativeQueryTerms, orderedBm25Sql } from './ordered-bm25.ts';
 const FIELDS = ['title', 'summary', 'text'] as const;
 type Field = (typeof FIELDS)[number];
 // Mirrors sqlite's bm25(content, 10.0, 5.0, 1.0, ...) column-weight intent; DuckDB's match_bm25 has no
-// field_weights argument (verified 1.4.5 through 1.5.6), so each field is scored separately and combined here.
+// field_weights argument before 2.0 (verified 1.4.5 through 1.5.6; 2.0 adds one, unused while 1.5 is in range), so each field is scored separately and combined here.
 const FIELD_WEIGHT: Record<Field, number> = { title: 10, summary: 5, text: 1 };
 
 // FTS5 operator syntax (sqlite.org/fts5.html sec. 3) that words/substrings below would otherwise silently

@@ -52,7 +52,7 @@ export const ENGINE_CHECK_QUERIES: ReadonlyArray<{ terms: string; paths: string[
 
 // What to do when an npm-installed engine fails: get a version from the tested range.
 export function npmRemedy(pkg: string, range: string): string {
-  return `run \`npm install ${pkg}@${range}\` for a tested version (tested ${range})`;
+  return `run \`npm install "${pkg}@${range}"\` for a tested version (tested ${range})`;
 }
 
 // Runs the store's real lexical query over ENGINE_CHECK_DOCS; any thrown error or wrong result fails the engine.

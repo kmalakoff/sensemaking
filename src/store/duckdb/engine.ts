@@ -28,7 +28,8 @@ export const DUCKDB_FTS_BUILDERS: DuckdbFtsBuilders = {
   conjunctiveGate: () => `fts_main_content.match_bm25(content."path", ?, conjunctive := true) IS NOT NULL`,
 };
 
-// Empty: DuckDB 1.4.5, 1.5.0 and 1.5.6 produce identical macros, tokens and scores (probed 2026-10-11).
+// Empty: DuckDB 1.4.5 through 1.5.6 produce identical macros, tokens and scores (probed 2026-10-11). 2.0.0's BM25F scores each field against its own
+// average length, so scores differ, but these builders run unchanged and pass the engine check (probed 2026-11-19).
 export const DUCKDB_PATCHES: readonly EnginePatch<DuckdbFtsBuilders>[] = [];
 
 export async function duckdbFts(): Promise<DuckdbFtsBuilders> {

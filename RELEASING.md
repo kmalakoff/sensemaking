@@ -141,9 +141,11 @@ Subagents dispatched during a release are spawned with `model: sonnet`. Reviews 
    node -p "JSON.stringify({ node: process.version, sqlite: process.versions.sqlite ?? null })"
    ```
 
-   A newer upstream version starts a review; it is not a new performance claim. For DuckDB and
-   Turso, `ncu -u -m` moves `devDependencies`, and the optional-peer contract test fails until
-   `peerDependencies` matches it after the store suites pass. A version whose behaviour differs
+   A newer upstream version starts a review; it is not a new performance claim. `ncu -u -m` moves
+   Turso's `devDependencies`, and the optional-peer contract test fails until `peerDependencies`
+   matches it after the store suites pass. DuckDB is in `.ncurc.json`'s reject, because ncu rewrites
+   its range to one that drops 1.x: it moves by `npm view @duckdb/node-api version` above, and a
+   tested engine line gets its own `~X.Y.Z-r.1` term in both `devDependencies` and `peerDependencies`. A version whose behaviour differs
    gets a patch entry in its store's `engine.ts`, never a pin. Read the official release notes and current docs, then test the APIs and
    experimental features Sense uses. For Turso this includes index methods, Tantivy behavior,
    transactions, connection lifetime, sync, encryption, and concurrent-write support. For DuckDB

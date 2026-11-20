@@ -21,7 +21,7 @@ export interface NativeModule<T> {
 }
 
 // install-module-linked is small, but a target native package can be large (@duckdb/node-api's
-// ~110MB), so it is required lazily inside the gated branch below, not for every store/index.ts load.
+// 60-100MB depending on platform), so it is required lazily inside the gated branch below, not for every store/index.ts load.
 const _require = typeof require === 'undefined' ? Module.createRequire(import.meta.url) : require;
 const _dirname = dirname(typeof __filename !== 'undefined' ? __filename : fileURLToPath(import.meta.url));
 
@@ -133,7 +133,7 @@ export async function loadOrInstall<T>(descriptor: NativeDescriptor, nodeModules
   } catch (installErr) {
     throw new SenseError(
       'STORE_DEPENDENCY_MISSING',
-      `store "${descriptor.store}" needs ${spec}, and installing it automatically failed (${(installErr as Error).message}); this can happen offline, in a sandboxed environment, or when node_modules is read-only or owned by another user (e.g. under a global install) -- run \`npm install ${spec}\` yourself and try again`
+      `store "${descriptor.store}" needs ${spec}, and installing it automatically failed (${(installErr as Error).message}); this can happen offline, in a sandboxed environment, or when node_modules is read-only or owned by another user (e.g. under a global install) -- run \`npm install "${spec}"\` yourself and try again`
     );
   }
   try {
@@ -142,6 +142,6 @@ export async function loadOrInstall<T>(descriptor: NativeDescriptor, nodeModules
     reportVersion(descriptor, version);
     return { api, version };
   } catch (loadErr) {
-    throw new SenseError('STORE_DEPENDENCY_MISSING', `store "${descriptor.store}" installed ${spec} but it could not be loaded (${(loadErr as Error).message}); it may not be available for this platform (${process.platform}-${process.arch}) -- run \`npm install ${spec}\` to see the underlying error`);
+    throw new SenseError('STORE_DEPENDENCY_MISSING', `store "${descriptor.store}" installed ${spec} but it could not be loaded (${(loadErr as Error).message}); it may not be available for this platform (${process.platform}-${process.arch}) -- run \`npm install "${spec}"\` to see the underlying error`);
   }
 }
