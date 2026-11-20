@@ -2,14 +2,22 @@ import assert from 'node:assert';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runCli } from '../lib/cli.ts';
+import { runFloorCli } from '../lib/duckdb-floor.ts';
 import { tmpTree, writeNote } from '../lib/tree.ts';
 
 // The two worked translations in skills/sense-bases/EXAMPLES.md, run against a fixture so the
-// skill's SQL cannot rot away from the schema it documents.
+// skill's SQL cannot rot away from the schema it documents. B also runs on duckdb, on DuckDB 2 and at the declared floor (network, duckdb-floor.ts).
+// A is SQLite SQL: on duckdb, `json_each` yields JSON values, so comparing them to a text literal fails on both DuckDB versions.
 
-function writeConfig(baseDir: string): void {
-  writeFileSync(join(baseDir, 'sense.config.json'), JSON.stringify({ version: 4, presets: { default: { include: ['**/*.md'] } }, queries: {} }));
+function writeConfig(baseDir: string, store: string): void {
+  writeFileSync(join(baseDir, 'sense.config.json'), JSON.stringify({ version: 4, store, presets: { default: { include: ['**/*.md'] } }, queries: {} }));
 }
+
+const VARIANTS: Array<{ name: string; store: string; run: (args: string[], opts: { cwd: string }) => ReturnType<typeof runCli> | Promise<ReturnType<typeof runCli>> }> = [
+  { name: 'sqlite', store: 'sqlite', run: runCli },
+  { name: 'duckdb', store: 'duckdb', run: runCli },
+  { name: 'duckdb at the floor', store: 'duckdb', run: runFloorCli },
+];
 
 describe('sense-bases worked examples', () => {
   it('A: filtered, sorted view over link-list frontmatter and basename()', () => {
@@ -21,7 +29,7 @@ describe('sense-bases worked examples', () => {
     // rating written as an explicit empty list: stored '[]', isEmpty() true.
     writeNote(baseDir, 'Alien.md', { frontmatter: { categories: ['[[Movies]]'], year: 1979, scoreImdb: 8.5, rating: [] } });
     writeNote(baseDir, 'Book.md', { frontmatter: { categories: ['[[Books]]'] } });
-    writeConfig(baseDir);
+    writeConfig(baseDir, 'sqlite');
     const sql = `SELECT basename(f.path, '.md') AS name, f.year FROM frontmatter f
       WHERE EXISTS (SELECT 1 FROM json_each(f.categories) WHERE value = '[[Movies]]')
         AND instr(basename(f.path), 'Template') = 0
@@ -35,15 +43,18 @@ describe('sense-bases worked examples', () => {
       'template and rated notes excluded, sorted by score'
     );
   });
+});
 
-  it('B: the this-relative Related pattern with one bound path', () => {
-    const baseDir = tmpTree();
-    writeNote(baseDir, 'a.md', { body: 'Links [[x]] [[y]] [[z]] [[w]]' });
-    writeNote(baseDir, 'b.md', { body: 'Shares [[x]] [[y]] [[z]]' });
-    writeNote(baseDir, 'c.md', { body: 'Only [[x]]' });
-    for (const n of ['x', 'y', 'z', 'w']) writeNote(baseDir, `${n}.md`, { body: 'leaf' });
-    writeConfig(baseDir);
-    const sql = `WITH me AS (SELECT ? AS p),
+for (const { name, store, run } of VARIANTS)
+  describe(`sense-bases worked example B on ${name}`, () => {
+    it('B: the this-relative Related pattern with one bound path', async () => {
+      const baseDir = tmpTree();
+      writeNote(baseDir, 'a.md', { body: 'Links [[x]] [[y]] [[z]] [[w]]' });
+      writeNote(baseDir, 'b.md', { body: 'Shares [[x]] [[y]] [[z]]' });
+      writeNote(baseDir, 'c.md', { body: 'Only [[x]]' });
+      for (const n of ['x', 'y', 'z', 'w']) writeNote(baseDir, `${n}.md`, { body: 'leaf' });
+      writeConfig(baseDir, store);
+      const sql = `WITH me AS (SELECT ? AS p),
       mine AS (SELECT DISTINCT dst FROM links, me WHERE src = me.p AND dst IS NOT NULL),
       scored AS (
         SELECT f.path,
@@ -55,17 +66,17 @@ describe('sense-bases worked examples', () => {
       SELECT path, overlap, shared_links FROM scored
       WHERE overlap > 2 OR links_to_me OR linked_by_me
       ORDER BY overlap DESC LIMIT 20`;
-    const result = runCli(['sql', sql, 'a.md', '--format', 'json'], { cwd: baseDir });
-    assert.equal(result.status, 0, result.stderr);
-    const rows = JSON.parse(result.stdout) as Array<{ path: string; overlap: number; shared_links: string | null }>;
-    assert.equal(rows[0].path, 'b.md');
-    assert.equal(rows[0].overlap, 3);
-    assert.deepEqual(rows[0].shared_links?.split(',').sort(), ['x.md', 'y.md', 'z.md']);
-    const paths = rows.map((r) => r.path);
-    assert.ok(!paths.includes('c.md'), 'overlap 1 with no direct link stays out');
-    assert.ok(
-      ['x.md', 'y.md', 'z.md', 'w.md'].every((p) => paths.includes(p)),
-      'targets the note links to qualify at zero overlap'
-    );
+      const result = await run(['sql', sql, 'a.md', '--format', 'json'], { cwd: baseDir });
+      assert.equal(result.status, 0, result.stderr);
+      const rows = JSON.parse(result.stdout) as Array<{ path: string; overlap: number; shared_links: string | null }>;
+      assert.equal(rows[0].path, 'b.md');
+      assert.equal(rows[0].overlap, 3);
+      assert.deepEqual(rows[0].shared_links?.split(',').sort(), ['x.md', 'y.md', 'z.md']);
+      const paths = rows.map((r) => r.path);
+      assert.ok(!paths.includes('c.md'), 'overlap 1 with no direct link stays out');
+      assert.ok(
+        ['x.md', 'y.md', 'z.md', 'w.md'].every((p) => paths.includes(p)),
+        'targets the note links to qualify at zero overlap'
+      );
+    });
   });
-});

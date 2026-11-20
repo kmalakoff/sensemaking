@@ -79,8 +79,8 @@ async function connect(dbPath: string, _cfg: ResolvedConfig, options: { existing
   let duckdb: DuckDBConnection;
   let instance: DuckDBInstance | undefined;
   try {
-    // On-disk files default to an older storage format for cross-version compatibility, which rejects VARIANT columns ("VARIANT
-    // columns are not supported in storage versions prior to v1.5.0"); this store's dynamic frontmatter columns need VARIANT (reconcile.ts), so the floor is pinned explicitly.
+    // The default storage format rejects the VARIANT columns reconcile.ts needs, and DuckDB 2's v69 would leave the file unopenable by 1.5.
+    // v1.5.0 supports VARIANT and keeps the file readable by both versions, which the engine-identity rebuild relies on.
     instance = await DuckDBInstance.create(dbPath, options.observational ? { access_mode: 'READ_ONLY' } : { storage_compatibility_version: 'v1.5.0' });
     duckdb = await instance.connect();
   } catch (err) {

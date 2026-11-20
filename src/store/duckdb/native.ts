@@ -10,7 +10,7 @@ let duckdbNativePromise: Promise<NativeModule<DuckdbApi>> | undefined;
 // the pre-install "not found" miss to any new bare-specifier lookup of the same path, so caching the resolved module here means only the first caller ever resolves it.
 export function duckdbNative(): Promise<NativeModule<DuckdbApi>> {
   if (!duckdbNativePromise) {
-    const descriptor: NativeDescriptor = { store: 'duckdb', pkg: DUCKDB_PACKAGE, sizeHint: '~110MB', range: peerRange(DUCKDB_PACKAGE) };
+    const descriptor: NativeDescriptor = { store: 'duckdb', pkg: DUCKDB_PACKAGE, sizeHint: '60-100MB', range: peerRange(DUCKDB_PACKAGE) };
     duckdbNativePromise = loadOrInstall<DuckdbApi>(descriptor, packageNodeModules());
   }
   return duckdbNativePromise;

@@ -17,7 +17,10 @@ Sense's [store benchmark summary](../store-benchmarks.md) measures the current a
 ## Current Sense adapter boundaries
 
 - DuckDB support is experimental.
-- The first open installs the newest `@duckdb/node-api` in the range sensemaking's `peerDependencies` declares, a native download of about 110 MB. An already-installed version is used, and one outside that range is reported. A build after the version changes rebuilds the cache.
+- The first open installs the newest `@duckdb/node-api` in the range sensemaking's `peerDependencies` declares, a native install of about 60 to 100 MB depending on platform. An already-installed version is used, and one outside that range is reported. A build after the version changes rebuilds the cache.
+- DuckDB 1.5 and 2.0 are both tested through the CLI suite, and the cache stays readable by DuckDB 1.5.
+- Each DuckDB version downloads its `fts` extension into `~/.duckdb/extensions/<version>/` on its first index build.
+- Write lambdas as `lambda x: ...`; the `x -> ...` form fails under DuckDB 2.
 - Under DuckDB's [concurrency model](https://duckdb.org/docs/current/connect/concurrency), Sense opens an existing cache for no-build observation in read-only mode, so several independent reader processes can coexist. A build-enabled command or watcher opens it read-write and excludes every other process until it closes. Contenders wait within Sense's bounded lock budget, then fail with `STORE_BUSY`. This cross-process rule does not promise writer/reader coexistence or unrestricted sharing by independently configured DuckDB instances in one process.
 - `sense search` accepts bare words and quoted phrases. It rejects FTS5 boolean, prefix, `NEAR`, initial-token, grouping, and column-filter syntax.
 - SQLite's raw `MATCH`, `snippet()`, and `bm25()` queries do not port.

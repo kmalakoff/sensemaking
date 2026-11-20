@@ -51,7 +51,7 @@ describe('checkEngine', () => {
       (err: unknown) => {
         assert.ok(err instanceof SenseError);
         assert.equal(err.code, 'STORE_CAPABILITY_MISSING');
-        assert.equal(err.message, 'store "fixture" cannot use fixture-pkg@1.0.0: searching "run" returned [b-text.md, z-title.md], expected [z-title.md, b-text.md]; run `npm install fixture-pkg@^1.0.0` for a tested version (tested ^1.0.0)');
+        assert.equal(err.message, 'store "fixture" cannot use fixture-pkg@1.0.0: searching "run" returned [b-text.md, z-title.md], expected [z-title.md, b-text.md]; run `npm install "fixture-pkg@^1.0.0"` for a tested version (tested ^1.0.0)');
         return true;
       }
     );

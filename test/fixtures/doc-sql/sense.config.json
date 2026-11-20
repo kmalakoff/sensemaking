@@ -1,0 +1,1 @@
+{ "version": 6, "store": "duckdb", "presets": { "default": { "include": ["*.md"] } }, "queries": {} }

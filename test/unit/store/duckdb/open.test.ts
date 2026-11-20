@@ -26,6 +26,19 @@ describe('openDuckdb', () => {
     await result.store.close();
   });
 
+  // Files stay readable by DuckDB 1.5 only while every database is created with storage_compatibility_version 'v1.5.0'; duckdb-engine-versions.test.ts proves the reopen, this guards the setting.
+  it('creates the file at storage version v1.5.0', async () => {
+    const baseDir = tmpTree();
+    writeNote(baseDir, 'a.md', { frontmatter: { title: 'A' } });
+    const result = await duckdbTree(baseDir);
+    try {
+      const stmt = await result.store.prepare('SELECT tags::VARCHAR AS tags FROM duckdb_databases() WHERE database_name = current_database()');
+      assert.equal(((await stmt.get()) as { tags: string }).tags, '{storage_version=v1.5.0+}');
+    } finally {
+      await result.store.close();
+    }
+  });
+
   it('a second open on an unchanged tree reparses nothing', async () => {
     const baseDir = tmpTree();
     writeNote(baseDir, 'a.md', { frontmatter: { title: 'A' } });

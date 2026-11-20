@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import assert from 'assert';
 import cr from 'cr';
@@ -13,6 +13,8 @@ import { identityHash } from '../../benchmark/lib/workload-identity.ts';
 import { failedStageReasons, renderStoreBenchmarkSummary } from '../../benchmark/report.ts';
 import { COMMANDS } from '../../dist/esm/cli/index.js';
 import { KNOWN_EMBED_KEYS } from '../../src/config/index.ts';
+import { runCli } from '../lib/cli.ts';
+import { runFloorCli } from '../lib/duckdb-floor.ts';
 import { packageRoot, scratchDir } from '../lib/tree.ts';
 
 // Published surfaces drift silently: nothing fails when the README stops describing what
@@ -752,4 +754,47 @@ describe('benchmark release-gate: generated report re-render is idempotent', () 
       assert.equal(`${wrapper[0]}${renderMarkdown(report)}`, trackedMd, `${mdFile} does not render from its saved JSON`);
     }
   });
+});
+
+// A fence tagged `sql duckdb` (DuckDB only) or `sql portable` (written to run on every store) is a claim that its statements run. Both kinds run here on the duckdb store,
+// indexed once by DuckDB 2 and once by the declared floor (network, duckdb-floor.ts); the portable ones are not run on the other stores.
+const SQL_DOC_FILES = [['README.md'], ['skills', 'sense', 'references', 'sql.md'], ['skills', 'sense', 'references', 'stores', 'duckdb.md']];
+const SQL_FENCE = /^```sql (duckdb|portable)\n([\s\S]*?)^```/gm;
+
+function taggedStatements(): Array<{ tag: string; file: string; sql: string }> {
+  return SQL_DOC_FILES.flatMap((parts) =>
+    [...read(packageRoot, ...parts).matchAll(SQL_FENCE)].flatMap((match) =>
+      match[2]
+        .split(/;[ \t]*(?:\n|$)/)
+        .map((sql) => sql.trim())
+        .filter((sql) => sql.length > 0)
+        .map((sql) => ({ tag: match[1], file: parts.join('/'), sql }))
+    )
+  );
+}
+
+describe('documented SQL runs on the duckdb store', () => {
+  const statements = taggedStatements();
+
+  it('the docs tag statements of both kinds', () => {
+    assert.ok(statements.filter((s) => s.tag === 'portable').length >= 5, 'sql.md tags its portable statements');
+    assert.ok(statements.filter((s) => s.tag === 'duckdb').length >= 1, 'duckdb.md tags its duckdb statement');
+  });
+
+  for (const [name, run] of [
+    ['DuckDB 2', async (args: string[], opts: { cwd: string }) => runCli(args, opts)],
+    ['the declared floor', runFloorCli],
+  ] as const) {
+    it(`every tagged statement exits 0 on ${name}`, async () => {
+      const dir = scratchDir('doc-sql');
+      const fixture = join(packageRoot, 'test', 'fixtures', 'doc-sql');
+      for (const entry of readdirSync(fixture)) cpSync(join(fixture, entry), join(dir, entry));
+      for (const { tag, file, sql } of statements) {
+        const binds = [...sql.matchAll(/\?/g)].map(() => (tag === 'duckdb' ? '2026-02-01T00:00:00Z' : 'alpha.md'));
+        const result = await run(['sql', sql, ...binds, '--format', 'json'], { cwd: dir });
+        assert.equal(result.status, 0, `${file}: ${sql}\n${result.stderr}`);
+        assert.ok(Array.isArray(JSON.parse(result.stdout)), `${file}: ${sql} returned no row list`);
+      }
+    });
+  }
 });

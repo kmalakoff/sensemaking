@@ -50,7 +50,7 @@ describe('loadOrInstall', () => {
         assert.ok(err instanceof SenseError);
         assert.equal(err.code, 'STORE_DEPENDENCY_MISSING');
         assert.ok(err.message.includes(`${DESCRIPTOR.pkg}@${DESCRIPTOR.range}, and installing it automatically failed`));
-        assert.ok(err.message.includes(`npm install ${DESCRIPTOR.pkg}@${DESCRIPTOR.range}`));
+        assert.ok(err.message.includes(`npm install "${DESCRIPTOR.pkg}@${DESCRIPTOR.range}"`));
         return true;
       }
     );
@@ -73,7 +73,7 @@ describe('loadOrInstall', () => {
           assert.equal(err.code, 'STORE_DEPENDENCY_MISSING');
           assert.ok(err.message.includes(`${DESCRIPTOR.pkg}@${DESCRIPTOR.range}, and installing it automatically failed`));
           assert.match(err.message, /read-only or owned by another user/);
-          assert.ok(err.message.includes(`npm install ${DESCRIPTOR.pkg}@${DESCRIPTOR.range}`));
+          assert.ok(err.message.includes(`npm install "${DESCRIPTOR.pkg}@${DESCRIPTOR.range}"`));
           return true;
         }
       );
@@ -143,7 +143,8 @@ describe('loadOrInstall', () => {
   });
 });
 
-// The published optional-peer contract tracks what the suite installs: `ncu -u -m` moves devDependencies, and this fails until peerDependencies follow.
+// The published optional-peer contract tracks what the suite installs: `ncu -u -m` moves Turso's devDependencies, and this fails until peerDependencies follow.
+// DuckDB's range is held from ncu and edited by hand in both places.
 describe('optional native peer contract', () => {
   const manifest = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8')) as {
     devDependencies: Record<string, string>;
