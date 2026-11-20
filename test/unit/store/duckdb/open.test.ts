@@ -3,7 +3,8 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { search } from 'sensemaking';
 import { STORE_DIMS } from '../../../../src/embed/types.ts';
-import { duckdbOpenDialect } from '../../../../src/store/duckdb/open.ts';
+import { checkRegisteredFunctions, checkVariantColumns, checkVectorScan, duckdbOpenDialect } from '../../../../src/store/duckdb/open.ts';
+import { ENGINE_CHECK_FUNCTIONS, ENGINE_CHECK_VARIANT_COLUMNS, ENGINE_CHECK_VARIANT_ROWS, ENGINE_CHECK_VARIANT_UPDATE, ENGINE_CHECK_VECTORS } from '../../../../src/store/engine.ts';
 import { writeModel } from '../../../lib/model.ts';
 import { NOT_LOCKED_MESSAGES } from '../../../lib/stores.ts';
 import { openConfig, packageRoot, tmpTree, writeNote } from '../../../lib/tree.ts';
@@ -148,5 +149,49 @@ describe('duckdb engine', () => {
 
   it('passes the shared behaviour check on the installed engine', async () => {
     await duckdbOpenDialect.checkEngine?.();
+  });
+});
+
+// Each binding check runs against the real engine in memory; a wrong expectation must fail it, or the check would pass on anything.
+describe('duckdb engine check: binding surface', () => {
+  async function withEngine<T>(fn: (handle: Awaited<ReturnType<typeof duckdbOpenDialect.connect>>['handle'], conn: Awaited<ReturnType<typeof duckdbOpenDialect.connect>>['conn']) => Promise<T>): Promise<T> {
+    const { handle, conn } = await duckdbOpenDialect.connect(':memory:', {} as never, { existingOnly: false, observational: false });
+    try {
+      await conn.exec('CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)');
+      await duckdbOpenDialect.ensureCoreSchema(handle, conn);
+      return await fn(handle, conn);
+    } finally {
+      await duckdbOpenDialect.close(handle);
+    }
+  }
+
+  it('VARIANT cells read back with the writer type tags, and an update keeps the other cells', async () => {
+    assert.equal(await withEngine((handle, conn) => checkVariantColumns(handle, conn)), null);
+  });
+
+  it('a wrong expected VARIANT type tag is reported with the cell and both types', async () => {
+    const columns = ENGINE_CHECK_VARIANT_COLUMNS.map((c) => (c.column === 'engine_text' ? { ...c, type: 'DOUBLE' as const } : c));
+    const mismatch = await withEngine((handle, conn) => checkVariantColumns(handle, conn, { columns, rows: ENGINE_CHECK_VARIANT_ROWS, update: ENGINE_CHECK_VARIANT_UPDATE }));
+    assert.match(mismatch ?? '', /a\.md engine_text read back as plain text .*expected plain text \(DOUBLE\)/);
+  });
+
+  it('vectors rank by native cosine in the reported order and rounding', async () => {
+    assert.equal(await withEngine((handle, conn) => checkVectorScan(handle, conn)), null);
+  });
+
+  it('a wrong expected vector order is reported', async () => {
+    const expected = [...ENGINE_CHECK_VECTORS.expected].reverse();
+    const mismatch = await withEngine((handle, conn) => checkVectorScan(handle, conn, { ...ENGINE_CHECK_VECTORS, expected }));
+    assert.match(mismatch ?? '', /\[a\.md:1, c\.md:0\.894, b\.md:0\], expected \[b\.md:0, c\.md:0\.894, a\.md:1\]/);
+  });
+
+  it('the registered functions return their documented results', async () => {
+    assert.equal(await withEngine((handle) => checkRegisteredFunctions(handle)), null);
+  });
+
+  it('a wrong expected function result is reported with its statement', async () => {
+    const fixture = ENGINE_CHECK_FUNCTIONS.map((f, i) => (i === 1 ? { ...f, expected: 'a.md' } : f));
+    const mismatch = await withEngine((handle) => checkRegisteredFunctions(handle, fixture));
+    assert.match(mismatch ?? '', /"a" for SELECT basename\('notes\/a\.md', '\.md'\) AS v, expected "a\.md"/);
   });
 });
