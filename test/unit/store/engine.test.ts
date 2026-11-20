@@ -1,6 +1,6 @@
 import assert from 'assert';
 import { SenseError } from '../../../src/errors.ts';
-import { checkEngine, ENGINE_CHECK_QUERIES, type EnginePatch, npmRemedy, selectBuilders } from '../../../src/store/engine.ts';
+import { checkEngine, checkEngineStep, ENGINE_CHECK_QUERIES, type EnginePatch, npmRemedy, selectBuilders } from '../../../src/store/engine.ts';
 
 interface Builders {
   a: () => string;
@@ -64,6 +64,39 @@ describe('checkEngine', () => {
           throw new Error('no such function: fts_match');
         }),
       /store "fixture" cannot use fixture-pkg@unknown: searching "run" failed \(no such function: fts_match\); fixture remedy$/
+    );
+  });
+});
+
+describe('checkEngineStep', () => {
+  it('passes a step that reports no mismatch', async () => {
+    await checkEngineStep('fixture', 'fixture-pkg@1.0.0', 'fixture remedy', 'a step', async () => null);
+  });
+
+  it('names the step and the mismatch when a step reports one', async () => {
+    await assert.rejects(
+      () => checkEngineStep('fixture', 'fixture-pkg@1.0.0', 'fixture remedy', 'writing vectors', async () => '[b], expected [a]'),
+      (err: unknown) => {
+        assert.ok(err instanceof SenseError);
+        assert.equal(err.code, 'STORE_CAPABILITY_MISSING');
+        assert.equal(err.message, 'store "fixture" cannot use fixture-pkg@1.0.0: writing vectors returned [b], expected [a]; fixture remedy');
+        return true;
+      }
+    );
+  });
+
+  it('reports a step that throws as a failed check', async () => {
+    await assert.rejects(
+      () =>
+        checkEngineStep('fixture', 'fixture-pkg@1.0.0', 'fixture remedy', 'writing vectors', async () => {
+          throw new Error('appender closed');
+        }),
+      (err: unknown) => {
+        assert.ok(err instanceof SenseError);
+        assert.match(err.message, /store "fixture" cannot use fixture-pkg@1.0.0: writing vectors failed \(appender closed\); fixture remedy$/);
+        assert.equal((err.cause as Error).message, 'appender closed');
+        return true;
+      }
     );
   });
 });
