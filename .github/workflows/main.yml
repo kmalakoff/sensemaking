@@ -15,8 +15,6 @@ jobs:
       SENSE_TEST_ENV: ci
     steps:
       - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
       - uses: actions/setup-node@v7
         with:
           node-version: 26
@@ -24,7 +22,5 @@ jobs:
       - run: git config --global user.email "actions@users.noreply.github.com"
       - run: npm ci
       - run: npm run prepublishOnly
-      - run: git diff --no-ext-diff --no-color
-        if: always()
       - run: npm run test
       - run: npm run test:engines
