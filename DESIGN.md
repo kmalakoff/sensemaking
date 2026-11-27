@@ -186,8 +186,9 @@ Floating-point addition still needs a specified order; DuckDB documents that
 DuckDB 1.4.5 (FTS revision `3937662`), 1.5.0 and 1.5.6 (revision `6814ec9`)
 generate byte-identical `match_bm25` and `tokenize` macros and return identical
 tokens and scores; `match_bm25` itself tokenizes through `tokenize`, so the adapter
-calls the same macro. DuckDB 2.0.0 (revision `2266e67d01`) tokenizes identically, but
-its `match_bm25` is BM25F: each field is normalized by that field's own average length,
+calls the same macro. DuckDB 2.0.0 (revision `2266e67d01`) and 2.0.1 (revision `623ee80e0b`)
+return the same non-empty tokens; they also emit empty strings around punctuation, which the
+adapter's `raw_term <> ''` drops. Their `match_bm25` is BM25F: each field is normalized by that field's own average length,
 so per-field scores fall 8 to 10 percent and not by one ratio, and ranks can differ from
 1.5 on the same notes. The builders run unchanged and the engine check passes. Other versions are covered by the engine check in
 [Native engine versions](#native-engine-versions), not by this list. Query SQL and bind
@@ -230,12 +231,12 @@ the suites run against, and equals their `devDependencies` entries; a unit test
 fails when `ncu -u -m` moves one without the other. A missing package is
 installed at the newest version in that range. An installed version outside it is
 used and reported on stderr. SQLite has no range: its version follows Node. The DuckDB
-range lists one `~` term per tested `-r` patch line (`~1.5.6-r.1 || ~2.0.0-r.1`) and is held
+range lists one `~` term per tested `-r` patch line (`~1.5.6-r.1 || ~2.0.1-r.1`) and is held
 from `ncu` (`.ncurc.json` reject), because semver admits a prerelease only against a
 comparator of the same patch line. A new DuckDB engine line gets a term after review.
 
 **Identity.** Each derived index records the engine that built it in
-`meta.engine_identity` (`node:sqlite@3.53.4`, `@duckdb/node-api@2.0.0-r.1`). A
+`meta.engine_identity` (`node:sqlite@3.53.4`, `@duckdb/node-api@2.0.1-r.1`). A
 build under a different identity rebuilds the cache, as a `schema_version` change
 does, because index formats and scoring belong to the engine. A no-build open
 refuses it with `INDEX_NOT_READY`.
