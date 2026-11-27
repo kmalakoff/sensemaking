@@ -9,7 +9,7 @@ import { safeRmSync } from 'fs-remove-compat';
 import type { Stages } from '../../src/store/stages.ts';
 import type { Store } from '../../src/store/types.ts';
 import { CORPUS_NAMES, corpusPath } from '../lib/corpus.ts';
-import { MEASURE_VERSION, medianAsync, medianOf, stdoutEvidence, structuredSearchEvidence, timedCli, verbsFrom, walkMd, warmFileCache } from '../lib/measure.ts';
+import { MEASURE_VERSION, medianAsync, medianOf, probeConfigVersion, probeHelp, stdoutEvidence, structuredSearchEvidence, timedCli, verbsFrom, walkMd, warmFileCache } from '../lib/measure.ts';
 import { startMeasuredWatcher } from '../lib/measured-watcher.ts';
 import { waitForNativeIndex } from '../lib/native-observer.ts';
 import { writeOut } from '../lib/out.ts';
@@ -166,10 +166,14 @@ if (!pkgRootArg || !treeArg) {
 }
 // Absolute from the start: spawns below run with cwd set to the tree.
 const pkgRoot = resolve(pkgRootArg);
+const cli = join(pkgRoot, 'bin', 'cli.js');
+// Structural probes run before the corpus is resolved or copied: a package that cannot answer them
+// stops the run with the child's diagnostic. A preset naming `signals` fails config load below v5.
+const HELP = probeHelp(cli);
+const CONFIG_VERSION = probeConfigVersion(pkgRoot);
 // A known corpus name builds and caches itself (atomic, fetch-once) rather than needing a
 // pre-materialized path; anything else is treated as a directory path. Read-only from here on.
 const sourceTree = (CORPUS_NAMES.includes(treeArg as (typeof CORPUS_NAMES)[number]) ? await corpusPath(treeArg) : resolve(treeArg)) as string;
-const cli = join(pkgRoot, 'bin', 'cli.js');
 
 // A run measures a private copy, never the cached corpus, which the in-place edits below would
 // otherwise drift. Same mechanism as compare-versions.ts and store-dump.ts.
@@ -221,9 +225,8 @@ const fail = (r: TimedResult | null | undefined, row: string) => {
   return null;
 };
 
-// Dialect detection: pre-rename packages have no `search` verb, so their --help never mentions it. Runs once.
+// Dialect detection: pre-rename packages have no `search` verb, so their --help never mentions it.
 // Every row-mapping choice below reads off this one flag, so old and new packages land in the same JSON shape for compare.mjs.
-const HELP = spawnSync(process.execPath, [cli, '--help'], { encoding: 'utf8' }).stdout ?? '';
 const NEW_DIALECT = /search/.test(HELP);
 // Every verb this package's CLI advertises. A verb this build lacks reads as an empty row, not a
 // failure: map/peek/related/path route through verbRow below; sql/query and find/search keep
@@ -233,13 +236,6 @@ const verbRow = (verb: string, args: CliArgs, row: string, runs: number) => (VER
 // Ad-hoc SQL was `query` until it became `sql`, which took the name back from the search
 // sense of "query". Read off --help so one harness measures every generation.
 const SQL_VERB = /\bsense sql\b/.test(HELP) ? 'sql' : 'query';
-// A preset naming `signals` fails config load on a package older than config v5. Probed in a child;
-// Number() of a crashed probe's empty stdout is NaN, indistinguishable from an old package (PLAN.md 3.63).
-const configProbe = spawnSync(process.execPath, ['-e', `import(${JSON.stringify(pathToFileURL(join(pkgRoot, 'dist', 'esm', 'index.js')).href)}).then((m) => process.stdout.write(String(m.SUPPORTED_CONFIG_VERSION ?? 0)), (err) => { console.error(String(err?.stack ?? err)); process.exit(1); })`], { encoding: 'utf8' });
-const configProbeReported = configProbe.status === 0 ? Number(configProbe.stdout) : NaN;
-if (Number.isNaN(configProbeReported))
-  addError('words_ms', { message: `config-version probe failed: exit ${configProbe.status}: ${(configProbe.stderr ?? '').split('\n').find(Boolean) ?? 'no stderr'}`, repetitions: [{ run: 1, status: configProbe.status, signal: configProbe.signal ?? null, stderr: configProbe.stderr ?? '' }] });
-const CONFIG_VERSION = Number.isNaN(configProbeReported) ? 0 : configProbeReported;
 // Two config dialects, not one pinned version, so the declared version and its preset shapes move
 // together; the v5 branch also names `embed` itself, since skipping migration drops that side effect (PLAN.md 3.63).
 const SCOPES =

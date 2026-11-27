@@ -1,8 +1,10 @@
 // Shared measurement helpers for run.mjs / sweep.ts / profile.ts: one definition of "an
 // indexed file", "a timed CLI run", and "a median", so a change here lands in every harness at once instead of skewing them apart.
+import { type SpawnSyncReturns, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { walkMd } from './work-tree.ts';
 
 export { walkMd } from './work-tree.ts';
@@ -27,6 +29,30 @@ export function verbsFrom(helpText: string) {
     if (/^[a-z][\w-]*$/i.test(m[1])) verbs.add(m[1]);
   }
   return verbs;
+}
+
+// A structural probe decides which dialect and config shape the run measures, so a probe that
+// failed establishes nothing: it stops the run with everything the child left behind.
+function probeFailure(name: string, probe: SpawnSyncReturns<string>) {
+  return new Error(`${name} failed: exit ${probe.status}, signal ${probe.signal ?? 'none'}, spawn error ${probe.error?.message ?? 'none'}; stdout ${JSON.stringify(probe.stdout ?? '')}; stderr ${JSON.stringify(probe.stderr ?? '')}`);
+}
+
+// `--help` of the CLI under test. Every release from 0.1.0 opens it with `usage: sense`; a help
+// that failed, opens otherwise or lists no verb is not a legacy CLI.
+export function probeHelp(cli: string) {
+  const probe = spawnSync(process.execPath, [cli, '--help'], { encoding: 'utf8' });
+  if (probe.error || probe.status !== 0 || probe.signal || !(probe.stdout ?? '').startsWith('usage: sense ') || verbsFrom(probe.stdout).size === 0) throw probeFailure('CLI help probe', probe);
+  return probe.stdout;
+}
+
+// SUPPORTED_CONFIG_VERSION of the package under test, imported in a child. A successful import
+// without the export reports 0; a failed import or any other output throws.
+export function probeConfigVersion(pkgRoot: string) {
+  const entry = pathToFileURL(join(pkgRoot, 'dist', 'esm', 'index.js')).href;
+  const probe = spawnSync(process.execPath, ['-e', `import(${JSON.stringify(entry)}).then((m) => process.stdout.write(String(m.SUPPORTED_CONFIG_VERSION ?? 0)), (err) => { console.error(String(err?.stack ?? err)); process.exit(1); })`], { encoding: 'utf8' });
+  const reported = Number(probe.stdout);
+  if (probe.error || probe.status !== 0 || probe.signal || !/^\d+$/.test(probe.stdout ?? '') || !Number.isSafeInteger(reported)) throw probeFailure('config-version probe', probe);
+  return reported;
 }
 
 // Reads every indexed file once so the page cache is warm before anything is timed. Without it the
